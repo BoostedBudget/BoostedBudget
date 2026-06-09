@@ -10,7 +10,34 @@
         "Accounts"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all linked bank accounts for the authenticated user.",
+      "parameters": [
+        {
+          "name": "include_hidden",
+          "in": "query",
+          "description": "If 'true', includes hidden accounts",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "description": "Filter by account status: 'active' (default), 'replaced', or 'all'",
+          "type": "string"
+        },
+        {
+          "name": "include_replaced",
+          "in": "query",
+          "description": "If 'true', equivalent to status=all (backward-compat alias)",
+          "type": "string"
+        },
+        {
+          "name": "user_account_id",
+          "in": "query",
+          "description": "When supplied, returns all accounts in the chain (active and replaced) for the given user_account_id. Status filter defaults to 'all' when this param is set.",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "reorderAccounts",
@@ -21,7 +48,8 @@
         "Accounts"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Bulk updates display_order for multiple accounts."
     },
     {
       "operationId": "updateAccount",
@@ -32,7 +60,17 @@
         "Accounts"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates account customization fields.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteAccount",
@@ -43,7 +81,17 @@
         "Accounts"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Deletes a single account with ownership validation.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Account ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "checkRole",
@@ -54,7 +102,8 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns whether the authenticated user has admin role. Callable by any authenticated user, available in all environments."
     },
     {
       "operationId": "listAdminDeadLetterJobs",
@@ -65,7 +114,60 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "kind",
+          "in": "query",
+          "description": "Filter by job kind",
+          "type": "string"
+        },
+        {
+          "name": "user_id",
+          "in": "query",
+          "description": "Filter by user ID extracted from args",
+          "type": "string"
+        },
+        {
+          "name": "retried",
+          "in": "query",
+          "description": "Filter by retried status: 'true', 'false', or empty for all",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "ISO 8601 start date filter",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "ISO 8601 end date filter",
+          "type": "string"
+        },
+        {
+          "name": "sort_by",
+          "in": "query",
+          "description": "Column to sort by",
+          "enum": [
+            "failed_at",
+            "kind",
+            "retried_at"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "sort_dir",
+          "in": "query",
+          "description": "Sort direction",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "bulkDeleteAdminDeadLetterJobs",
@@ -153,7 +255,22 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns failed, past_due, and canceled Paddle transactions for admin review. Requires admin role.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of transactions to return",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of transactions to skip",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "fireWebhook",
@@ -164,7 +281,8 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Fires a Plaid webhook for testing in QA environment. Requires Clerk authentication."
     },
     {
       "operationId": "grantTrial",
@@ -175,7 +293,8 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Grants a 60-day trial to the authenticated user. For E2E testing. Returns success if user already has trial."
     },
     {
       "operationId": "getSystemHealth",
@@ -186,7 +305,8 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role."
     },
     {
       "operationId": "listAdminUsers",
@@ -197,7 +317,56 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns a paginated list of users with optional email search and tier filtering. Requires admin role.",
+      "parameters": [
+        {
+          "name": "page",
+          "in": "query",
+          "description": "Page number (1-indexed)",
+          "type": "integer"
+        },
+        {
+          "name": "page_size",
+          "in": "query",
+          "description": "Number of items per page (1-100)",
+          "type": "integer"
+        },
+        {
+          "name": "search",
+          "in": "query",
+          "description": "Search by email prefix, starts-with match (min 3 chars)",
+          "type": "string"
+        },
+        {
+          "name": "tier",
+          "in": "query",
+          "description": "Filter by subscription tier",
+          "type": "string"
+        },
+        {
+          "name": "sort_by",
+          "in": "query",
+          "description": "Column to sort by",
+          "enum": [
+            "created_at",
+            "last_login_at",
+            "subscription_tier",
+            "subscription_status"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "sort_dir",
+          "in": "query",
+          "description": "Sort direction",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getAdminUserDetail",
@@ -208,7 +377,17 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns detailed user information including statistics. Requires admin role.",
+      "parameters": [
+        {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "description": "User UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "get-admin-user-subscription",
@@ -219,7 +398,17 @@
         "Admin Subscriptions"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "View a user's subscription tier, manual overrides, and effective limits.",
+      "parameters": [
+        {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "description": "ID of the user to fetch",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "create-admin-subscription-override",
@@ -230,7 +419,17 @@
         "Admin Subscriptions"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.",
+      "parameters": [
+        {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "description": "ID of the user to override",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "update-admin-user-tier",
@@ -241,7 +440,17 @@
         "Admin Subscriptions"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Manually override a user's subscription tier. Requires admin privileges.",
+      "parameters": [
+        {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "description": "ID of the user to update",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "listAdminPaddleWebhooks",
@@ -252,7 +461,54 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "event_type",
+          "in": "query",
+          "description": "Filter by event type (empty = all)",
+          "type": "string"
+        },
+        {
+          "name": "processed",
+          "in": "query",
+          "description": "Filter by processed status: 'true', 'false', or empty for all",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "ISO 8601 date string",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "ISO 8601 date string",
+          "type": "string"
+        },
+        {
+          "name": "sort_by",
+          "in": "query",
+          "description": "Column to sort by",
+          "enum": [
+            "created_at",
+            "attempts",
+            "status"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "sort_dir",
+          "in": "query",
+          "description": "Sort direction",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getAdminPaddleWebhookStats",
@@ -263,7 +519,20 @@
         "Admin"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "time_range",
+          "in": "query",
+          "enum": [
+            "24h",
+            "7d",
+            "30d",
+            "all"
+          ],
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getAdminPaddleWebhookDetail",
@@ -296,7 +565,36 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the average monthly expense total over a date range. Single DB round-trip; designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter (e.g. depository,credit)",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getBudgetVsActual",
@@ -307,7 +605,17 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns active budgets for the given period with allocated vs spent amounts, remaining balance, over-budget flag, and utilisation percentage. period selects by configured budget period (weekly/monthly/quarterly/yearly/custom). AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "period",
+          "in": "query",
+          "required": true,
+          "description": "Budget period to query: weekly, monthly, quarterly, yearly, or custom",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getCashFlowHistory",
@@ -318,7 +626,42 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns time series cash flow data grouped by period for charts.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "grouping",
+          "in": "query",
+          "description": "Time grouping: daily, weekly, or monthly (auto-selected if not provided)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getCashFlowSummary",
@@ -329,7 +672,36 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns aggregated cash flow data (income, expenses, net) for a date range.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getCategoryTotalForPeriod",
@@ -340,7 +712,31 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the total expense amount and transaction count for a specific category in a date range. Single DB round-trip; designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "category",
+          "in": "query",
+          "required": true,
+          "description": "Category identifier (PFC primary or custom:<uuid>)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getFinancialSummary",
@@ -351,7 +747,36 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns a bundled financial summary with parallel fan-out across key analytics metrics. Sub-metrics are best-effort: individual failures are logged and the section is omitted from the response (200 with partial data). Designed as an AI-tool-callable single round-trip for common 'how am I doing financially?' questions.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types (optional)",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfers (true/false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getIncomeSourceBreakdown",
@@ -362,7 +787,36 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns income (inflow) totals grouped by category with percentages. AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getLargestTransactionsForPeriod",
@@ -373,7 +827,42 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the N largest expense transactions in a date range, ordered by amount descending. AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of transactions to return (1-100, default 10)",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "getCategoryBreakdownForMerchant",
@@ -384,7 +873,43 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns spending totals grouped by category for a specific merchant, with percentages. AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "merchant_name",
+          "in": "query",
+          "required": true,
+          "description": "Merchant name to filter by",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getMonthOverMonthSpendingChange",
@@ -395,7 +920,34 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns monthly spend buckets with period-over-period percentage and absolute changes. months param controls lookback (2-24). AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "category",
+          "in": "query",
+          "description": "Optional PFC primary or custom:<uuid> to scope spending",
+          "type": "string"
+        },
+        {
+          "name": "months",
+          "in": "query",
+          "description": "Months to look back (2-24, default 6)",
+          "type": "integer"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter (e.g. depository,credit)",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getNetWorthTrend",
@@ -406,7 +958,16 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months. Uses balance snapshot history. AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "grouping",
+          "in": "query",
+          "description": "Bucket size: daily, weekly, or monthly (default monthly)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getRecurringSubscriptions",
@@ -417,7 +978,8 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function."
     },
     {
       "operationId": "getSavingsRateForPeriod",
@@ -428,7 +990,24 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns savings rate (income - expenses) / income for a date range. Null savings_rate when income is zero. AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getSpendingByCategory",
@@ -439,7 +1018,54 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns spending totals grouped by category with percentages. Pass category param for subcategory drill-down.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "category",
+          "in": "query",
+          "description": "Primary category to drill into subcategories",
+          "type": "string"
+        },
+        {
+          "name": "custom_category_ids",
+          "in": "query",
+          "description": "Comma-separated custom category UUIDs to scope the report (Issue #1203)",
+          "type": "string"
+        },
+        {
+          "name": "roll_up",
+          "in": "query",
+          "description": "When true, a parent custom category also includes its children (default true)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getSpendingByMerchant",
@@ -450,7 +1076,42 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns top merchants by spending with percentages.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of merchants to return (default 10)",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "getSpendingTrends",
@@ -461,7 +1122,36 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns monthly category spending trends for stacked bar charts. Top 5 categories plus Other.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "include_transfers",
+          "in": "query",
+          "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getTopExpense",
@@ -472,7 +1162,24 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the single largest expense transaction in a date range. Returns null when no expenses exist. Designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getUnusualSpend",
@@ -483,7 +1190,24 @@
         "Analytics"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns transactions in the query window that exceed 2 standard deviations above the per-category baseline mean (3-month window before startDate). AI-tool-callable.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of query window (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of query window (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getUserRules",
@@ -494,7 +1218,8 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all categorization rules for the authenticated user, ordered by priority."
     },
     {
       "operationId": "createRule",
@@ -505,7 +1230,8 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Creates a new categorization rule for the authenticated user."
     },
     {
       "operationId": "getRuleByID",
@@ -516,7 +1242,17 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific categorization rule by its UUID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateRule",
@@ -527,7 +1263,17 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Updates a categorization rule's configuration.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteRule",
@@ -538,7 +1284,17 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Removes a categorization rule.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "toggleRule",
@@ -549,7 +1305,17 @@
         "Auto-Categorization"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Enables or disables a categorization rule.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getBudgets",
@@ -560,7 +1326,8 @@
         "Budgets"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all budgets for the authenticated user."
     },
     {
       "operationId": "createBudget",
@@ -571,7 +1338,8 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Creates a new budget for the authenticated user."
     },
     {
       "operationId": "getAvailableCategories",
@@ -582,7 +1350,8 @@
         "Budgets"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the merged list of available categories (custom + Plaid)."
     },
     {
       "operationId": "previewCategoryMatches",
@@ -593,7 +1362,8 @@
         "Budget"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the count and total amount of transactions matching the given category configuration within the date range."
     },
     {
       "operationId": "getCurrentBudget",
@@ -604,7 +1374,8 @@
         "Budgets"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves the current active budget (where today is within the period)."
     },
     {
       "operationId": "getBudget",
@@ -615,7 +1386,17 @@
         "Budgets"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific budget by ID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateBudget",
@@ -626,7 +1407,17 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates a budget's properties.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteBudget",
@@ -637,7 +1428,17 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Removes a budget from the user's collection.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "addBudgetCategory",
@@ -648,7 +1449,17 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Adds a category to a budget.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateBudgetCategory",
@@ -659,7 +1470,24 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates a budget category.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        },
+        {
+          "name": "categoryId",
+          "in": "path",
+          "required": true,
+          "description": "Category ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteBudgetCategory",
@@ -670,7 +1498,24 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Removes a category from a budget.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        },
+        {
+          "name": "categoryId",
+          "in": "path",
+          "required": true,
+          "description": "Category ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getCategoryTransactions",
@@ -681,7 +1526,36 @@
         "Budgets"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns paginated transactions matching a budget category.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        },
+        {
+          "name": "categoryId",
+          "in": "path",
+          "required": true,
+          "description": "Category ID",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of transactions to return",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Offset for pagination",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "syncBudget",
@@ -692,7 +1566,17 @@
         "Budgets"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Manually triggers recalculation of budget income and spent amounts.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getUserCategories",
@@ -703,7 +1587,8 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all custom categories for the authenticated user."
     },
     {
       "operationId": "createCategory",
@@ -714,7 +1599,8 @@
         "Categories"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Creates a new custom category for the authenticated user."
     },
     {
       "operationId": "getPlaidCategories",
@@ -725,7 +1611,8 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns distinct Plaid category names from the user's transactions."
     },
     {
       "operationId": "getPlaidDetailedCategories",
@@ -736,7 +1623,8 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition."
     },
     {
       "operationId": "getPlaidPrimaryCategories",
@@ -747,7 +1635,8 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface."
     },
     {
       "operationId": "getCategoryByID",
@@ -758,7 +1647,17 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific category by its UUID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Category UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateCategory",
@@ -769,7 +1668,17 @@
         "Categories"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates a category's name, icon, or color.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Category UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteCategory",
@@ -780,7 +1689,17 @@
         "Categories"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Removes a category from the user's collection.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Category UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getCategoryUsage",
@@ -791,7 +1710,17 @@
         "Categories"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns counts of transactions, budgets, rules, and child categories referencing the category (for delete-impact warnings).",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Category UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getAccountTypes",
@@ -802,7 +1731,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns available account types for the user with counts and totals."
     },
     {
       "operationId": "getBalanceHistory",
@@ -813,7 +1743,34 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns time series balance data for charts with optional account type breakdown.",
+      "parameters": [
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "granularity",
+          "in": "query",
+          "description": "Time granularity: daily, weekly, or monthly",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getBalanceSummary",
@@ -824,7 +1781,22 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns current balance overview with breakdown by account type and period comparison.",
+      "parameters": [
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter (investment, checking, savings, credit, loan)",
+          "type": "string"
+        },
+        {
+          "name": "as_of_date",
+          "in": "query",
+          "description": "Get balance as of specific date (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getDefaultLayout",
@@ -835,7 +1807,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the default dashboard layout configuration. Public endpoint."
     },
     {
       "operationId": "getNetWorth",
@@ -846,7 +1819,22 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns current net worth (assets - liabilities) with breakdown by category and period comparison.",
+      "parameters": [
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter (depository, investment, credit, loan)",
+          "type": "string"
+        },
+        {
+          "name": "as_of_date",
+          "in": "query",
+          "description": "Get net worth as of specific date (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getNetWorthHistory",
@@ -857,7 +1845,34 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns time series net worth data for charts with assets and liabilities breakdown.",
+      "parameters": [
+        {
+          "name": "account_types",
+          "in": "query",
+          "description": "Comma-separated account types to filter",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Start of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "granularity",
+          "in": "query",
+          "description": "Time granularity: daily, weekly, or monthly",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getDashboardPreferences",
@@ -868,7 +1883,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the user's dashboard layout preferences (or default if none exist)."
     },
     {
       "operationId": "saveDashboardPreferences",
@@ -879,7 +1895,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Saves the user's dashboard layout preferences."
     },
     {
       "operationId": "resetDashboardPreferences",
@@ -890,7 +1907,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Resets the user's dashboard layout to the default configuration."
     },
     {
       "operationId": "getWidgetTypes",
@@ -901,7 +1919,8 @@
         "Dashboard"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns all available widget types with their metadata for the widget catalog. Public endpoint."
     },
     {
       "operationId": "disconnectInstitution",
@@ -912,7 +1931,17 @@
         "Accounts"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Disconnects an institution and all associated accounts.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Linked item ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "recordMCPAuditEntry",
@@ -923,7 +1952,8 @@
         "MCP Audit"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Records a security audit entry for an MCP operation. Called by the trusted MCP Worker; authenticated by CloudflareOnly middleware (X-Origin-Secret), not end-user Clerk JWT."
     },
     {
       "operationId": "listMCPRecipes",
@@ -934,7 +1964,8 @@
         "MCP Recipes"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "List all saved MCP workflow recipes for the authenticated user."
     },
     {
       "operationId": "createMCPRecipe",
@@ -945,7 +1976,8 @@
         "MCP Recipes"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Create a saved MCP workflow recipe (read-only compositions only in v1)."
     },
     {
       "operationId": "getMCPRecipe",
@@ -956,7 +1988,16 @@
         "MCP Recipes"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Recipe ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateMCPRecipe",
@@ -967,7 +2008,16 @@
         "MCP Recipes"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Recipe ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteMCPRecipe",
@@ -978,7 +2028,16 @@
         "MCP Recipes"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Recipe ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "runMCPRecipe",
@@ -989,7 +2048,17 @@
         "MCP Recipes"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Resolve a recipe's spec for execution. Returns the ordered list of API calls to chain through execute().",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Recipe ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getNotifications",
@@ -1000,7 +2069,16 @@
         "Notifications"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves notifications for the authenticated user, ordered by created_at DESC.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of notifications to return (1-100, default 50)",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "markAllNotificationsAsRead",
@@ -1011,7 +2089,8 @@
         "Notifications"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks all unread notifications as read for the authenticated user."
     },
     {
       "operationId": "getUnreadNotificationCount",
@@ -1022,7 +2101,8 @@
         "Notifications"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns the count of unread notifications for the authenticated user."
     },
     {
       "operationId": "markNotificationAsRead",
@@ -1033,7 +2113,17 @@
         "Notifications"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks a specific notification as read for the authenticated user.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Notification UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "exchangePublicToken",
@@ -1044,7 +2134,8 @@
         "Plaid"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Exchanges a Plaid public token for an access token and links bank accounts."
     },
     {
       "operationId": "createLinkToken",
@@ -1055,7 +2146,8 @@
         "Plaid"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Generates a Plaid Link token for initiating bank account connection flow."
     },
     {
       "operationId": "qaAuthBypass",
@@ -1066,7 +2158,8 @@
         "QA"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Creates a Clerk sign-in token URL for QA test users. Only available in QA/Staging environments."
     },
     {
       "operationId": "getRegions",
@@ -1077,18 +2170,28 @@
         "Regions"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint."
     },
     {
       "operationId": "getAutomationRules",
       "method": "GET",
       "path": "/api/v1/rules",
-      "summary": "Get user automation rules",
+      "summary": "List automation rules (filter by rule_type)",
       "tags": [
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves automation rules for the authenticated user, ordered by priority. Use the repeatable `rule_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all rule types are returned.",
+      "parameters": [
+        {
+          "name": "rule_type",
+          "in": "query",
+          "description": "Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.",
+          "type": "array"
+        }
+      ]
     },
     {
       "operationId": "createAutomationRule",
@@ -1099,7 +2202,8 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Creates a new automation rule for the authenticated user."
     },
     {
       "operationId": "getAutomationRuleByID",
@@ -1110,7 +2214,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific automation rule by its UUID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateAutomationRule",
@@ -1121,7 +2235,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Updates an automation rule's configuration.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteAutomationRule",
@@ -1132,7 +2256,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Removes an automation rule.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "disableAutomationRule",
@@ -1143,7 +2277,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Disables an automation rule from execution.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "enableAutomationRule",
@@ -1154,7 +2298,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Enables an automation rule for execution.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getRuleExecutions",
@@ -1165,7 +2319,35 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves execution history for a specific automation rule with optional status filter.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "in": "query",
+          "description": "Filter by status: pending, running, completed, failed",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of results",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of results to skip",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "testAutomationRule",
@@ -1176,7 +2358,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Executes a dry-run of the rule to preview results without persisting changes.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "toggleAutomationRule",
@@ -1187,7 +2379,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Enables or disables an automation rule.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "triggerAutomationRule",
@@ -1198,7 +2400,17 @@
         "Automation Rules"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Triggers an automation rule for immediate execution with optional custom data.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Automation Rule UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getSavingsGoals",
@@ -1209,7 +2421,8 @@
         "Savings Goals"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all savings goals for the authenticated user."
     },
     {
       "operationId": "createSavingsGoal",
@@ -1220,7 +2433,8 @@
         "Savings Goals"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Creates a new savings goal for the authenticated user."
     },
     {
       "operationId": "getActiveSavingsGoals",
@@ -1231,7 +2445,8 @@
         "Savings Goals"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all active (not completed) savings goals for the authenticated user."
     },
     {
       "operationId": "getSavingsGoal",
@@ -1242,7 +2457,17 @@
         "Savings Goals"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific savings goal by ID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateSavingsGoal",
@@ -1253,7 +2478,17 @@
         "Savings Goals"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates a savings goal's properties.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteSavingsGoal",
@@ -1264,7 +2499,17 @@
         "Savings Goals"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Removes a savings goal from the user's collection.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getSavingsImpactAggregate",
@@ -1275,7 +2520,8 @@
         "SavingsImpact"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns platform-wide savings transfer automation impact. Published only when k-anonymity thresholds are met (≥10 users, ≥$1000 total). Public endpoint — no authentication required."
     },
     {
       "operationId": "getSavingsImpactMe",
@@ -1286,7 +2532,8 @@
         "SavingsImpact"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns savings transfer automation impact totals for the authenticated user."
     },
     {
       "operationId": "get-billing-portal-url",
@@ -1298,7 +2545,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns URL to Paddle billing portal where users can manage payment methods and view billing history."
     },
     {
       "operationId": "cancel-paddle-subscription",
@@ -1310,7 +2558,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Cancels subscription at end of current billing period. User retains access until period ends."
     },
     {
       "operationId": "create-paddle-checkout",
@@ -1322,7 +2571,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect."
     },
     {
       "operationId": "get-current-subscription",
@@ -1334,7 +2584,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Fetches current subscription details from Paddle API with live status, billing info, and tier information."
     },
     {
       "operationId": "preview-paddle-subscription-update",
@@ -1346,7 +2597,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details."
     },
     {
       "operationId": "getSubscriptionTiers",
@@ -1357,7 +2609,8 @@
         "Subscription"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information."
     },
     {
       "operationId": "update-paddle-subscription",
@@ -1369,7 +2622,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Updates subscription to a different tier or billing interval. Handles proration automatically."
     },
     {
       "operationId": "getUserTags",
@@ -1380,7 +2634,8 @@
         "Tags"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves all tags for the authenticated user."
     },
     {
       "operationId": "createTag",
@@ -1391,7 +2646,8 @@
         "Tags"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Creates a new tag for the authenticated user."
     },
     {
       "operationId": "getTagByID",
@@ -1402,7 +2658,17 @@
         "Tags"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific tag by its UUID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Tag UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateTag",
@@ -1413,7 +2679,17 @@
         "Tags"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates a tag's name or color.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Tag UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "deleteTag",
@@ -1424,7 +2700,17 @@
         "Tags"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Removes a tag from the user's collection.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Tag UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getTransactions",
@@ -1435,7 +2721,145 @@
         "Transactions"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves transactions for the authenticated user with optional filters and pagination.",
+      "parameters": [
+        {
+          "name": "cursor",
+          "in": "query",
+          "description": "Opaque cursor from previous page's next_cursor; omit for first page",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of transactions to return (1-100)",
+          "type": "integer"
+        },
+        {
+          "name": "account_id",
+          "in": "query",
+          "description": "Filter by specific account ID (deprecated: use account_ids)",
+          "type": "string"
+        },
+        {
+          "name": "account_ids",
+          "in": "query",
+          "description": "Filter by multiple account IDs (comma-separated UUIDs)",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Filter transactions on or after this date (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "Filter transactions on or before this date (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "pfc_primaries",
+          "in": "query",
+          "description": "Filter by effective PFC primary enum(s) (comma-separated, e.g. FOOD_AND_DRINK,TRAVEL)",
+          "type": "string"
+        },
+        {
+          "name": "pfc_detaileds",
+          "in": "query",
+          "description": "Filter by effective PFC detailed sub-category enum(s) (comma-separated, e.g. FOOD_AND_DRINK_FAST_FOOD,FOOD_AND_DRINK_COFFEE). Combined with pfc_primaries using OR logic.",
+          "type": "string"
+        },
+        {
+          "name": "custom_category_ids",
+          "in": "query",
+          "description": "Filter by custom category UUIDs (comma-separated)",
+          "type": "string"
+        },
+        {
+          "name": "search",
+          "in": "query",
+          "description": "Search in merchant name or transaction name",
+          "type": "string"
+        },
+        {
+          "name": "pending",
+          "in": "query",
+          "description": "Filter by pending status (true/false)",
+          "type": "string"
+        },
+        {
+          "name": "reviewed",
+          "in": "query",
+          "description": "Filter by review state: true (reviewed), false (unreviewed inbox), omit for both",
+          "type": "string"
+        },
+        {
+          "name": "category_source",
+          "in": "query",
+          "description": "Filter by category origin (comma-separated): plaid, rule, manual",
+          "type": "string"
+        },
+        {
+          "name": "min_amount",
+          "in": "query",
+          "description": "Filter by minimum absolute amount",
+          "type": "string"
+        },
+        {
+          "name": "max_amount",
+          "in": "query",
+          "description": "Filter by maximum absolute amount",
+          "type": "string"
+        },
+        {
+          "name": "amount_type",
+          "in": "query",
+          "description": "Filter by transaction type",
+          "enum": [
+            "income",
+            "expense",
+            "all"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "user_account_id",
+          "in": "query",
+          "description": "Filter by logical account ID (user_accounts.id) — stable across re-links; returns transactions from all chain members",
+          "type": "string"
+        },
+        {
+          "name": "merchant_id",
+          "in": "query",
+          "description": "Filter transactions by merchant UUID",
+          "type": "string"
+        },
+        {
+          "name": "sort_by",
+          "in": "query",
+          "description": "Column to sort by",
+          "enum": [
+            "date",
+            "merchant",
+            "amount",
+            "category"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "sort_dir",
+          "in": "query",
+          "description": "Sort direction",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "bulkUpdateTransactionCategory",
@@ -1446,7 +2870,8 @@
         "Transactions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Recategorizes multiple transactions for the authenticated user. Best-effort: unowned/unknown IDs are silently ignored. Returns requested (de-duplicated input count) and updated (rows changed)."
     },
     {
       "operationId": "bulkSetTransactionReviewed",
@@ -1457,7 +2882,8 @@
         "Transactions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks multiple transactions reviewed or unreviewed for the authenticated user."
     },
     {
       "operationId": "getTransactionReviewSummary",
@@ -1468,7 +2894,22 @@
         "Transactions"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns pre-computed review-state counts and top unreviewed categories. Dates are optional (all-time default). Transfers included. Designed for AI-tool consumption.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Optional: scope summary to transactions on or after this date (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "Optional: scope summary to transactions on or before this date (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getTransactionByID",
@@ -1479,7 +2920,17 @@
         "Transactions"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific transaction by its UUID.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transaction UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateTransactionCategory",
@@ -1490,7 +2941,17 @@
         "Transactions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates the category override on a specific transaction.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transaction UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "setTransactionReviewed",
@@ -1501,7 +2962,17 @@
         "Transactions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks a transaction reviewed or unreviewed (moves it out of / into the unreviewed inbox).",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transaction UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateTransactionTags",
@@ -1512,18 +2983,49 @@
         "Transactions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates the tags on a specific transaction.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transaction UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getTransferSuggestions",
       "method": "GET",
       "path": "/api/v1/transfer-suggestions",
-      "summary": "Get pending transfer suggestions",
+      "summary": "List transfer suggestions (filter by status)",
       "tags": [
         "TransferSuggestions"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns transfer suggestions for the authenticated user. Use the `status` query parameter (comma-separated) to filter by status. Valid values: pending, accepted, completed, rejected, expired. When omitted, returns only pending suggestions (backward-compatible default). Supports `limit` (1–100, default 20) and `offset` pagination.",
+      "parameters": [
+        {
+          "name": "status",
+          "in": "query",
+          "description": "Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only.",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Maximum number of suggestions to return.",
+          "type": "integer"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "description": "Number of suggestions to skip for pagination.",
+          "type": "integer"
+        }
+      ]
     },
     {
       "operationId": "acceptTransferSuggestion",
@@ -1534,7 +3036,17 @@
         "TransferSuggestions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks a pending transfer suggestion as accepted. Returns 404 if not found, 409 if already actioned.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transfer suggestion UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "cancelTransferSuggestion",
@@ -1545,7 +3057,17 @@
         "TransferSuggestions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Cancels a pending or accepted suggestion, transitioning it to rejected so it leaves the Awaiting Match tab. Distinct from decline-match (which only clears the fuzzy-match reservation without changing status).",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transfer suggestion UUID to cancel",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "confirmTransferSuggestionMatch",
@@ -1556,7 +3078,17 @@
         "TransferSuggestions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Confirms a fuzzy-matched transfer suggestion with the actual transfer amount. For MCP use.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transfer suggestion UUID to confirm",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "declineTransferSuggestionMatch",
@@ -1567,7 +3099,17 @@
         "TransferSuggestions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Releases the fuzzy-match reservation on a pending/accepted suggestion. The inflow is freed for other suggestions.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transfer suggestion UUID to decline",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "rejectTransferSuggestion",
@@ -1578,7 +3120,17 @@
         "TransferSuggestions"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Marks a pending transfer suggestion as rejected. Returns 404 if not found, 409 if already actioned.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Transfer suggestion UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getUserAccounts",
@@ -1589,7 +3141,16 @@
         "User Accounts"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Returns all stable user accounts for the authenticated user. These survive Plaid re-links and provide consistent references for querying transactions.",
+      "parameters": [
+        {
+          "name": "include_hidden",
+          "in": "query",
+          "description": "Include hidden accounts (default false)",
+          "type": "boolean"
+        }
+      ]
     },
     {
       "operationId": "getUserAccountById",
@@ -1600,7 +3161,17 @@
         "User Accounts"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves a specific user account by ID. Returns 404 if not found or not owned by the user.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User Account UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "updateUserAccount",
@@ -1611,7 +3182,17 @@
         "User Accounts"
       ],
       "manifestClass": "write",
-      "excluded": false
+      "excluded": false,
+      "description": "Updates customization fields (nickname, color, icon, emoji, display order, hidden status) for a user account. Only provided fields are updated.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User Account UUID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "requestDeletion",
@@ -1622,7 +3203,8 @@
         "User"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Initiates account deletion with 30-day grace period. User will receive email with cancellation link."
     },
     {
       "operationId": "cancelDeletion",
@@ -1633,7 +3215,17 @@
         "User"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Cancels a pending account deletion using the cancellation token from the email.",
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "Cancellation token from email",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getPrivacySettings",
@@ -1644,7 +3236,8 @@
         "Privacy"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves the authenticated user's privacy settings, creating defaults if none exist."
     },
     {
       "operationId": "updatePrivacySettings",
@@ -1655,7 +3248,8 @@
         "Privacy"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Updates the authenticated user's privacy settings with GDPR validation."
     },
     {
       "operationId": "getUserProfile",
@@ -1666,7 +3260,8 @@
         "Profile"
       ],
       "manifestClass": "read",
-      "excluded": false
+      "excluded": false,
+      "description": "Retrieves the authenticated user's profile, creating one if it's their first login."
     },
     {
       "operationId": "updateUserProfile",
@@ -1677,7 +3272,8 @@
         "Profile"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Updates the authenticated user's profile with validated data."
     },
     {
       "operationId": "getHealth",
@@ -1688,7 +3284,8 @@
         "Health"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns the health status of the API and its dependencies (database, Redis, Clerk)."
     },
     {
       "operationId": "getMetrics",
@@ -1699,7 +3296,8 @@
         "Monitoring"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Returns Prometheus metrics in text format for monitoring."
     },
     {
       "operationId": "paddle-webhook",
@@ -1711,7 +3309,8 @@
         "Paddle"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Public endpoint for Paddle to send subscription and payment event notifications. Verifies HMAC-SHA256 signature, stores in database, and enqueues async processing job."
     },
     {
       "operationId": "handlePlaidWebhook",
@@ -1722,7 +3321,8 @@
         "Webhooks"
       ],
       "manifestClass": "read",
-      "excluded": true
+      "excluded": true,
+      "description": "Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing."
     }
   ]
 }

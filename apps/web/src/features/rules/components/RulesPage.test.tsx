@@ -626,4 +626,88 @@ describe('RulesPage', () => {
     fireEvent.click(testButtons[0])
     expect(mockTestAutomationRuleMutate).toHaveBeenCalled()
   })
+
+  // R8-1c: Rule type segment for Boosts Rules tab (#1267)
+  describe('Rule type segment (R8-1c)', () => {
+    it('renders segment control when showTypeSegment is true', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /transfer & savings/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+    })
+
+    it('does not render segment when showTypeSegment is omitted (default)', async () => {
+      renderWithProviders(<RulesPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/automation rules/i)).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('group', { name: /rule type filter/i })).not.toBeInTheDocument()
+    })
+
+    it('calls useGetAutomationRules with rule_type when default is Transfer & Savings', async () => {
+      mockUseGetAutomationRules.mockClear()
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+      expect(lastCallParams).toEqual({ rule_type: ['transfer_suggestion', 'savings_goal'] })
+    })
+
+    it('calls useGetAutomationRules without rule_type when All rules is selected', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+      })
+      mockUseGetAutomationRules.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+        expect(lastCallParams).toBeUndefined()
+      })
+    })
+
+    it('fires boosts_rules_filter_changed when segment is changed', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+      })
+      mockTrackEvent.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'all' })
+        )
+      })
+    })
+
+    it('fires boosts_rules_filter_changed with filter:transfer_savings when switching back', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      // First switch to "All rules"
+      await waitFor(() => expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      mockTrackEvent.mockClear()
+      // Then switch back to "Transfer & Savings"
+      fireEvent.click(screen.getByRole('button', { name: /transfer & savings/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'transfer_savings' })
+        )
+      })
+    })
+  })
 })

@@ -97,8 +97,8 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
- * Returns all pending transfer suggestions for the authenticated user.
- * @summary Get pending transfer suggestions
+ * Returns transfer suggestions for the authenticated user. Use the `status` query parameter (comma-separated) to filter by status. Valid values: pending, accepted, completed, rejected, expired. When omitted, returns only pending suggestions (backward-compatible default). Supports `limit` (1–100, default 20) and `offset` pagination.
+ * @summary List transfer suggestions (filter by status)
  */
 export const getTransferSuggestions = (
     params?: GetTransferSuggestionsParams,
@@ -170,7 +170,7 @@ export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getT
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
- * @summary Get pending transfer suggestions
+ * @summary List transfer suggestions (filter by status)
  */
 
 export function useGetTransferSuggestions<TData = Awaited<ReturnType<typeof getTransferSuggestions>>, TError = ErrorType<ErrorModel>>(

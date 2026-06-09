@@ -124,6 +124,7 @@ export * from './getAdminDeadLetterJobArgs200';
 export * from './getAdminPaddleWebhookStatsParams';
 export * from './getAdminPaddleWebhookStatsTimeRange';
 export * from './getAdminPaymentFailuresParams';
+export * from './getAutomationRulesParams';
 export * from './getAverageMonthlySpendParams';
 export * from './getBalanceHistoryParams';
 export * from './getBalanceSummaryParams';

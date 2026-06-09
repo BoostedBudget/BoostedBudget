@@ -135,6 +135,7 @@ export const ANALYTICS_EVENTS = {
   // Boosts (#1267)
   BOOSTS_PAGE_VIEWED: 'boosts_page_viewed',
   BOOSTS_TAB_CHANGED: 'boosts_tab_changed',
+  BOOSTS_RULES_FILTER_CHANGED: 'boosts_rules_filter_changed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',

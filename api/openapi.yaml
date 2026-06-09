@@ -9518,8 +9518,20 @@ paths:
         - Regions
   /api/v1/rules:
     get:
-      description: Retrieves all automation rules for the authenticated user, ordered by priority.
+      description: "Retrieves automation rules for the authenticated user, ordered by priority. Use the repeatable `rule_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all rule types are returned."
       operationId: getAutomationRules
+      parameters:
+        - description: "Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
+          explode: false
+          in: query
+          name: rule_type
+          schema:
+            description: "Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
+            items:
+              type: string
+            type:
+              - array
+              - "null"
       responses:
         "200":
           content:
@@ -9539,7 +9551,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Get user automation rules
+      summary: List automation rules (filter by rule_type)
       tags:
         - Automation Rules
     post:
@@ -10927,7 +10939,7 @@ paths:
         - Transactions
   /api/v1/transfer-suggestions:
     get:
-      description: Returns all pending transfer suggestions for the authenticated user.
+      description: "Returns transfer suggestions for the authenticated user. Use the `status` query parameter (comma-separated) to filter by status. Valid values: pending, accepted, completed, rejected, expired. When omitted, returns only pending suggestions (backward-compatible default). Supports `limit` (1–100, default 20) and `offset` pagination."
       operationId: getTransferSuggestions
       parameters:
         - description: Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only.
@@ -10973,7 +10985,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Get pending transfer suggestions
+      summary: List transfer suggestions (filter by status)
       tags:
         - TransferSuggestions
   /api/v1/transfer-suggestions/{id}/accept:

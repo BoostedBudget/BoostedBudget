@@ -872,6 +872,23 @@ func (m *mockAutomationRulesRepository) GetByUserID(ctx context.Context, userID 
 	return result, nil
 }
 
+func (m *mockAutomationRulesRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	if len(ruleTypes) == 0 {
+		return m.GetByUserID(ctx, userID)
+	}
+	typeSet := make(map[domain.RuleType]bool, len(ruleTypes))
+	for _, rt := range ruleTypes {
+		typeSet[rt] = true
+	}
+	var result []*domain.AutomationRule
+	for _, r := range m.rules {
+		if r.UserID == userID && typeSet[r.RuleType] {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+
 func (m *mockAutomationRulesRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
 	var result []*domain.AutomationRule
 	for _, r := range m.rules {

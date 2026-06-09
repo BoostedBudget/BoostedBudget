@@ -54,7 +54,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
 
   const budgetsQuery = useGetBudgets({ query: { staleTime: 60_000, enabled: shouldFetch } })
   const savingsGoalsQuery = useGetSavingsGoals({ query: { staleTime: 60_000, enabled: shouldFetch } })
-  const automationRulesQuery = useGetAutomationRules({ query: { staleTime: 60_000, enabled: shouldFetch } })
+  const automationRulesQuery = useGetAutomationRules(undefined, { query: { staleTime: 60_000, enabled: shouldFetch } })
   const categorizationRulesQuery = useGetUserRules({ query: { staleTime: 60_000, enabled: shouldFetch } })
 
   const isLoading =

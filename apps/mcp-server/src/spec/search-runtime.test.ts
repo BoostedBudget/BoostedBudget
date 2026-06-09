@@ -43,6 +43,32 @@ const FIXTURE_INDEX: SpecIndex = {
       manifestClass: 'read',
       excluded: true,
     },
+    // R8-2b: entry with description + parameters for discoverability tests
+    {
+      operationId: 'getTransferSuggestions',
+      method: 'GET',
+      path: '/api/v1/transfer-suggestions',
+      summary: 'List transfer suggestions (filter by status)',
+      description: 'Returns transfer suggestions. Use status query param: pending, accepted, completed, rejected, expired.',
+      tags: ['TransferSuggestions'],
+      manifestClass: 'read',
+      excluded: false,
+      parameters: [
+        {
+          name: 'status',
+          in: 'query',
+          description: 'Comma-separated list of statuses',
+          enum: ['pending', 'accepted', 'completed', 'rejected', 'expired'],
+          type: 'string',
+        },
+        {
+          name: 'limit',
+          in: 'query',
+          description: 'Maximum number of results',
+          type: 'integer',
+        },
+      ],
+    },
   ],
 }
 
@@ -116,5 +142,34 @@ describe('listSpecEntries', () => {
   it('filters by class=write', () => {
     const writes = listSpecEntries(FIXTURE_INDEX, { class: 'write' })
     expect(writes.every((e: SpecEntry) => e.manifestClass === 'write')).toBe(true)
+  })
+})
+
+// R8-2b: description + parameters improve discoverability in the search haystack
+describe('searchSpec with description and parameters (R8-2b)', () => {
+  it('finds entries by description text', () => {
+    // "Returns transfer suggestions" is in the description, not the summary/path/tags
+    const results = searchSpec(FIXTURE_INDEX, 'returns transfer suggestions')
+    expect(results.some((e: SpecEntry) => e.operationId === 'getTransferSuggestions')).toBe(true)
+  })
+
+  it('finds entries by parameter name', () => {
+    // "status" is both a param name and appears in summary — verifies param data contributes to haystack
+    const results = searchSpec(FIXTURE_INDEX, 'status')
+    expect(results.some((e: SpecEntry) => e.operationId === 'getTransferSuggestions')).toBe(true)
+  })
+
+  it('finds entries by parameter enum value', () => {
+    // "accepted" is in the status param enum of getTransferSuggestions
+    const results = searchSpec(FIXTURE_INDEX, 'accepted')
+    expect(results.some((e: SpecEntry) => e.operationId === 'getTransferSuggestions')).toBe(true)
+  })
+
+  it('entry has description and parameters fields', () => {
+    const entry = FIXTURE_INDEX.entries.find((e) => e.operationId === 'getTransferSuggestions')
+    expect(entry?.description).toContain('status query param')
+    expect(entry?.parameters).toHaveLength(2)
+    expect(entry?.parameters?.[0]?.name).toBe('status')
+    expect(entry?.parameters?.[0]?.enum).toContain('pending')
   })
 })

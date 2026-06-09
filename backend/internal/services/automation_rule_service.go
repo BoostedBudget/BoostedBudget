@@ -20,6 +20,10 @@ type AutomationRuleService interface {
 	// GetUserRules retrieves all automation rules for a user, ordered by priority.
 	GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
 
+	// GetUserRulesFiltered retrieves automation rules optionally filtered by rule types.
+	// When ruleTypes is empty, all rules are returned (same as GetUserRules).
+	GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error)
+
 	// GetRuleByID retrieves a specific rule by ID.
 	GetRuleByID(ctx context.Context, userID, ruleID string) (*domain.AutomationRule, error)
 
@@ -213,6 +217,12 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 // GetUserRules retrieves all automation rules for a user, ordered by priority.
 func (s *automationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
 	return s.ruleRepo.GetByUserID(ctx, userID)
+}
+
+// GetUserRulesFiltered retrieves automation rules optionally filtered by rule types.
+// When ruleTypes is empty, all rules are returned (delegates to GetUserRules).
+func (s *automationRuleService) GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	return s.ruleRepo.GetByUserIDFiltered(ctx, userID, ruleTypes)
 }
 
 // GetRuleByID retrieves a specific rule by ID.
