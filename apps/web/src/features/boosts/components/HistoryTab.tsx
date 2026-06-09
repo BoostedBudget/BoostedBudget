@@ -84,13 +84,20 @@ export function HistoryTab({
       defaultSize: 240,
       minSize: 140,
       render: (item) => {
-        const note = item.user_notes ?? item.reason
+        const note = item.user_notes || item.reason
         const matchedAt = item.matched_transaction_at
         if (matchedAt) {
           return (
             <span className="text-sm text-muted-foreground">
               Matched transaction on {formatDate(matchedAt)}
               {note ? ` · ${note}` : ''}
+            </span>
+          )
+        }
+        if (!note && item.status === 'expired') {
+          return (
+            <span className="text-sm text-muted-foreground italic">
+              No matching transfer found
             </span>
           )
         }

@@ -318,16 +318,30 @@ describe('issue #972: savings transfer automation operations', () => {
     expect(entry?.destructive).toBe(false)
   })
 
-  it('isAllowed returns true for all four new operations', () => {
+  // R3-4 (#1267): cancelTransferSuggestion was in Go manifest + TS manifest but missing from
+  // the regenerated facade + spec-index. This assertion guards the regenerated artifacts.
+  it('classifies cancelTransferSuggestion as write with confirmation', () => {
+    const entry = getCapability('cancelTransferSuggestion')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.idempotent).toBe(true)
+    expect(entry?.destructive).toBe(false)
+  })
+
+  it('isAllowed returns true for all five new operations', () => {
     expect(isAllowed('getSavingsImpactAggregate')).toBe(true)
     expect(isAllowed('getSavingsImpactMe')).toBe(true)
     expect(isAllowed('confirmTransferSuggestionMatch')).toBe(true)
     expect(isAllowed('declineTransferSuggestionMatch')).toBe(true)
+    expect(isAllowed('cancelTransferSuggestion')).toBe(true)
   })
 
   it('isWrite returns true for write ops and false for reads', () => {
     expect(isWrite('confirmTransferSuggestionMatch')).toBe(true)
     expect(isWrite('declineTransferSuggestionMatch')).toBe(true)
+    expect(isWrite('cancelTransferSuggestion')).toBe(true)
     expect(isWrite('getSavingsImpactAggregate')).toBe(false)
     expect(isWrite('getSavingsImpactMe')).toBe(false)
   })

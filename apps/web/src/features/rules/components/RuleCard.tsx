@@ -126,7 +126,7 @@ export function RuleCard({
       </div>
 
       {!compact && rule.description && (
-        <p className="text-sm leading-relaxed text-muted-foreground">{rule.description}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
       )}
 
       <div className="flex flex-col gap-2">
