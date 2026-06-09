@@ -8,15 +8,17 @@ export interface UseBoostSuggestionsResult {
   total: number
   isLoading: boolean
   error: Error | null
+  refetch: () => void
 }
 
 export function useBoostSuggestions(params: GetTransferSuggestionsParams): UseBoostSuggestionsResult {
-  const { data, isLoading, error } = useGetTransferSuggestions(params)
+  const { data, isLoading, error, refetch } = useGetTransferSuggestions(params)
 
   return {
     items: data?.items ?? [],
     total: data?.total ?? 0,
     isLoading,
     error: error as Error | null,
+    refetch,
   }
 }

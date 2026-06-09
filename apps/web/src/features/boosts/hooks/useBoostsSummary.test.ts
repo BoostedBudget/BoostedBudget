@@ -5,7 +5,7 @@
  * TDD RED: Tests written before implementation.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
 import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
@@ -16,8 +16,8 @@ describe('useBoostsSummary', () => {
   beforeEach(() => {
     mockUseGetSavingsImpactMe.mockClear()
     mockUseGetAutomationRules.mockClear()
-    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
   })
 
   it('returns totalMoved from savings impact total_amount', () => {
@@ -120,11 +120,62 @@ describe('useBoostsSummary', () => {
   })
 
   it('propagates isLoading as false when both queries are settled', () => {
-    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
     expect(result.current.isLoading).toBe(false)
+  })
+
+  // R7-2: error + refetch
+  it('surfaces error from the savings impact query', () => {
+    const err = new Error('impact failed')
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: err, refetch: mock(() => {}) })
+
+    const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
+
+    expect(result.current.error).toBe(err)
+  })
+
+  it('surfaces error from the automation rules query when savings impact is fine', () => {
+    const err = new Error('rules failed')
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: err, refetch: mock(() => {}) })
+
+    const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
+
+    expect(result.current.error).toBe(err)
+  })
+
+  it('returns null error when both queries succeed', () => {
+    const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
+
+    expect(result.current.error).toBeNull()
+  })
+
+  it('exposes impactQuery error when both queries fail simultaneously', () => {
+    const impactErr = new Error('impact failed')
+    const rulesErr = new Error('rules failed')
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: impactErr, refetch: mock(() => {}) })
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: rulesErr, refetch: mock(() => {}) })
+
+    const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
+
+    // impactQuery error takes precedence (?? short-circuits on first non-nullish)
+    expect(result.current.error).toBe(impactErr)
+  })
+
+  it('provides a refetch that invokes both underlying queries', () => {
+    const impactRefetch = mock(() => Promise.resolve({ data: null }))
+    const rulesRefetch = mock(() => Promise.resolve({ data: [] }))
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: impactRefetch })
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: rulesRefetch })
+
+    const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
+    result.current.refetch()
+
+    expect(impactRefetch).toHaveBeenCalledTimes(1)
+    expect(rulesRefetch).toHaveBeenCalledTimes(1)
   })
 })

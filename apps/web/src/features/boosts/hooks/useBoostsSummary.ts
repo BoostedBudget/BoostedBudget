@@ -9,6 +9,8 @@ export interface UseBoostsSummaryResult {
   completedCount: number | null
   activeRulesCount: number
   isLoading: boolean
+  error: Error | null
+  refetch: () => void
 }
 
 export function useBoostsSummary(): UseBoostsSummaryResult {
@@ -26,5 +28,10 @@ export function useBoostsSummary(): UseBoostsSummaryResult {
     completedCount: data?.completed_count ?? null,
     activeRulesCount: rules.filter((r) => r.enabled).length,
     isLoading: impactQuery.isLoading || rulesQuery.isLoading,
+    error: (impactQuery.error ?? rulesQuery.error) as Error | null,
+    refetch: () => {
+      void impactQuery.refetch()
+      void rulesQuery.refetch()
+    },
   }
 }

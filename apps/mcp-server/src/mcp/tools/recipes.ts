@@ -60,6 +60,15 @@ export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
       { operationId: 'getLargestTransactionsForPeriod', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}', limit: 10 } },
     ],
   },
+  {
+    name: 'Boosts Review',
+    description: 'Review savings automation: pending recommendations, transfers awaiting a match, and overall savings performance.',
+    calls: [
+      { operationId: 'getTransferSuggestions', params: { status: 'pending' } },
+      { operationId: 'getTransferSuggestions', params: { status: 'accepted' } },
+      { operationId: 'getSavingsImpactMe' },
+    ],
+  },
 ]
 
 export interface SaveRecipeInput {

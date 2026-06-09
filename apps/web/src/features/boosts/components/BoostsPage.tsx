@@ -62,19 +62,19 @@ export function BoostsPage() {
   const summary = useBoostsSummary()
   const { accept, reject, confirmMatch, cancelAccepted, isPending } = useBoostSuggestionActions()
 
-  const { items: activeItems, isLoading: activeLoading } = useBoostSuggestions({
+  const { items: activeItems, isLoading: activeLoading, error: activeError, refetch: refetchActive } = useBoostSuggestions({
     status: 'pending',
     limit: 20,
     offset: 0,
   })
 
-  const { items: awaitingItems, isLoading: awaitingLoading } = useBoostSuggestions({
+  const { items: awaitingItems, isLoading: awaitingLoading, error: awaitingError, refetch: refetchAwaiting } = useBoostSuggestions({
     status: 'accepted',
     limit: 20,
     offset: 0,
   })
 
-  const { items: historyItems, total: historyTotal, isLoading: historyLoading } = useBoostSuggestions({
+  const { items: historyItems, total: historyTotal, isLoading: historyLoading, error: historyError, refetch: refetchHistory } = useBoostSuggestions({
     status: 'completed,rejected,expired',
     limit: HISTORY_PAGE_SIZE,
     offset: historyOffset,
@@ -90,6 +90,8 @@ export function BoostsPage() {
         completedCount={summary.completedCount}
         activeRulesCount={summary.activeRulesCount}
         isLoading={summary.isLoading}
+        isError={summary.error !== null}
+        onRetry={summary.refetch}
       />
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
@@ -108,6 +110,8 @@ export function BoostsPage() {
             onAccept={accept}
             onReject={reject}
             isPending={isPending}
+            error={activeError}
+            onRetry={refetchActive}
           />
         </TabsContent>
 
@@ -118,6 +122,8 @@ export function BoostsPage() {
             onConfirmMatch={confirmMatch}
             onCancelAccepted={cancelAccepted}
             isPending={isPending}
+            error={awaitingError}
+            onRetry={refetchAwaiting}
           />
         </TabsContent>
 
@@ -129,6 +135,8 @@ export function BoostsPage() {
             offset={historyOffset}
             isLoading={historyLoading}
             onPageChange={setHistoryOffset}
+            error={historyError}
+            onRetry={refetchHistory}
           />
         </TabsContent>
 

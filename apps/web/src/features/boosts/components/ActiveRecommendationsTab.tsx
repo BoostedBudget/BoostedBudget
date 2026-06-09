@@ -2,6 +2,7 @@ import { Check, X, TrendingUp } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
@@ -15,6 +16,8 @@ export interface ActiveRecommendationsTabProps {
   onAccept: (id: string) => void
   onReject: (id: string) => void
   isPending: boolean
+  error?: Error | null
+  onRetry?: () => void
 }
 
 export function ActiveRecommendationsTab({
@@ -23,8 +26,20 @@ export function ActiveRecommendationsTab({
   onAccept,
   onReject,
   isPending,
+  error,
+  onRetry,
 }: ActiveRecommendationsTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-active', COLUMN_IDS)
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Couldn't load recommendations"
+        description="There was a problem fetching your active recommendations."
+        onRetry={onRetry}
+      />
+    )
+  }
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {

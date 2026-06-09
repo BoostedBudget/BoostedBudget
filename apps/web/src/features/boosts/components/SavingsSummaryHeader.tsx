@@ -1,4 +1,5 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 
 const formatCurrency = (amount: number) =>
@@ -15,6 +16,10 @@ export interface SavingsSummaryHeaderProps {
   completedCount: number | null
   activeRulesCount: number
   isLoading: boolean
+  /** True when a fetch error prevents the summary from loading */
+  isError?: boolean
+  /** Called when the user clicks the Retry button in the error fallback */
+  onRetry?: () => void
 }
 
 export function SavingsSummaryHeader({
@@ -23,6 +28,8 @@ export function SavingsSummaryHeader({
   completedCount,
   activeRulesCount,
   isLoading,
+  isError,
+  onRetry,
 }: SavingsSummaryHeaderProps) {
   if (isLoading) {
     return (
@@ -30,6 +37,19 @@ export function SavingsSummaryHeader({
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="h-16 rounded-lg bg-muted" />
         ))}
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="flex items-center justify-center gap-3 py-4">
+        <p className="text-sm text-muted-foreground">Unable to load savings summary</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" onClick={onRetry} aria-label="Retry">
+            Retry
+          </Button>
+        )}
       </div>
     )
   }

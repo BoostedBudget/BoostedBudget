@@ -1,12 +1,13 @@
 import { History } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 import { formatCurrency, formatDate } from '../constants'
 import { SuggestionStatusBadge } from './SuggestionStatusBadge'
 
-const COLUMN_IDS = ['event_date', 'amount', 'status', 'source', 'notes']
+const COLUMN_IDS = ['event_date', 'amount', 'destination', 'status', 'source', 'notes']
 
 /** Most-informative timestamp: completed > acted-on > updated > created */
 const eventDate = (item: TransferSuggestion): string =>
@@ -28,6 +29,8 @@ export interface HistoryTabProps {
   isLoading: boolean
   /** Called with the new offset value */
   onPageChange: (offset: number) => void
+  error?: Error | null
+  onRetry?: () => void
 }
 
 export function HistoryTab({
@@ -37,8 +40,20 @@ export function HistoryTab({
   offset,
   isLoading,
   onPageChange,
+  error,
+  onRetry,
 }: HistoryTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-history', COLUMN_IDS)
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Couldn't load history"
+        description="There was a problem fetching your transfer history."
+        onRetry={onRetry}
+      />
+    )
+  }
 
   const currentPage = Math.floor(offset / limit) + 1
   const totalPages = Math.ceil(total / limit)
@@ -58,6 +73,15 @@ export function HistoryTab({
       defaultSize: 120,
       minSize: 90,
       render: (item) => formatCurrency(item.amount, item.currency_code),
+    },
+    {
+      id: 'destination',
+      header: 'Move To',
+      defaultSize: 160,
+      minSize: 110,
+      render: (item) => (
+        <span className="text-sm font-medium">{item.to_account_name ?? 'No destination'}</span>
+      ),
     },
     {
       id: 'status',
@@ -121,7 +145,7 @@ export function HistoryTab({
         onColumnSizingChange={onSizingChange}
         loading={isLoading}
         skeletonRows={3}
-        maskedColumnIds={['amount', 'notes']}
+        maskedColumnIds={['amount', 'destination', 'notes']}
         emptyState={
           <EmptyState
             icon={<History />}

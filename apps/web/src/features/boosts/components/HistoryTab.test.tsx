@@ -314,10 +314,40 @@ describe('HistoryTab', () => {
     expect(screen.getByText(/budget period ended without a match/i)).toBeTruthy()
   })
 
-  // === R2-E: PII masking + EmptyState ===
+  // === R7-1: destination column (AC4) ===
 
-  it('masks amount and notes columns (≥2 ph-mask tds per row)', () => {
-    const { container } = render(
+  it('shows destination account name for completed items', () => {
+    const completedWithDest = { ...completedItem, to_account_name: 'High-Yield Savings' }
+    render(
+      <HistoryTab
+        items={[completedWithDest]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText('High-Yield Savings')).toBeTruthy()
+  })
+
+  it('shows destination account name for expired items', () => {
+    const expiredWithDest = { ...expiredItem, to_account_name: 'Emergency Fund' }
+    render(
+      <HistoryTab
+        items={[expiredWithDest]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(screen.getByText('Emergency Fund')).toBeTruthy()
+  })
+
+  it('shows "No destination" fallback when to_account_name is null', () => {
+    render(
       <HistoryTab
         items={[completedItem]}
         total={1}
@@ -327,8 +357,26 @@ describe('HistoryTab', () => {
         onPageChange={mockOnPageChange}
       />
     )
+    // completedItem has no to_account_name — should show descriptive fallback
+    expect(screen.getByText('No destination')).toBeTruthy()
+  })
+
+  // === R2-E: PII masking + EmptyState ===
+
+  it('masks amount, destination, and notes columns (≥3 ph-mask tds per row)', () => {
+    const completedWithDest = { ...completedItem, to_account_name: 'High-Yield Savings' }
+    const { container } = render(
+      <HistoryTab
+        items={[completedWithDest]}
+        total={1}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        onPageChange={mockOnPageChange}
+      />
+    )
     const masked = container.querySelectorAll('[data-ph-mask]')
-    expect(masked.length).toBeGreaterThanOrEqual(2)
+    expect(masked.length).toBeGreaterThanOrEqual(3)
   })
 
   it('renders EmptyState component (data-slot="empty-state") for empty items', () => {
@@ -343,5 +391,40 @@ describe('HistoryTab', () => {
       />
     )
     expect(container.querySelector('[data-slot="empty-state"]')).toBeTruthy()
+  })
+
+  // === R7-2: error state ===
+
+  it('renders ErrorState instead of table when error is set', () => {
+    const { container } = render(
+      <HistoryTab
+        items={[]}
+        total={0}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        error={new Error('fetch failed')}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('calls onRetry when Retry is clicked in error state', () => {
+    const mockOnRetry = mock((_?: unknown) => {})
+    render(
+      <HistoryTab
+        items={[]}
+        total={0}
+        limit={20}
+        offset={0}
+        isLoading={false}
+        error={new Error('fail')}
+        onRetry={mockOnRetry}
+        onPageChange={mockOnPageChange}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(mockOnRetry).toHaveBeenCalledTimes(1)
   })
 })

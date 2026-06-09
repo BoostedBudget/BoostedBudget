@@ -2,6 +2,7 @@ import { CheckCircle2, XCircle, Clock } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
@@ -16,6 +17,8 @@ export interface AwaitingMatchTabProps {
   /** Cancel an accepted suggestion, transitioning it to rejected (leaves the tab) */
   onCancelAccepted: (id: string) => void
   isPending: boolean
+  error?: Error | null
+  onRetry?: () => void
 }
 
 export function AwaitingMatchTab({
@@ -24,8 +27,20 @@ export function AwaitingMatchTab({
   onConfirmMatch,
   onCancelAccepted,
   isPending,
+  error,
+  onRetry,
 }: AwaitingMatchTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-awaiting', COLUMN_IDS)
+
+  if (error) {
+    return (
+      <ErrorState
+        title="Couldn't load awaiting transfers"
+        description="There was a problem fetching transfers waiting for a match."
+        onRetry={onRetry}
+      />
+    )
+  }
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {
