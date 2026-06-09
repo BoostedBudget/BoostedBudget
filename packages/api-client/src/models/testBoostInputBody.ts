@@ -27,27 +27,11 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { AutomationRuleCondition } from './automationRuleCondition';
-import type { TriggerConfig } from './triggerConfig';
+import type { TestBoostInputBodyTriggerData } from './testBoostInputBodyTriggerData';
 
-export interface AutomationRule {
+export interface TestBoostInputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  actions: unknown;
-  condition_logic: string;
-  /** @nullable */
-  conditions: AutomationRuleCondition[] | null;
-  created_at: string;
-  description?: string;
-  enabled: boolean;
-  execution_count: number;
-  id: string;
-  last_executed_at?: string;
-  last_successful_at?: string;
-  name: string;
-  priority: number;
-  rule_type: string;
-  trigger_config: TriggerConfig;
-  updated_at: string;
-  user_id: string;
+  /** Optional test data to evaluate conditions against */
+  trigger_data?: TestBoostInputBodyTriggerData;
 }

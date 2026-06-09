@@ -28,10 +28,10 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export type GetAutomationRulesParams = {
-/**
- * Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
- * @nullable
- */
-rule_type?: string[] | null;
-};
+export interface BoostCondition {
+  budget_id?: string;
+  category_id?: string;
+  field: string;
+  operator: string;
+  value: unknown;
+}

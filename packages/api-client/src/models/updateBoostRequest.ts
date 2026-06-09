@@ -27,11 +27,18 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BoostCondition } from './boostCondition';
+import type { TriggerConfig } from './triggerConfig';
 
-export interface AutomationRuleCondition {
-  budget_id?: string;
-  category_id?: string;
-  field: string;
-  operator: string;
-  value: unknown;
+export interface UpdateBoostRequest {
+  /** A URL to the JSON Schema for this object. */
+  readonly $schema?: string;
+  actions?: unknown;
+  condition_logic?: string;
+  conditions?: BoostCondition[];
+  description?: string;
+  enabled?: boolean;
+  name?: string;
+  priority?: number;
+  trigger_config?: TriggerConfig;
 }

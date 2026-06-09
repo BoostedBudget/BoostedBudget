@@ -28,20 +28,7 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export type GetRuleExecutionsParams = {
 /**
- * Filter by status: pending, running, completed, failed
+ * Optional data to pass to the rule execution
  */
-status?: string;
-/**
- * Maximum number of results
- * @minimum 1
- * @maximum 100
- */
-limit?: number;
-/**
- * Number of results to skip
- * @minimum 0
- */
-offset?: number;
-};
+export type TriggerBoostInputBodyTriggerData = {[key: string]: unknown};

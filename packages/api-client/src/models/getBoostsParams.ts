@@ -27,11 +27,11 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { TestAutomationRuleInputBodyTriggerData } from './testAutomationRuleInputBodyTriggerData';
 
-export interface TestAutomationRuleInputBody {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** Optional test data to evaluate conditions against */
-  trigger_data?: TestAutomationRuleInputBodyTriggerData;
-}
+export type GetBoostsParams = {
+/**
+ * Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
+ * @nullable
+ */
+rule_type?: string[] | null;
+};
