@@ -134,7 +134,7 @@ export function RuleTable({
                   type="checkbox"
                   checked={selectedIds.includes(row.id)}
                   onChange={() => handleSelectRow(row.id)}
-                  aria-label={`Select ${row.name}`}
+                  aria-label="Select rule"
                   className="h-4 w-4 cursor-pointer accent-primary"
                 />
               </div>

@@ -346,6 +346,20 @@ describe('RuleTable', () => {
       expect(onSelectionChange).toHaveBeenCalledWith(['rule-1', 'rule-2', 'rule-3'])
     })
 
+    it('row checkboxes do not embed rule name in aria-label (attribute-path PII leak)', () => {
+      // R4-2: session replay records attributes verbatim; data-ph-mask cannot cover them.
+      // The per-row checkbox aria-label must NOT contain the rule name.
+      render(<RuleTable rules={mockRules} selectable />)
+      const checkboxes = screen.getAllByRole('checkbox')
+      // Skip index 0 (Select all) — verify row checkboxes (1..n)
+      for (let i = 1; i < checkboxes.length; i++) {
+        const label = checkboxes[i].getAttribute('aria-label') ?? ''
+        expect(label).not.toContain('Daily Budget Check')
+        expect(label).not.toContain('Monthly Savings')
+        expect(label).not.toContain('Event Transfer')
+      }
+    })
+
     it('should show selected rows', () => {
       render(
         <RuleTable

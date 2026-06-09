@@ -155,7 +155,7 @@ export function RuleCard({
         </div>
 
         {conditionSummary && (
-          <p className="text-xs text-muted-foreground italic">{conditionSummary}</p>
+          <p className="text-xs text-muted-foreground italic" data-ph-mask>{conditionSummary}</p>
         )}
 
         {actionSummary && (
