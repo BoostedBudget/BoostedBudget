@@ -12,7 +12,7 @@ import { screen, fireEvent, act } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
-// Mock API client boundary (hooks call through to these)
+// Mock API client boundary
 import '@/test/mocks/transfer-suggestions-api'
 import '@/test/mocks/savings-impact-api'
 import '@/test/mocks/automation-rules-api'
@@ -26,12 +26,10 @@ import {
 } from '@/test/mocks/transfer-suggestions-api'
 import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
 
-// Mock RulesPage to avoid rendering the full management UI in this test
 mock.module('@/features/rules/components/RulesPage', () => ({
   RulesPage: () => <div data-testid="rules-page-mock">Rules Page</div>,
 }))
 
-// Ensure useTrackEvent returns our mock
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
@@ -48,13 +46,15 @@ function renderBoostsPage(initialRoute = '/boosts') {
 
 describe('BoostsPage', () => {
   beforeEach(() => {
+    localStorage.clear()
     mockTrackEvent.mockClear()
     mockUseGetTransferSuggestions.mockClear()
     mockUseGetTransferSuggestions.mockReturnValue({ data: undefined, isLoading: false, error: null })
-    mockUseAcceptTransferSuggestion.mockReturnValue({ mutate: mock(() => {}), isPending: false })
-    mockUseRejectTransferSuggestion.mockReturnValue({ mutate: mock(() => {}), isPending: false })
-    mockUseConfirmTransferSuggestionMatch.mockReturnValue({ mutate: mock(() => {}), isPending: false })
-    mockUseDeclineTransferSuggestionMatch.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+    const emptyMutate = { mutate: mock(() => {}), isPending: false }
+    mockUseAcceptTransferSuggestion.mockReturnValue(emptyMutate)
+    mockUseRejectTransferSuggestion.mockReturnValue(emptyMutate)
+    mockUseConfirmTransferSuggestionMatch.mockReturnValue(emptyMutate)
+    mockUseDeclineTransferSuggestionMatch.mockReturnValue(emptyMutate)
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null })
   })
 
@@ -85,7 +85,7 @@ describe('BoostsPage', () => {
   it('fires BOOSTS_PAGE_VIEWED analytics once on mount', async () => {
     renderBoostsPage()
     await act(async () => {})
-    expect(mockTrackEvent).toHaveBeenCalledWith('boosts_page_viewed', expect.anything())
+    expect(mockTrackEvent).toHaveBeenCalledWith('boosts_page_viewed', { tab: 'active' })
   })
 
   // Radix Tabs switches on focus (onFocus with activationMode !== 'manual').
@@ -98,6 +98,15 @@ describe('BoostsPage', () => {
     })
     const awaitingTab = screen.getByRole('tab', { name: /awaiting match/i })
     expect(awaitingTab.getAttribute('data-state')).toBe('active')
+  })
+
+  // R6-1: assert BOOSTS_TAB_CHANGED fires when switching tabs
+  it('fires BOOSTS_TAB_CHANGED analytics when switching to Awaiting Match tab', async () => {
+    renderBoostsPage()
+    await act(async () => {
+      fireEvent.focus(screen.getByRole('tab', { name: /awaiting match/i }))
+    })
+    expect(mockTrackEvent).toHaveBeenCalledWith('boosts_tab_changed', { tab: 'awaiting' })
   })
 
   it('switches to History tab when focused', async () => {
