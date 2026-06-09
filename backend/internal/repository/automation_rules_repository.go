@@ -25,6 +25,10 @@ type AutomationRulesRepository interface {
 	// GetByUserID retrieves all rules for a specific user, ordered by priority (desc).
 	GetByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
 
+	// GetByUserIDFiltered retrieves rules for a user optionally filtered by rule types.
+	// When ruleTypes is empty, returns all rules (same as GetByUserID).
+	GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error)
+
 	// GetEnabledByUserID retrieves all enabled rules for a user, ordered by priority (desc).
 	GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
 
@@ -163,6 +167,32 @@ func (r *automationRulesRepository) GetByUserID(ctx context.Context, userID stri
 	`
 
 	return r.queryRules(ctx, query, userID)
+}
+
+// GetByUserIDFiltered retrieves rules for a user with an optional rule-type filter.
+// When ruleTypes is empty, all rules are returned (same as GetByUserID).
+func (r *automationRulesRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	if len(ruleTypes) == 0 {
+		return r.GetByUserID(ctx, userID)
+	}
+
+	// Convert to string slice for pgx text array binding.
+	typeStrs := make([]string, len(ruleTypes))
+	for i, rt := range ruleTypes {
+		typeStrs[i] = string(rt)
+	}
+
+	query := `
+		SELECT id, user_id, name, description, enabled, priority,
+			rule_type, trigger_config, conditions, condition_logic,
+			actions, execution_count, last_executed_at, last_successful_at,
+			created_at, updated_at
+		FROM rules
+		WHERE user_id = $1 AND rule_type = ANY($2::text[])
+		ORDER BY priority DESC, created_at ASC
+	`
+
+	return r.queryRules(ctx, query, userID, typeStrs)
 }
 
 // GetEnabledByUserID retrieves all enabled rules for a user, ordered by priority (desc).

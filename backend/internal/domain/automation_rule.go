@@ -763,6 +763,21 @@ type TransferSuggestion struct {
 	CompletionSource     *string          `json:"completion_source,omitempty"      db:"completion_source"`
 	CreatedAt            time.Time        `json:"created_at" db:"created_at"`
 	UpdatedAt            time.Time        `json:"updated_at" db:"updated_at"`
+
+	// Enriched fields — populated by GetByUserIDStatuses (JOIN-enriched list only).
+	// Nil when the suggestion was fetched via a single-row lookup (GetByID, etc.)
+	// or when the related row does not exist.
+	ToAccountName        *string    `json:"to_account_name,omitempty"        db:"-"`
+	FromAccountName      *string    `json:"from_account_name,omitempty"      db:"-"`
+	RuleName             *string    `json:"rule_name,omitempty"              db:"-"`
+	MatchedTransactionAt *time.Time `json:"matched_transaction_at,omitempty" db:"-"`
+
+	// CanConfirmMatch is a server-derived flag set by the API handler before masking.
+	// True when the suggestion is accepted AND holds a reservation (matched_transaction_id
+	// non-nil), allowing the Boosts UI to enable the "Mark Done" button accurately.
+	// Computed before maskReservation clears matched_transaction_id, so the UI always
+	// receives the correct value regardless of the masking applied.
+	CanConfirmMatch *bool `json:"can_confirm_match,omitempty" db:"-"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.

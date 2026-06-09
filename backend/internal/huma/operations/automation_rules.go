@@ -43,6 +43,10 @@ func (h *AutomationRuleHandler) SetExecutionService(executionService services.Ru
 // GetAutomationRulesInput represents the input for getting user automation rules.
 type GetAutomationRulesInput struct {
 	inputs.AuthenticatedInput
+	// RuleType is an optional list of rule types to filter by.
+	// Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
+	// When omitted, all rule types are returned.
+	RuleType []string `query:"rule_type" doc:"Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal." required:"false"`
 }
 
 // GetAutomationRulesOutput represents the response for getting user automation rules.
@@ -161,10 +165,27 @@ type GetRuleExecutionsOutput struct {
 
 // --- Handler Methods ---
 
+// validRuleTypeValues lists the allowed rule_type query values for the list endpoint.
+var validRuleTypeValues = map[string]domain.RuleType{
+	string(domain.RuleTypeTransferSuggestion): domain.RuleTypeTransferSuggestion,
+	string(domain.RuleTypeBudgetAlert):        domain.RuleTypeBudgetAlert,
+	string(domain.RuleTypeCategoryRollover):   domain.RuleTypeCategoryRollover,
+	string(domain.RuleTypeSavingsGoal):        domain.RuleTypeSavingsGoal,
+}
+
 // GetAutomationRules handles GET /api/v1/rules requests.
-// Retrieves all automation rules for the authenticated user.
+// Retrieves automation rules for the authenticated user, optionally filtered by rule type.
 func (h *AutomationRuleHandler) GetAutomationRules(ctx context.Context, input *GetAutomationRulesInput) (*GetAutomationRulesOutput, error) {
-	rules, err := h.service.GetUserRules(ctx, input.UserID)
+	var ruleTypes []domain.RuleType
+	for _, rt := range input.RuleType {
+		canonical, ok := validRuleTypeValues[rt]
+		if !ok {
+			return nil, huma.Error422UnprocessableEntity("invalid rule_type: " + rt + "; valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal")
+		}
+		ruleTypes = append(ruleTypes, canonical)
+	}
+
+	rules, err := h.service.GetUserRulesFiltered(ctx, input.UserID, ruleTypes)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -360,15 +381,19 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 // RegisterAutomationRuleRoutes registers automation rule routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) {
-	// GET /api/v1/rules - Get all user automation rules
+	// GET /api/v1/rules - Get automation rules, optionally filtered by rule type
 	huma.Register(api, huma.Operation{
 		OperationID: "getAutomationRules",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/rules",
-		Summary:     "Get user automation rules",
-		Description: "Retrieves all automation rules for the authenticated user, ordered by priority.",
-		Tags:        []string{"Automation Rules"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "List automation rules (filter by rule_type)",
+		Description: "Retrieves automation rules for the authenticated user, ordered by priority. " +
+			"Use the repeatable `rule_type` query parameter to filter by type. " +
+			"Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. " +
+			"Transfer-generating types are transfer_suggestion and savings_goal. " +
+			"When omitted, all rule types are returned.",
+		Tags:     []string{"Automation Rules"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GetAutomationRules)
 
 	// GET /api/v1/rules/{id} - Get automation rule by ID

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import $RefParser from '@apidevtools/json-schema-ref-parser'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../manifest/capability-manifest'
-import type { SpecEntry, SpecIndex } from './search-runtime'
+import type { SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
 
 // Paths relative to repo root
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -23,12 +23,29 @@ const REPO_ROOT = resolve(__dirname, '../../../../')
 const OPENAPI_PATH = resolve(REPO_ROOT, 'api/openapi.yaml')
 const OUTPUT_PATH = resolve(__dirname, 'generated/spec-index.json')
 
+interface OpenAPIParameterSchema {
+  type?: string | string[]
+  enum?: string[]
+  items?: { type?: string; enum?: string[] }
+  [key: string]: unknown
+}
+
+interface OpenAPIParameter {
+  name?: string
+  in?: string
+  required?: boolean
+  description?: string
+  schema?: OpenAPIParameterSchema
+  [key: string]: unknown
+}
+
 interface OpenAPIOperation {
   operationId?: string
   summary?: string
   description?: string
   tags?: string[]
   security?: unknown[]
+  parameters?: OpenAPIParameter[]
 }
 
 interface OpenAPIPathItem {
@@ -63,7 +80,7 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
       const operation = pathItem[method] as OpenAPIOperation | undefined
       if (!operation?.operationId) continue
 
-      const { operationId, summary = '', tags = [] } = operation
+      const { operationId, summary = '', description, tags = [], parameters: rawParams } = operation
 
       // Look up capability classification; skip operations not in the manifest
       const capability = getCapability(operationId)
@@ -73,7 +90,25 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
         continue
       }
 
-      entries.push({
+      // Extract query + path parameters with description/enum only (token-efficient)
+      const parameters: SpecParameter[] = (rawParams ?? [])
+        .filter((p): p is OpenAPIParameter & { name: string; in: string } =>
+          typeof p.name === 'string' && (p.in === 'query' || p.in === 'path') && !!(p.description || p.schema?.enum || p.schema?.items?.enum)
+        )
+        .map((p) => {
+          const enumValues = p.schema?.enum ?? p.schema?.items?.enum
+          const schemaType = Array.isArray(p.schema?.type) ? p.schema.type.find((t) => t !== 'null') : p.schema?.type
+          return {
+            name: p.name,
+            in: p.in,
+            ...(p.required && { required: true }),
+            ...(p.description && { description: p.description }),
+            ...(enumValues && { enum: enumValues.map(String) }),
+            ...(schemaType && { type: schemaType }),
+          }
+        })
+
+      const entry: SpecEntry = {
         operationId,
         method: method.toUpperCase(),
         path,
@@ -81,7 +116,11 @@ export async function buildSpecIndex(): Promise<SpecIndex> {
         tags,
         manifestClass: capability.class,
         excluded: capability.excluded,
-      })
+      }
+      if (description) entry.description = description
+      if (parameters.length > 0) entry.parameters = parameters
+
+      entries.push(entry)
     }
   }
 

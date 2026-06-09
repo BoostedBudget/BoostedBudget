@@ -180,6 +180,17 @@ func (m *mockTransferSuggestionRepository) UpdateStatus(ctx context.Context, id 
 	return domain.ErrTransferSuggestionNotFound
 }
 
+func (m *mockTransferSuggestionRepository) CancelAcceptedSuggestion(ctx context.Context, id string, userNotes *string) error {
+	for _, s := range m.suggestions {
+		if s.ID == id && (s.Status == domain.SuggestionStatusPending || s.Status == domain.SuggestionStatusAccepted) {
+			s.Status = domain.SuggestionStatusRejected
+			s.UserNotes = userNotes
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionAlreadyActioned
+}
+
 func (m *mockTransferSuggestionRepository) Update(ctx context.Context, suggestion *domain.TransferSuggestion) error {
 	for i, s := range m.suggestions {
 		if s.ID == suggestion.ID {
@@ -274,6 +285,33 @@ func (m *mockTransferSuggestionRepository) CompleteRetainingReservation(ctx cont
 
 func (m *mockTransferSuggestionRepository) ClearStaleReservations(_ context.Context) (int64, error) {
 	return 0, nil
+}
+
+func (m *mockTransferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	statusSet := make(map[domain.SuggestionStatus]bool, len(statuses))
+	for _, s := range statuses {
+		statusSet[s] = true
+	}
+	if len(statusSet) == 0 {
+		statusSet[domain.SuggestionStatusPending] = true
+	}
+	var result []*domain.TransferSuggestion
+	for _, s := range m.suggestions {
+		if s.UserID == userID && statusSet[s.Status] {
+			result = append(result, s)
+		}
+	}
+	total := len(result)
+	// Apply pagination.
+	if offset < len(result) {
+		result = result[offset:]
+	} else {
+		result = nil
+	}
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, total, nil
 }
 
 // TestConditionEvaluation tests the condition matching logic.
@@ -828,6 +866,23 @@ func (m *mockAutomationRulesRepository) GetByUserID(ctx context.Context, userID 
 	var result []*domain.AutomationRule
 	for _, r := range m.rules {
 		if r.UserID == userID {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockAutomationRulesRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	if len(ruleTypes) == 0 {
+		return m.GetByUserID(ctx, userID)
+	}
+	typeSet := make(map[domain.RuleType]bool, len(ruleTypes))
+	for _, rt := range ruleTypes {
+		typeSet[rt] = true
+	}
+	var result []*domain.AutomationRule
+	for _, r := range m.rules {
+		if r.UserID == userID && typeSet[r.RuleType] {
 			result = append(result, r)
 		}
 	}

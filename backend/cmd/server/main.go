@@ -340,7 +340,7 @@ func main() {
 		budgetRepo := repository.NewBudgetRepository(db)                                             // Issue #28: Budget management
 		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                   // Issue #28: Savings goals
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                       // Issue #354: Dashboard preferences
-		transferSuggestionRepo := repository.NewTransferSuggestionRepository(db)                     // Issue #36: Transfer suggestions
+		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor) // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
 		automationRuleRepo := repository.NewAutomationRulesRepository(db)                            // Issue #37: Automation rules
 		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                       // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)                                 // Issue #640: System health monitoring

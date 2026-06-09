@@ -18,15 +18,15 @@ import {
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
+// This re-mock ensures SavingsPage gets the correct mockTrackEvent reference even when
+// running alongside other test files in the same bun worker (module cache reuse).
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
-
-mock.module('@/auth/ReadOnlyContext', () => ({
-  useReadOnly: () => ({ isReadOnly: false }),
-  ReadOnlyProvider: ({ children }: { children: React.ReactNode }) => children,
-}))
-
+// IMPORTANT: Do NOT add mock.module('@/auth/ReadOnlyContext', ...) here.
+// It is process-global in bun and corrupts ReadOnlyGuard for other test files
+// that run in the same worker (see CLAUDE.md feedback_bun_test_mock_module_global).
+// The real ReadOnlyContext default (isReadOnly: false) is correct for SavingsPage tests.
 const { SavingsPage } = await import('./SavingsPage')
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
