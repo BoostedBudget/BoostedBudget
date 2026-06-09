@@ -5,7 +5,7 @@
  * TDD RED: Tests written before implementation.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import type { TransferSuggestionListResponse } from '@boostedbudget/api-client/models'
 import { mockUseGetTransferSuggestions } from '@/test/mocks/transfer-suggestions-api'
@@ -117,5 +117,22 @@ describe('useBoostSuggestions', () => {
     })
 
     expect(result.current.error).toBe(err)
+  })
+
+  // R7-2: refetch passthrough
+  it('passes through refetch from the underlying query', () => {
+    const mockRefetch = mock(() => Promise.resolve({ data: undefined }))
+    mockUseGetTransferSuggestions.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetch,
+    })
+
+    const { result } = renderHook(() => useBoostSuggestions({ status: 'pending', limit: 20, offset: 0 }), {
+      wrapper: createQueryWrapper(),
+    })
+
+    expect(result.current.refetch).toBe(mockRefetch)
   })
 })

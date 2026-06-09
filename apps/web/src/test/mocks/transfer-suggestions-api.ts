@@ -9,10 +9,12 @@ import * as RealTransferSuggestionsModule from '@boostedbudget/api-client/endpoi
 export const getGetTransferSuggestionsQueryKey = RealTransferSuggestionsModule.getGetTransferSuggestionsQueryKey
 
 // === useGetTransferSuggestions ===
+export const mockRefetch = mock(() => Promise.resolve())
 export const mockUseGetTransferSuggestions = mock(() => ({
   data: [],
   isLoading: false,
   error: null,
+  refetch: mockRefetch,
 }))
 
 // === useAcceptTransferSuggestion ===

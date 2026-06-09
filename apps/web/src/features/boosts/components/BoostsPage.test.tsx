@@ -25,6 +25,7 @@ import {
   mockUseDeclineTransferSuggestionMatch,
 } from '@/test/mocks/transfer-suggestions-api'
 import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
+import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
 
 mock.module('@/features/rules/components/RulesPage', () => ({
   RulesPage: () => <div data-testid="rules-page-mock">Rules Page</div>,
@@ -48,14 +49,22 @@ describe('BoostsPage', () => {
   beforeEach(() => {
     localStorage.clear()
     mockTrackEvent.mockClear()
+
+    // Reset all API mocks to default (success/empty) state
     mockUseGetTransferSuggestions.mockClear()
-    mockUseGetTransferSuggestions.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    mockUseGetTransferSuggestions.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mock(() => {}) })
+
     const emptyMutate = { mutate: mock(() => {}), isPending: false }
     mockUseAcceptTransferSuggestion.mockReturnValue(emptyMutate)
     mockUseRejectTransferSuggestion.mockReturnValue(emptyMutate)
     mockUseConfirmTransferSuggestionMatch.mockReturnValue(emptyMutate)
     mockUseDeclineTransferSuggestionMatch.mockReturnValue(emptyMutate)
-    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null })
+
+    mockUseGetSavingsImpactMe.mockClear()
+    mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
+
+    mockUseGetAutomationRules.mockClear()
+    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
   })
 
   it('renders the "Boosts" heading', () => {
@@ -132,9 +141,76 @@ describe('BoostsPage', () => {
       data: { total_amount: 1500, month_amount: 200, prev_month_amount: 100, completed_count: 5, recent_items: null },
       isLoading: false,
       error: null,
+      refetch: mock(() => {}),
     })
     renderBoostsPage()
     // The header shows the total moved value
     expect(screen.getByText(/1,500/)).toBeTruthy()
+  })
+
+  // R7-2: error states wired through BoostsPage
+  it('shows error state in Active tab when transfer suggestions fetch fails', async () => {
+    mockUseGetTransferSuggestions.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('network error'),
+      refetch: mock(() => {}),
+    })
+    renderBoostsPage()
+    // The active tab (default) should show ErrorState not empty state
+    const { container } = renderBoostsPage()
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('shows error state in Awaiting Match tab when transfer suggestions fetch fails', async () => {
+    mockUseGetTransferSuggestions.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('network error'),
+      refetch: mock(() => {}),
+    })
+    const { container } = renderBoostsPage()
+    await act(async () => {
+      fireEvent.focus(screen.getByRole('tab', { name: /awaiting match/i }))
+    })
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('shows error state in History tab when transfer suggestions fetch fails', async () => {
+    mockUseGetTransferSuggestions.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('network error'),
+      refetch: mock(() => {}),
+    })
+    const { container } = renderBoostsPage()
+    await act(async () => {
+      fireEvent.focus(screen.getByRole('tab', { name: /history/i }))
+    })
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('shows summary error fallback when savings impact fetch fails', async () => {
+    mockUseGetSavingsImpactMe.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: new Error('impact error'),
+      refetch: mock(() => {}),
+    })
+    renderBoostsPage()
+    expect(screen.getByText(/unable to load savings summary/i)).toBeTruthy()
+  })
+
+  it('calls summary refetch when Retry is clicked in summary error fallback', async () => {
+    const mockSavingsRefetch = mock(() => Promise.resolve({ data: null }))
+    mockUseGetSavingsImpactMe.mockReturnValue({
+      data: null,
+      isLoading: false,
+      error: new Error('impact error'),
+      refetch: mockSavingsRefetch,
+    })
+    renderBoostsPage()
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(mockSavingsRefetch).toHaveBeenCalledTimes(1)
   })
 })

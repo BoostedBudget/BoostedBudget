@@ -268,4 +268,37 @@ describe('AwaitingMatchTab', () => {
     // Amount should appear in the watching copy row even without dest account
     expect(bodyText).toContain('750')
   })
+
+  // === R7-2: error state ===
+
+  it('renders ErrorState instead of table when error is set', () => {
+    const { container } = render(
+      <AwaitingMatchTab
+        items={[]}
+        isLoading={false}
+        error={new Error('fetch failed')}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('calls onRetry when Retry is clicked in error state', () => {
+    const mockOnRetry = mock(() => {})
+    render(
+      <AwaitingMatchTab
+        items={[]}
+        isLoading={false}
+        error={new Error('fail')}
+        onRetry={mockOnRetry}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(mockOnRetry).toHaveBeenCalledTimes(1)
+  })
 })

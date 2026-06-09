@@ -245,4 +245,37 @@ describe('ActiveRecommendationsTab', () => {
     // Should say something more descriptive than bare dash
     expect(bodyText).toContain('No destination')
   })
+
+  // === R7-2: error state ===
+
+  it('renders ErrorState instead of table when error is set', () => {
+    const { container } = render(
+      <ActiveRecommendationsTab
+        items={[]}
+        isLoading={false}
+        error={new Error('network error')}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    expect(container.querySelector('[data-slot="error-state"]')).toBeTruthy()
+  })
+
+  it('calls onRetry when Retry is clicked in error state', () => {
+    const mockOnRetry = mock(() => {})
+    render(
+      <ActiveRecommendationsTab
+        items={[]}
+        isLoading={false}
+        error={new Error('fail')}
+        onRetry={mockOnRetry}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    expect(mockOnRetry).toHaveBeenCalledTimes(1)
+  })
 })

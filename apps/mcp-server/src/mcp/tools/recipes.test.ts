@@ -168,4 +168,29 @@ describe('recipe.templates', () => {
       }
     }
   })
+
+  // R7-3: Boosts Review recipe template
+  it('includes a "Boosts Review" template that references getTransferSuggestions and getSavingsImpactMe', () => {
+    const boostsRecipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Boosts Review')
+    expect(boostsRecipe).toBeDefined()
+    const opIds = boostsRecipe!.calls.map((c) => c.operationId)
+    expect(opIds).toContain('getTransferSuggestions')
+    expect(opIds).toContain('getSavingsImpactMe')
+  })
+
+  it('"Boosts Review" pending call has status param set to "pending"', () => {
+    const boostsRecipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Boosts Review')!
+    const pendingCall = boostsRecipe.calls.find(
+      (c) => c.operationId === 'getTransferSuggestions' && c.params?.['status'] === 'pending',
+    )
+    expect(pendingCall).toBeDefined()
+  })
+
+  it('"Boosts Review" accepted call has status param set to "accepted"', () => {
+    const boostsRecipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Boosts Review')!
+    const acceptedCall = boostsRecipe.calls.find(
+      (c) => c.operationId === 'getTransferSuggestions' && c.params?.['status'] === 'accepted',
+    )
+    expect(acceptedCall).toBeDefined()
+  })
 })

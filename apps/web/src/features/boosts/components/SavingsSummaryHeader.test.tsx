@@ -5,8 +5,8 @@
  * TDD RED: Tests written before implementation.
  */
 
-import { describe, it, expect } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, mock } from 'bun:test'
+import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import { SavingsSummaryHeader } from './SavingsSummaryHeader'
 
@@ -110,16 +110,6 @@ describe('SavingsSummaryHeader', () => {
     })
 
     it('shows em-dash or 0 when totalMoved is null (no data yet)', () => {
-      render(
-        <SavingsSummaryHeader
-          totalMoved={null}
-          momChange={null}
-          completedCount={null}
-          activeRulesCount={0}
-          isLoading={false}
-        />
-      )
-      // Should not throw and should show some placeholder for empty state
       const { container } = render(
         <SavingsSummaryHeader
           totalMoved={null}
@@ -129,7 +119,7 @@ describe('SavingsSummaryHeader', () => {
           isLoading={false}
         />
       )
-      // At minimum the component renders
+      // At minimum the component renders without throwing
       expect(container.firstChild).toBeTruthy()
     })
 
@@ -146,6 +136,85 @@ describe('SavingsSummaryHeader', () => {
       const maskedElements = container.querySelectorAll('[data-ph-mask]')
       // Should have at least 2: total + mom change
       expect(maskedElements.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // === R7-2: error state ===
+  describe('error state', () => {
+    it('shows a fallback message when isError is true and not loading', () => {
+      render(
+        <SavingsSummaryHeader
+          totalMoved={null}
+          momChange={null}
+          completedCount={null}
+          activeRulesCount={0}
+          isLoading={false}
+          isError={true}
+        />
+      )
+      expect(screen.getByText(/unable to load savings summary/i)).toBeTruthy()
+    })
+
+    it('does not render StatCards when isError is true', () => {
+      const { container } = render(
+        <SavingsSummaryHeader
+          totalMoved={2500}
+          momChange={100}
+          completedCount={10}
+          activeRulesCount={3}
+          isLoading={false}
+          isError={true}
+        />
+      )
+      // StatCards render data-ph-mask; error fallback should not
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBe(0)
+    })
+
+    it('shows a Retry button when onRetry is provided', () => {
+      render(
+        <SavingsSummaryHeader
+          totalMoved={null}
+          momChange={null}
+          completedCount={null}
+          activeRulesCount={0}
+          isLoading={false}
+          isError={true}
+          onRetry={() => {}}
+        />
+      )
+      expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy()
+    })
+
+    it('calls onRetry when Retry button is clicked', () => {
+      const onRetry = mock(() => {})
+      render(
+        <SavingsSummaryHeader
+          totalMoved={null}
+          momChange={null}
+          completedCount={null}
+          activeRulesCount={0}
+          isLoading={false}
+          isError={true}
+          onRetry={onRetry}
+        />
+      )
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+      expect(onRetry).toHaveBeenCalledTimes(1)
+    })
+
+    it('omits Retry button when onRetry is not provided', () => {
+      render(
+        <SavingsSummaryHeader
+          totalMoved={null}
+          momChange={null}
+          completedCount={null}
+          activeRulesCount={0}
+          isLoading={false}
+          isError={true}
+        />
+      )
+      expect(screen.queryByRole('button', { name: /retry/i })).toBeNull()
     })
   })
 })
