@@ -24,6 +24,7 @@ import {
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 const mockRules: AutomationRule[] = [
   {
@@ -109,6 +110,7 @@ describe('RulesPage', () => {
     mockRefetchAutomationRules.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
+    mockTrackEvent.mockClear()
     localStorage.clear()
 
     // Configure automation rules mock
@@ -365,6 +367,32 @@ describe('RulesPage', () => {
     fireEvent.click(confirmButton)
     await waitFor(() => {
       expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
+    })
+  })
+
+  it('fires RULE_DELETED analytics after delete is confirmed', async () => {
+    mockDeleteAutomationRuleMutate.mockImplementationOnce(
+      (_args: unknown, opts?: { onSuccess?: () => void }) => { opts?.onSuccess?.() }
+    )
+
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', { name: /delete/i })
+    fireEvent.click(confirmButton)
+
+    await waitFor(() => {
+      expect(mockTrackEvent).toHaveBeenCalledWith('rule_deleted')
     })
   })
 

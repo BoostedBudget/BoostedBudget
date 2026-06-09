@@ -6,7 +6,7 @@
  * Tests for the main rule builder form.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -28,6 +28,12 @@ import { mockUseGetSavingsGoals } from '@/test/mocks/budgets-api'
 import { mockNavigate } from '@/test/mocks/react-router'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+
+// Re-register to ensure mock is current for this test file's execution order
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
 
 const mockRule: AutomationRule = {
   id: 'rule-1',
@@ -94,6 +100,7 @@ describe('RuleBuilder', () => {
   beforeEach(() => {
     // Clear all mocks
     mockNavigate.mockClear()
+    mockTrackEvent.mockClear()
     mockCreateAutomationRuleMutateAsync.mockClear()
     mockUpdateAutomationRuleMutateAsync.mockClear()
     mockUseGetAutomationRules.mockClear()
@@ -346,6 +353,57 @@ describe('RuleBuilder', () => {
 
       await waitFor(() => {
         expect(mockNavigate).toHaveBeenCalledWith('/boosts')
+      })
+    })
+
+    it('fires RULE_CREATED analytics after successful create', async () => {
+      renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
+      const nameInput = screen.getByLabelText(/rule name/i)
+      fireEvent.change(nameInput, { target: { value: 'Analytics Test Rule' } })
+
+      const typeSelect = screen.getByLabelText(/rule type/i)
+      fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith('rule_created')
+      })
+    })
+  })
+
+  describe('Form Submission - Edit', () => {
+    function renderEditMode() {
+      mockUseGetAutomationRuleByID.mockReturnValue({
+        data: mockRule,
+        isLoading: false,
+        error: null,
+      })
+      return renderWithProviders(<RuleBuilder />, { route: '/boosts/rule-1/edit' })
+    }
+
+    it('fires RULE_EDITED analytics after successful edit save', async () => {
+      renderEditMode()
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
+      // Touch the name so the save is valid (field is pre-populated from mockRule)
+      const nameInput = screen.getByLabelText(/rule name/i)
+      fireEvent.change(nameInput, { target: { value: 'Updated Rule Name' } })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith('rule_edited')
       })
     })
   })
