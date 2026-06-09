@@ -27,11 +27,5 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { TriggerAutomationRuleInputBodyTriggerData } from './triggerAutomationRuleInputBodyTriggerData';
 
-export interface TriggerAutomationRuleInputBody {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** Optional data to pass to the rule execution */
-  trigger_data?: TriggerAutomationRuleInputBodyTriggerData;
-}
+export type BoostTestResultSimulatedAction = {[key: string]: unknown};

@@ -28,7 +28,20 @@
  * OpenAPI spec version: 1.0.0
  */
 
+export type GetBoostExecutionsParams = {
 /**
- * Optional test data to evaluate conditions against
+ * Filter by status: pending, running, completed, failed
  */
-export type TestAutomationRuleInputBodyTriggerData = {[key: string]: unknown};
+status?: string;
+/**
+ * Maximum number of results
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Number of results to skip
+ * @minimum 0
+ */
+offset?: number;
+};

@@ -27,5 +27,11 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { TriggerBoostInputBodyTriggerData } from './triggerBoostInputBodyTriggerData';
 
-export type RuleTestResultTriggerDataUsed = {[key: string]: unknown};
+export interface TriggerBoostInputBody {
+  /** A URL to the JSON Schema for this object. */
+  readonly $schema?: string;
+  /** Optional data to pass to the rule execution */
+  trigger_data?: TriggerBoostInputBodyTriggerData;
+}

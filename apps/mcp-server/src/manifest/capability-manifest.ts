@@ -150,18 +150,18 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('deleteRule', REASON_RULES_UNATTENDED),
   excluded('toggleRule', REASON_RULES_UNATTENDED),
 
-  // ── Automation Rules ────────────────────────────────────────────────────
-  read('getAutomationRules'),
-  read('getAutomationRuleByID'),
-  read('getRuleExecutions'),
-  excluded('createAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('updateAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('deleteAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('disableAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('enableAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('toggleAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('triggerAutomationRule', REASON_RULES_UNATTENDED),
-  excluded('testAutomationRule', REASON_RULES_UNATTENDED),
+  // ── Boosts ──────────────────────────────────────────────────────────────
+  read('getBoosts'),
+  read('getBoostByID'),
+  read('getBoostExecutions'),
+  excluded('createBoost', REASON_RULES_UNATTENDED),
+  excluded('updateBoost', REASON_RULES_UNATTENDED),
+  excluded('deleteBoost', REASON_RULES_UNATTENDED),
+  excluded('disableBoost', REASON_RULES_UNATTENDED),
+  excluded('enableBoost', REASON_RULES_UNATTENDED),
+  excluded('toggleBoost', REASON_RULES_UNATTENDED),
+  excluded('triggerBoost', REASON_RULES_UNATTENDED),
+  excluded('testBoost', REASON_RULES_UNATTENDED),
 
   // ── Budgets ─────────────────────────────────────────────────────────────
   read('getBudgets'),

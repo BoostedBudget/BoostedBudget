@@ -27,8 +27,19 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BoostCondition } from './boostCondition';
+import type { TriggerConfig } from './triggerConfig';
 
-/**
- * Optional data to pass to the rule execution
- */
-export type TriggerAutomationRuleInputBodyTriggerData = {[key: string]: unknown};
+export interface CreateBoostRequest {
+  /** A URL to the JSON Schema for this object. */
+  readonly $schema?: string;
+  actions: unknown;
+  boost_type: string;
+  condition_logic?: string;
+  /** @nullable */
+  conditions?: BoostCondition[] | null;
+  description?: string;
+  name: string;
+  priority?: number;
+  trigger_config: TriggerConfig;
+}

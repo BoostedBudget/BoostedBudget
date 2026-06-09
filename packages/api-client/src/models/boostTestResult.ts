@@ -27,18 +27,20 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { AutomationRuleCondition } from './automationRuleCondition';
-import type { TriggerConfig } from './triggerConfig';
+import type { BoostTestResultSimulatedAction } from './boostTestResultSimulatedAction';
+import type { BoostTestResultTriggerDataUsed } from './boostTestResultTriggerDataUsed';
+import type { ConditionEvalResult } from './conditionEvalResult';
 
-export interface UpdateAutomationRuleRequest {
+export interface BoostTestResult {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  actions?: unknown;
-  condition_logic?: string;
-  conditions?: AutomationRuleCondition[];
-  description?: string;
-  enabled?: boolean;
-  name?: string;
-  priority?: number;
-  trigger_config?: TriggerConfig;
+  boost_id: string;
+  boost_name: string;
+  boost_type: string;
+  /** @nullable */
+  condition_results: ConditionEvalResult[] | null;
+  conditions_met: boolean;
+  error?: string;
+  simulated_action?: BoostTestResultSimulatedAction;
+  trigger_data_used: BoostTestResultTriggerDataUsed;
 }

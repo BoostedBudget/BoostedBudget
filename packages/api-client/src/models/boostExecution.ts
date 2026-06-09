@@ -27,20 +27,21 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { ConditionEvalResult } from './conditionEvalResult';
-import type { RuleTestResultSimulatedAction } from './ruleTestResultSimulatedAction';
-import type { RuleTestResultTriggerDataUsed } from './ruleTestResultTriggerDataUsed';
 
-export interface RuleTestResult {
+export interface BoostExecution {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** @nullable */
-  condition_results: ConditionEvalResult[] | null;
-  conditions_met: boolean;
-  error?: string;
-  rule_id: string;
-  rule_name: string;
-  rule_type: string;
-  simulated_action?: RuleTestResultSimulatedAction;
-  trigger_data_used: RuleTestResultTriggerDataUsed;
+  boost_id: string;
+  completed_at?: string;
+  error_code?: string;
+  error_message?: string;
+  execution_duration_ms?: number;
+  id: string;
+  input_data?: unknown;
+  max_retries: number;
+  output_data?: unknown;
+  retry_count: number;
+  started_at: string;
+  status: string;
+  trigger_context: unknown;
 }

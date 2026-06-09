@@ -27,5 +27,27 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BoostCondition } from './boostCondition';
+import type { TriggerConfig } from './triggerConfig';
 
-export type RuleTestResultSimulatedAction = {[key: string]: unknown};
+export interface Boost {
+  /** A URL to the JSON Schema for this object. */
+  readonly $schema?: string;
+  actions: unknown;
+  boost_type: string;
+  condition_logic: string;
+  /** @nullable */
+  conditions: BoostCondition[] | null;
+  created_at: string;
+  description?: string;
+  enabled: boolean;
+  execution_count: number;
+  id: string;
+  last_executed_at?: string;
+  last_successful_at?: string;
+  name: string;
+  priority: number;
+  trigger_config: TriggerConfig;
+  updated_at: string;
+  user_id: string;
+}

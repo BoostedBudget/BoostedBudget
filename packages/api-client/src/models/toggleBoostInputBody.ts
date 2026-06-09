@@ -28,7 +28,7 @@
  * OpenAPI spec version: 1.0.0
  */
 
-export interface ToggleAutomationRuleInputBody {
+export interface ToggleBoostInputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   /** Whether the rule should be enabled */

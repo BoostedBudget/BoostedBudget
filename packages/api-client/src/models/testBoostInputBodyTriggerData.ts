@@ -27,19 +27,8 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { AutomationRuleCondition } from './automationRuleCondition';
-import type { TriggerConfig } from './triggerConfig';
 
-export interface CreateAutomationRuleRequest {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  actions: unknown;
-  condition_logic?: string;
-  /** @nullable */
-  conditions?: AutomationRuleCondition[] | null;
-  description?: string;
-  name: string;
-  priority?: number;
-  rule_type: string;
-  trigger_config: TriggerConfig;
-}
+/**
+ * Optional test data to evaluate conditions against
+ */
+export type TestBoostInputBodyTriggerData = {[key: string]: unknown};

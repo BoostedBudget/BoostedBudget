@@ -27,21 +27,14 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BoostExecution } from './boostExecution';
 
-export interface RuleExecution {
+export interface BoostExecutionsResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  completed_at?: string;
-  error_code?: string;
-  error_message?: string;
-  execution_duration_ms?: number;
-  id: string;
-  input_data?: unknown;
-  max_retries: number;
-  output_data?: unknown;
-  retry_count: number;
-  rule_id: string;
-  started_at: string;
-  status: string;
-  trigger_context: unknown;
+  /** @nullable */
+  executions: BoostExecution[] | null;
+  limit: number;
+  offset: number;
+  total: number;
 }

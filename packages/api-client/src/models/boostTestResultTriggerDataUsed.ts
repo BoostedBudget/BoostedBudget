@@ -27,14 +27,5 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { RuleExecution } from './ruleExecution';
 
-export interface RuleExecutionsResponse {
-  /** A URL to the JSON Schema for this object. */
-  readonly $schema?: string;
-  /** @nullable */
-  executions: RuleExecution[] | null;
-  limit: number;
-  offset: number;
-  total: number;
-}
+export type BoostTestResultTriggerDataUsed = {[key: string]: unknown};
