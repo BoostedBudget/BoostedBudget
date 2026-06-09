@@ -69,7 +69,7 @@ export function useBoostSuggestionActions(): UseBoostSuggestionActionsResult {
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })
-        trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_REJECTED, { source: 'boosts_page' })
+        trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_CANCELED, { source: 'boosts_page' })
       },
       onError: (err) => console.error('[Boosts] cancel-accepted failed:', err),
     },

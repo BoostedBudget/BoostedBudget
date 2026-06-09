@@ -186,6 +186,35 @@ describe('useBoostSuggestionActions', () => {
     )
   })
 
+  it('onSuccess for cancelAccepted fires TRANSFER_SUGGESTION_CANCELED (not REJECTED) with source boosts_page', () => {
+    let capturedOnSuccess: (() => void) | undefined
+    mockUseCancelTransferSuggestion.mockImplementation(
+      (opts?: { mutation?: { onSuccess?: () => void } }) => {
+        capturedOnSuccess = opts?.mutation?.onSuccess
+        return {
+          mutate: mock((_args: unknown) => {
+            capturedOnSuccess?.()
+          }),
+          mutateAsync: mockCancelTransferSuggestionMutate,
+          isPending: false,
+        }
+      }
+    )
+
+    const { result } = renderHook(() => useBoostSuggestionActions(), { wrapper: createQueryWrapper() })
+    result.current.cancelAccepted('ts-cancel')
+
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      'transfer_suggestion_canceled',
+      expect.objectContaining({ source: 'boosts_page' })
+    )
+    // Must NOT fire the reject event — these are distinct user actions
+    const rejectCalls = (mockTrackEvent.mock.calls as Array<[string, unknown]>).filter(
+      ([event]) => event === 'transfer_suggestion_rejected'
+    )
+    expect(rejectCalls.length).toBe(0)
+  })
+
   it('invalidation uses the base transfer-suggestions query key (key shape sanity)', () => {
     // Verify the base key returned by getGetTransferSuggestionsQueryKey() is a non-empty array.
     // The hook calls queryClient.invalidateQueries({ queryKey: getGetTransferSuggestionsQueryKey() })

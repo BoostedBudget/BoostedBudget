@@ -79,6 +79,7 @@ export const ANALYTICS_EVENTS = {
   NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
   TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
   TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
+  TRANSFER_SUGGESTION_CANCELED: 'transfer_suggestion_canceled',
   TRANSFER_SUGGESTION_MATCH_CONFIRMED: 'transfer_suggestion_match_confirmed',
   TRANSFER_SUGGESTION_MATCH_DECLINED: 'transfer_suggestion_match_declined',
 
