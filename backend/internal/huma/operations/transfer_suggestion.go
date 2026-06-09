@@ -500,15 +500,19 @@ func (h *TransferSuggestionHandler) CancelSuggestion(ctx context.Context, input 
 
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.
 func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionHandler) {
-	// GET /api/v1/transfer-suggestions — list pending suggestions for authenticated user
+	// GET /api/v1/transfer-suggestions — list suggestions for authenticated user (filterable by status)
 	huma.Register(api, huma.Operation{
 		OperationID: "getTransferSuggestions",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/transfer-suggestions",
-		Summary:     "Get pending transfer suggestions",
-		Description: "Returns all pending transfer suggestions for the authenticated user.",
-		Tags:        []string{"TransferSuggestions"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "List transfer suggestions (filter by status)",
+		Description: "Returns transfer suggestions for the authenticated user. " +
+			"Use the `status` query parameter (comma-separated) to filter by status. " +
+			"Valid values: pending, accepted, completed, rejected, expired. " +
+			"When omitted, returns only pending suggestions (backward-compatible default). " +
+			"Supports `limit` (1–100, default 20) and `offset` pagination.",
+		Tags:     []string{"TransferSuggestions"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GetTransferSuggestions)
 
 	// PATCH /api/v1/transfer-suggestions/{id}/accept — accept a suggestion

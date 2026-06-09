@@ -91,4 +91,73 @@ describe('buildSearchResult', () => {
     // Even if buildSearchResult receives an excluded entry (shouldn't happen), it filters them
     expect(result.content[0]?.text).not.toContain('checkRole')
   })
+
+  // R8-2c: description and parameters improve AI discoverability in search output
+  it('includes description when present (R8-2c)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransferSuggestions',
+        method: 'GET',
+        path: '/api/v1/transfer-suggestions',
+        summary: 'List transfer suggestions (filter by status)',
+        description: 'Use status param: pending, accepted, completed.',
+        tags: ['TransferSuggestions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).toContain('description:')
+    expect(result.content[0]?.text).toContain('pending, accepted, completed')
+  })
+
+  it('includes parameter names and enum values when present (R8-2c)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransferSuggestions',
+        method: 'GET',
+        path: '/api/v1/transfer-suggestions',
+        summary: 'List transfer suggestions (filter by status)',
+        description: 'Filter by status.',
+        tags: ['TransferSuggestions'],
+        manifestClass: 'read',
+        excluded: false,
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Comma-separated statuses',
+            enum: ['pending', 'accepted', 'completed', 'rejected', 'expired'],
+            type: 'string',
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            description: 'Max results',
+            type: 'integer',
+          },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('params:')
+    expect(text).toContain('status')
+    expect(text).toContain('pending|accepted|completed|rejected|expired')
+    expect(text).toContain('limit')
+  })
+
+  it('omits description/params lines when not present (R8-2c)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'getTransactions',
+        method: 'GET',
+        path: '/api/v1/transactions',
+        summary: 'List transactions',
+        tags: ['Transactions'],
+        manifestClass: 'read',
+        excluded: false,
+      },
+    ])
+    expect(result.content[0]?.text).not.toContain('description:')
+    expect(result.content[0]?.text).not.toContain('params:')
+  })
 })

@@ -193,4 +193,35 @@ describe('recipe.templates', () => {
     )
     expect(acceptedCall).toBeDefined()
   })
+
+  // R8-2d: Additional Boosts recipes (#1267)
+  it('includes an "Awaiting Matches" template with accepted transfer suggestions', () => {
+    const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Awaiting Matches')
+    expect(recipe).toBeDefined()
+    const opIds = recipe!.calls.map((c) => c.operationId)
+    expect(opIds).toContain('getTransferSuggestions')
+    const acceptedCall = recipe!.calls.find(
+      (c) => c.operationId === 'getTransferSuggestions' && c.params?.['status'] === 'accepted',
+    )
+    expect(acceptedCall).toBeDefined()
+  })
+
+  it('includes a "Monthly Savings Performance" template with savings impact', () => {
+    const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Monthly Savings Performance')
+    expect(recipe).toBeDefined()
+    const opIds = recipe!.calls.map((c) => c.operationId)
+    expect(opIds).toContain('getSavingsImpactMe')
+    expect(opIds).toContain('getSavingsImpactAggregate')
+  })
+
+  it('includes a "Transfer Rules Audit" template with getAutomationRules and getRuleExecutions', () => {
+    const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Transfer Rules Audit')
+    expect(recipe).toBeDefined()
+    const opIds = recipe!.calls.map((c) => c.operationId)
+    expect(opIds).toContain('getAutomationRules')
+    expect(opIds).toContain('getRuleExecutions')
+    // Should filter to transfer-generating rule types
+    const rulesCall = recipe!.calls.find((c) => c.operationId === 'getAutomationRules')
+    expect(rulesCall?.params?.['rule_type']).toEqual(['transfer_suggestion', 'savings_goal'])
+  })
 })

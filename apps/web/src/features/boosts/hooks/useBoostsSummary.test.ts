@@ -78,12 +78,14 @@ describe('useBoostsSummary', () => {
     expect(result.current.completedCount).toBe(15)
   })
 
-  it('counts only enabled automation rules for activeRulesCount', () => {
+  it('counts only enabled transfer-generating rules for activeRulesCount (AC1: type ∈ {transfer_suggestion, savings_goal})', () => {
     mockUseGetAutomationRules.mockReturnValue({
       data: [
-        { id: 'r1', enabled: true, name: 'Rule 1', rule_type: 'budget_rollover', priority: 1, created_at: '', updated_at: '' },
-        { id: 'r2', enabled: false, name: 'Rule 2', rule_type: 'budget_rollover', priority: 2, created_at: '', updated_at: '' },
-        { id: 'r3', enabled: true, name: 'Rule 3', rule_type: 'category_rollover', priority: 3, created_at: '', updated_at: '' },
+        { id: 'r1', enabled: true, name: 'Rule 1', rule_type: 'transfer_suggestion', priority: 1, created_at: '', updated_at: '' },
+        { id: 'r2', enabled: true, name: 'Rule 2', rule_type: 'savings_goal', priority: 2, created_at: '', updated_at: '' },
+        { id: 'r3', enabled: true, name: 'Rule 3', rule_type: 'budget_alert', priority: 3, created_at: '', updated_at: '' },
+        { id: 'r4', enabled: true, name: 'Rule 4', rule_type: 'category_rollover', priority: 4, created_at: '', updated_at: '' },
+        { id: 'r5', enabled: false, name: 'Rule 5', rule_type: 'transfer_suggestion', priority: 5, created_at: '', updated_at: '' },
       ],
       isLoading: false,
       error: null,
@@ -91,6 +93,8 @@ describe('useBoostsSummary', () => {
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
+    // Only r1 (transfer_suggestion, enabled) + r2 (savings_goal, enabled) count.
+    // r3 (budget_alert), r4 (category_rollover), r5 (disabled transfer_suggestion) do not.
     expect(result.current.activeRulesCount).toBe(2)
   })
 

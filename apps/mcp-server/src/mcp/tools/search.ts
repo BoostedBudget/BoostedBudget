@@ -59,9 +59,25 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     }
   }
 
-  const lines = allowed.map((e) =>
-    `${e.method} ${e.path} (${e.manifestClass})\n  operationId: ${e.operationId}\n  summary: ${e.summary}\n  tags: ${e.tags.join(', ')}`,
-  )
+  const lines = allowed.map((e) => {
+    const parts = [
+      `${e.method} ${e.path} (${e.manifestClass})`,
+      `  operationId: ${e.operationId}`,
+      `  summary: ${e.summary}`,
+    ]
+    if (e.description) {
+      parts.push(`  description: ${e.description}`)
+    }
+    if (e.parameters?.length) {
+      const paramLines = e.parameters.map(
+        (p) =>
+          `    ${p.name} (${p.in}${p.required ? ', required' : ''})${p.enum ? ` [${p.enum.join('|')}]` : ''}${p.description ? ` — ${p.description}` : ''}`
+      )
+      parts.push(`  params:\n${paramLines.join('\n')}`)
+    }
+    parts.push(`  tags: ${e.tags.join(', ')}`)
+    return parts.join('\n')
+  })
 
   return {
     content: [
