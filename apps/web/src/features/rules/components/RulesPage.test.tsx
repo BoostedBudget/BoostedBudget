@@ -16,11 +16,14 @@ import { RulesPage } from './RulesPage'
 // Import centralized mocks for configuration
 import {
   mockUseGetAutomationRules,
+  mockUseToggleAutomationRule,
   mockToggleAutomationRuleMutate,
+  mockToggleAutomationRuleMutateAsync,
   mockDeleteAutomationRuleMutate,
   mockTestAutomationRuleMutate,
   mockRefetchAutomationRules,
 } from '@/test/mocks/automation-rules-api'
+import { getGetAutomationRulesQueryKey } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
@@ -48,8 +51,7 @@ const mockRules: AutomationRule[] = [
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any,
+  } as AutomationRule,
   {
     id: 'rule-2',
     user_id: 'user-1',
@@ -69,8 +71,7 @@ const mockRules: AutomationRule[] = [
     actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any,
+  } as AutomationRule,
 ]
 
 // Mock user data with premium tier
@@ -708,6 +709,95 @@ describe('RulesPage', () => {
           expect.objectContaining({ filter: 'transfer_savings' })
         )
       })
+    })
+  })
+
+  // R9-c (#1267): Optimistic toggle cache-key regression test.
+  // Verifies that onMutate writes to the FILTERED cache key when the segment is active,
+  // and that onError rolls back exactly that same key. Prevents silent regressions where
+  // a future edit might use the base (unfiltered) key instead.
+  describe('Optimistic toggle cache-key (R9-c)', () => {
+    it('onMutate writes to the filtered cache key and onError rolls it back', async () => {
+      type OnMutateCallback = (vars: { id: string; data: { enabled: boolean } }) => Promise<{ previousRules: unknown }>
+      type OnErrorCallback = (err: unknown, vars: unknown, ctx: { previousRules: unknown } | undefined) => void
+
+      let capturedOnMutate: OnMutateCallback | undefined
+      let capturedOnError: OnErrorCallback | undefined
+
+      mockUseToggleAutomationRule.mockImplementationOnce(
+        (opts: { mutation?: { onMutate?: unknown; onError?: unknown } } | undefined) => {
+          capturedOnMutate = opts?.mutation?.onMutate as OnMutateCallback
+          capturedOnError = opts?.mutation?.onError as OnErrorCallback
+          return {
+            mutate: mockToggleAutomationRuleMutate,
+            mutateAsync: mockToggleAutomationRuleMutateAsync,
+            isPending: false,
+            isError: false,
+            isSuccess: false,
+            error: null,
+            data: null,
+            reset: () => {},
+          }
+        }
+      )
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+
+      const seedRule: AutomationRule = {
+        ...mockRules[0],
+        id: 'seed-rule',
+        rule_type: 'transfer_suggestion',
+        enabled: false,
+      }
+
+      // Pre-seed the FILTERED cache key — this is the key the segment view reads.
+      const filteredParams = { rule_type: ['transfer_suggestion', 'savings_goal'] }
+      queryClient.setQueryData(getGetAutomationRulesQueryKey(filteredParams), [seedRule])
+
+      mockUseGetAutomationRules.mockReturnValueOnce({
+        data: [seedRule],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+
+      await waitFor(() => {
+        expect(capturedOnMutate).toBeDefined()
+        expect(capturedOnError).toBeDefined()
+      })
+
+      // (1) onMutate should optimistically flip `enabled` on the FILTERED key.
+      const rollbackContext = await capturedOnMutate!({ id: 'seed-rule', data: { enabled: true } })
+
+      const filteredAfterOptimistic = queryClient.getQueryData(
+        getGetAutomationRulesQueryKey(filteredParams)
+      ) as AutomationRule[]
+      expect(filteredAfterOptimistic[0]?.enabled).toBe(true)
+
+      // The unfiltered (base) key is untouched — onMutate must NOT write to the wrong key.
+      expect(queryClient.getQueryData(getGetAutomationRulesQueryKey())).toBeUndefined()
+
+      // (2) onError should roll back the filtered key to its previous value.
+      capturedOnError!(
+        new Error('network error'),
+        { id: 'seed-rule', data: { enabled: true } },
+        rollbackContext
+      )
+
+      const filteredAfterRollback = queryClient.getQueryData(
+        getGetAutomationRulesQueryKey(filteredParams)
+      ) as AutomationRule[]
+      expect(filteredAfterRollback[0]?.enabled).toBe(false)
     })
   })
 })
