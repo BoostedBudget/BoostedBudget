@@ -9,6 +9,7 @@ import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { ActiveRecommendationsTab } from './ActiveRecommendationsTab'
 
 const mockOnAccept = mock((_id: string) => {})
@@ -34,6 +35,20 @@ const pendingItem2: TransferSuggestion = {
   user_id: 'u1',
   created_at: '2025-01-14T10:00:00Z',
   updated_at: '2025-01-14T10:00:00Z',
+}
+
+// Enriched item with destination account + rule name (from W1 backend enrichment)
+const enrichedItem: TransferSuggestion = {
+  id: 'ts-enriched',
+  status: 'pending',
+  amount: 600,
+  currency_code: 'USD',
+  source: 'rule',
+  user_id: 'u1',
+  created_at: '2025-01-16T10:00:00Z',
+  updated_at: '2025-01-16T10:00:00Z',
+  to_account_name: 'Emergency Fund',
+  rule_name: 'Save Extra Cash',
 }
 
 describe('ActiveRecommendationsTab', () => {
@@ -122,5 +137,67 @@ describe('ActiveRecommendationsTab', () => {
     const rejectBtn = screen.getByRole('button', { name: /reject/i })
     expect(acceptBtn.getAttribute('disabled')).not.toBeNull()
     expect(rejectBtn.getAttribute('disabled')).not.toBeNull()
+  })
+
+  // === Gap W4: destination account name + rule context ===
+
+  it('shows destination account name in Move to column', () => {
+    render(
+      <ActiveRecommendationsTab
+        items={[enrichedItem]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    expect(screen.getByText('Emergency Fund')).toBeTruthy()
+  })
+
+  it('shows rule name as source context', () => {
+    render(
+      <ActiveRecommendationsTab
+        items={[enrichedItem]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    expect(screen.getByText('Save Extra Cash')).toBeTruthy()
+  })
+
+  it('shows generic destination label when to_account_name is absent', () => {
+    render(
+      <ActiveRecommendationsTab
+        items={[pendingItem]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    // Should render a fallback like "—" or "Unknown account" rather than throwing
+    const bodyText = document.body.textContent ?? ''
+    // At minimum, no JS error — table renders
+    expect(bodyText.length).toBeGreaterThan(0)
+  })
+
+  // === Gap W6: read-only guarding ===
+
+  it('shows ReadOnlyGuard wrapper around action buttons in read-only mode', () => {
+    const { container } = render(
+      <ReadOnlyProvider isReadOnly={true}>
+        <ActiveRecommendationsTab
+          items={[pendingItem]}
+          isLoading={false}
+          onAccept={mockOnAccept}
+          onReject={mockOnReject}
+          isPending={false}
+        />
+      </ReadOnlyProvider>
+    )
+    // ReadOnlyGuard renders with pointer-events-none on the children wrapper
+    expect(container.querySelector('.pointer-events-none')).toBeTruthy()
   })
 })

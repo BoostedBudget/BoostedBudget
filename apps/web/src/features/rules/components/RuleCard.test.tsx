@@ -8,6 +8,7 @@
 
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { RuleCard } from './RuleCard'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 
@@ -275,6 +276,62 @@ describe('RuleCard', () => {
       render(<RuleCard rule={mockRule} />)
 
       expect(screen.queryByText(/priority/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Condition summary (W5)', () => {
+    const ruleWithConditions = {
+      ...mockRule,
+      conditions: [{ field: 'budget.percent_used', operator: 'gte', value: 80 }],
+    }
+
+    it('shows condition summary when conditions are present', () => {
+      render(<RuleCard rule={ruleWithConditions} />)
+      // Expects "Budget % Used" label and the value "80"
+      const bodyText = document.body.textContent ?? ''
+      expect(/Budget % Used/i.test(bodyText)).toBe(true)
+      expect(/80/.test(bodyText)).toBe(true)
+    })
+
+    it('does not show condition summary when conditions is empty', () => {
+      render(<RuleCard rule={{ ...mockRule, conditions: [] }} />)
+      // No "When" prefix expected
+      const bodyText = document.body.textContent ?? ''
+      expect(/^When /m.test(bodyText)).toBe(false)
+    })
+
+    it('shows View recent executions link when onViewExecutions is provided', () => {
+      render(<RuleCard rule={mockRule} onViewExecutions={mock(() => {})} />)
+      expect(screen.getByRole('button', { name: /view recent executions/i })).toBeTruthy()
+    })
+
+    it('calls onViewExecutions with rule when link is clicked', () => {
+      const onViewExecutions = mock((_rule: AutomationRule) => {})
+      render(<RuleCard rule={mockRule} onViewExecutions={onViewExecutions} />)
+      fireEvent.click(screen.getByRole('button', { name: /view recent executions/i }))
+      expect(onViewExecutions).toHaveBeenCalledWith(mockRule)
+    })
+
+    it('does not show View recent executions button when prop is absent', () => {
+      render(<RuleCard rule={mockRule} />)
+      expect(screen.queryByRole('button', { name: /view recent executions/i })).toBeNull()
+    })
+  })
+
+  describe('Read-only guarding (W6)', () => {
+    it('wraps toggle + action buttons in ReadOnlyGuard in read-only mode', () => {
+      const { container } = render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <RuleCard
+            rule={mockRule}
+            onEdit={mock(() => {})}
+            onDelete={mock(() => {})}
+            onToggle={mock(() => {})}
+            onTest={mock(() => {})}
+          />
+        </ReadOnlyProvider>
+      )
+      expect(container.querySelector('.pointer-events-none')).toBeTruthy()
     })
   })
 })

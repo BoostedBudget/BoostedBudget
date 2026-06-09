@@ -180,6 +180,17 @@ func (m *mockTransferSuggestionRepository) UpdateStatus(ctx context.Context, id 
 	return domain.ErrTransferSuggestionNotFound
 }
 
+func (m *mockTransferSuggestionRepository) CancelAcceptedSuggestion(ctx context.Context, id string, userNotes *string) error {
+	for _, s := range m.suggestions {
+		if s.ID == id && (s.Status == domain.SuggestionStatusPending || s.Status == domain.SuggestionStatusAccepted) {
+			s.Status = domain.SuggestionStatusRejected
+			s.UserNotes = userNotes
+			return nil
+		}
+	}
+	return domain.ErrTransferSuggestionAlreadyActioned
+}
+
 func (m *mockTransferSuggestionRepository) Update(ctx context.Context, suggestion *domain.TransferSuggestion) error {
 	for i, s := range m.suggestions {
 		if s.ID == suggestion.ID {

@@ -65,6 +65,8 @@ export * from './bulkUpdateTransactionCategoryInputBodyKind';
 export * from './bulkUpdateTransactionCategoryOutputBody';
 export * from './cancelDeletionResponseBody';
 export * from './cancelSubscriptionOutputBody';
+export * from './cancelTransferSuggestionInputBody';
+export * from './cancelTransferSuggestionOutputBody';
 export * from './cashFlowHistoryResponse';
 export * from './cashFlowPeriodComparison';
 export * from './cashFlowPeriodData';

@@ -3,13 +3,24 @@ import { DataTable, TablePagination, useTablePreferences } from '@/shared/compon
 import type { ColumnDef } from '@/shared/components/DataTable'
 import { SuggestionStatusBadge } from './SuggestionStatusBadge'
 
-const COLUMN_IDS = ['date', 'amount', 'status', 'reason']
+const COLUMN_IDS = ['event_date', 'amount', 'status', 'source', 'notes']
 
 const formatCurrency = (amount: number, currency: string) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+/** Most-informative timestamp: completed > acted-on > updated > created */
+const eventDate = (item: TransferSuggestion): string =>
+  item.completed_at ?? item.user_action_at ?? item.updated_at ?? item.created_at
+
+/** Human-readable completion source label */
+const formatCompletionSource = (source?: string): string => {
+  if (source === 'exact_match') return 'Auto-matched'
+  if (source === 'user_confirmed') return 'You confirmed'
+  return '—'
+}
 
 export interface HistoryTabProps {
   items: TransferSuggestion[]
@@ -55,11 +66,11 @@ export function HistoryTab({
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {
-      id: 'date',
+      id: 'event_date',
       header: 'Date',
       defaultSize: 140,
       minSize: 100,
-      render: (item) => formatDate(item.created_at),
+      render: (item) => formatDate(eventDate(item)),
     },
     {
       id: 'amount',
@@ -78,12 +89,33 @@ export function HistoryTab({
       ),
     },
     {
-      id: 'reason',
+      id: 'source',
+      header: 'Source',
+      defaultSize: 140,
+      minSize: 110,
+      render: (item) => (
+        <span className="text-sm text-muted-foreground">{formatCompletionSource(item.completion_source)}</span>
+      ),
+    },
+    {
+      id: 'notes',
       header: 'Notes',
       resizable: true,
-      defaultSize: 280,
-      minSize: 160,
-      render: (item) => <span className="text-sm text-muted-foreground">{item.reason ?? item.user_notes ?? '—'}</span>,
+      defaultSize: 240,
+      minSize: 140,
+      render: (item) => {
+        const note = item.user_notes ?? item.reason
+        const matchedAt = item.matched_transaction_at
+        if (matchedAt) {
+          return (
+            <span className="text-sm text-muted-foreground">
+              Matched transaction on {formatDate(matchedAt)}
+              {note ? ` · ${note}` : ''}
+            </span>
+          )
+        }
+        return <span className="text-sm text-muted-foreground">{note ?? '—'}</span>
+      },
     },
   ]
 

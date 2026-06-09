@@ -60,7 +60,7 @@ export function BoostsPage() {
   }
 
   const summary = useBoostsSummary()
-  const { accept, reject, confirmMatch, declineMatch, isPending } = useBoostSuggestionActions()
+  const { accept, reject, confirmMatch, cancelAccepted, isPending } = useBoostSuggestionActions()
 
   const { items: activeItems, isLoading: activeLoading } = useBoostSuggestions({
     status: 'pending',
@@ -116,7 +116,7 @@ export function BoostsPage() {
             items={awaitingItems}
             isLoading={awaitingLoading}
             onConfirmMatch={confirmMatch}
-            onDeclineMatch={declineMatch}
+            onCancelAccepted={cancelAccepted}
             isPending={isPending}
           />
         </TabsContent>

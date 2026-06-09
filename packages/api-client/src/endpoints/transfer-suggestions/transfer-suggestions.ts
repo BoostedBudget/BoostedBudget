@@ -49,6 +49,8 @@ import type {
 import type {
   AcceptTransferSuggestionInputBody,
   AcceptTransferSuggestionOutputBody,
+  CancelTransferSuggestionInputBody,
+  CancelTransferSuggestionOutputBody,
   ConfirmMatchBody,
   ConfirmTransferSuggestionMatchOutputBody,
   DeclineTransferSuggestionMatchOutputBody,
@@ -252,6 +254,71 @@ export const useAcceptTransferSuggestion = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getAcceptTransferSuggestionMutationOptions(options), queryClient);
+    }
+    /**
+ * Cancels a pending or accepted suggestion, transitioning it to rejected so it leaves the Awaiting Match tab. Distinct from decline-match (which only clears the fuzzy-match reservation without changing status).
+ * @summary Cancel a transfer suggestion
+ */
+export const cancelTransferSuggestion = (
+    id: string,
+    cancelTransferSuggestionInputBody: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<CancelTransferSuggestionOutputBody>(
+      {url: `/api/v1/transfer-suggestions/${id}/cancel`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: cancelTransferSuggestionInputBody, signal
+    },
+      options);
+    }
+
+
+
+export const getCancelTransferSuggestionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelTransferSuggestion>>, TError,{id: string;data: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelTransferSuggestion>>, TError,{id: string;data: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>}, TContext> => {
+
+const mutationKey = ['cancelTransferSuggestion'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelTransferSuggestion>>, {id: string;data: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  cancelTransferSuggestion(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelTransferSuggestionMutationResult = NonNullable<Awaited<ReturnType<typeof cancelTransferSuggestion>>>
+    export type CancelTransferSuggestionMutationBody = BodyType<NonReadonly<CancelTransferSuggestionInputBody>>
+    export type CancelTransferSuggestionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Cancel a transfer suggestion
+ */
+export const useCancelTransferSuggestion = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelTransferSuggestion>>, TError,{id: string;data: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof cancelTransferSuggestion>>,
+        TError,
+        {id: string;data: BodyType<NonReadonly<CancelTransferSuggestionInputBody>>},
+        TContext
+      > => {
+      return useMutation(getCancelTransferSuggestionMutationOptions(options), queryClient);
     }
     /**
  * Confirms a fuzzy-matched transfer suggestion with the actual transfer amount. For MCP use.

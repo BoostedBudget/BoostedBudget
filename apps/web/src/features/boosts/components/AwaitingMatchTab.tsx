@@ -1,6 +1,7 @@
 import { CheckCircle2, XCircle } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
@@ -16,7 +17,8 @@ export interface AwaitingMatchTabProps {
   items: TransferSuggestion[]
   isLoading: boolean
   onConfirmMatch: (id: string, actualAmount: number) => void
-  onDeclineMatch: (id: string) => void
+  /** Cancel an accepted suggestion, transitioning it to rejected (leaves the tab) */
+  onCancelAccepted: (id: string) => void
   isPending: boolean
 }
 
@@ -24,7 +26,7 @@ export function AwaitingMatchTab({
   items,
   isLoading,
   onConfirmMatch,
-  onDeclineMatch,
+  onCancelAccepted,
   isPending,
 }: AwaitingMatchTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-awaiting', COLUMN_IDS)
@@ -67,11 +69,16 @@ export function AwaitingMatchTab({
       resizable: true,
       defaultSize: 280,
       minSize: 160,
-      render: (item) => (
-        <span className="text-sm text-muted-foreground">
-          Accepted on {formatDate(item.user_action_at ?? item.updated_at)} — watching for transfer
-        </span>
-      ),
+      render: (item) => {
+        const destPart = item.to_account_name
+          ? ` to ${item.to_account_name} of ${formatCurrency(item.amount, item.currency_code)}`
+          : ''
+        return (
+          <span className="text-sm text-muted-foreground">
+            Accepted on {formatDate(item.user_action_at ?? item.updated_at)} — watching for transfer{destPart}
+          </span>
+        )
+      },
     },
     {
       id: 'actions',
@@ -79,28 +86,31 @@ export function AwaitingMatchTab({
       defaultSize: 200,
       minSize: 170,
       render: (item) => (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="default"
-            disabled={isPending}
-            onClick={() => onConfirmMatch(item.id, item.actual_amount ?? item.amount)}
-            aria-label="Mark Done"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-            Mark Done
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={isPending}
-            onClick={() => onDeclineMatch(item.id)}
-            aria-label="Cancel"
-          >
-            <XCircle className="h-3.5 w-3.5 mr-1" />
-            Cancel
-          </Button>
-        </div>
+        <ReadOnlyGuard>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="default"
+              disabled={isPending || !item.can_confirm_match}
+              title={!item.can_confirm_match ? 'Waiting for an automatic match before confirming' : undefined}
+              onClick={() => onConfirmMatch(item.id, item.actual_amount ?? item.amount)}
+              aria-label="Mark Done"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+              Mark Done
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isPending}
+              onClick={() => onCancelAccepted(item.id)}
+              aria-label="Cancel"
+            >
+              <XCircle className="h-3.5 w-3.5 mr-1" />
+              Cancel
+            </Button>
+          </div>
+        </ReadOnlyGuard>
       ),
     },
   ]
