@@ -383,130 +383,130 @@ func (h *BoostHandler) GetBoostExecutions(ctx context.Context, input *GetBoostEx
 func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
 	// GET /api/v1/rules - Get automation rules, optionally filtered by rule type
 	huma.Register(api, huma.Operation{
-		OperationID: "getAutomationRules",
+		OperationID: "getBoosts",
 		Method:      http.MethodGet,
-		Path:        "/api/v1/rules",
-		Summary:     "List automation rules (filter by rule_type)",
-		Description: "Retrieves automation rules for the authenticated user, ordered by priority. " +
+		Path:        "/api/v1/boosts",
+		Summary:     "List boosts (filter by rule_type)",
+		Description: "Retrieves boosts for the authenticated user, ordered by priority. " +
 			"Use the repeatable `rule_type` query parameter to filter by type. " +
 			"Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. " +
 			"Transfer-generating types are transfer_suggestion and savings_goal. " +
-			"When omitted, all rule types are returned.",
-		Tags:     []string{"Automation Rules"},
+			"When omitted, all boost types are returned.",
+		Tags:     []string{"Boosts"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GetBoosts)
 
-	// GET /api/v1/rules/{id} - Get automation rule by ID
+	// GET /api/v1/boosts/{id} - Get boost by ID
 	huma.Register(api, huma.Operation{
-		OperationID: "getAutomationRuleByID",
+		OperationID: "getBoostByID",
 		Method:      http.MethodGet,
-		Path:        "/api/v1/rules/{id}",
-		Summary:     "Get automation rule by ID",
-		Description: "Retrieves a specific automation rule by its UUID.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}",
+		Summary:     "Get boost by ID",
+		Description: "Retrieves a specific boost by its UUID.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBoostByID)
 
-	// POST /api/v1/rules - Create a new automation rule
+	// POST /api/v1/boosts - Create a new boost
 	huma.Register(api, huma.Operation{
-		OperationID:   "createAutomationRule",
+		OperationID:   "createBoost",
 		Method:        http.MethodPost,
-		Path:          "/api/v1/rules",
-		Summary:       "Create a new automation rule",
-		Description:   "Creates a new automation rule for the authenticated user.",
-		Tags:          []string{"Automation Rules"},
+		Path:          "/api/v1/boosts",
+		Summary:       "Create a new boost",
+		Description:   "Creates a new boost for the authenticated user.",
+		Tags:          []string{"Boosts"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
 	}, handler.CreateBoost)
 
-	// PUT /api/v1/rules/{id} - Update an automation rule
+	// PUT /api/v1/boosts/{id} - Update a boost
 	huma.Register(api, huma.Operation{
-		OperationID: "updateAutomationRule",
+		OperationID: "updateBoost",
 		Method:      http.MethodPut,
-		Path:        "/api/v1/rules/{id}",
-		Summary:     "Update an automation rule",
-		Description: "Updates an automation rule's configuration.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}",
+		Summary:     "Update a boost",
+		Description: "Updates a boost's configuration.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.UpdateBoost)
 
-	// DELETE /api/v1/rules/{id} - Delete an automation rule
+	// DELETE /api/v1/boosts/{id} - Delete a boost
 	huma.Register(api, huma.Operation{
-		OperationID:   "deleteAutomationRule",
+		OperationID:   "deleteBoost",
 		Method:        http.MethodDelete,
-		Path:          "/api/v1/rules/{id}",
-		Summary:       "Delete an automation rule",
-		Description:   "Removes an automation rule.",
-		Tags:          []string{"Automation Rules"},
+		Path:          "/api/v1/boosts/{id}",
+		Summary:       "Delete a boost",
+		Description:   "Removes a boost.",
+		Tags:          []string{"Boosts"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
 	}, handler.DeleteBoost)
 
-	// POST /api/v1/rules/{id}/toggle - Toggle an automation rule
+	// POST /api/v1/boosts/{id}/toggle - Toggle a boost
 	huma.Register(api, huma.Operation{
-		OperationID: "toggleAutomationRule",
+		OperationID: "toggleBoost",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/rules/{id}/toggle",
-		Summary:     "Toggle an automation rule",
-		Description: "Enables or disables an automation rule.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/toggle",
+		Summary:     "Toggle a boost",
+		Description: "Enables or disables a boost.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.ToggleBoost)
 
-	// POST /api/v1/rules/{id}/trigger - Manually trigger an automation rule
+	// POST /api/v1/boosts/{id}/trigger - Manually trigger a boost
 	huma.Register(api, huma.Operation{
-		OperationID: "triggerAutomationRule",
+		OperationID: "triggerBoost",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/rules/{id}/trigger",
-		Summary:     "Manually trigger an automation rule",
-		Description: "Triggers an automation rule for immediate execution with optional custom data.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/trigger",
+		Summary:     "Manually trigger a boost",
+		Description: "Triggers a boost for immediate execution with optional custom data.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.TriggerBoost)
 
-	// Issue #38: Rules API Endpoints - New routes
+	// Issue #38: Boosts API Endpoints - New routes
 
-	// POST /api/v1/rules/{id}/test - Test automation rule (dry-run)
+	// POST /api/v1/boosts/{id}/test - Test boost (dry-run)
 	huma.Register(api, huma.Operation{
-		OperationID: "testAutomationRule",
+		OperationID: "testBoost",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/rules/{id}/test",
-		Summary:     "Test automation rule",
-		Description: "Executes a dry-run of the rule to preview results without persisting changes.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/test",
+		Summary:     "Test boost",
+		Description: "Executes a dry-run of the boost to preview results without persisting changes.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.TestBoost)
 
-	// POST /api/v1/rules/{id}/enable - Enable an automation rule
+	// POST /api/v1/boosts/{id}/enable - Enable a boost
 	huma.Register(api, huma.Operation{
-		OperationID: "enableAutomationRule",
+		OperationID: "enableBoost",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/rules/{id}/enable",
-		Summary:     "Enable automation rule",
-		Description: "Enables an automation rule for execution.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/enable",
+		Summary:     "Enable boost",
+		Description: "Enables a boost for execution.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.EnableBoost)
 
-	// POST /api/v1/rules/{id}/disable - Disable an automation rule
+	// POST /api/v1/boosts/{id}/disable - Disable a boost
 	huma.Register(api, huma.Operation{
-		OperationID: "disableAutomationRule",
+		OperationID: "disableBoost",
 		Method:      http.MethodPost,
-		Path:        "/api/v1/rules/{id}/disable",
-		Summary:     "Disable automation rule",
-		Description: "Disables an automation rule from execution.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/disable",
+		Summary:     "Disable boost",
+		Description: "Disables a boost from execution.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.DisableBoost)
 
-	// GET /api/v1/rules/{id}/executions - Get rule execution history
+	// GET /api/v1/boosts/{id}/executions - Get boost execution history
 	huma.Register(api, huma.Operation{
-		OperationID: "getRuleExecutions",
+		OperationID: "getBoostExecutions",
 		Method:      http.MethodGet,
-		Path:        "/api/v1/rules/{id}/executions",
-		Summary:     "Get rule execution history",
-		Description: "Retrieves execution history for a specific automation rule with optional status filter.",
-		Tags:        []string{"Automation Rules"},
+		Path:        "/api/v1/boosts/{id}/executions",
+		Summary:     "Get boost execution history",
+		Description: "Retrieves execution history for a specific boost with optional status filter.",
+		Tags:        []string{"Boosts"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBoostExecutions)
 }
