@@ -136,6 +136,11 @@ export default defineConfig({
               priority: 5,
             },
             {
+              name: 'boosts',
+              test: /\/apps\/web\/src\/features\/boosts\//,
+              priority: 5,
+            },
+            {
               name: 'rules',
               test: /\/apps\/web\/src\/features\/rules\//,
               priority: 5,

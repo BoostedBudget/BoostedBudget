@@ -103,11 +103,19 @@ export const mockUseGetAutomationRuleByID = mock(() => ({
   refetch: mock(() => Promise.resolve()),
 }))
 
+// === useGetRuleExecutions ===
+export const mockUseGetRuleExecutions = mock(() => ({
+  data: { items: [], total: 0, limit: 5, offset: 0 },
+  isLoading: false,
+  error: null,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/automation-rules/automation-rules', () => ({
   ...RealAutomationRulesModule,
   useGetAutomationRules: mockUseGetAutomationRules,
   useGetAutomationRuleByID: mockUseGetAutomationRuleByID,
+  useGetRuleExecutions: mockUseGetRuleExecutions,
   useCreateAutomationRule: mockUseCreateAutomationRule,
   useUpdateAutomationRule: mockUseUpdateAutomationRule,
   useDeleteAutomationRule: mockUseDeleteAutomationRule,

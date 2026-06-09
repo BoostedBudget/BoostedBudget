@@ -32,13 +32,32 @@ import { RuleTable, type SortColumn } from './RuleTable'
 import { useRuleFilters } from '../hooks/useRuleFilters'
 import { sortRules } from '../utils/sortRules'
 
+interface RulesPageProps {
+  /** When true, renders a "Transfer & Savings / All rules" segment above the list. */
+  showTypeSegment?: boolean
+  /**
+   * Initial rule-type filter passed to the backend query when the segment is shown.
+   * Accepts readonly arrays (e.g. `as const` tuples from constants files).
+   * Defaults to showing all rules when omitted (no segment).
+   */
+  ruleTypeFilter?: readonly string[]
+}
+
 /**
  * RulesPage displays the list of automation rules with card/table toggle.
+ * Accepts optional `showTypeSegment` + `ruleTypeFilter` props used by RulesTab
+ * (inside Boosts page) to scope the default view to transfer-generating rule types
+ * while still allowing "All rules" navigation to avoid orphaning other types.
  */
-export function RulesPage() {
+export function RulesPage({ showTypeSegment = false, ruleTypeFilter }: RulesPageProps = {}) {
   const trackEvent = useTrackEvent()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+
+  // Copy to mutable array so the state setter and query params receive the right type.
+  const [activeRuleTypeFilter, setActiveRuleTypeFilter] = useState<string[] | undefined>(
+    ruleTypeFilter ? [...ruleTypeFilter] : undefined
+  )
 
   const [view, setView] = useState<ListView>(() => {
     try {
@@ -57,47 +76,41 @@ export function RulesPage() {
   const sortColumn = sort?.columnId as SortColumn | undefined
   const sortDirection = sort?.direction ?? 'asc'
 
-  // Fetch rules
+  // Fetch rules — pass rule_type filter when segment is active
+  const queryParams = activeRuleTypeFilter ? { rule_type: activeRuleTypeFilter } : undefined
   const {
     data,
     isLoading,
     error,
     refetch,
-  } = useGetAutomationRules()
+  } = useGetAutomationRules(queryParams)
 
   const rules = useMemo(() => data ?? [], [data])
 
-  // Mutations
-  // Issue #579: Optimistic updates for toggle - UI updates immediately, rollback on error
+  // Mutations — Issue #579: Optimistic updates with rule_type filter awareness
   const toggleMutation = useToggleAutomationRule({
     mutation: {
       onMutate: async ({ id, data }) => {
-        // Cancel any outgoing refetches to avoid overwriting optimistic update
-        await queryClient.cancelQueries({ queryKey: getGetAutomationRulesQueryKey() })
-        // Snapshot the previous value for rollback
-        const previousRules = queryClient.getQueryData(getGetAutomationRulesQueryKey())
-        // Optimistically update the cache
+        await queryClient.cancelQueries({ queryKey: getGetAutomationRulesQueryKey(queryParams) })
+        const previousRules = queryClient.getQueryData(getGetAutomationRulesQueryKey(queryParams))
         queryClient.setQueryData(
-          getGetAutomationRulesQueryKey(),
+          getGetAutomationRulesQueryKey(queryParams),
           (old: AutomationRule[] | undefined) =>
             old?.map((rule) =>
               rule.id === id ? { ...rule, enabled: data.enabled } : rule
             )
         )
-        // Return context with snapshot for rollback
         return { previousRules }
       },
       onError: (_err, _variables, context) => {
-        // Rollback to previous value on error
         if (context?.previousRules) {
           queryClient.setQueryData(
-            getGetAutomationRulesQueryKey(),
+            getGetAutomationRulesQueryKey(queryParams),
             context.previousRules
           )
         }
       },
       onSettled: () => {
-        // Always refetch after error or success to ensure cache is in sync
         queryClient.invalidateQueries({ queryKey: getGetAutomationRulesQueryKey() })
       },
     },
@@ -107,12 +120,12 @@ export function RulesPage() {
 
   // Handlers
   const handleCreateRule = useCallback(() => {
-    navigate('/rules/new')
+    navigate('/boosts/new')
   }, [navigate])
 
   const handleEditRule = useCallback(
     (rule: AutomationRule) => {
-      navigate(`/rules/${rule.id}/edit`)
+      navigate(`/boosts/${rule.id}/edit`)
     },
     [navigate]
   )
@@ -159,6 +172,16 @@ export function RulesPage() {
     setView(newView)
   }, [])
 
+  const handleSegmentChange = useCallback(
+    (filter: readonly string[] | undefined) => {
+      setActiveRuleTypeFilter(filter ? [...filter] : undefined)
+      trackEvent(ANALYTICS_EVENTS.BOOSTS_RULES_FILTER_CHANGED, {
+        filter: filter ? 'transfer_savings' : 'all',
+      })
+    },
+    [trackEvent]
+  )
+
   const handleTestRule = useCallback(
     (rule: AutomationRule) => {
       testMutation.mutate({ id: rule.id, data: {} })
@@ -187,17 +210,52 @@ export function RulesPage() {
     )
   }
 
+  // Rule-type segment: shown on Boosts → Rules tab (#1267 R8-1c).
+  // Defined before the empty-state early-return so it is always reachable, even when
+  // the filtered query returns zero results (R10-a: prevents orphaning non-transfer rules).
+  const ruleTypeSegment = showTypeSegment ? (
+    <div
+      role="group"
+      aria-label="Rule type filter"
+      className="mb-4 flex gap-2"
+    >
+      <Button
+        variant={activeRuleTypeFilter ? 'default' : 'outline'}
+        size="sm"
+        onClick={() => handleSegmentChange(ruleTypeFilter)}
+      >
+        Transfer &amp; Savings
+      </Button>
+      <Button
+        variant={!activeRuleTypeFilter ? 'default' : 'outline'}
+        size="sm"
+        onClick={() => handleSegmentChange(undefined)}
+      >
+        All rules
+      </Button>
+    </div>
+  ) : null
+
   // Empty state (guarded: during initial load, show skeleton in table instead)
   if (!isLoading && rules.length === 0) {
     return (
       <div className="mx-auto max-w-[1200px] p-6">
+        {ruleTypeSegment}
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold text-foreground">Automation Rules</h1>
         </header>
         <EmptyState
           icon={<Zap />}
-          title="No automation rules yet"
-          description="Create your first automation rule to automatically manage your budgets, transfers, and savings."
+          title={
+            activeRuleTypeFilter
+              ? 'No transfer or savings rules'
+              : 'No automation rules yet'
+          }
+          description={
+            activeRuleTypeFilter
+              ? 'You have no transfer suggestion or savings goal rules. Switch to "All rules" to see your other rule types, or create a new one.'
+              : 'Create your first automation rule to automatically manage your budgets, transfers, and savings.'
+          }
           action={
             <ReadOnlyGuard>
               <Button onClick={handleCreateRule}>
@@ -213,6 +271,8 @@ export function RulesPage() {
 
   return (
     <div className="mx-auto max-w-[1200px] p-6">
+      {ruleTypeSegment}
+
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-semibold text-foreground">Automation Rules</h1>
@@ -262,6 +322,7 @@ export function RulesPage() {
                   onDelete={handleDeleteClick}
                   onToggle={handleToggleRule}
                   onTest={handleTestRule}
+                  onViewExecutions={(r) => navigate(`/boosts/${r.id}`)}
                   loading={toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
                 />
               ))}
@@ -274,6 +335,7 @@ export function RulesPage() {
             onDelete={handleDeleteClick}
             onToggle={handleToggleRule}
             onTest={handleTestRule}
+            onRowClick={(rule) => navigate(`/boosts/${rule.id}`)}
             loading={isLoading || toggleMutation.isPending || deleteMutation.isPending || testMutation.isPending}
             sort={sort}
             onSortChange={setSort}
@@ -287,7 +349,9 @@ export function RulesPage() {
         onOpenChange={(open) => !open && handleDeleteCancel()}
         onConfirm={handleDeleteConfirm}
         title="Delete Rule"
-        description={deleteConfirm ? `Are you sure you want to delete "${deleteConfirm.name}"? This action cannot be undone.` : ''}
+        description={deleteConfirm ? (
+          <>Are you sure you want to delete &ldquo;<span data-ph-mask>{deleteConfirm.name}</span>&rdquo;? This action cannot be undone.</>
+        ) : ''}
         variant="destructive"
         loading={deleteMutation.isPending}
       />

@@ -5,15 +5,29 @@
 
 import type { OperationClass } from '../manifest/capability-manifest'
 
+/** A single parameter extracted from the OpenAPI spec for discoverability. */
+export interface SpecParameter {
+  name: string
+  in: string
+  required?: boolean
+  description?: string
+  enum?: string[]
+  type?: string
+}
+
 export interface SpecEntry {
   operationId: string
   method: string
   path: string
   summary: string
+  /** Full OpenAPI description — documents filters, enums, pagination details. */
+  description?: string
   tags: string[]
   /** Class from the capability manifest */
   manifestClass: OperationClass
   excluded: boolean
+  /** Query and path parameters extracted from the OpenAPI spec for AI discoverability. */
+  parameters?: SpecParameter[]
 }
 
 export interface SpecIndex {
@@ -52,8 +66,10 @@ export function searchSpec(
       const haystack = [
         entry.operationId,
         entry.summary,
+        entry.description ?? '',
         entry.path,
         ...entry.tags,
+        ...(entry.parameters?.map((p) => `${p.name} ${p.description ?? ''} ${(p.enum ?? []).join(' ')}`) ?? []),
       ]
         .join(' ')
         .toLowerCase()

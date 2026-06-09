@@ -8,6 +8,7 @@
 
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { RuleCard } from './RuleCard'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 
@@ -275,6 +276,123 @@ describe('RuleCard', () => {
       render(<RuleCard rule={mockRule} />)
 
       expect(screen.queryByText(/priority/i)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Condition summary (W5)', () => {
+    const ruleWithConditions = {
+      ...mockRule,
+      conditions: [{ field: 'budget.percent_used', operator: 'gte', value: 80 }],
+    }
+
+    it('shows condition summary when conditions are present', () => {
+      render(<RuleCard rule={ruleWithConditions} />)
+      // Expects "Budget % Used" label and the value "80"
+      const bodyText = document.body.textContent ?? ''
+      expect(/Budget % Used/i.test(bodyText)).toBe(true)
+      expect(/80/.test(bodyText)).toBe(true)
+    })
+
+    it('does not show condition summary when conditions is empty', () => {
+      render(<RuleCard rule={{ ...mockRule, conditions: [] }} />)
+      // No "When" prefix expected
+      const bodyText = document.body.textContent ?? ''
+      expect(/^When /m.test(bodyText)).toBe(false)
+    })
+
+    it('shows View recent executions link when onViewExecutions is provided', () => {
+      render(<RuleCard rule={mockRule} onViewExecutions={mock(() => {})} />)
+      expect(screen.getByRole('button', { name: /view recent executions/i })).toBeTruthy()
+    })
+
+    it('calls onViewExecutions with rule when link is clicked', () => {
+      const onViewExecutions = mock((_rule: AutomationRule) => {})
+      render(<RuleCard rule={mockRule} onViewExecutions={onViewExecutions} />)
+      fireEvent.click(screen.getByRole('button', { name: /view recent executions/i }))
+      expect(onViewExecutions).toHaveBeenCalledWith(mockRule)
+    })
+
+    it('does not show View recent executions button when prop is absent', () => {
+      render(<RuleCard rule={mockRule} />)
+      expect(screen.queryByRole('button', { name: /view recent executions/i })).toBeNull()
+    })
+  })
+
+  describe('Action summary (R2-B)', () => {
+    it('shows action summary for transfer_suggestion rule with amount', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        actions: { amount: 200 },
+      }
+      render(<RuleCard rule={transferRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Suggest transfer $200')
+    })
+
+    it('shows action summary for transfer_suggestion rule without amount', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        actions: {},
+      }
+      render(<RuleCard rule={transferRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Suggest transfer')
+    })
+
+    it('shows action summary for budget_alert rule', () => {
+      render(<RuleCard rule={mockRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Send budget alert notification')
+    })
+
+    it('masks action summary with data-ph-mask (PII — financial amount)', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        actions: { amount: 200 } as any,
+      }
+      const { container } = render(<RuleCard rule={transferRule} />)
+      // rule.name is always masked; action summary containing "$200" must also be masked
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('masks condition summary with data-ph-mask (PII — condition values can be currency amounts)', () => {
+      // R4-1: budget.total_spent is a currency field — condition summary "When Budget Total Spent ≥ 500"
+      // must be masked just like the action summary on the line below it.
+      const ruleWithAmountCondition = {
+        ...mockRule,
+        conditions: [{ field: 'budget.total_spent', operator: 'gte', value: 500 }],
+      }
+      const { container } = render(<RuleCard rule={ruleWithAmountCondition} />)
+      // At least: rule.name mask + condition summary mask (+ optional action mask)
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBeGreaterThanOrEqual(2)
+      // Specifically, an element with data-ph-mask must contain "Budget Total Spent"
+      const conditionMasked = Array.from(masked).some((el) =>
+        el.textContent?.includes('Budget Total Spent')
+      )
+      expect(conditionMasked).toBe(true)
+    })
+  })
+
+  describe('Read-only guarding (W6)', () => {
+    it('wraps toggle + action buttons in ReadOnlyGuard in read-only mode', () => {
+      const { container } = render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <RuleCard
+            rule={mockRule}
+            onEdit={mock(() => {})}
+            onDelete={mock(() => {})}
+            onToggle={mock(() => {})}
+            onTest={mock(() => {})}
+          />
+        </ReadOnlyProvider>
+      )
+      expect(container.querySelector('.pointer-events-none')).toBeTruthy()
     })
   })
 })

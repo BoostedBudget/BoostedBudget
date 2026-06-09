@@ -115,7 +115,7 @@ describe('useGettingStarted', () => {
       expect(steps[2].id).toBe('create-savings-goal')
       expect(steps[2].href).toBe('/savings')
       expect(steps[3].id).toBe('create-automation-rule')
-      expect(steps[3].href).toBe('/rules')
+      expect(steps[3].href).toBe('/boosts')
       expect(steps[4].id).toBe('set-up-auto-categorization')
       expect(steps[4].href).toBe('/auto-categorization')
     })

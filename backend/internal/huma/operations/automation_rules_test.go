@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
@@ -34,6 +35,14 @@ func (m *MockAutomationRuleService) CreateRule(ctx context.Context, userID strin
 
 func (m *MockAutomationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
 	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+}
+
+func (m *MockAutomationRuleService) GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	args := m.Called(ctx, userID, ruleTypes)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -159,7 +168,8 @@ func TestAutomationRuleHandler_GetAutomationRules(t *testing.T) {
 		createMockRule("rule-2", "user-1"),
 	}
 
-	mockService.On("GetUserRules", mock.Anything, "user-1").Return(rules, nil)
+	// No rule_type filter → empty slice passed to GetUserRulesFiltered.
+	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", []domain.RuleType(nil)).Return(rules, nil)
 
 	handler := NewAutomationRuleHandler(mockService, nil)
 
@@ -177,8 +187,8 @@ func TestAutomationRuleHandler_GetAutomationRules(t *testing.T) {
 func TestAutomationRuleHandler_GetAutomationRules_Empty(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 
-	// Return nil to test empty handling
-	mockService.On("GetUserRules", mock.Anything, "user-1").Return(nil, nil)
+	// Return nil to test empty handling.
+	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", []domain.RuleType(nil)).Return(nil, nil)
 
 	handler := NewAutomationRuleHandler(mockService, nil)
 
@@ -191,6 +201,50 @@ func TestAutomationRuleHandler_GetAutomationRules_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, result.Body)
 	assert.Len(t, result.Body, 0)
+}
+
+// R8-1b: rule_type filter returns only requested types.
+func TestAutomationRuleHandler_GetAutomationRules_WithRuleTypeFilter(t *testing.T) {
+	mockService := new(MockAutomationRuleService)
+
+	filtered := []*domain.AutomationRule{
+		{ID: "r1", UserID: "user-1", RuleType: domain.RuleTypeTransferSuggestion},
+		{ID: "r2", UserID: "user-1", RuleType: domain.RuleTypeSavingsGoal},
+	}
+
+	expectedTypes := []domain.RuleType{domain.RuleTypeTransferSuggestion, domain.RuleTypeSavingsGoal}
+	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", expectedTypes).Return(filtered, nil)
+
+	handler := NewAutomationRuleHandler(mockService, nil)
+
+	input := &GetAutomationRulesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		RuleType:           []string{"transfer_suggestion", "savings_goal"},
+	}
+
+	result, err := handler.GetAutomationRules(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Len(t, result.Body, 2)
+	mockService.AssertExpectations(t)
+}
+
+// R8-1b: invalid rule_type value returns 422.
+func TestAutomationRuleHandler_GetAutomationRules_InvalidRuleType(t *testing.T) {
+	mockService := new(MockAutomationRuleService)
+	handler := NewAutomationRuleHandler(mockService, nil)
+
+	input := &GetAutomationRulesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		RuleType:           []string{"transfer_suggestion", "invalid_type"},
+	}
+
+	_, err := handler.GetAutomationRules(context.Background(), input)
+
+	require.Error(t, err)
+	var humaErr huma.StatusError
+	require.ErrorAs(t, err, &humaErr)
+	assert.Equal(t, 422, humaErr.GetStatus())
 }
 
 func TestAutomationRuleHandler_GetAutomationRuleByID(t *testing.T) {

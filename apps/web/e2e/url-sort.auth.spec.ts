@@ -275,6 +275,29 @@ async function mockRulesPage(page: Page) {
       route.continue()
     }
   })
+  // BoostsPage also fetches transfer-suggestions (3 tabs) and savings-impact on mount.
+  await page.route('**/api/v1/transfer-suggestions*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+  await page.route('**/api/v1/savings-impact*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ completed_count: 0, month_amount: 0, prev_month_amount: 0, recent_items: null }),
+      })
+    } else {
+      route.continue()
+    }
+  })
 }
 
 // Switch to table view and wait for the table to appear
@@ -298,7 +321,7 @@ async function verifySortPersistsAfterReload(
 // Verify sort changes use replace semantics
 async function verifySortReplaceSemanticsForBackButton(page: Page) {
   await page.goBack()
-  await expect(page).not.toHaveURL(/\/transactions|\/accounts|\/budgets|\/rules/)
+  await expect(page).not.toHaveURL(/\/transactions|\/accounts|\/budgets|\/boosts/)
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +508,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('navigating with ?sort=priority:asc pre-applies aria-sort after switching to table view', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/rules?sort=priority%3Aasc')
+    await page.goto('/boosts?tab=rules&sort=priority%3Aasc')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -494,7 +517,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('clicking a sortable header adds sort to URL', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -505,7 +528,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('sort persists after reload', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -518,7 +541,7 @@ test.describe('URL Sort — Rules', () => {
   test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
     await mockRulesPage(page)
     await page.goto('/')
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })

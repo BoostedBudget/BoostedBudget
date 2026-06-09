@@ -60,6 +60,39 @@ export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
       { operationId: 'getLargestTransactionsForPeriod', params: { start_date: '{{MONTH_START}}', end_date: '{{MONTH_END}}', limit: 10 } },
     ],
   },
+  {
+    name: 'Boosts Review',
+    description: 'Review savings automation: pending recommendations, transfers awaiting a match, and overall savings performance.',
+    calls: [
+      { operationId: 'getTransferSuggestions', params: { status: 'pending' } },
+      { operationId: 'getTransferSuggestions', params: { status: 'accepted' } },
+      { operationId: 'getSavingsImpactMe' },
+    ],
+  },
+  // R8-2d: Additional Boosts recipes (#1267)
+  {
+    name: 'Awaiting Matches',
+    description: 'Show accepted transfer suggestions waiting for a matching transaction to be confirmed.',
+    calls: [
+      { operationId: 'getTransferSuggestions', params: { status: 'accepted' } },
+    ],
+  },
+  {
+    name: 'Monthly Savings Performance',
+    description: 'Assess personal savings impact and compare to platform-wide aggregate for the current month.',
+    calls: [
+      { operationId: 'getSavingsImpactMe' },
+      { operationId: 'getSavingsImpactAggregate' },
+    ],
+  },
+  {
+    name: 'Transfer Rules Audit',
+    description: 'List transfer-generating automation rules (transfer_suggestion and savings_goal types) and recent execution history for a specific rule.',
+    calls: [
+      { operationId: 'getAutomationRules', params: { rule_type: ['transfer_suggestion', 'savings_goal'] } },
+      { operationId: 'getRuleExecutions', pathParams: { id: '{{RULE_ID}}' } },
+    ],
+  },
 ]
 
 export interface SaveRecipeInput {
