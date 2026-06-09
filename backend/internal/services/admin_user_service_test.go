@@ -60,7 +60,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 			LastLoginAt:          &now,
 			IsActive:             true,
 			LinkedAccountsCount:  3,
-			AutomationRulesCount: 5,
+			BoostsCount: 5,
 		},
 		{
 			ID:                   user2ID,
@@ -71,7 +71,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 			CreatedAt:            now,
 			IsActive:             true,
 			LinkedAccountsCount:  1,
-			AutomationRulesCount: 2,
+			BoostsCount: 2,
 		},
 	}
 
@@ -249,7 +249,7 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 			LastLoginAt:          &now,
 			IsActive:             true,
 			LinkedAccountsCount:  5,
-			AutomationRulesCount: 10,
+			BoostsCount: 10,
 		},
 		TransactionsCount: 1500,
 		BudgetsCount:      4,

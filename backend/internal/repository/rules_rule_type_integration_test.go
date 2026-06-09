@@ -63,7 +63,7 @@ func TestRuleType_AllValidTypesAccepted_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
 
-	// All 4 valid rule types that must be accepted — keep in sync with 000088 + domain.RuleType* consts.
+	// All 4 valid rule types that must be accepted — keep in sync with 000088 + domain.BoostType* consts.
 	validTypes := []string{
 		"transfer_suggestion",
 		"budget_alert",

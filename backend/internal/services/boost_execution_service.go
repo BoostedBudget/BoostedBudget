@@ -1,4 +1,4 @@
-// Package services provides business logic for rule execution.
+// Package services provides business logic for boost execution.
 // Issue #35: Rules Engine Core - condition evaluation and action execution.
 package services
 
@@ -24,31 +24,31 @@ import (
 // This allows us to track skipped executions separately in the service layer.
 const ExecutionStatusSkipped domain.ExecutionStatus = "completed"
 
-// RuleExecutionService defines the interface for rule execution business logic.
-type RuleExecutionService interface {
-	// ExecuteRule executes a single rule with the given trigger data.
-	ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error)
+// BoostExecutionService defines the interface for boost execution business logic.
+type BoostExecutionService interface {
+	// ExecuteBoost executes a single rule with the given trigger data.
+	ExecuteBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error)
 
 	// ProcessEventTrigger processes an event trigger for all matching rules.
 	ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error
 
-	// GetExecutionHistory retrieves execution history for a rule.
-	GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error)
+	// GetBoostExecutionHistory retrieves execution history for a rule.
+	GetBoostExecutionHistory(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error)
 
 	// GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
 	// Issue #38: Rules API Endpoints - Execution history with filtering.
-	GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error)
+	GetExecutionHistoryWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
-	// TestRule performs a dry-run execution of a rule without persisting any changes.
+	// TestBoost performs a dry-run execution of a rule without persisting any changes.
 	// Issue #38: Rules API Endpoints - Test endpoint.
-	TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error)
+	TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error)
 }
 
-// ruleExecutionService implements RuleExecutionService.
-type ruleExecutionService struct {
-	executionRepo       repository.RuleExecutionRepository
+// boostExecutionService implements BoostExecutionService.
+type boostExecutionService struct {
+	executionRepo       repository.BoostExecutionRepository
 	suggestionRepo      repository.TransferSuggestionRepository
-	ruleRepo            repository.AutomationRulesRepository
+	ruleRepo            repository.BoostsRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
 	accountRepo         repository.AccountRepository  // optional; for execution-time ownership checks (GAP AE)
 	notificationService NotificationService
@@ -62,14 +62,14 @@ type NotificationService interface {
 	SendBudgetAlert(ctx context.Context, userID string, alert *domain.AlertAction, data map[string]interface{}) error
 }
 
-// NewRuleExecutionService creates a new RuleExecutionService instance.
-func NewRuleExecutionService(
-	executionRepo repository.RuleExecutionRepository,
+// NewBoostExecutionService creates a new BoostExecutionService instance.
+func NewBoostExecutionService(
+	executionRepo repository.BoostExecutionRepository,
 	suggestionRepo repository.TransferSuggestionRepository,
-	ruleRepo repository.AutomationRulesRepository,
+	ruleRepo repository.BoostsRepository,
 	notificationService NotificationService,
-) *ruleExecutionService {
-	return &ruleExecutionService{
+) *boostExecutionService {
+	return &boostExecutionService{
 		executionRepo:       executionRepo,
 		suggestionRepo:      suggestionRepo,
 		ruleRepo:            ruleRepo,
@@ -78,51 +78,51 @@ func NewRuleExecutionService(
 }
 
 // SetAnalytics sets the analytics client for event capture.
-func (s *ruleExecutionService) SetAnalytics(analytics phclient.Analytics) {
+func (s *boostExecutionService) SetAnalytics(analytics phclient.Analytics) {
 	s.analytics = analytics
 }
 
 // SetSavingsGoalRepo sets the savings goal repository for savings goal executor.
-func (s *ruleExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
+func (s *boostExecutionService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
 	s.savingsGoalRepo = repo
 }
 
 // SetNotificationRepo sets the notification repository for creating transfer suggestion notifications.
-func (s *ruleExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
+func (s *boostExecutionService) SetNotificationRepo(repo repository.NotificationRepository) {
 	s.notificationRepo = repo
 }
 
 // SetAccountRepo injects the account repository for execution-time ownership checks.
 // When set, executeTransferSuggestion verifies from/to_account_id belong to the rule owner.
 // Issue #972: GAP AE defense-in-depth for already-persisted transfer rules.
-func (s *ruleExecutionService) SetAccountRepo(repo repository.AccountRepository) {
+func (s *boostExecutionService) SetAccountRepo(repo repository.AccountRepository) {
 	s.accountRepo = repo
 }
 
 // SetChainResolver injects the chain resolver to map user_account_id → active account_id.
 // Issue #1109: Used by executeTransferSuggestion and executeSavingsGoal.
-func (s *ruleExecutionService) SetChainResolver(resolver AccountChainResolver) {
+func (s *boostExecutionService) SetChainResolver(resolver AccountChainResolver) {
 	s.chainResolver = resolver
 }
 
-// ExecuteRule executes a single rule with the given trigger data.
-func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+// ExecuteBoost executes a single rule with the given trigger data.
+func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	// Defense-in-depth: re-validate action completeness before dispatching.
 	// The service layer validates on create/update, but rules loaded directly from the
 	// DB or injected in tests may bypass that path. Re-validating here prevents a
 	// partial-field action (e.g. transfer without to_account_id) from creating a
 	// malformed suggestion. Cost: one cheap in-memory validation per execution.
-	if err := rule.Validate(); err != nil {
-		return nil, fmt.Errorf("rule validation failed: %w", err)
+	if err := boost.Validate(); err != nil {
+		return nil, fmt.Errorf("boost validation failed: %w", err)
 	}
 
 	startTime := time.Now()
 
 	// Create execution record
 	triggerContextJSON, _ := json.Marshal(triggerData)
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:             uuid.New().String(),
-		RuleID:         rule.ID,
+		BoostID: boost.ID,
 		Status:         domain.ExecutionStatusRunning,
 		StartedAt:      startTime,
 		TriggerContext: triggerContextJSON,
@@ -134,14 +134,14 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 	}
 
 	// Check if rule is enabled
-	if !rule.Enabled {
-		s.markExecutionSkipped(execution, startTime, "rule disabled")
+	if !boost.Enabled {
+		s.markExecutionSkipped(execution, startTime, "boost disabled")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
 	}
 
 	// Evaluate conditions
-	if !evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData) {
+	if !evaluateConditions(boost.Conditions, boost.ConditionLogic, triggerData) {
 		s.markExecutionSkipped(execution, startTime, "conditions not met")
 		_ = s.executionRepo.Update(ctx, execution)
 		return execution, nil
@@ -149,17 +149,17 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 	// Execute action based on rule type
 	var actionErr error
-	switch rule.RuleType {
-	case domain.RuleTypeTransferSuggestion:
-		actionErr = s.executeTransferSuggestion(ctx, rule, execution.ID, triggerData)
-	case domain.RuleTypeBudgetAlert:
-		actionErr = s.executeBudgetAlert(ctx, rule, triggerData)
-	case domain.RuleTypeCategoryRollover:
-		actionErr = s.executeCategoryRollover(ctx, rule, execution.ID, triggerData)
-	case domain.RuleTypeSavingsGoal:
-		actionErr = s.executeSavingsGoal(ctx, rule, execution.ID, triggerData)
+	switch boost.BoostType {
+	case domain.BoostTypeTransferSuggestion:
+		actionErr = s.executeTransferSuggestion(ctx, boost, execution.ID, triggerData)
+	case domain.BoostTypeBudgetAlert:
+		actionErr = s.executeBudgetAlert(ctx, boost, triggerData)
+	case domain.BoostTypeCategoryRollover:
+		actionErr = s.executeCategoryRollover(ctx, boost, execution.ID, triggerData)
+	case domain.BoostTypeSavingsGoal:
+		actionErr = s.executeSavingsGoal(ctx, boost, execution.ID, triggerData)
 	default:
-		actionErr = fmt.Errorf("unknown rule type: %s", rule.RuleType)
+		actionErr = fmt.Errorf("unknown boost type: %s", boost.BoostType)
 	}
 
 	// Update execution record
@@ -182,13 +182,13 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 	_ = s.executionRepo.Update(ctx, execution)
 
 	// Update rule execution stats
-	_ = s.ruleRepo.IncrementExecutionCount(ctx, rule.ID)
-	_ = s.ruleRepo.UpdateLastSuccessful(ctx, rule.ID)
+	_ = s.ruleRepo.IncrementExecutionCount(ctx, boost.ID)
+	_ = s.ruleRepo.UpdateLastSuccessful(ctx, boost.ID)
 
 	if s.analytics != nil {
-		s.analytics.Capture(rule.UserID, phclient.EventRuleTriggered, map[string]interface{}{
-			"rule_id":   rule.ID,
-			"rule_type": string(rule.RuleType),
+		s.analytics.Capture(boost.UserID, phclient.EventBoostTriggered, map[string]interface{}{
+			"rule_id":   boost.ID,
+			"rule_type": string(boost.BoostType),
 		})
 	}
 
@@ -197,9 +197,9 @@ func (s *ruleExecutionService) ExecuteRule(ctx context.Context, rule *domain.Aut
 
 // ProcessEventTrigger processes an event trigger for all matching rules.
 // Simplified: No tier restrictions on event-based triggers.
-func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
+func (s *boostExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
 	// Get matching rules for this event
-	rules, err := s.ruleRepo.GetRulesByEventTrigger(ctx, userID, eventType)
+	rules, err := s.ruleRepo.GetBoostsByEventTrigger(ctx, userID, eventType)
 	if err != nil {
 		return err
 	}
@@ -208,19 +208,19 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 	// one rule failing (e.g. transient DB error, missing repo) must not prevent
 	// other rules for the same user from firing on the same event.
 	eventBudgetID, _ := eventData[domain.EventDataKeyBudgetID].(string)
-	for _, rule := range rules {
+	for _, boost := range rules {
 		// A-CR2: if the rule is scoped to a specific budget (via budget_category.* conditions),
 		// skip it entirely when the event belongs to a different budget. This closes the OR-escape
 		// bug where an OR-logic rule could fire via a non-category condition even though its
 		// budget_category condition is for a different budget.
-		if boundID, bound := rule.BoundBudgetID(); bound && boundID != eventBudgetID {
+		if boundID, bound := boost.BoundBudgetID(); bound && boundID != eventBudgetID {
 			continue
 		}
-		_, execErr := s.ExecuteRule(ctx, rule, eventData)
+		_, execErr := s.ExecuteBoost(ctx, boost, eventData)
 		if execErr != nil {
-			slog.Error("rule execution failed; continuing with remaining rules",
-				"rule_id", rule.ID,
-				"user_id", rule.UserID,
+			slog.Error("boost execution failed; continuing with remaining rules",
+				"rule_id", boost.ID,
+				"user_id", boost.UserID,
 				"event_type", eventType,
 				"error", execErr,
 			)
@@ -230,18 +230,18 @@ func (s *ruleExecutionService) ProcessEventTrigger(ctx context.Context, userID, 
 	return nil
 }
 
-// GetExecutionHistory retrieves execution history for a rule.
-func (s *ruleExecutionService) GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
-	return s.executionRepo.GetByRuleID(ctx, ruleID, limit, offset)
+// GetBoostExecutionHistory retrieves execution history for a rule.
+func (s *boostExecutionService) GetBoostExecutionHistory(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
+	return s.executionRepo.GetByBoostID(ctx, boostID, limit, offset)
 }
 
 // GetExecutionHistoryWithFilter retrieves execution history with optional status filter and total count.
 // Issue #38: Rules API Endpoints - Execution history with filtering.
-func (s *ruleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
-	return s.executionRepo.GetByRuleIDWithFilter(ctx, ruleID, status, limit, offset)
+func (s *boostExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	return s.executionRepo.GetByBoostIDWithFilter(ctx, boostID, status, limit, offset)
 }
 
-// TestRule performs a dry-run execution of a rule without persisting any changes.
+// TestBoost performs a dry-run execution of a rule without persisting any changes.
 // Issue #38: Rules API Endpoints - Test endpoint.
 // This method:
 // - Evaluates each condition and returns individual results
@@ -250,11 +250,11 @@ func (s *ruleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context
 // - Does NOT count toward daily execution limits
 // - Does NOT persist execution records
 // - Does NOT create transfer suggestions or send notifications
-func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error) {
-	result := &domain.RuleTestResult{
-		RuleID:          rule.ID,
-		RuleName:        rule.Name,
-		RuleType:        rule.RuleType,
+func (s *boostExecutionService) TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
+	result := &domain.BoostTestResult{
+		BoostID: boost.ID,
+		BoostName: boost.Name,
+		BoostType: boost.BoostType,
 		TriggerDataUsed: triggerData,
 	}
 
@@ -263,8 +263,8 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 	// read from the nested categories map, and other fields resolve via
 	// normalizeConditionField. Fall back to the raw dotted field key for emitters
 	// (e.g. transaction events) that publish the full dotted name as-is.
-	conditionResults := make([]domain.ConditionEvalResult, len(rule.Conditions))
-	for i, condition := range rule.Conditions {
+	conditionResults := make([]domain.ConditionEvalResult, len(boost.Conditions))
+	for i, condition := range boost.Conditions {
 		actual, exists := lookupFieldValue(condition, triggerData)
 		if !exists && !strings.HasPrefix(condition.Field, "budget_category.") {
 			// Fallback: some emitters publish the dotted key verbatim (e.g.
@@ -287,11 +287,11 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 	result.ConditionResults = conditionResults
 
 	// Determine overall condition result based on logic
-	result.ConditionsMet = evaluateConditions(rule.Conditions, rule.ConditionLogic, triggerData)
+	result.ConditionsMet = evaluateConditions(boost.Conditions, boost.ConditionLogic, triggerData)
 
 	// If conditions are met, simulate the action without persisting
 	if result.ConditionsMet {
-		simulatedAction, err := s.simulateAction(rule, triggerData)
+		simulatedAction, err := s.simulateAction(boost, triggerData)
 		if err != nil {
 			result.Error = err.Error()
 		} else {
@@ -304,12 +304,12 @@ func (s *ruleExecutionService) TestRule(ctx context.Context, rule *domain.Automa
 }
 
 // simulateAction returns a description of what action would occur without actually executing it.
-func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, triggerData map[string]interface{}) (map[string]interface{}, error) {
+func (s *boostExecutionService) simulateAction(boost *domain.Boost, triggerData map[string]interface{}) (map[string]interface{}, error) {
 	simulatedAction := make(map[string]interface{})
 
-	switch rule.RuleType {
-	case domain.RuleTypeTransferSuggestion:
-		transfer, err := rule.ParseTransferAction()
+	switch boost.BoostType {
+	case domain.BoostTypeTransferSuggestion:
+		transfer, err := boost.ParseTransferAction()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse transfer action: %w", err)
 		}
@@ -327,8 +327,8 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 			simulatedAction["from_user_account_id"] = transfer.FromUserAccountID
 		}
 
-	case domain.RuleTypeBudgetAlert:
-		alert, err := rule.ParseAlertAction()
+	case domain.BoostTypeBudgetAlert:
+		alert, err := boost.ParseAlertAction()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse alert action: %w", err)
 		}
@@ -340,8 +340,8 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 		simulatedAction["threshold_type"] = alert.ThresholdType
 		simulatedAction["threshold_value"] = alert.ThresholdValue
 
-	case domain.RuleTypeCategoryRollover:
-		rollover, err := rule.ParseRolloverAction()
+	case domain.BoostTypeCategoryRollover:
+		rollover, err := boost.ParseRolloverAction()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse rollover action: %w", err)
 		}
@@ -360,8 +360,8 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 			simulatedAction["source_category_id"] = rollover.SourceBudgetCategoryID
 		}
 
-	case domain.RuleTypeSavingsGoal:
-		savingsGoal, err := rule.ParseSavingsGoalAction()
+	case domain.BoostTypeSavingsGoal:
+		savingsGoal, err := boost.ParseSavingsGoalAction()
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse savings goal action: %w", err)
 		}
@@ -376,15 +376,15 @@ func (s *ruleExecutionService) simulateAction(rule *domain.AutomationRule, trigg
 		simulatedAction["amount_type"] = savingsGoal.AmountType
 
 	default:
-		return nil, fmt.Errorf("unknown rule type: %s", rule.RuleType)
+		return nil, fmt.Errorf("unknown boost type: %s", boost.BoostType)
 	}
 
 	return simulatedAction, nil
 }
 
 // executeTransferSuggestion creates a transfer suggestion from the rule action.
-func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	transfer, err := rule.ParseTransferAction()
+func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, boost *domain.Boost, executionID string, triggerData map[string]interface{}) error {
+	transfer, err := boost.ParseTransferAction()
 	if err != nil {
 		return fmt.Errorf("failed to parse transfer action: %w", err)
 	}
@@ -396,15 +396,15 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 	// The service layer rejects new rules with mismatched IDs; this guard protects
 	// already-persisted rules that may predate that check.
 	if s.accountRepo != nil {
-		if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, rule.UserID); err != nil {
-			slog.Warn("transfer executor: from_account_id ownership mismatch; skipping rule",
-				"rule_id", rule.ID, "user_id", rule.UserID, "from_account_id", transfer.FromAccountID)
+		if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, boost.UserID); err != nil {
+			slog.Warn("transfer executor: from_account_id ownership mismatch; skipping boost",
+				"rule_id", boost.ID, "user_id", boost.UserID, "from_account_id", transfer.FromAccountID)
 			return nil
 		}
 		if transfer.ToAccountID != "" {
-			if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.ToAccountID, rule.UserID); err != nil {
-				slog.Warn("transfer executor: to_account_id ownership mismatch; skipping rule",
-					"rule_id", rule.ID, "user_id", rule.UserID, "to_account_id", transfer.ToAccountID)
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.ToAccountID, boost.UserID); err != nil {
+				slog.Warn("transfer executor: to_account_id ownership mismatch; skipping boost",
+					"rule_id", boost.ID, "user_id", boost.UserID, "to_account_id", transfer.ToAccountID)
 				return nil
 			}
 		}
@@ -417,21 +417,21 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 	}
 
 	// Create reason string
-	reason := fmt.Sprintf("Rule '%s' triggered", rule.Name)
+	reason := fmt.Sprintf("Rule '%s' triggered", boost.Name)
 
 	// Create suggestion
 	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
-		UserID:          rule.UserID,
-		RuleID:          ptrString(rule.ID),
-		RuleExecutionID: ptrString(executionID),
+		UserID:          boost.UserID,
+		BoostID: ptrString(boost.ID),
+		BoostExecutionID: ptrString(executionID),
 		FromAccountID:   ptrString(transfer.FromAccountID),
 		ToAccountID:     ptrString(transfer.ToAccountID),
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,
-		Source:          domain.SuggestionSourceRule,
+		Source:          domain.SuggestionSourceBoost,
 		Status:          domain.SuggestionStatusPending,
 		ExpiresAt:       &expiresAt,
 	}
@@ -443,14 +443,14 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 	// with the victim's active account. The ownership check is the backstop.
 	if transfer.FromUserAccountID != "" {
 		suggestion.FromUserAccountID = ptrString(transfer.FromUserAccountID)
-		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.FromUserAccountID, rule.UserID, rule.ID,
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.FromUserAccountID, boost.UserID, boost.ID,
 			func(activeID string) { suggestion.FromAccountID = ptrString(activeID) }, "from_account_id"); skipRule {
 			return nil
 		}
 	}
 	if transfer.ToUserAccountID != "" {
 		suggestion.ToUserAccountID = ptrString(transfer.ToUserAccountID)
-		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.ToUserAccountID, rule.UserID, rule.ID,
+		if skipRule, _ := s.resolveAndVerifyUserAccount(ctx, transfer.ToUserAccountID, boost.UserID, boost.ID,
 			func(activeID string) { suggestion.ToAccountID = ptrString(activeID) }, "to_account_id"); skipRule {
 			return nil
 		}
@@ -471,7 +471,7 @@ func (s *ruleExecutionService) executeTransferSuggestion(ctx context.Context, ru
 // Called during transfer suggestion execution to resolve stable identifiers across Plaid re-links.
 // If resolution succeeds, calls onResolve with the active ID. Returns (true, nil) if ownership fails
 // and the entire rule should be skipped; otherwise returns (false, nil).
-func (s *ruleExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, ruleID string,
+func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context, userAccountID, userID, boostID string,
 	onResolve func(string), fieldName string) (bool, error) {
 	if s.chainResolver == nil {
 		return false, nil
@@ -492,13 +492,13 @@ func (s *ruleExecutionService) resolveAndVerifyUserAccount(ctx context.Context, 
 	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
 	if s.accountRepo != nil {
 		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
-			slog.Warn("chain resolve: resolved account belongs to different user; skipping rule",
-				"rule_id", ruleID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
+			slog.Warn("chain resolve: resolved account belongs to different user; skipping boost",
+				"rule_id", boostID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
 			return true, nil
 		}
 	} else {
 		slog.Warn("chain resolve: accountRepo not configured; applying resolved ID without ownership check (configure SetAccountRepo in production)",
-			"rule_id", ruleID, "user_id", userID, "field", fieldName)
+			"rule_id", boostID, "user_id", userID, "field", fieldName)
 	}
 	onResolve(activeID)
 	return false, nil
@@ -506,7 +506,7 @@ func (s *ruleExecutionService) resolveAndVerifyUserAccount(ctx context.Context, 
 
 // createTransferSuggestionNotification creates an accept_reject notification for a new transfer suggestion.
 // This is non-blocking: errors are logged and ignored so a notification failure never blocks rule execution.
-func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.Context, suggestion *domain.TransferSuggestion) {
+func (s *boostExecutionService) createTransferSuggestionNotification(ctx context.Context, suggestion *domain.TransferSuggestion) {
 	if s.notificationRepo == nil {
 		return
 	}
@@ -539,7 +539,7 @@ func (s *ruleExecutionService) createTransferSuggestionNotification(ctx context.
 // calculateTransferAmount computes the transfer amount based on action type:
 // fixed: Amount directly; percentage: Amount% of budget income; remaining: full surplus;
 // excess: surplus above Threshold; threshold: legacy (use excess).
-func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAction, triggerData map[string]interface{}) float64 {
+func (s *boostExecutionService) calculateTransferAmount(action *domain.TransferAction, triggerData map[string]interface{}) float64 {
 	if action.AmountType == "fixed" {
 		return action.Amount
 	}
@@ -586,8 +586,8 @@ func (s *ruleExecutionService) calculateTransferAmount(action *domain.TransferAc
 }
 
 // executeBudgetAlert sends a budget alert notification.
-func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) error {
-	alert, err := rule.ParseAlertAction()
+func (s *boostExecutionService) executeBudgetAlert(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) error {
+	alert, err := boost.ParseAlertAction()
 	if err != nil {
 		return fmt.Errorf("failed to parse alert action: %w", err)
 	}
@@ -597,7 +597,7 @@ func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *dom
 
 	// Send notification if service is available
 	if s.notificationService != nil {
-		return s.notificationService.SendBudgetAlert(ctx, rule.UserID, alert, triggerData)
+		return s.notificationService.SendBudgetAlert(ctx, boost.UserID, alert, triggerData)
 	}
 
 	// If no notification service, just return success
@@ -606,8 +606,8 @@ func (s *ruleExecutionService) executeBudgetAlert(ctx context.Context, rule *dom
 }
 
 // executeCategoryRollover creates a rollover suggestion.
-func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	rollover, err := rule.ParseRolloverAction()
+func (s *boostExecutionService) executeCategoryRollover(ctx context.Context, boost *domain.Boost, executionID string, triggerData map[string]interface{}) error {
+	rollover, err := boost.ParseRolloverAction()
 	if err != nil {
 		return fmt.Errorf("failed to parse rollover action: %w", err)
 	}
@@ -628,18 +628,18 @@ func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule
 	}
 
 	// Create reason string
-	reason := fmt.Sprintf("Category rollover from rule '%s'", rule.Name)
+	reason := fmt.Sprintf("Category rollover from boost '%s'", boost.Name)
 
 	// Create suggestion for the rollover
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
-		UserID:          rule.UserID,
-		RuleID:          ptrString(rule.ID),
-		RuleExecutionID: ptrString(executionID),
+		UserID:          boost.UserID,
+		BoostID: ptrString(boost.ID),
+		BoostExecutionID: ptrString(executionID),
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,
-		Source:          domain.SuggestionSourceRule,
+		Source:          domain.SuggestionSourceBoost,
 		Status:          domain.SuggestionStatusPending,
 	}
 
@@ -656,7 +656,7 @@ func (s *ruleExecutionService) executeCategoryRollover(ctx context.Context, rule
 }
 
 // calculateRolloverAmount calculates the rollover amount based on rollover type.
-func (s *ruleExecutionService) calculateRolloverAmount(action *domain.RolloverAction, remaining float64) float64 {
+func (s *boostExecutionService) calculateRolloverAmount(action *domain.RolloverAction, remaining float64) float64 {
 	if remaining <= 0 {
 		return 0
 	}
@@ -680,8 +680,8 @@ func (s *ruleExecutionService) calculateRolloverAmount(action *domain.RolloverAc
 
 // executeSavingsGoal creates a transfer suggestion to contribute to a savings goal.
 // Issue #36: Rule Executors - Savings Goal Executor.
-func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *domain.AutomationRule, executionID string, triggerData map[string]interface{}) error {
-	savingsGoalAction, err := rule.ParseSavingsGoalAction()
+func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *domain.Boost, executionID string, triggerData map[string]interface{}) error {
+	savingsGoalAction, err := boost.ParseSavingsGoalAction()
 	if err != nil {
 		return fmt.Errorf("failed to parse savings goal action: %w", err)
 	}
@@ -696,11 +696,11 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 		return fmt.Errorf("savings goal repository not configured")
 	}
 
-	goal, err := s.savingsGoalRepo.GetByIDForUser(ctx, savingsGoalAction.SavingsGoalID, rule.UserID)
+	goal, err := s.savingsGoalRepo.GetByIDForUser(ctx, savingsGoalAction.SavingsGoalID, boost.UserID)
 	if err != nil {
 		// Log but don't fail the batch — this rule is silently skipped.
-		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping rule",
-			"rule_id", rule.ID, "user_id", rule.UserID,
+		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping boost",
+			"rule_id", boost.ID, "user_id", boost.UserID,
 			"savings_goal_id", savingsGoalAction.SavingsGoalID, "error", err)
 		return nil
 	}
@@ -713,7 +713,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	}
 
 	// Create reason string
-	reason := fmt.Sprintf("Savings contribution to '%s' from rule '%s'", goal.Name, rule.Name)
+	reason := fmt.Sprintf("Savings contribution to '%s' from boost '%s'", goal.Name, boost.Name)
 
 	// Issue #1109: Resolve savings goal's account to current active account_id via stable user_account_id.
 	toAccountID := goal.AccountID
@@ -730,15 +730,15 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
 	suggestion := &domain.TransferSuggestion{
 		ID:              uuid.New().String(),
-		UserID:          rule.UserID,
-		RuleID:          ptrString(rule.ID),
-		RuleExecutionID: ptrString(executionID),
+		UserID:          boost.UserID,
+		BoostID: ptrString(boost.ID),
+		BoostExecutionID: ptrString(executionID),
 		FromAccountID:   ptrString(savingsGoalAction.FromAccountID),
 		ToAccountID:     ptrString(toAccountID),
 		Amount:          amount,
 		CurrencyCode:    "USD",
 		Reason:          &reason,
-		Source:          domain.SuggestionSourceRule,
+		Source:          domain.SuggestionSourceBoost,
 		Status:          domain.SuggestionStatusPending,
 		ExpiresAt:       &expiresAt,
 	}
@@ -756,7 +756,7 @@ func (s *ruleExecutionService) executeSavingsGoal(ctx context.Context, rule *dom
 }
 
 // calculateSavingsGoalAmount calculates the contribution amount based on action type.
-func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.SavingsGoalAction, triggerData map[string]interface{}) float64 {
+func (s *boostExecutionService) calculateSavingsGoalAmount(action *domain.SavingsGoalAction, triggerData map[string]interface{}) float64 {
 	if action.AmountType == "fixed" {
 		return action.Amount
 	}
@@ -785,7 +785,7 @@ func (s *ruleExecutionService) calculateSavingsGoalAmount(action *domain.Savings
 }
 
 // evaluateConditions evaluates all conditions with the given logic.
-func evaluateConditions(conditions []domain.AutomationRuleCondition, logic string, data map[string]interface{}) bool {
+func evaluateConditions(conditions []domain.BoostCondition, logic string, data map[string]interface{}) bool {
 	if len(conditions) == 0 {
 		return true
 	}
@@ -856,7 +856,7 @@ func normalizeConditionField(field string) string {
 // via normalizeConditionField.
 // Issue #1270: GAP M — per-category condition evaluation.
 // Issue #1271 Items 5+6: dual-shape reader, budget-scope guard.
-func lookupFieldValue(condition domain.AutomationRuleCondition, data map[string]interface{}) (interface{}, bool) {
+func lookupFieldValue(condition domain.BoostCondition, data map[string]interface{}) (interface{}, bool) {
 	if strings.HasPrefix(condition.Field, "budget_category.") {
 		// Defense-in-depth budget scope check (primary guard is in ProcessEventTrigger).
 		if condition.BudgetID != "" {
@@ -901,7 +901,7 @@ func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) 
 // evaluateCondition evaluates a single condition against the data.
 // Supports both short form (eq, neq, gt, gte, lt, lte) and long form
 // (equals, not_equals, greater_than, etc.) operator names.
-func evaluateCondition(condition domain.AutomationRuleCondition, data map[string]interface{}) bool {
+func evaluateCondition(condition domain.BoostCondition, data map[string]interface{}) bool {
 	fieldValue, exists := lookupFieldValue(condition, data)
 	if !exists {
 		return false
@@ -911,7 +911,7 @@ func evaluateCondition(condition domain.AutomationRuleCondition, data map[string
 
 // evaluateConditionWithValue evaluates a condition against a pre-looked-up value,
 // avoiding a second map lookup when the caller already holds the value.
-func evaluateConditionWithValue(condition domain.AutomationRuleCondition, fieldValue interface{}) bool {
+func evaluateConditionWithValue(condition domain.BoostCondition, fieldValue interface{}) bool {
 	if fieldValue == nil {
 		return false
 	}
@@ -1015,7 +1015,7 @@ func containsValue(list, value string) bool {
 
 // markExecutionSkipped marks an execution as skipped with the given reason.
 // Sets status, completion time, duration, and output data in one place.
-func (s *ruleExecutionService) markExecutionSkipped(execution *domain.RuleExecution, startTime time.Time, reason string) {
+func (s *boostExecutionService) markExecutionSkipped(execution *domain.BoostExecution, startTime time.Time, reason string) {
 	execution.Status = ExecutionStatusSkipped
 	completedAt := time.Now()
 	execution.CompletedAt = &completedAt

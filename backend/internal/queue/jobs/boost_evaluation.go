@@ -13,10 +13,10 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// RuleEvaluationArgs contains the arguments for a rule evaluation job.
+// BoostEvaluationArgs contains the arguments for a boost evaluation job.
 // This job evaluates automation rules when events occur (e.g., budget_updated,
 // transaction_created) and executes matching rules asynchronously.
-type RuleEvaluationArgs struct {
+type BoostEvaluationArgs struct {
 	// UserID is the ID of the user whose rules should be evaluated
 	UserID string `json:"user_id"`
 
@@ -30,31 +30,31 @@ type RuleEvaluationArgs struct {
 }
 
 // Kind returns the unique identifier for this job type.
-func (RuleEvaluationArgs) Kind() string { return "rule_evaluation" }
+func (BoostEvaluationArgs) Kind() string { return "boost_evaluation" }
 
-// RuleEvaluationWorker processes rule evaluation jobs by checking automation
+// BoostEvaluationWorker processes boost evaluation jobs by checking automation
 // rules against event data and executing matching rules.
-type RuleEvaluationWorker struct {
-	river.WorkerDefaults[RuleEvaluationArgs]
+type BoostEvaluationWorker struct {
+	river.WorkerDefaults[BoostEvaluationArgs]
 
-	ruleExecutionService services.RuleExecutionService
+	boostExecutionService services.BoostExecutionService
 	logger               *slog.Logger
 }
 
-// RuleEvaluationWorkerDeps contains the dependencies for RuleEvaluationWorker.
-type RuleEvaluationWorkerDeps struct {
-	RuleExecutionService services.RuleExecutionService
+// BoostEvaluationWorkerDeps contains the dependencies for BoostEvaluationWorker.
+type BoostEvaluationWorkerDeps struct {
+	BoostExecutionService services.BoostExecutionService
 	Logger               *slog.Logger
 }
 
-// NewRuleEvaluationWorker creates a new rule evaluation worker.
-func NewRuleEvaluationWorker(deps RuleEvaluationWorkerDeps) *RuleEvaluationWorker {
+// NewBoostEvaluationWorker creates a new boost evaluation worker.
+func NewBoostEvaluationWorker(deps BoostEvaluationWorkerDeps) *BoostEvaluationWorker {
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &RuleEvaluationWorker{
-		ruleExecutionService: deps.RuleExecutionService,
+	return &BoostEvaluationWorker{
+		boostExecutionService: deps.BoostExecutionService,
 		logger:               logger,
 	}
 }
@@ -68,7 +68,7 @@ func NewRuleEvaluationWorker(deps RuleEvaluationWorkerDeps) *RuleEvaluationWorke
 //
 // Rule execution failures for individual rules don't fail the entire job.
 // Each rule execution is logged and tracked independently.
-func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEvaluationArgs]) (err error) {
+func (w *BoostEvaluationWorker) Work(ctx context.Context, job *river.Job[BoostEvaluationArgs]) (err error) {
 	args := job.Args
 
 	w.logger.Info("starting rule evaluation job",
@@ -91,7 +91,7 @@ func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEval
 	startTime := time.Now()
 
 	// Process the event trigger - this evaluates all matching rules
-	err = w.ruleExecutionService.ProcessEventTrigger(ctx, args.UserID, args.EventType, args.EventData)
+	err = w.boostExecutionService.ProcessEventTrigger(ctx, args.UserID, args.EventType, args.EventData)
 	if err != nil {
 		w.logger.Error("rule evaluation failed",
 			"job_id", job.ID,
@@ -113,10 +113,10 @@ func (w *RuleEvaluationWorker) Work(ctx context.Context, job *river.Job[RuleEval
 	return nil
 }
 
-// RuleEvaluationUniqueOpts returns the recommended uniqueness options for RuleEvaluationArgs.
+// BoostEvaluationUniqueOpts returns the recommended uniqueness options for BoostEvaluationArgs.
 // This provides a 1-minute debounce period for the same user+event type combination.
 // This prevents rapid-fire rule evaluations when many events occur quickly.
-func RuleEvaluationUniqueOpts() *queue.UniqueOpts {
+func BoostEvaluationUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs:   true,
 		ByPeriod: 1 * time.Minute,

@@ -14,34 +14,34 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 )
 
-// AutomationRuleHandler handles automation rule-related HTTP requests.
-type AutomationRuleHandler struct {
-	service          services.AutomationRuleService
-	executionService services.RuleExecutionService
-	schedulerManager *workers.RuleSchedulerManager
+// BoostHandler handles boost-related HTTP requests.
+type BoostHandler struct {
+	service          services.BoostService
+	executionService services.BoostExecutionService
+	schedulerManager *workers.BoostSchedulerManager
 }
 
-// NewAutomationRuleHandler creates a new AutomationRuleHandler instance.
-func NewAutomationRuleHandler(
-	service services.AutomationRuleService,
-	schedulerManager *workers.RuleSchedulerManager,
-) *AutomationRuleHandler {
-	return &AutomationRuleHandler{
+// NewBoostHandler creates a new BoostHandler instance.
+func NewBoostHandler(
+	service services.BoostService,
+	schedulerManager *workers.BoostSchedulerManager,
+) *BoostHandler {
+	return &BoostHandler{
 		service:          service,
 		schedulerManager: schedulerManager,
 	}
 }
 
-// SetExecutionService sets the rule execution service for test and execution history endpoints.
+// SetExecutionService sets the boost execution service for test and execution history endpoints.
 // Issue #38: Rules API Endpoints - Test and execution history.
-func (h *AutomationRuleHandler) SetExecutionService(executionService services.RuleExecutionService) {
+func (h *BoostHandler) SetExecutionService(executionService services.BoostExecutionService) {
 	h.executionService = executionService
 }
 
 // --- Input/Output Types ---
 
-// GetAutomationRulesInput represents the input for getting user automation rules.
-type GetAutomationRulesInput struct {
+// GetBoostsInput represents the input for getting user automation rules.
+type GetBoostsInput struct {
 	inputs.AuthenticatedInput
 	// RuleType is an optional list of rule types to filter by.
 	// Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
@@ -49,53 +49,53 @@ type GetAutomationRulesInput struct {
 	RuleType []string `query:"rule_type" doc:"Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal." required:"false"`
 }
 
-// GetAutomationRulesOutput represents the response for getting user automation rules.
-type GetAutomationRulesOutput struct {
-	Body []*domain.AutomationRule
+// GetBoostsOutput represents the response for getting user automation rules.
+type GetBoostsOutput struct {
+	Body []*domain.Boost
 }
 
-// GetAutomationRuleByIDInput represents the input for getting a rule by ID.
-type GetAutomationRuleByIDInput struct {
+// GetBoostByIDInput represents the input for getting a rule by ID.
+type GetBoostByIDInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Automation Rule UUID"`
 }
 
-// GetAutomationRuleByIDOutput represents the response for getting a rule by ID.
-type GetAutomationRuleByIDOutput struct {
-	Body *domain.AutomationRule
+// GetBoostByIDOutput represents the response for getting a rule by ID.
+type GetBoostByIDOutput struct {
+	Body *domain.Boost
 }
 
-// CreateAutomationRuleInput represents the input for creating an automation rule.
-type CreateAutomationRuleInput struct {
+// CreateBoostInput represents the input for creating an automation rule.
+type CreateBoostInput struct {
 	inputs.AuthenticatedInput
-	Body domain.CreateAutomationRuleRequest
+	Body domain.CreateBoostRequest
 }
 
-// CreateAutomationRuleOutput represents the response for creating an automation rule.
-type CreateAutomationRuleOutput struct {
-	Body *domain.AutomationRule
+// CreateBoostOutput represents the response for creating an automation rule.
+type CreateBoostOutput struct {
+	Body *domain.Boost
 }
 
-// UpdateAutomationRuleInput represents the input for updating an automation rule.
-type UpdateAutomationRuleInput struct {
+// UpdateBoostInput represents the input for updating an automation rule.
+type UpdateBoostInput struct {
 	inputs.AuthenticatedInput
 	ID   string `path:"id" doc:"Automation Rule UUID"`
-	Body domain.UpdateAutomationRuleRequest
+	Body domain.UpdateBoostRequest
 }
 
-// UpdateAutomationRuleOutput represents the response for updating an automation rule.
-type UpdateAutomationRuleOutput struct {
-	Body *domain.AutomationRule
+// UpdateBoostOutput represents the response for updating an automation rule.
+type UpdateBoostOutput struct {
+	Body *domain.Boost
 }
 
-// DeleteAutomationRuleInput represents the input for deleting an automation rule.
-type DeleteAutomationRuleInput struct {
+// DeleteBoostInput represents the input for deleting an automation rule.
+type DeleteBoostInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Automation Rule UUID"`
 }
 
-// ToggleAutomationRuleInput represents the input for toggling an automation rule.
-type ToggleAutomationRuleInput struct {
+// ToggleBoostInput represents the input for toggling an automation rule.
+type ToggleBoostInput struct {
 	inputs.AuthenticatedInput
 	ID   string `path:"id" doc:"Automation Rule UUID"`
 	Body struct {
@@ -103,13 +103,13 @@ type ToggleAutomationRuleInput struct {
 	}
 }
 
-// ToggleAutomationRuleOutput represents the response for toggling an automation rule.
-type ToggleAutomationRuleOutput struct {
-	Body *domain.AutomationRule
+// ToggleBoostOutput represents the response for toggling an automation rule.
+type ToggleBoostOutput struct {
+	Body *domain.Boost
 }
 
-// TriggerAutomationRuleInput represents the input for manually triggering an automation rule.
-type TriggerAutomationRuleInput struct {
+// TriggerBoostInput represents the input for manually triggering an automation rule.
+type TriggerBoostInput struct {
 	inputs.AuthenticatedInput
 	ID   string `path:"id" doc:"Automation Rule UUID"`
 	Body struct {
@@ -117,14 +117,14 @@ type TriggerAutomationRuleInput struct {
 	}
 }
 
-// TriggerAutomationRuleOutput represents the response for triggering an automation rule.
-type TriggerAutomationRuleOutput struct {
-	Body *domain.RuleExecution
+// TriggerBoostOutput represents the response for triggering an automation rule.
+type TriggerBoostOutput struct {
+	Body *domain.BoostExecution
 }
 
-// TestAutomationRuleInput represents the input for testing a rule execution (dry-run).
+// TestBoostInput represents the input for testing a rule execution (dry-run).
 // Issue #38: Rules API Endpoints.
-type TestAutomationRuleInput struct {
+type TestBoostInput struct {
 	inputs.AuthenticatedInput
 	ID   string `path:"id" doc:"Automation Rule UUID"`
 	Body struct {
@@ -132,25 +132,25 @@ type TestAutomationRuleInput struct {
 	}
 }
 
-// TestAutomationRuleOutput represents the response for testing a rule execution.
-type TestAutomationRuleOutput struct {
-	Body *domain.RuleTestResult
+// TestBoostOutput represents the response for testing a rule execution.
+type TestBoostOutput struct {
+	Body *domain.BoostTestResult
 }
 
-// EnableAutomationRuleInput represents the input for enabling an automation rule.
-type EnableAutomationRuleInput struct {
+// EnableBoostInput represents the input for enabling an automation rule.
+type EnableBoostInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Automation Rule UUID"`
 }
 
-// DisableAutomationRuleInput represents the input for disabling an automation rule.
-type DisableAutomationRuleInput struct {
+// DisableBoostInput represents the input for disabling an automation rule.
+type DisableBoostInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Automation Rule UUID"`
 }
 
-// GetRuleExecutionsInput represents the input for getting rule execution history.
-type GetRuleExecutionsInput struct {
+// GetBoostExecutionsInput represents the input for getting rule execution history.
+type GetBoostExecutionsInput struct {
 	inputs.AuthenticatedInput
 	ID     string `path:"id" doc:"Automation Rule UUID"`
 	Status string `query:"status" doc:"Filter by status: pending, running, completed, failed"`
@@ -158,82 +158,82 @@ type GetRuleExecutionsInput struct {
 	Offset int    `query:"offset" default:"0" minimum:"0" doc:"Number of results to skip"`
 }
 
-// GetRuleExecutionsOutput represents the response for getting rule execution history.
-type GetRuleExecutionsOutput struct {
-	Body *domain.RuleExecutionsResponse
+// GetBoostExecutionsOutput represents the response for getting rule execution history.
+type GetBoostExecutionsOutput struct {
+	Body *domain.BoostExecutionsResponse
 }
 
 // --- Handler Methods ---
 
-// validRuleTypeValues lists the allowed rule_type query values for the list endpoint.
-var validRuleTypeValues = map[string]domain.RuleType{
-	string(domain.RuleTypeTransferSuggestion): domain.RuleTypeTransferSuggestion,
-	string(domain.RuleTypeBudgetAlert):        domain.RuleTypeBudgetAlert,
-	string(domain.RuleTypeCategoryRollover):   domain.RuleTypeCategoryRollover,
-	string(domain.RuleTypeSavingsGoal):        domain.RuleTypeSavingsGoal,
+// validBoostTypeValues lists the allowed rule_type query values for the list endpoint.
+var validBoostTypeValues = map[string]domain.BoostType{
+	string(domain.BoostTypeTransferSuggestion): domain.BoostTypeTransferSuggestion,
+	string(domain.BoostTypeBudgetAlert):        domain.BoostTypeBudgetAlert,
+	string(domain.BoostTypeCategoryRollover):   domain.BoostTypeCategoryRollover,
+	string(domain.BoostTypeSavingsGoal):        domain.BoostTypeSavingsGoal,
 }
 
-// GetAutomationRules handles GET /api/v1/rules requests.
+// GetBoosts handles GET /api/v1/rules requests.
 // Retrieves automation rules for the authenticated user, optionally filtered by rule type.
-func (h *AutomationRuleHandler) GetAutomationRules(ctx context.Context, input *GetAutomationRulesInput) (*GetAutomationRulesOutput, error) {
-	var ruleTypes []domain.RuleType
+func (h *BoostHandler) GetBoosts(ctx context.Context, input *GetBoostsInput) (*GetBoostsOutput, error) {
+	var boostTypes []domain.BoostType
 	for _, rt := range input.RuleType {
-		canonical, ok := validRuleTypeValues[rt]
+		canonical, ok := validBoostTypeValues[rt]
 		if !ok {
 			return nil, huma.Error422UnprocessableEntity("invalid rule_type: " + rt + "; valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal")
 		}
-		ruleTypes = append(ruleTypes, canonical)
+		boostTypes = append(boostTypes, canonical)
 	}
 
-	rules, err := h.service.GetUserRulesFiltered(ctx, input.UserID, ruleTypes)
+	rules, err := h.service.GetUserRulesFiltered(ctx, input.UserID, boostTypes)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Return empty array instead of null if no rules
 	if rules == nil {
-		rules = []*domain.AutomationRule{}
+		rules = []*domain.Boost{}
 	}
 
-	return &GetAutomationRulesOutput{Body: rules}, nil
+	return &GetBoostsOutput{Body: rules}, nil
 }
 
-// GetAutomationRuleByID handles GET /api/v1/rules/:id requests.
+// GetBoostByID handles GET /api/v1/rules/:id requests.
 // Retrieves a specific automation rule by ID.
-func (h *AutomationRuleHandler) GetAutomationRuleByID(ctx context.Context, input *GetAutomationRuleByIDInput) (*GetAutomationRuleByIDOutput, error) {
+func (h *BoostHandler) GetBoostByID(ctx context.Context, input *GetBoostByIDInput) (*GetBoostByIDOutput, error) {
 	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetAutomationRuleByIDOutput{Body: rule}, nil
+	return &GetBoostByIDOutput{Body: rule}, nil
 }
 
-// CreateAutomationRule handles POST /api/v1/rules requests.
+// CreateBoost handles POST /api/v1/rules requests.
 // Creates a new automation rule for the authenticated user.
-func (h *AutomationRuleHandler) CreateAutomationRule(ctx context.Context, input *CreateAutomationRuleInput) (*CreateAutomationRuleOutput, error) {
+func (h *BoostHandler) CreateBoost(ctx context.Context, input *CreateBoostInput) (*CreateBoostOutput, error) {
 	rule, err := h.service.CreateRule(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &CreateAutomationRuleOutput{Body: rule}, nil
+	return &CreateBoostOutput{Body: rule}, nil
 }
 
-// UpdateAutomationRule handles PUT /api/v1/rules/:id requests.
+// UpdateBoost handles PUT /api/v1/rules/:id requests.
 // Updates an automation rule's configuration.
-func (h *AutomationRuleHandler) UpdateAutomationRule(ctx context.Context, input *UpdateAutomationRuleInput) (*UpdateAutomationRuleOutput, error) {
+func (h *BoostHandler) UpdateBoost(ctx context.Context, input *UpdateBoostInput) (*UpdateBoostOutput, error) {
 	rule, err := h.service.UpdateRule(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &UpdateAutomationRuleOutput{Body: rule}, nil
+	return &UpdateBoostOutput{Body: rule}, nil
 }
 
-// DeleteAutomationRule handles DELETE /api/v1/rules/:id requests.
+// DeleteBoost handles DELETE /api/v1/rules/:id requests.
 // Removes an automation rule.
-func (h *AutomationRuleHandler) DeleteAutomationRule(ctx context.Context, input *DeleteAutomationRuleInput) (*struct{}, error) {
+func (h *BoostHandler) DeleteBoost(ctx context.Context, input *DeleteBoostInput) (*struct{}, error) {
 	err := h.service.DeleteRule(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
@@ -242,21 +242,21 @@ func (h *AutomationRuleHandler) DeleteAutomationRule(ctx context.Context, input 
 	return nil, nil
 }
 
-// ToggleAutomationRule handles POST /api/v1/rules/:id/toggle requests.
+// ToggleBoost handles POST /api/v1/rules/:id/toggle requests.
 // Enables or disables an automation rule.
-func (h *AutomationRuleHandler) ToggleAutomationRule(ctx context.Context, input *ToggleAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
+func (h *BoostHandler) ToggleBoost(ctx context.Context, input *ToggleBoostInput) (*ToggleBoostOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, input.Body.Enabled)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleAutomationRuleOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: rule}, nil
 }
 
-// TriggerAutomationRule handles POST /api/v1/rules/:id/trigger requests.
+// TriggerBoost handles POST /api/v1/rules/:id/trigger requests.
 // Manually triggers an automation rule for immediate execution.
 // Issue #37: Rule Scheduler - Manual trigger support.
-func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input *TriggerAutomationRuleInput) (*TriggerAutomationRuleOutput, error) {
+func (h *BoostHandler) TriggerBoost(ctx context.Context, input *TriggerBoostInput) (*TriggerBoostOutput, error) {
 	// Verify user owns the rule first
 	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
@@ -289,13 +289,13 @@ func (h *AutomationRuleHandler) TriggerAutomationRule(ctx context.Context, input
 		}
 	}
 
-	return &TriggerAutomationRuleOutput{Body: execution}, nil
+	return &TriggerBoostOutput{Body: execution}, nil
 }
 
-// TestAutomationRule handles POST /api/v1/rules/:id/test requests.
+// TestBoost handles POST /api/v1/rules/:id/test requests.
 // Performs a dry-run of the rule to preview results without persisting changes.
 // Issue #38: Rules API Endpoints.
-func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *TestAutomationRuleInput) (*TestAutomationRuleOutput, error) {
+func (h *BoostHandler) TestBoost(ctx context.Context, input *TestBoostInput) (*TestBoostOutput, error) {
 	// Verify user owns the rule
 	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
@@ -308,42 +308,42 @@ func (h *AutomationRuleHandler) TestAutomationRule(ctx context.Context, input *T
 	}
 
 	// Perform dry-run test
-	result, err := h.executionService.TestRule(ctx, rule, input.Body.TriggerData)
+	result, err := h.executionService.TestBoost(ctx, rule, input.Body.TriggerData)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &TestAutomationRuleOutput{Body: result}, nil
+	return &TestBoostOutput{Body: result}, nil
 }
 
-// EnableAutomationRule handles POST /api/v1/rules/:id/enable requests.
+// EnableBoost handles POST /api/v1/rules/:id/enable requests.
 // Convenience wrapper for enabling a rule.
 // Issue #38: Rules API Endpoints.
-func (h *AutomationRuleHandler) EnableAutomationRule(ctx context.Context, input *EnableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
+func (h *BoostHandler) EnableBoost(ctx context.Context, input *EnableBoostInput) (*ToggleBoostOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, true)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleAutomationRuleOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: rule}, nil
 }
 
-// DisableAutomationRule handles POST /api/v1/rules/:id/disable requests.
+// DisableBoost handles POST /api/v1/rules/:id/disable requests.
 // Convenience wrapper for disabling a rule.
 // Issue #38: Rules API Endpoints.
-func (h *AutomationRuleHandler) DisableAutomationRule(ctx context.Context, input *DisableAutomationRuleInput) (*ToggleAutomationRuleOutput, error) {
+func (h *BoostHandler) DisableBoost(ctx context.Context, input *DisableBoostInput) (*ToggleBoostOutput, error) {
 	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, false)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleAutomationRuleOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: rule}, nil
 }
 
-// GetRuleExecutions handles GET /api/v1/rules/:id/executions requests.
+// GetBoostExecutions handles GET /api/v1/rules/:id/executions requests.
 // Retrieves execution history for a specific rule with pagination.
 // Issue #38: Rules API Endpoints.
-func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *GetRuleExecutionsInput) (*GetRuleExecutionsOutput, error) {
+func (h *BoostHandler) GetBoostExecutions(ctx context.Context, input *GetBoostExecutionsInput) (*GetBoostExecutionsOutput, error) {
 	// Verify user owns the rule
 	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
 	if err != nil {
@@ -368,8 +368,8 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetRuleExecutionsOutput{
-		Body: &domain.RuleExecutionsResponse{
+	return &GetBoostExecutionsOutput{
+		Body: &domain.BoostExecutionsResponse{
 			Executions: executions,
 			Total:      total,
 			Limit:      input.Limit,
@@ -378,9 +378,9 @@ func (h *AutomationRuleHandler) GetRuleExecutions(ctx context.Context, input *Ge
 	}, nil
 }
 
-// RegisterAutomationRuleRoutes registers automation rule routes with the Huma API.
+// RegisterBoostRoutes registers boost routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
-func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) {
+func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
 	// GET /api/v1/rules - Get automation rules, optionally filtered by rule type
 	huma.Register(api, huma.Operation{
 		OperationID: "getAutomationRules",
@@ -394,7 +394,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 			"When omitted, all rule types are returned.",
 		Tags:     []string{"Automation Rules"},
 		Security: []map[string][]string{{"clerk": {}}},
-	}, handler.GetAutomationRules)
+	}, handler.GetBoosts)
 
 	// GET /api/v1/rules/{id} - Get automation rule by ID
 	huma.Register(api, huma.Operation{
@@ -405,7 +405,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Retrieves a specific automation rule by its UUID.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.GetAutomationRuleByID)
+	}, handler.GetBoostByID)
 
 	// POST /api/v1/rules - Create a new automation rule
 	huma.Register(api, huma.Operation{
@@ -417,7 +417,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Tags:          []string{"Automation Rules"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusCreated,
-	}, handler.CreateAutomationRule)
+	}, handler.CreateBoost)
 
 	// PUT /api/v1/rules/{id} - Update an automation rule
 	huma.Register(api, huma.Operation{
@@ -428,7 +428,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Updates an automation rule's configuration.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.UpdateAutomationRule)
+	}, handler.UpdateBoost)
 
 	// DELETE /api/v1/rules/{id} - Delete an automation rule
 	huma.Register(api, huma.Operation{
@@ -440,7 +440,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Tags:          []string{"Automation Rules"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
-	}, handler.DeleteAutomationRule)
+	}, handler.DeleteBoost)
 
 	// POST /api/v1/rules/{id}/toggle - Toggle an automation rule
 	huma.Register(api, huma.Operation{
@@ -451,7 +451,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Enables or disables an automation rule.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.ToggleAutomationRule)
+	}, handler.ToggleBoost)
 
 	// POST /api/v1/rules/{id}/trigger - Manually trigger an automation rule
 	huma.Register(api, huma.Operation{
@@ -462,7 +462,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Triggers an automation rule for immediate execution with optional custom data.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.TriggerAutomationRule)
+	}, handler.TriggerBoost)
 
 	// Issue #38: Rules API Endpoints - New routes
 
@@ -475,7 +475,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Executes a dry-run of the rule to preview results without persisting changes.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.TestAutomationRule)
+	}, handler.TestBoost)
 
 	// POST /api/v1/rules/{id}/enable - Enable an automation rule
 	huma.Register(api, huma.Operation{
@@ -486,7 +486,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Enables an automation rule for execution.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.EnableAutomationRule)
+	}, handler.EnableBoost)
 
 	// POST /api/v1/rules/{id}/disable - Disable an automation rule
 	huma.Register(api, huma.Operation{
@@ -497,7 +497,7 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Disables an automation rule from execution.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.DisableAutomationRule)
+	}, handler.DisableBoost)
 
 	// GET /api/v1/rules/{id}/executions - Get rule execution history
 	huma.Register(api, huma.Operation{
@@ -508,5 +508,5 @@ func RegisterAutomationRuleRoutes(api huma.API, handler *AutomationRuleHandler) 
 		Description: "Retrieves execution history for a specific automation rule with optional status filter.",
 		Tags:        []string{"Automation Rules"},
 		Security:    []map[string][]string{{"clerk": {}}},
-	}, handler.GetRuleExecutions)
+	}, handler.GetBoostExecutions)
 }

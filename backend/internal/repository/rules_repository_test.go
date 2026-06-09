@@ -83,7 +83,7 @@ func TestRulesTable_CanInsertWithJSONB(t *testing.T) {
 // covered by TestRuleType_AllValidTypesAccepted_Integration (rules_rule_type_integration_test.go).
 // This test ensures service-layer code does not accidentally pass an unexpected literal.
 func TestRulesTable_RuleTypeConstraint(t *testing.T) {
-	// Keep in sync with migration 000088 and domain.RuleType* constants.
+	// Keep in sync with migration 000088 and domain.BoostType* constants.
 	// 'savings_goal' was added by migration 000088 (#972, GAP CI).
 	validTypes := []string{"transfer_suggestion", "budget_alert", "category_rollover", "savings_goal"}
 

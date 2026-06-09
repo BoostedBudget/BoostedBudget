@@ -131,7 +131,7 @@ func createTestTransferSuggestion(userID string) *domain.TransferSuggestion {
 		Amount:        100.00,
 		CurrencyCode:  "USD",
 		Reason:        &reason,
-		Source:        domain.SuggestionSourceRule,
+		Source:        domain.SuggestionSourceBoost,
 		Status:        domain.SuggestionStatusPending,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),

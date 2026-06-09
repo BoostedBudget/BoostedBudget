@@ -1,4 +1,4 @@
-// Package repository provides data access for rule execution tracking.
+// Package repository provides data access for boost execution tracking.
 // Issue #35: Rules Engine Core - execution history and auditing.
 package repository
 
@@ -14,49 +14,49 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// RuleExecutionRepository defines the interface for rule execution data access.
-type RuleExecutionRepository interface {
+// BoostExecutionRepository defines the interface for boost execution data access.
+type BoostExecutionRepository interface {
 	// Create creates a new rule execution record.
-	Create(ctx context.Context, execution *domain.RuleExecution) error
+	Create(ctx context.Context, execution *domain.BoostExecution) error
 
 	// Update updates an existing execution record.
-	Update(ctx context.Context, execution *domain.RuleExecution) error
+	Update(ctx context.Context, execution *domain.BoostExecution) error
 
 	// GetByID retrieves an execution by its ID.
-	GetByID(ctx context.Context, id string) (*domain.RuleExecution, error)
+	GetByID(ctx context.Context, id string) (*domain.BoostExecution, error)
 
-	// GetByRuleID retrieves executions for a specific rule with pagination.
-	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error)
+	// GetByBoostID retrieves executions for a specific rule with pagination.
+	GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error)
 
-	// GetByRuleIDWithFilter retrieves executions for a rule with optional status filter and total count.
+	// GetByBoostIDWithFilter retrieves executions for a rule with optional status filter and total count.
 	// Issue #38: Rules API Endpoints - Execution history with filtering.
-	GetByRuleIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error)
+	GetByBoostIDWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
 	// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
 	GetTodayExecutionCount(ctx context.Context, userID string) (int, error)
 
 	// GetLastExecutionForRule retrieves the most recent execution for a rule.
-	GetLastExecutionForRule(ctx context.Context, ruleID string) (*domain.RuleExecution, error)
+	GetLastExecutionForRule(ctx context.Context, boostID string) (*domain.BoostExecution, error)
 
 	// GetPendingExecutions retrieves pending executions for processing queue.
-	GetPendingExecutions(ctx context.Context, limit int) ([]*domain.RuleExecution, error)
+	GetPendingExecutions(ctx context.Context, limit int) ([]*domain.BoostExecution, error)
 
 	// GetFailedExecutions retrieves failed executions for retry.
-	GetFailedExecutions(ctx context.Context, ruleID string, limit int) ([]*domain.RuleExecution, error)
+	GetFailedExecutions(ctx context.Context, boostID string, limit int) ([]*domain.BoostExecution, error)
 }
 
-// ruleExecutionRepository implements RuleExecutionRepository using PostgreSQL.
-type ruleExecutionRepository struct {
+// boostExecutionRepository implements BoostExecutionRepository using PostgreSQL.
+type boostExecutionRepository struct {
 	db DB
 }
 
-// NewRuleExecutionRepository creates a new RuleExecutionRepository instance.
-func NewRuleExecutionRepository(db DB) RuleExecutionRepository {
-	return &ruleExecutionRepository{db: db}
+// NewBoostExecutionRepository creates a new BoostExecutionRepository instance.
+func NewBoostExecutionRepository(db DB) BoostExecutionRepository {
+	return &boostExecutionRepository{db: db}
 }
 
 // Create creates a new rule execution record.
-func (r *ruleExecutionRepository) Create(ctx context.Context, execution *domain.RuleExecution) error {
+func (r *boostExecutionRepository) Create(ctx context.Context, execution *domain.BoostExecution) error {
 	// Generate UUID if not already set
 	if execution.ID == "" {
 		execution.ID = uuid.New().String()
@@ -80,8 +80,8 @@ func (r *ruleExecutionRepository) Create(ctx context.Context, execution *domain.
 	}
 
 	query := `
-		INSERT INTO rule_executions (
-			id, rule_id, status, started_at, completed_at,
+		INSERT INTO boost_executions (
+			id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -89,7 +89,7 @@ func (r *ruleExecutionRepository) Create(ctx context.Context, execution *domain.
 
 	_, err := r.db.Exec(ctx, query,
 		execution.ID,
-		execution.RuleID,
+		execution.BoostID,
 		execution.Status,
 		execution.StartedAt,
 		execution.CompletedAt,
@@ -107,9 +107,9 @@ func (r *ruleExecutionRepository) Create(ctx context.Context, execution *domain.
 }
 
 // Update updates an existing execution record.
-func (r *ruleExecutionRepository) Update(ctx context.Context, execution *domain.RuleExecution) error {
+func (r *boostExecutionRepository) Update(ctx context.Context, execution *domain.BoostExecution) error {
 	query := `
-		UPDATE rule_executions
+		UPDATE boost_executions
 		SET status = $1, completed_at = $2, execution_duration_ms = $3,
 			output_data = $4, error_code = $5, error_message = $6, retry_count = $7
 		WHERE id = $8
@@ -137,48 +137,48 @@ func (r *ruleExecutionRepository) Update(ctx context.Context, execution *domain.
 }
 
 // GetByID retrieves an execution by its ID.
-func (r *ruleExecutionRepository) GetByID(ctx context.Context, id string) (*domain.RuleExecution, error) {
+func (r *boostExecutionRepository) GetByID(ctx context.Context, id string) (*domain.BoostExecution, error) {
 	query := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
+		FROM boost_executions
 		WHERE id = $1
 	`
 
 	return r.scanExecution(r.db.QueryRow(ctx, query, id))
 }
 
-// GetByRuleID retrieves executions for a specific rule with pagination.
-func (r *ruleExecutionRepository) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
+// GetByBoostID retrieves executions for a specific rule with pagination.
+func (r *boostExecutionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
-		WHERE rule_id = $1
+		FROM boost_executions
+		WHERE boost_id = $1
 		ORDER BY started_at DESC
 		LIMIT $2 OFFSET $3
 	`
 
-	return r.queryExecutions(ctx, query, ruleID, limit, offset)
+	return r.queryExecutions(ctx, query, boostID, limit, offset)
 }
 
-// GetByRuleIDWithFilter retrieves executions for a rule with optional status filter and total count.
+// GetByBoostIDWithFilter retrieves executions for a rule with optional status filter and total count.
 // Issue #38: Rules API Endpoints - Execution history with filtering.
-func (r *ruleExecutionRepository) GetByRuleIDWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	// Build count query
-	countQuery := `SELECT COUNT(*) FROM rule_executions WHERE rule_id = $1`
-	countArgs := []interface{}{ruleID}
+	countQuery := `SELECT COUNT(*) FROM boost_executions WHERE boost_id = $1`
+	countArgs := []interface{}{boostID}
 
 	// Build data query
 	dataQuery := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
-		WHERE rule_id = $1`
-	dataArgs := []interface{}{ruleID}
+		FROM boost_executions
+		WHERE boost_id = $1`
+	dataArgs := []interface{}{boostID}
 
 	// Add status filter if provided
 	if status != nil {
@@ -211,11 +211,11 @@ func (r *ruleExecutionRepository) GetByRuleIDWithFilter(ctx context.Context, rul
 
 // GetTodayExecutionCount counts executions for a user today (since midnight UTC).
 // Joins with rules table to get user_id.
-func (r *ruleExecutionRepository) GetTodayExecutionCount(ctx context.Context, userID string) (int, error) {
+func (r *boostExecutionRepository) GetTodayExecutionCount(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
-		FROM rule_executions re
-		JOIN rules r ON re.rule_id = r.id
+		FROM boost_executions re
+		JOIN rules r ON re.boost_id = r.id
 		WHERE r.user_id = $1
 			AND re.started_at >= $2
 			AND re.status IN ('completed', 'running')
@@ -235,27 +235,27 @@ func (r *ruleExecutionRepository) GetTodayExecutionCount(ctx context.Context, us
 }
 
 // GetLastExecutionForRule retrieves the most recent execution for a rule.
-func (r *ruleExecutionRepository) GetLastExecutionForRule(ctx context.Context, ruleID string) (*domain.RuleExecution, error) {
+func (r *boostExecutionRepository) GetLastExecutionForRule(ctx context.Context, boostID string) (*domain.BoostExecution, error) {
 	query := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
-		WHERE rule_id = $1
+		FROM boost_executions
+		WHERE boost_id = $1
 		ORDER BY started_at DESC
 		LIMIT 1
 	`
 
-	return r.scanExecution(r.db.QueryRow(ctx, query, ruleID))
+	return r.scanExecution(r.db.QueryRow(ctx, query, boostID))
 }
 
 // GetPendingExecutions retrieves pending executions for processing queue.
-func (r *ruleExecutionRepository) GetPendingExecutions(ctx context.Context, limit int) ([]*domain.RuleExecution, error) {
+func (r *boostExecutionRepository) GetPendingExecutions(ctx context.Context, limit int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
+		FROM boost_executions
 		WHERE status = 'pending'
 		ORDER BY started_at ASC
 		LIMIT $1
@@ -265,28 +265,28 @@ func (r *ruleExecutionRepository) GetPendingExecutions(ctx context.Context, limi
 }
 
 // GetFailedExecutions retrieves failed executions for retry.
-func (r *ruleExecutionRepository) GetFailedExecutions(ctx context.Context, ruleID string, limit int) ([]*domain.RuleExecution, error) {
+func (r *boostExecutionRepository) GetFailedExecutions(ctx context.Context, boostID string, limit int) ([]*domain.BoostExecution, error) {
 	query := `
-		SELECT id, rule_id, status, started_at, completed_at,
+		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,
 			error_code, error_message, retry_count, max_retries
-		FROM rule_executions
-		WHERE rule_id = $1 AND status = 'failed' AND retry_count < max_retries
+		FROM boost_executions
+		WHERE boost_id = $1 AND status = 'failed' AND retry_count < max_retries
 		ORDER BY started_at DESC
 		LIMIT $2
 	`
 
-	return r.queryExecutions(ctx, query, ruleID, limit)
+	return r.queryExecutions(ctx, query, boostID, limit)
 }
 
 // scanExecution scans a single execution from a row.
-func (r *ruleExecutionRepository) scanExecution(row pgx.Row) (*domain.RuleExecution, error) {
-	execution := &domain.RuleExecution{}
+func (r *boostExecutionRepository) scanExecution(row pgx.Row) (*domain.BoostExecution, error) {
+	execution := &domain.BoostExecution{}
 	var triggerContext, inputData, outputData []byte
 
 	err := row.Scan(
 		&execution.ID,
-		&execution.RuleID,
+		&execution.BoostID,
 		&execution.Status,
 		&execution.StartedAt,
 		&execution.CompletedAt,
@@ -320,21 +320,21 @@ func (r *ruleExecutionRepository) scanExecution(row pgx.Row) (*domain.RuleExecut
 }
 
 // queryExecutions is a helper to query and scan multiple executions.
-func (r *ruleExecutionRepository) queryExecutions(ctx context.Context, query string, args ...interface{}) ([]*domain.RuleExecution, error) {
+func (r *boostExecutionRepository) queryExecutions(ctx context.Context, query string, args ...interface{}) ([]*domain.BoostExecution, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var executions []*domain.RuleExecution
+	var executions []*domain.BoostExecution
 	for rows.Next() {
-		execution := &domain.RuleExecution{}
+		execution := &domain.BoostExecution{}
 		var triggerContext, inputData, outputData []byte
 
 		err := rows.Scan(
 			&execution.ID,
-			&execution.RuleID,
+			&execution.BoostID,
 			&execution.Status,
 			&execution.StartedAt,
 			&execution.CompletedAt,

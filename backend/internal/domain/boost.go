@@ -1,4 +1,4 @@
-// Package domain contains domain models for the automation rules engine.
+// Package domain contains domain models for the boosts engine.
 // Issue #35: Rules Engine Core - supports transfer suggestions, budget alerts, and category rollovers.
 // This is SEPARATE from categorization rules (Issue #346) which handle transaction auto-categorization.
 package domain
@@ -14,31 +14,31 @@ import (
 )
 
 // =============================================================================
-// Rule Types
+// Boost Types
 // =============================================================================
 
-// RuleType represents the type of automation rule.
-type RuleType string
+// BoostType represents the type of boost.
+type BoostType string
 
-// Supported automation rule types (matches database CHECK constraint).
+// Supported boost types (matches database CHECK constraint).
 const (
-	RuleTypeTransferSuggestion RuleType = "transfer_suggestion"
-	RuleTypeBudgetAlert        RuleType = "budget_alert"
-	RuleTypeCategoryRollover   RuleType = "category_rollover"
-	RuleTypeSavingsGoal        RuleType = "savings_goal" // Issue #36: Savings goal contributions
+	BoostTypeTransferSuggestion BoostType = "transfer_suggestion"
+	BoostTypeBudgetAlert        BoostType = "budget_alert"
+	BoostTypeCategoryRollover   BoostType = "category_rollover"
+	BoostTypeSavingsGoal        BoostType = "savings_goal" // Issue #36: Savings goal contributions
 )
 
-// validRuleTypes is a set of all valid rule types.
-var validRuleTypes = map[RuleType]bool{
-	RuleTypeTransferSuggestion: true,
-	RuleTypeBudgetAlert:        true,
-	RuleTypeCategoryRollover:   true,
-	RuleTypeSavingsGoal:        true,
+// validBoostTypes is a set of all valid boost types.
+var validBoostTypes = map[BoostType]bool{
+	BoostTypeTransferSuggestion: true,
+	BoostTypeBudgetAlert:        true,
+	BoostTypeCategoryRollover:   true,
+	BoostTypeSavingsGoal:        true,
 }
 
-// IsValid checks if the rule type is valid.
-func (rt RuleType) IsValid() bool {
-	return validRuleTypes[rt]
+// IsValid checks if the boost type is valid.
+func (bt BoostType) IsValid() bool {
+	return validBoostTypes[bt]
 }
 
 // =============================================================================
@@ -252,14 +252,14 @@ type SuggestionSource string
 
 // Supported suggestion sources (matches database CHECK constraint).
 const (
-	SuggestionSourceRule   SuggestionSource = "rule"
+	SuggestionSourceBoost  SuggestionSource = "boost"
 	SuggestionSourceManual SuggestionSource = "manual"
 	SuggestionSourceAI     SuggestionSource = "ai"
 )
 
 // validSuggestionSources is a set of all valid suggestion sources.
 var validSuggestionSources = map[SuggestionSource]bool{
-	SuggestionSourceRule:   true,
+	SuggestionSourceBoost:  true,
 	SuggestionSourceManual: true,
 	SuggestionSourceAI:     true,
 }
@@ -331,8 +331,8 @@ func ValidateCronExpression(expr string) error {
 // Rule Condition
 // =============================================================================
 
-// AutomationRuleCondition represents a condition that must be met for a rule to fire.
-type AutomationRuleCondition struct {
+// BoostCondition represents a condition that must be met for a boost to fire.
+type BoostCondition struct {
 	Field      string            `json:"field"`                // Field to evaluate: account.balance, budget.percent_used, budget_category.remaining, etc.
 	Operator   ConditionOperator `json:"operator"`             // Comparison operator
 	Value      interface{}       `json:"value"`                // Value to compare against
@@ -388,20 +388,20 @@ type SavingsGoalAction struct {
 }
 
 // =============================================================================
-// AutomationRule
+// Boost
 // =============================================================================
 
-// AutomationRule represents a user-defined automation rule.
-type AutomationRule struct {
+// Boost represents a user-defined boost.
+type Boost struct {
 	ID               string                    `json:"id" db:"id"`
 	UserID           string                    `json:"user_id" db:"user_id"`
 	Name             string                    `json:"name" db:"name"`
 	Description      *string                   `json:"description,omitempty" db:"description"`
 	Enabled          bool                      `json:"enabled" db:"enabled"`
 	Priority         int                       `json:"priority" db:"priority"` // Higher = evaluated first
-	RuleType         RuleType                  `json:"rule_type" db:"rule_type"`
+	BoostType         BoostType                  `json:"boost_type" db:"boost_type"`
 	TriggerConfig    TriggerConfig             `json:"trigger_config" db:"-"` // Stored as JSONB
-	Conditions       []AutomationRuleCondition `json:"conditions" db:"-"`     // Stored as JSONB
+	Conditions       []BoostCondition `json:"conditions" db:"-"`     // Stored as JSONB
 	ConditionLogic   string                    `json:"condition_logic" db:"condition_logic"`
 	Actions          json.RawMessage           `json:"actions" db:"-"` // Stored as JSONB, structure depends on rule_type
 	ExecutionCount   int64                     `json:"execution_count" db:"execution_count"`
@@ -411,69 +411,69 @@ type AutomationRule struct {
 	UpdatedAt        time.Time                 `json:"updated_at" db:"updated_at"`
 }
 
-// Validate checks that the automation rule has all required fields and valid values.
-func (r *AutomationRule) Validate() error {
-	if r.UserID == "" {
+// Validate checks that the boost has all required fields and valid values.
+func (b *Boost) Validate() error {
+	if b.UserID == "" {
 		return errors.New("user_id is required")
 	}
 
-	if r.Name == "" {
+	if b.Name == "" {
 		return errors.New("name is required")
 	}
 
-	if len(r.Name) > 100 {
+	if len(b.Name) > 100 {
 		return errors.New("name must be 100 characters or less")
 	}
 
-	if !r.RuleType.IsValid() {
-		return errors.New("invalid rule_type: " + string(r.RuleType))
+	if !b.BoostType.IsValid() {
+		return errors.New("invalid boost_type: " + string(b.BoostType))
 	}
 
 	// Validate trigger config
-	if err := r.TriggerConfig.Validate(); err != nil {
+	if err := b.TriggerConfig.Validate(); err != nil {
 		return err
 	}
 
 	// Validate conditions — operator and CategoryID checks apply to all trigger types;
 	// field allowlists are only enforced for events that have a defined set.
-	if err := r.validateConditions(); err != nil {
+	if err := b.validateConditions(); err != nil {
 		return err
 	}
 
 	// Validate condition logic (default to AND if empty)
-	if r.ConditionLogic != "" && r.ConditionLogic != "AND" && r.ConditionLogic != "OR" {
+	if b.ConditionLogic != "" && b.ConditionLogic != "AND" && b.ConditionLogic != "OR" {
 		return errors.New("condition_logic must be AND or OR")
 	}
 
 	// Validate actions based on rule type
-	return r.validateActions()
+	return b.validateActions()
 }
 
 // validateConditions checks each condition's operator and field against the
-// allowlists for the rule's event type. It must only be called for event-type
+// allowlists for the boost's event type. It must only be called for event-type
 // triggers (caller responsibility).
-func (r *AutomationRule) validateConditions() error {
-	for _, condition := range r.Conditions {
+func (b *Boost) validateConditions() error {
+	for _, condition := range b.Conditions {
 		if !allowedConditionOperators[condition.Operator] {
 			return fmt.Errorf("condition field %q has unsupported operator %q", condition.Field, condition.Operator)
 		}
 		// Only enforce field allowlist for events that have a defined field set.
 		// Events without an entry (e.g. balance_changed, transaction_created) do not
 		// have a field allowlist — their conditions are not field-validated here.
-		if allowedFields, hasAllowlist := validConditionFieldsByEvent[r.TriggerConfig.Event]; hasAllowlist {
+		if allowedFields, hasAllowlist := validConditionFieldsByEvent[b.TriggerConfig.Event]; hasAllowlist {
 			if !allowedFields[condition.Field] {
-				return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, r.TriggerConfig.Event)
+				return fmt.Errorf("condition field %q is not valid for event type %q", condition.Field, b.TriggerConfig.Event)
 			}
 		}
 	}
 	return nil
 }
 
-// BoundBudgetID returns the budget this rule is scoped to, derived from its
+// BoundBudgetID returns the budget this boost is scoped to, derived from its
 // category-scoped conditions. Returns ("", false) when no condition binds a budget.
 // The result is AND/OR-agnostic: any category-scoped condition binds the whole rule (A-CR2).
-func (r *AutomationRule) BoundBudgetID() (string, bool) {
-	for _, c := range r.Conditions {
+func (b *Boost) BoundBudgetID() (string, bool) {
+	for _, c := range b.Conditions {
 		if strings.HasPrefix(c.Field, "budget_category.") && c.BudgetID != "" {
 			return c.BudgetID, true
 		}
@@ -481,58 +481,58 @@ func (r *AutomationRule) BoundBudgetID() (string, bool) {
 	return "", false
 }
 
-// ValidateForPersistence validates the rule for create/update. It calls Validate()
-// for static checks (wrapping any error as ErrInvalidRule), then additionally requires
+// ValidateForPersistence validates the boost for create/update. It calls Validate()
+// for static checks (wrapping any error as ErrInvalidBoost), then additionally requires
 // scope IDs for category-scoped conditions and validates multi-budget constraint.
-func (r *AutomationRule) ValidateForPersistence() error {
-	if err := r.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidRule, err)
+func (b *Boost) ValidateForPersistence() error {
+	if err := b.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidBoost, err)
 	}
 
 	// Validate category-scoped conditions and collect distinct BudgetIDs (single-pass).
 	budgetIDs := make(map[string]struct{})
-	for _, condition := range r.Conditions {
+	for _, condition := range b.Conditions {
 		if !strings.HasPrefix(condition.Field, "budget_category.") {
 			continue
 		}
 		if condition.CategoryID == "" {
-			return fmt.Errorf("%w: condition field %q requires a category_id", ErrInvalidRule, condition.Field)
+			return fmt.Errorf("%w: condition field %q requires a category_id", ErrInvalidBoost, condition.Field)
 		}
 		if condition.BudgetID == "" {
-			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidRule, condition.Field)
+			return fmt.Errorf("%w: condition field %q requires a budget_id", ErrInvalidBoost, condition.Field)
 		}
 		budgetIDs[condition.BudgetID] = struct{}{}
 	}
 
 	// Multi-budget check: rule may bind at most one budget.
 	if len(budgetIDs) > 1 {
-		return fmt.Errorf("%w: a rule may bind at most one budget", ErrInvalidRule)
+		return fmt.Errorf("%w: a boost may bind at most one budget", ErrInvalidBoost)
 	}
 	return nil
 }
 
 // validateActions validates the actions JSON based on rule type.
-func (r *AutomationRule) validateActions() error {
-	if len(r.Actions) == 0 {
+func (b *Boost) validateActions() error {
+	if len(b.Actions) == 0 {
 		return errors.New("actions is required")
 	}
 
-	switch r.RuleType {
-	case RuleTypeTransferSuggestion:
-		return r.validateTransferAction()
-	case RuleTypeBudgetAlert:
-		return r.validateAlertAction()
-	case RuleTypeCategoryRollover:
-		return r.validateRolloverAction()
-	case RuleTypeSavingsGoal:
-		return r.validateSavingsGoalAction()
+	switch b.BoostType {
+	case BoostTypeTransferSuggestion:
+		return b.validateTransferAction()
+	case BoostTypeBudgetAlert:
+		return b.validateAlertAction()
+	case BoostTypeCategoryRollover:
+		return b.validateRolloverAction()
+	case BoostTypeSavingsGoal:
+		return b.validateSavingsGoalAction()
 	}
 
 	return nil
 }
 
-func (r *AutomationRule) validateTransferAction() error {
-	action, err := r.ParseTransferAction()
+func (b *Boost) validateTransferAction() error {
+	action, err := b.ParseTransferAction()
 	if err != nil {
 		return errors.New("invalid transfer action: " + err.Error())
 	}
@@ -570,8 +570,8 @@ func (r *AutomationRule) validateTransferAction() error {
 	return nil
 }
 
-func (r *AutomationRule) validateAlertAction() error {
-	action, err := r.ParseAlertAction()
+func (b *Boost) validateAlertAction() error {
+	action, err := b.ParseAlertAction()
 	if err != nil {
 		return errors.New("invalid alert action: " + err.Error())
 	}
@@ -588,8 +588,8 @@ func (r *AutomationRule) validateAlertAction() error {
 	return nil
 }
 
-func (r *AutomationRule) validateRolloverAction() error {
-	action, err := r.ParseRolloverAction()
+func (b *Boost) validateRolloverAction() error {
+	action, err := b.ParseRolloverAction()
 	if err != nil {
 		return errors.New("invalid rollover action: " + err.Error())
 	}
@@ -621,8 +621,8 @@ func (r *AutomationRule) validateRolloverAction() error {
 	return nil
 }
 
-func (r *AutomationRule) validateSavingsGoalAction() error {
-	action, err := r.ParseSavingsGoalAction()
+func (b *Boost) validateSavingsGoalAction() error {
+	action, err := b.ParseSavingsGoalAction()
 	if err != nil {
 		return errors.New("invalid savings goal action: " + err.Error())
 	}
@@ -658,49 +658,49 @@ func (r *AutomationRule) validateSavingsGoalAction() error {
 }
 
 // ParseTransferAction parses the Actions JSON as a TransferAction.
-func (r *AutomationRule) ParseTransferAction() (*TransferAction, error) {
+func (b *Boost) ParseTransferAction() (*TransferAction, error) {
 	var action TransferAction
-	if err := json.Unmarshal(r.Actions, &action); err != nil {
+	if err := json.Unmarshal(b.Actions, &action); err != nil {
 		return nil, err
 	}
 	return &action, nil
 }
 
 // ParseAlertAction parses the Actions JSON as an AlertAction.
-func (r *AutomationRule) ParseAlertAction() (*AlertAction, error) {
+func (b *Boost) ParseAlertAction() (*AlertAction, error) {
 	var action AlertAction
-	if err := json.Unmarshal(r.Actions, &action); err != nil {
+	if err := json.Unmarshal(b.Actions, &action); err != nil {
 		return nil, err
 	}
 	return &action, nil
 }
 
 // ParseRolloverAction parses the Actions JSON as a RolloverAction.
-func (r *AutomationRule) ParseRolloverAction() (*RolloverAction, error) {
+func (b *Boost) ParseRolloverAction() (*RolloverAction, error) {
 	var action RolloverAction
-	if err := json.Unmarshal(r.Actions, &action); err != nil {
+	if err := json.Unmarshal(b.Actions, &action); err != nil {
 		return nil, err
 	}
 	return &action, nil
 }
 
 // ParseSavingsGoalAction parses the Actions JSON as a SavingsGoalAction.
-func (r *AutomationRule) ParseSavingsGoalAction() (*SavingsGoalAction, error) {
+func (b *Boost) ParseSavingsGoalAction() (*SavingsGoalAction, error) {
 	var action SavingsGoalAction
-	if err := json.Unmarshal(r.Actions, &action); err != nil {
+	if err := json.Unmarshal(b.Actions, &action); err != nil {
 		return nil, err
 	}
 	return &action, nil
 }
 
 // =============================================================================
-// RuleExecution
+// BoostExecution
 // =============================================================================
 
-// RuleExecution tracks a single execution of an automation rule.
-type RuleExecution struct {
+// BoostExecution tracks a single execution of a boost.
+type BoostExecution struct {
 	ID                  string          `json:"id" db:"id"`
-	RuleID              string          `json:"rule_id" db:"rule_id"`
+	BoostID              string          `json:"boost_id" db:"boost_id"`
 	Status              ExecutionStatus `json:"status" db:"status"`
 	StartedAt           time.Time       `json:"started_at" db:"started_at"`
 	CompletedAt         *time.Time      `json:"completed_at,omitempty" db:"completed_at"`
@@ -715,7 +715,7 @@ type RuleExecution struct {
 }
 
 // MarkComplete marks the execution as completed and calculates duration.
-func (e *RuleExecution) MarkComplete() {
+func (e *BoostExecution) MarkComplete() {
 	now := time.Now()
 	e.Status = ExecutionStatusCompleted
 	e.CompletedAt = &now
@@ -724,7 +724,7 @@ func (e *RuleExecution) MarkComplete() {
 }
 
 // MarkFailed marks the execution as failed with error details.
-func (e *RuleExecution) MarkFailed(errorCode, errorMessage string) {
+func (e *BoostExecution) MarkFailed(errorCode, errorMessage string) {
 	now := time.Now()
 	e.Status = ExecutionStatusFailed
 	e.CompletedAt = &now
@@ -743,8 +743,8 @@ func (e *RuleExecution) MarkFailed(errorCode, errorMessage string) {
 type TransferSuggestion struct {
 	ID                   string           `json:"id" db:"id"`
 	UserID               string           `json:"user_id" db:"user_id"`
-	RuleID               *string          `json:"rule_id,omitempty" db:"rule_id"`
-	RuleExecutionID      *string          `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
+	BoostID               *string          `json:"boost_id,omitempty" db:"boost_id"`
+	BoostExecutionID      *string          `json:"boost_execution_id,omitempty" db:"boost_execution_id"`
 	FromAccountID        *string          `json:"from_account_id,omitempty" db:"from_account_id"`
 	ToAccountID          *string          `json:"to_account_id,omitempty" db:"to_account_id"`
 	FromUserAccountID    *string          `json:"from_user_account_id,omitempty" db:"from_user_account_id"` // Stable reference surviving re-links (Issue #1109)
@@ -836,46 +836,46 @@ func (s *TransferSuggestion) Complete(matchedTransactionID string, actualAmount 
 // Request/Response Types
 // =============================================================================
 
-// CreateAutomationRuleRequest represents the request to create a new automation rule.
-type CreateAutomationRuleRequest struct {
+// CreateBoostRequest represents the request to create a new boost.
+type CreateBoostRequest struct {
 	Name           string                    `json:"name" validate:"required,max=100"`
 	Description    *string                   `json:"description,omitempty"`
 	Priority       int                       `json:"priority,omitempty"`
-	RuleType       RuleType                  `json:"rule_type" validate:"required"`
+	BoostType       BoostType                  `json:"boost_type" validate:"required"`
 	TriggerConfig  TriggerConfig             `json:"trigger_config" validate:"required"`
-	Conditions     []AutomationRuleCondition `json:"conditions,omitempty"`
+	Conditions     []BoostCondition `json:"conditions,omitempty"`
 	ConditionLogic string                    `json:"condition_logic,omitempty" validate:"omitempty,oneof=AND OR"`
 	Actions        json.RawMessage           `json:"actions" validate:"required"`
 }
 
-// UpdateAutomationRuleRequest represents the request to update an automation rule.
-type UpdateAutomationRuleRequest struct {
+// UpdateBoostRequest represents the request to update a boost.
+type UpdateBoostRequest struct {
 	Name           *string                    `json:"name,omitempty" validate:"omitempty,max=100"`
 	Description    *string                    `json:"description,omitempty"`
 	Enabled        *bool                      `json:"enabled,omitempty"`
 	Priority       *int                       `json:"priority,omitempty"`
 	TriggerConfig  *TriggerConfig             `json:"trigger_config,omitempty"`
-	Conditions     *[]AutomationRuleCondition `json:"conditions,omitempty"`
+	Conditions     *[]BoostCondition `json:"conditions,omitempty"`
 	ConditionLogic *string                    `json:"condition_logic,omitempty" validate:"omitempty,oneof=AND OR"`
 	Actions        *json.RawMessage           `json:"actions,omitempty"`
 }
 
-// ToggleAutomationRuleRequest represents the request to enable/disable a rule.
-type ToggleAutomationRuleRequest struct {
+// ToggleBoostRequest represents the request to enable/disable a boost.
+type ToggleBoostRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
 // =============================================================================
-// Rule Test Result (Issue #38: Test Rule Execution)
+// BoostTestResult (Issue #38: Test Boost Execution)
 // =============================================================================
 
-// RuleTestResult represents the result of a dry-run rule execution.
+// BoostTestResult represents the result of a dry-run boost execution.
 // Used by the POST /api/v1/rules/:id/test endpoint to preview what would happen
 // without persisting any changes.
-type RuleTestResult struct {
-	RuleID           string                 `json:"rule_id"`
-	RuleName         string                 `json:"rule_name"`
-	RuleType         RuleType               `json:"rule_type"`
+type BoostTestResult struct {
+	BoostID           string                 `json:"boost_id"`
+	BoostName         string                 `json:"boost_name"`
+	BoostType         BoostType               `json:"boost_type"`
 	ConditionsMet    bool                   `json:"conditions_met"`
 	ConditionResults []ConditionEvalResult  `json:"condition_results"`
 	SimulatedAction  map[string]interface{} `json:"simulated_action,omitempty"`
@@ -895,12 +895,12 @@ type ConditionEvalResult struct {
 }
 
 // =============================================================================
-// Rule Executions Response (Issue #38: Execution History)
+// BoostExecutionsResponse (Issue #38: Execution History)
 // =============================================================================
 
-// RuleExecutionsResponse represents a paginated list of rule executions.
-type RuleExecutionsResponse struct {
-	Executions []*RuleExecution `json:"executions"`
+// BoostExecutionsResponse represents a paginated list of boost executions.
+type BoostExecutionsResponse struct {
+	Executions []*BoostExecution `json:"executions"`
 	Total      int              `json:"total"`
 	Limit      int              `json:"limit"`
 	Offset     int              `json:"offset"`
@@ -910,19 +910,19 @@ type RuleExecutionsResponse struct {
 // Error Constants
 // =============================================================================
 
-// Automation rule-related errors.
+// Boost-related errors.
 var (
-	ErrAutomationRuleNotFound            = errors.New("automation rule not found")
-	ErrAutomationRuleAlreadyExists       = errors.New("automation rule with this name already exists")
+	ErrBoostNotFound                     = errors.New("boost not found")
+	ErrBoostAlreadyExists                = errors.New("boost with this name already exists")
 	ErrTransferSuggestionNotFound        = errors.New("transfer suggestion not found")
 	ErrTransferSuggestionAlreadyActioned = errors.New("transfer suggestion has already been accepted or rejected")
-	ErrRuleExecutionNotFound             = errors.New("rule execution not found")
+	ErrBoostExecutionNotFound            = errors.New("boost execution not found")
 
 	// Issue #1270: GAP-L — typed sentinels so the error mapper can return the correct HTTP status.
-	// ErrInvalidRule is returned (wrapped) when rule.Validate() fails due to bad client input
+	// ErrInvalidBoost is returned (wrapped) when boost.Validate() fails due to bad client input
 	// (unknown event, unsupported operator, disallowed condition field). Maps to HTTP 400.
-	ErrInvalidRule = errors.New("invalid automation rule")
-	// ErrRuleConditionForbidden is returned when a condition's CategoryID does not belong to the
+	ErrInvalidBoost = errors.New("invalid boost")
+	// ErrBoostConditionForbidden is returned when a condition's CategoryID does not belong to the
 	// requesting user (IDOR prevention). Maps to HTTP 403.
-	ErrRuleConditionForbidden = errors.New("automation rule condition access denied")
+	ErrBoostConditionForbidden = errors.New("boost condition access denied")
 )

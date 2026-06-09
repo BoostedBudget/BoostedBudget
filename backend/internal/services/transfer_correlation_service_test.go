@@ -90,7 +90,7 @@ func newTestSuggestion(id, userID string, amount float64, toAccountID string, st
 		ToAccountID:  &toAccountID,
 		Amount:       amount,
 		CurrencyCode: "USD",
-		Source:       domain.SuggestionSourceRule,
+		Source:       domain.SuggestionSourceBoost,
 		Status:       status,
 		CreatedAt:    createdAt,
 		UpdatedAt:    createdAt,

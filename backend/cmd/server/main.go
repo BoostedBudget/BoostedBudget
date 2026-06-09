@@ -249,8 +249,8 @@ func main() {
 	// Issue #1015: Created unconditionally (before Plaid block); registered with River after.
 	var emailChangePropagationWorker *jobs.EmailChangePropagationWorker
 
-	// Issue #1015: Declare rule evaluation worker (non-Plaid)
-	var ruleEvaluationWorker *jobs.RuleEvaluationWorker
+	// Issue #1015: Declare boost evaluation worker (non-Plaid)
+	var boostEvaluationWorker *jobs.BoostEvaluationWorker
 
 	// Issue #972: Declare budget period close check worker (daily scanner, no Plaid dependency)
 	var budgetPeriodCloseCheckWorker *jobs.BudgetPeriodCloseCheckWorker
@@ -268,8 +268,8 @@ func main() {
 	var investmentHoldingsSyncWorker *jobs.InvestmentHoldingsSyncWorker
 	var investmentTransactionsSyncWorker *jobs.InvestmentTransactionsSyncWorker
 
-	// Issue #37: Declare rule scheduler manager at package scope for graceful shutdown
-	var ruleSchedulerManager *workers.RuleSchedulerManager
+	// Issue #37: Declare boost scheduler manager at package scope for graceful shutdown
+	var boostSchedulerManager *workers.BoostSchedulerManager
 
 	// Issue #45, #46: Declare Paddle services and workers at package scope
 	var paddleService services.PaddleService
@@ -341,7 +341,7 @@ func main() {
 		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                   // Issue #28: Savings goals
 		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                       // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor) // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
-		automationRuleRepo := repository.NewAutomationRulesRepository(db)                            // Issue #37: Automation rules
+		boostRepo := repository.NewBoostsRepository(db)                                              // Issue #37: Boosts
 		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                       // Issue #639: Admin user management
 		systemHealthRepo := repository.NewSystemHealthRepository(db)                                 // Issue #640: System health monitoring
 		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                               // Issue #640: Dead letter queue metrics
@@ -420,43 +420,43 @@ func main() {
 		)
 
 		// Issue #37: Automation Rule Service and Rule Scheduler
-		automationRuleService := services.NewAutomationRuleService(automationRuleRepo)
+		boostService := services.NewBoostService(boostRepo)
 		// Issue #972 GAP AE: inject repos for create/update IDOR ownership validation.
-		automationRuleService.SetSavingsGoalRepo(savingsGoalRepo)
-		automationRuleService.SetAccountRepo(accountRepo)
-		automationRuleService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
-		appLogger.Info("Automation rule service initialized")
+		boostService.SetSavingsGoalRepo(savingsGoalRepo)
+		boostService.SetAccountRepo(accountRepo)
+		boostService.SetBudgetRepo(budgetRepo) // #1270: category ownership validation
+		appLogger.Info("Boost service initialized")
 
-		// Issue #37: Rule Execution Service
-		ruleExecutionRepo := repository.NewRuleExecutionRepository(db)
-		ruleExecutionService := services.NewRuleExecutionService(ruleExecutionRepo, transferSuggestionRepo, automationRuleRepo, nil)
-		ruleExecutionService.SetAnalytics(phClient)
-		appLogger.Info("Rule execution service initialized")
+		// Issue #37: Boost Execution Service
+		boostExecutionRepo := repository.NewBoostExecutionRepository(db)
+		boostExecutionService := services.NewBoostExecutionService(boostExecutionRepo, transferSuggestionRepo, boostRepo, nil)
+		boostExecutionService.SetAnalytics(phClient)
+		appLogger.Info("Boost execution service initialized")
 
 		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
-		// SetEventProcessor must be called after ruleExecutionService is fully initialized.
-		budgetSyncService.SetEventProcessor(ruleExecutionService)
+		// SetEventProcessor must be called after boostExecutionService is fully initialized.
+		budgetSyncService.SetEventProcessor(boostExecutionService)
 
 		// Issue #37: Rule Scheduler Manager with providers
-		ruleSchedulerManager = workers.NewRuleSchedulerManager(appLogger)
+		boostSchedulerManager = workers.NewBoostSchedulerManager(appLogger)
 
 		// Create and register CronTriggerProvider
 		cronProvider := workers.NewCronTriggerProvider(
-			automationRuleRepo,
-			ruleExecutionService,
+			boostRepo,
+			boostExecutionService,
 			15*time.Minute, // Refresh interval for picking up new/updated rules
 			appLogger,
 		)
-		ruleSchedulerManager.RegisterProvider(cronProvider)
+		boostSchedulerManager.RegisterProvider(cronProvider)
 
 		// Create and register ManualTriggerProvider
 		manualProvider := workers.NewManualTriggerProvider(
-			automationRuleRepo,
-			ruleExecutionService,
+			boostRepo,
+			boostExecutionService,
 			appLogger,
 		)
-		ruleSchedulerManager.RegisterProvider(manualProvider)
-		appLogger.Info("Rule scheduler manager initialized with cron and manual providers")
+		boostSchedulerManager.RegisterProvider(manualProvider)
+		appLogger.Info("Boost scheduler manager initialized with cron and manual providers")
 
 		// Initialize Email service (needed by deletion service and item error service)
 		// Optional - uses no-op mock if not configured
@@ -638,12 +638,12 @@ func main() {
 		appLogger.Info("Email change propagation worker created (River)")
 		emailChangePropagationWorker.SetAnalytics(phClient)
 
-		// Issue #1015: Create rule evaluation worker (depends only on ruleExecutionService, no Plaid dependency)
-		ruleEvaluationWorker = jobs.NewRuleEvaluationWorker(jobs.RuleEvaluationWorkerDeps{
-			RuleExecutionService: ruleExecutionService,
+		// Issue #1015: Create rule evaluation worker (depends only on boostExecutionService, no Plaid dependency)
+		boostEvaluationWorker = jobs.NewBoostEvaluationWorker(jobs.BoostEvaluationWorkerDeps{
+			BoostExecutionService: boostExecutionService,
 			Logger:               appLogger,
 		})
-		appLogger.Info("Rule evaluation worker created (River)")
+		appLogger.Info("Boost evaluation worker created (River)")
 
 		// Issue #972: Create budget period close check worker (daily scanner, no Plaid dependency)
 		budgetPeriodCloseCheckWorker = jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{
@@ -1097,8 +1097,8 @@ func main() {
 				river.AddWorker(riverWorkers, subscriptionWebhookWorker)
 				appLogger.Info("Paddle subscription webhook worker registered with River")
 			}
-			if ruleEvaluationWorker != nil {
-				river.AddWorker(riverWorkers, ruleEvaluationWorker)
+			if boostEvaluationWorker != nil {
+				river.AddWorker(riverWorkers, boostEvaluationWorker)
 				appLogger.Info("Rule evaluation worker registered with River")
 			}
 			if budgetPeriodCloseCheckWorker != nil {
@@ -1325,16 +1325,16 @@ func main() {
 		appLogger.Info("Huma transfer suggestion routes registered")
 
 
-		// Wire all optional setters for ruleExecutionService.
+		// Wire all optional setters for boostExecutionService.
 		// IMPORTANT: ALL SetXxx calls must be listed here. Omitting any setter means
 		// the corresponding feature silently fails in production (nil guard returns error,
 		// no suggestion created). See Issue #972 (GAP H) for the savings_goal example.
-		ruleExecutionService.SetNotificationRepo(notificationRepo)
-		ruleExecutionService.SetSavingsGoalRepo(savingsGoalRepo)
+		boostExecutionService.SetNotificationRepo(notificationRepo)
+		boostExecutionService.SetSavingsGoalRepo(savingsGoalRepo)
 		// Issue #972 GAP AE: execution-time account ownership guard for transfer rules.
-		ruleExecutionService.SetAccountRepo(accountRepo)
+		boostExecutionService.SetAccountRepo(accountRepo)
 		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
-		ruleExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
+		boostExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
@@ -1386,10 +1386,10 @@ func main() {
 		appLogger.Info("Huma savings goal routes registered")
 
 		// Register Huma automation rule routes (Issue #37: Rule Scheduler)
-		humaAutomationRuleHandler := operations.NewAutomationRuleHandler(automationRuleService, ruleSchedulerManager)
-		humaAutomationRuleHandler.SetExecutionService(ruleExecutionService) // Issue #579: Wire execution service for test endpoint
-		operations.RegisterAutomationRuleRoutes(humaAPI, humaAutomationRuleHandler)
-		appLogger.Info("Huma automation rule routes registered")
+		humaBoostHandler := operations.NewBoostHandler(boostService, boostSchedulerManager)
+		humaBoostHandler.SetExecutionService(boostExecutionService) // Issue #579: Wire execution service for test endpoint
+		operations.RegisterBoostRoutes(humaAPI, humaBoostHandler)
+		appLogger.Info("Huma boost routes registered")
 
 		// Register Huma plaid routes (Issue #559: Huma migration)
 		if plaidService != nil && accountService != nil {
@@ -1549,7 +1549,7 @@ func main() {
 	var workerCancel context.CancelFunc
 
 	// Initialize worker context once for all background workers
-	if riverRunner != nil || ruleSchedulerManager != nil {
+	if riverRunner != nil || boostSchedulerManager != nil {
 		workerCtx, workerCancel = context.WithCancel(context.Background())
 	}
 
@@ -1564,9 +1564,9 @@ func main() {
 	}
 
 	// Issue #37: Start rule scheduler manager
-	if ruleSchedulerManager != nil {
+	if boostSchedulerManager != nil {
 		go func() {
-			if err := ruleSchedulerManager.Start(workerCtx); err != nil {
+			if err := boostSchedulerManager.Start(workerCtx); err != nil {
 				appLogger.Warn("Failed to start rule scheduler", "error", err)
 			}
 		}()
@@ -1593,10 +1593,10 @@ func main() {
 	appLogger.Info("Shutting down server...")
 
 	// Issue #37: Stop rule scheduler manager first (graceful shutdown)
-	if ruleSchedulerManager != nil {
+	if boostSchedulerManager != nil {
 		appLogger.Info("Stopping rule scheduler manager...")
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := ruleSchedulerManager.Stop(stopCtx); err != nil {
+		if err := boostSchedulerManager.Stop(stopCtx); err != nil {
 			appLogger.Warn("Error stopping rule scheduler", "error", err)
 		}
 		stopCancel()

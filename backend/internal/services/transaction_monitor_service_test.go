@@ -47,7 +47,7 @@ func createTestSuggestionForMonitor(userID string, toAccountID string, amount fl
 		Amount:        amount,
 		CurrencyCode:  "USD",
 		Reason:        &reason,
-		Source:        domain.SuggestionSourceRule,
+		Source:        domain.SuggestionSourceBoost,
 		Status:        domain.SuggestionStatusPending,
 		CreatedAt:     createdAt,
 		UpdatedAt:     createdAt,

@@ -39,10 +39,10 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"updateAccount":    MCPClassWrite,
 	"deleteAccount":    MCPClassExcluded,
 	"disconnectInstitution": MCPClassExcluded,
-	// Automation Rules — reads only (writes excluded)
-	"getAutomationRules":    MCPClassRead,
-	"getAutomationRuleByID": MCPClassRead,
-	"getRuleExecutions":     MCPClassRead,
+	// Boosts — reads only (writes excluded)
+	"getBoosts":           MCPClassRead,
+	"getBoostByID":        MCPClassRead,
+	"getBoostExecutions":  MCPClassRead,
 	// Auto-Categorization — reads only
 	"getUserRules": MCPClassRead,
 	"getRuleByID":  MCPClassRead,

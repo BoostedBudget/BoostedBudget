@@ -20,49 +20,41 @@ import (
 // Mock Services
 // ============================================================================
 
-// MockAutomationRuleService implements services.AutomationRuleService for testing.
+// MockAutomationRuleService implements services.BoostService for testing.
 type MockAutomationRuleService struct {
 	mock.Mock
 }
 
-func (m *MockAutomationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateAutomationRuleRequest) (*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error) {
 	args := m.Called(ctx, userID, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
-	args := m.Called(ctx, userID, ruleTypes)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
-}
-
-func (m *MockAutomationRuleService) GetRuleByID(ctx context.Context, userID, ruleID string) (*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) GetRuleByID(ctx context.Context, userID, ruleID string) (*domain.Boost, error) {
 	args := m.Called(ctx, userID, ruleID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) UpdateRule(ctx context.Context, userID, ruleID string, req *domain.UpdateAutomationRuleRequest) (*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) UpdateRule(ctx context.Context, userID, ruleID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
 	args := m.Called(ctx, userID, ruleID, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
 func (m *MockAutomationRuleService) DeleteRule(ctx context.Context, userID, ruleID string) error {
@@ -70,42 +62,50 @@ func (m *MockAutomationRuleService) DeleteRule(ctx context.Context, userID, rule
 	return args.Error(0)
 }
 
-func (m *MockAutomationRuleService) ToggleRule(ctx context.Context, userID, ruleID string, enabled bool) (*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) ToggleRule(ctx context.Context, userID, ruleID string, enabled bool) (*domain.Boost, error) {
 	args := m.Called(ctx, userID, ruleID, enabled)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockAutomationRuleService) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
+func (m *MockAutomationRuleService) GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostTypes)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Boost), args.Error(1)
+}
+
+func (m *MockAutomationRuleService) GetRulesByType(ctx context.Context, userID string, ruleType domain.BoostType) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID, ruleType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-// MockRuleExecutionService implements services.RuleExecutionService for testing.
+// MockRuleExecutionService implements services.BoostExecutionService for testing.
 // Issue #38: Rules API Endpoints.
 type MockRuleExecutionService struct {
 	mock.Mock
 }
 
-func (m *MockRuleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *MockRuleExecutionService) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleExecution), args.Error(1)
+	return args.Get(0).(*domain.BoostExecution), args.Error(1)
 }
 
 func (m *MockRuleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
@@ -113,41 +113,41 @@ func (m *MockRuleExecutionService) ProcessEventTrigger(ctx context.Context, user
 	return args.Error(0)
 }
 
-func (m *MockRuleExecutionService) GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
+func (m *MockRuleExecutionService) GetBoostExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	args := m.Called(ctx, ruleID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.RuleExecution), args.Error(1)
+	return args.Get(0).([]*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	args := m.Called(ctx, ruleID, status, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Int(1), args.Error(2)
 	}
-	return args.Get(0).([]*domain.RuleExecution), args.Int(1), args.Error(2)
+	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
-func (m *MockRuleExecutionService) TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error) {
+func (m *MockRuleExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleTestResult), args.Error(1)
+	return args.Get(0).(*domain.BoostTestResult), args.Error(1)
 }
 
 // ============================================================================
 // Test Helpers
 // ============================================================================
 
-func createMockRule(id, userID string) *domain.AutomationRule {
-	return &domain.AutomationRule{
+func createMockRule(id, userID string) *domain.Boost {
+	return &domain.Boost{
 		ID:       id,
 		UserID:   userID,
 		Name:     "Test Rule " + id,
 		Enabled:  true,
-		RuleType: domain.RuleTypeBudgetAlert,
+		BoostType: domain.BoostTypeBudgetAlert,
 		TriggerConfig: domain.TriggerConfig{
 			Type: domain.TriggerTypeSchedule,
 			Cron: "0 9 * * *",
@@ -163,7 +163,7 @@ func createMockRule(id, userID string) *domain.AutomationRule {
 func TestAutomationRuleHandler_GetAutomationRules(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 
-	rules := []*domain.AutomationRule{
+	rules := []*domain.Boost{
 		createMockRule("rule-1", "user-1"),
 		createMockRule("rule-2", "user-1"),
 	}
@@ -171,13 +171,13 @@ func TestAutomationRuleHandler_GetAutomationRules(t *testing.T) {
 	// No rule_type filter → empty slice passed to GetUserRulesFiltered.
 	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", []domain.RuleType(nil)).Return(rules, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &GetAutomationRulesInput{
+	input := &GetBoostsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 	}
 
-	result, err := handler.GetAutomationRules(context.Background(), input)
+	result, err := handler.GetBoosts(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Len(t, result.Body, 2)
@@ -190,13 +190,13 @@ func TestAutomationRuleHandler_GetAutomationRules_Empty(t *testing.T) {
 	// Return nil to test empty handling.
 	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", []domain.RuleType(nil)).Return(nil, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &GetAutomationRulesInput{
+	input := &GetBoostsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 	}
 
-	result, err := handler.GetAutomationRules(context.Background(), input)
+	result, err := handler.GetBoosts(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result.Body)
@@ -253,14 +253,14 @@ func TestAutomationRuleHandler_GetAutomationRuleByID(t *testing.T) {
 	rule := createMockRule("rule-1", "user-1")
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &GetAutomationRuleByIDInput{
+	input := &GetBoostByIDInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	result, err := handler.GetAutomationRuleByID(context.Background(), input)
+	result, err := handler.GetBoostByID(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, "rule-1", result.Body.ID)
@@ -270,16 +270,16 @@ func TestAutomationRuleHandler_GetAutomationRuleByID(t *testing.T) {
 func TestAutomationRuleHandler_GetAutomationRuleByID_NotFound(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 
-	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &GetAutomationRuleByIDInput{
+	input := &GetBoostByIDInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-unknown",
 	}
 
-	_, err := handler.GetAutomationRuleByID(context.Background(), input)
+	_, err := handler.GetBoostByID(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -291,11 +291,11 @@ func TestAutomationRuleHandler_TriggerAutomationRule_Success(t *testing.T) {
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	// Create a manager with a mock manual provider
-	manager := workers.NewRuleSchedulerManager(nil)
+	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
-		execution: &domain.RuleExecution{
+		execution: &domain.BoostExecution{
 			ID:     "exec-1",
-			RuleID: "rule-1",
+			BoostID: "rule-1",
 			Status: domain.ExecutionStatusCompleted,
 		},
 	}
@@ -303,14 +303,14 @@ func TestAutomationRuleHandler_TriggerAutomationRule_Success(t *testing.T) {
 	_ = manager.Start(context.Background())
 	defer manager.Stop(context.Background())
 
-	handler := NewAutomationRuleHandler(mockService, manager)
+	handler := NewBoostHandler(mockService, manager)
 
-	input := &TriggerAutomationRuleInput{
+	input := &TriggerBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	result, err := handler.TriggerAutomationRule(context.Background(), input)
+	result, err := handler.TriggerBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, "exec-1", result.Body.ID)
@@ -323,11 +323,11 @@ func TestAutomationRuleHandler_TriggerAutomationRule_WithTriggerData(t *testing.
 	rule := createMockRule("rule-1", "user-1")
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	manager := workers.NewRuleSchedulerManager(nil)
+	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
-		execution: &domain.RuleExecution{
+		execution: &domain.BoostExecution{
 			ID:     "exec-1",
-			RuleID: "rule-1",
+			BoostID: "rule-1",
 			Status: domain.ExecutionStatusCompleted,
 		},
 	}
@@ -335,9 +335,9 @@ func TestAutomationRuleHandler_TriggerAutomationRule_WithTriggerData(t *testing.
 	_ = manager.Start(context.Background())
 	defer manager.Stop(context.Background())
 
-	handler := NewAutomationRuleHandler(mockService, manager)
+	handler := NewBoostHandler(mockService, manager)
 
-	input := &TriggerAutomationRuleInput{
+	input := &TriggerBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
@@ -345,7 +345,7 @@ func TestAutomationRuleHandler_TriggerAutomationRule_WithTriggerData(t *testing.
 		"custom_field": "value",
 	}
 
-	result, err := handler.TriggerAutomationRule(context.Background(), input)
+	result, err := handler.TriggerBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result.Body)
@@ -357,17 +357,17 @@ func TestAutomationRuleHandler_TriggerAutomationRule_WithTriggerData(t *testing.
 func TestAutomationRuleHandler_TriggerAutomationRule_RuleNotFound(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 
-	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	manager := workers.NewRuleSchedulerManager(nil)
-	handler := NewAutomationRuleHandler(mockService, manager)
+	manager := workers.NewBoostSchedulerManager(nil)
+	handler := NewBoostHandler(mockService, manager)
 
-	input := &TriggerAutomationRuleInput{
+	input := &TriggerBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-unknown",
 	}
 
-	_, err := handler.TriggerAutomationRule(context.Background(), input)
+	_, err := handler.TriggerBoost(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -379,15 +379,15 @@ func TestAutomationRuleHandler_TriggerAutomationRule_ManagerNotStarted(t *testin
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	// Manager not started
-	manager := workers.NewRuleSchedulerManager(nil)
-	handler := NewAutomationRuleHandler(mockService, manager)
+	manager := workers.NewBoostSchedulerManager(nil)
+	handler := NewBoostHandler(mockService, manager)
 
-	input := &TriggerAutomationRuleInput{
+	input := &TriggerBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	_, err := handler.TriggerAutomationRule(context.Background(), input)
+	_, err := handler.TriggerBoost(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -399,14 +399,14 @@ func TestAutomationRuleHandler_TriggerAutomationRule_NoSchedulerManager(t *testi
 	mockService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	// No scheduler manager
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &TriggerAutomationRuleInput{
+	input := &TriggerBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	_, err := handler.TriggerAutomationRule(context.Background(), input)
+	_, err := handler.TriggerBoost(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -419,15 +419,15 @@ func TestAutomationRuleHandler_ToggleAutomationRule(t *testing.T) {
 
 	mockService.On("ToggleRule", mock.Anything, "user-1", "rule-1", true).Return(rule, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &ToggleAutomationRuleInput{
+	input := &ToggleBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 	input.Body.Enabled = true
 
-	result, err := handler.ToggleAutomationRule(context.Background(), input)
+	result, err := handler.ToggleBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, "rule-1", result.Body.ID)
@@ -439,14 +439,14 @@ func TestAutomationRuleHandler_DeleteAutomationRule(t *testing.T) {
 
 	mockService.On("DeleteRule", mock.Anything, "user-1", "rule-1").Return(nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &DeleteAutomationRuleInput{
+	input := &DeleteBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	_, err := handler.DeleteAutomationRule(context.Background(), input)
+	_, err := handler.DeleteBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	mockService.AssertExpectations(t)
@@ -457,7 +457,7 @@ func TestAutomationRuleHandler_DeleteAutomationRule(t *testing.T) {
 // ============================================================================
 
 type mockManualProvider struct {
-	execution       *domain.RuleExecution
+	execution       *domain.BoostExecution
 	lastTriggerData map[string]interface{}
 }
 
@@ -477,7 +477,7 @@ func (m *mockManualProvider) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockManualProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *mockManualProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	m.lastTriggerData = triggerData
 	return m.execution, nil
 }
@@ -493,10 +493,10 @@ func TestAutomationRuleHandler_TestAutomationRule_Success(t *testing.T) {
 	rule := createMockRule("rule-1", "user-1")
 	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	testResult := &domain.RuleTestResult{
-		RuleID:        "rule-1",
-		RuleName:      rule.Name,
-		RuleType:      rule.RuleType,
+	testResult := &domain.BoostTestResult{
+		BoostID:        "rule-1",
+		BoostName:      rule.Name,
+		BoostType:      rule.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{Field: "amount", Operator: "gt", Value: "50", Actual: float64(100), Met: true},
@@ -504,21 +504,21 @@ func TestAutomationRuleHandler_TestAutomationRule_Success(t *testing.T) {
 		SimulatedAction: map[string]interface{}{"action_type": "budget_alert"},
 		TriggerDataUsed: map[string]interface{}{"amount": float64(100)},
 	}
-	mockExecService.On("TestRule", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+	mockExecService.On("TestBoost", mock.Anything, rule, mock.Anything).Return(testResult, nil)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &TestAutomationRuleInput{
+	input := &TestBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 	input.Body.TriggerData = map[string]interface{}{"amount": float64(100)}
 
-	result, err := handler.TestAutomationRule(context.Background(), input)
+	result, err := handler.TestBoost(context.Background(), input)
 
 	require.NoError(t, err)
-	assert.Equal(t, "rule-1", result.Body.RuleID)
+	assert.Equal(t, "rule-1", result.Body.BoostID)
 	assert.True(t, result.Body.ConditionsMet)
 	assert.Len(t, result.Body.ConditionResults, 1)
 	mockRuleService.AssertExpectations(t)
@@ -529,17 +529,17 @@ func TestAutomationRuleHandler_TestAutomationRule_RuleNotFound(t *testing.T) {
 	mockRuleService := new(MockAutomationRuleService)
 	mockExecService := new(MockRuleExecutionService)
 
-	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &TestAutomationRuleInput{
+	input := &TestBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-unknown",
 	}
 
-	_, err := handler.TestAutomationRule(context.Background(), input)
+	_, err := handler.TestBoost(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -550,15 +550,15 @@ func TestAutomationRuleHandler_TestAutomationRule_NoExecutionService(t *testing.
 	rule := createMockRule("rule-1", "user-1")
 	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	// No execution service set
 
-	input := &TestAutomationRuleInput{
+	input := &TestBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	_, err := handler.TestAutomationRule(context.Background(), input)
+	_, err := handler.TestBoost(context.Background(), input)
 
 	assert.Error(t, err)
 }
@@ -570,10 +570,10 @@ func TestAutomationRuleHandler_TestAutomationRule_PFCDisplayFieldsPassThrough(t 
 	rule := createMockRule("rule-1", "user-1")
 	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	testResult := &domain.RuleTestResult{
-		RuleID:        "rule-1",
-		RuleName:      rule.Name,
-		RuleType:      rule.RuleType,
+	testResult := &domain.BoostTestResult{
+		BoostID:        "rule-1",
+		BoostName:      rule.Name,
+		BoostType:      rule.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{
@@ -588,18 +588,18 @@ func TestAutomationRuleHandler_TestAutomationRule_PFCDisplayFieldsPassThrough(t 
 		},
 		TriggerDataUsed: map[string]interface{}{"transaction.pfc_primary": "FOOD_AND_DRINK"},
 	}
-	mockExecService.On("TestRule", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+	mockExecService.On("TestBoost", mock.Anything, rule, mock.Anything).Return(testResult, nil)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &TestAutomationRuleInput{
+	input := &TestBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 	input.Body.TriggerData = map[string]interface{}{"transaction.pfc_primary": "FOOD_AND_DRINK"}
 
-	result, err := handler.TestAutomationRule(context.Background(), input)
+	result, err := handler.TestBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	require.Len(t, result.Body.ConditionResults, 1)
@@ -617,14 +617,14 @@ func TestAutomationRuleHandler_EnableAutomationRule(t *testing.T) {
 
 	mockService.On("ToggleRule", mock.Anything, "user-1", "rule-1", true).Return(rule, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &EnableAutomationRuleInput{
+	input := &EnableBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	result, err := handler.EnableAutomationRule(context.Background(), input)
+	result, err := handler.EnableBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, "rule-1", result.Body.ID)
@@ -640,14 +640,14 @@ func TestAutomationRuleHandler_DisableAutomationRule(t *testing.T) {
 
 	mockService.On("ToggleRule", mock.Anything, "user-1", "rule-1", false).Return(rule, nil)
 
-	handler := NewAutomationRuleHandler(mockService, nil)
+	handler := NewBoostHandler(mockService, nil)
 
-	input := &DisableAutomationRuleInput{
+	input := &DisableBoostInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 	}
 
-	result, err := handler.DisableAutomationRule(context.Background(), input)
+	result, err := handler.DisableBoost(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, "rule-1", result.Body.ID)
@@ -662,23 +662,23 @@ func TestAutomationRuleHandler_GetRuleExecutions_Success(t *testing.T) {
 	rule := createMockRule("rule-1", "user-1")
 	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
-	executions := []*domain.RuleExecution{
-		{ID: "exec-1", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
-		{ID: "exec-2", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
+	executions := []*domain.BoostExecution{
+		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
+		{ID: "exec-2", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", (*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &GetRuleExecutionsInput{
+	input := &GetBoostExecutionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 		Limit:              20,
 		Offset:             0,
 	}
 
-	result, err := handler.GetRuleExecutions(context.Background(), input)
+	result, err := handler.GetBoostExecutions(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Len(t, result.Body.Executions, 2)
@@ -697,15 +697,15 @@ func TestAutomationRuleHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) 
 	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
 
 	completedStatus := domain.ExecutionStatusCompleted
-	executions := []*domain.RuleExecution{
-		{ID: "exec-1", RuleID: "rule-1", Status: domain.ExecutionStatusCompleted},
+	executions := []*domain.BoostExecution{
+		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", &completedStatus, 20, 0).Return(executions, 1, nil)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &GetRuleExecutionsInput{
+	input := &GetBoostExecutionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-1",
 		Status:             "completed",
@@ -713,7 +713,7 @@ func TestAutomationRuleHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) 
 		Offset:             0,
 	}
 
-	result, err := handler.GetRuleExecutions(context.Background(), input)
+	result, err := handler.GetBoostExecutions(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Len(t, result.Body.Executions, 1)
@@ -724,19 +724,19 @@ func TestAutomationRuleHandler_GetRuleExecutions_RuleNotFound(t *testing.T) {
 	mockRuleService := new(MockAutomationRuleService)
 	mockExecService := new(MockRuleExecutionService)
 
-	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockRuleService.On("GetRuleByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	handler := NewAutomationRuleHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockRuleService, nil)
 	handler.SetExecutionService(mockExecService)
 
-	input := &GetRuleExecutionsInput{
+	input := &GetBoostExecutionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 		ID:                 "rule-unknown",
 		Limit:              20,
 		Offset:             0,
 	}
 
-	_, err := handler.GetRuleExecutions(context.Background(), input)
+	_, err := handler.GetBoostExecutions(context.Background(), input)
 
 	assert.Error(t, err)
 }

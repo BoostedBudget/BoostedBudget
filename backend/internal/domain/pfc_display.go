@@ -126,7 +126,7 @@ func (c *ConditionEvalResult) PopulatePFCDisplay() {
 
 // PopulatePFCDisplay enriches every condition result in the dry-run response,
 // mirroring the aggregate-level pattern used by CategorizationRule.
-func (r *RuleTestResult) PopulatePFCDisplay() {
+func (r *BoostTestResult) PopulatePFCDisplay() {
 	for i := range r.ConditionResults {
 		r.ConditionResults[i].PopulatePFCDisplay()
 	}

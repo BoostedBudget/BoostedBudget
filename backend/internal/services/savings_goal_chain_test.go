@@ -185,7 +185,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetChainResolver(mockResolver)
 
@@ -199,14 +199,14 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		Amount:        500,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-savings-chain-001",
 		UserID:         "user-savings-001",
 		Name:           "Savings Chain Rule",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeSavingsGoal,
+		BoostType:       domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -216,7 +216,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -254,7 +254,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 	}
 	goalRepo.goals = append(goalRepo.goals, existingGoal)
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	// No SetChainResolver — chainResolver stays nil.
 
@@ -268,14 +268,14 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 		Amount:        200,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-savings-nil-resolver",
 		UserID:         "user-savings-002",
 		Name:           "Nil Resolver Savings",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeSavingsGoal,
+		BoostType:       domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -285,7 +285,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -333,7 +333,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetChainResolver(mockResolver)
 
@@ -347,14 +347,14 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		Amount:        750,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-savings-depth2-001",
 		UserID:         "user-savings-depth2",
 		Name:           "Depth-2 Savings Rule",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeSavingsGoal,
+		BoostType:       domain.BoostTypeSavingsGoal,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -364,7 +364,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)

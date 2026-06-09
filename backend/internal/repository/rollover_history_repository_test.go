@@ -58,8 +58,8 @@ func TestRolloverHistoryRepository_Create(t *testing.T) {
 		pgxmock.AnyArg(), // id
 		rollover.UserID,
 		rollover.BudgetID,
-		rollover.RuleID,
-		rollover.RuleExecutionID,
+		rollover.BoostID,
+		rollover.BoostExecutionID,
 		rollover.SourceBudgetCategoryID,
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,
@@ -95,8 +95,8 @@ func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
 		pgxmock.AnyArg(),
 		rollover.UserID,
 		rollover.BudgetID,
-		rollover.RuleID,
-		rollover.RuleExecutionID,
+		rollover.BoostID,
+		rollover.BoostExecutionID,
 		rollover.SourceBudgetCategoryID,
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,
@@ -126,15 +126,15 @@ func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
 	)
 	ruleID := uuid.New().String()
 	execID := uuid.New().String()
-	rollover.RuleID = &ruleID
-	rollover.RuleExecutionID = &execID
+	rollover.BoostID = &ruleID
+	rollover.BoostExecutionID = &execID
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rollover_history`)).WithArgs(
 		pgxmock.AnyArg(),
 		rollover.UserID,
 		rollover.BudgetID,
-		rollover.RuleID,
-		rollover.RuleExecutionID,
+		rollover.BoostID,
+		rollover.BoostExecutionID,
 		rollover.SourceBudgetCategoryID,
 		rollover.TargetBudgetCategoryID,
 		rollover.Amount,

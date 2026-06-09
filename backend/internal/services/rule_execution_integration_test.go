@@ -1,8 +1,8 @@
 //go:build integration
 
 // Package services provides real-Postgres integration tests for category-scoped rule execution.
-// These tests exercise the full rule evaluation stack (AutomationRuleService.CreateRule →
-// RuleExecutionService.ProcessEventTrigger → transfer_suggestions insert) against a live
+// These tests exercise the full rule evaluation stack (BoostService.CreateRule →
+// BoostExecutionService.ProcessEventTrigger → transfer_suggestions insert) against a live
 // database — a level of coverage that pgxmock cannot provide because it never sends SQL to a
 // real planner and thus cannot verify constraint enforcement or multi-table behavior.
 //
@@ -117,20 +117,20 @@ func buildTransferActionsJSON(t *testing.T) json.RawMessage {
 	return b
 }
 
-// buildRule returns a CreateAutomationRuleRequest for a budget_category.percent_used > threshold
+// buildRule returns a CreateBoostRequest for a budget_category.percent_used > threshold
 // rule scoped to the given budgetID + categoryID with a transfer_suggestion action.
-func buildCategoryScopedRuleReq(t *testing.T, budgetID, categoryID string, threshold float64) *domain.CreateAutomationRuleRequest {
+func buildCategoryScopedRuleReq(t *testing.T, budgetID, categoryID string, threshold float64) *domain.CreateBoostRequest {
 	t.Helper()
-	return &domain.CreateAutomationRuleRequest{
+	return &domain.CreateBoostRequest{
 		Name:           "test-cat-rule-" + uuid.New().String()[:8],
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		Priority:       1,
 		ConditionLogic: "AND",
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Conditions: []domain.AutomationRuleCondition{
+		Conditions: []domain.BoostCondition{
 			{
 				Field:      "budget_category.percent_used",
 				Operator:   domain.ConditionOperatorGt,
@@ -153,14 +153,14 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 	// Shared service constructor helper — wires real repos onto the transaction-scoped repos.
 	buildServices := func(txDB repository.DB) (*automationRuleService, *ruleExecutionService) {
 		budgetRepo := repository.NewBudgetRepository(txDB)
-		rulesRepo := repository.NewAutomationRulesRepository(txDB)
-		execRepo := repository.NewRuleExecutionRepository(txDB)
+		rulesRepo := repository.NewBoostsRepository(txDB)
+		execRepo := repository.NewBoostExecutionRepository(txDB)
 		suggRepo := repository.NewTransferSuggestionRepository(txDB)
 
-		ruleSvc := NewAutomationRuleService(rulesRepo)
+		ruleSvc := NewBoostService(rulesRepo)
 		ruleSvc.SetBudgetRepo(budgetRepo)
 
-		execSvc := NewRuleExecutionService(execRepo, suggRepo, rulesRepo, nil /* notificationService */)
+		execSvc := NewBoostExecutionService(execRepo, suggRepo, rulesRepo, nil /* notificationService */)
 		return ruleSvc, execSvc
 	}
 
@@ -279,8 +279,8 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 		req := buildCategoryScopedRuleReq(t, budget2ID, cat2ID, 30.0)
 		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
 		require.Error(t, err, "CreateRule with another user's category must fail")
-		assert.True(t, errors.Is(err, domain.ErrRuleConditionForbidden),
-			"expected ErrRuleConditionForbidden, got: %v", err)
+		assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
+			"expected ErrBoostConditionForbidden, got: %v", err)
 	})
 
 	// -------------------------------------------------------------------------
@@ -298,8 +298,8 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 		req := buildCategoryScopedRuleReq(t, fix.budgetYID, fix.catCID, 30.0)
 		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
 		require.Error(t, err, "category C is not in Budget Y — must be rejected")
-		assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-			"expected ErrInvalidRule (category not in budget), got: %v", err)
+		assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+			"expected ErrInvalidBoost (category not in budget), got: %v", err)
 	})
 
 	// -------------------------------------------------------------------------
@@ -314,16 +314,16 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 		ruleSvc, _ := buildServices(tx)
 
 		// Two conditions: one scoped to Budget X / Cat C, one to Budget Y / Cat D.
-		req := &domain.CreateAutomationRuleRequest{
+		req := &domain.CreateBoostRequest{
 			Name:           "multi-budget-rule-" + uuid.New().String()[:8],
-			RuleType:       domain.RuleTypeTransferSuggestion,
+			BoostType:       domain.BoostTypeTransferSuggestion,
 			Priority:       1,
 			ConditionLogic: "AND",
 			TriggerConfig: domain.TriggerConfig{
 				Type:  domain.TriggerTypeEvent,
 				Event: domain.EventBudgetPeriodEnd,
 			},
-			Conditions: []domain.AutomationRuleCondition{
+			Conditions: []domain.BoostCondition{
 				{
 					Field:      "budget_category.percent_used",
 					Operator:   domain.ConditionOperatorGt,
@@ -344,8 +344,8 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
 		require.Error(t, err, "rule spanning two budgets must be rejected")
-		assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-			"expected ErrInvalidRule (multi-budget), got: %v", err)
+		assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+			"expected ErrInvalidBoost (multi-budget), got: %v", err)
 	})
 
 	// -------------------------------------------------------------------------

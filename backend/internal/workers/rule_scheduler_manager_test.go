@@ -1,5 +1,5 @@
 // Package workers provides background job processing for automation rules.
-// Issue #37: Rule Scheduler - RuleSchedulerManager tests (TDD).
+// Issue #37: Rule Scheduler - BoostSchedulerManager tests (TDD).
 package workers
 
 import (
@@ -19,7 +19,7 @@ import (
 // Mock Provider for Testing
 // ============================================================================
 
-// MockTriggerProvider implements RuleTriggerProvider for testing.
+// MockTriggerProvider implements BoostTriggerProvider for testing.
 type MockTriggerProvider struct {
 	mock.Mock
 	name                 string
@@ -60,12 +60,12 @@ func (m *MockTriggerProvider) Stop(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *MockTriggerProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *MockTriggerProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	args := m.Called(ctx, ruleID, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleExecution), args.Error(1)
+	return args.Get(0).(*domain.BoostExecution), args.Error(1)
 }
 
 func (m *MockTriggerProvider) WasStartCalled() bool {
@@ -81,11 +81,11 @@ func (m *MockTriggerProvider) WasStopCalled() bool {
 }
 
 // ============================================================================
-// RuleSchedulerManager Tests
+// BoostSchedulerManager Tests
 // ============================================================================
 
 func TestManager_RegisterProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -100,7 +100,7 @@ func TestManager_RegisterProvider(t *testing.T) {
 }
 
 func TestManager_RegisterProvider_OverwritesDuplicate(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	provider1 := NewMockTriggerProvider("cron", false)
 	provider2 := NewMockTriggerProvider("cron", true) // Same name, different
@@ -113,7 +113,7 @@ func TestManager_RegisterProvider_OverwritesDuplicate(t *testing.T) {
 }
 
 func TestManager_Start_StartsAllProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -133,7 +133,7 @@ func TestManager_Start_StartsAllProviders(t *testing.T) {
 }
 
 func TestManager_Start_ReturnsFirstError(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(errors.New("cron start failed"))
@@ -148,7 +148,7 @@ func TestManager_Start_ReturnsFirstError(t *testing.T) {
 }
 
 func TestManager_Start_Idempotent(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(nil).Once()
@@ -170,7 +170,7 @@ func TestManager_Start_Idempotent(t *testing.T) {
 }
 
 func TestManager_Stop_StopsAllProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -194,7 +194,7 @@ func TestManager_Stop_StopsAllProviders(t *testing.T) {
 }
 
 func TestManager_Stop_Idempotent(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	cronProvider.On("Start", mock.Anything).Return(nil)
@@ -218,7 +218,7 @@ func TestManager_Stop_Idempotent(t *testing.T) {
 }
 
 func TestManager_Stop_WithoutStart(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manager.RegisterProvider(cronProvider)
@@ -234,14 +234,14 @@ func TestManager_Stop_WithoutStart(t *testing.T) {
 }
 
 func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -267,7 +267,7 @@ func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
 }
 
 func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	// Only cron provider, which doesn't support manual triggers
 	cronProvider := NewMockTriggerProvider("cron", false)
@@ -286,7 +286,7 @@ func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
 }
 
 func TestManager_TriggerRule_NotStarted(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	manualProvider := NewMockTriggerProvider("manual", true)
 	manager.RegisterProvider(manualProvider)
@@ -302,7 +302,7 @@ func TestManager_TriggerRule_NotStarted(t *testing.T) {
 }
 
 func TestManager_GetProvider(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manager.RegisterProvider(cronProvider)
@@ -316,7 +316,7 @@ func TestManager_GetProvider(t *testing.T) {
 }
 
 func TestManager_ListProviders(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -335,7 +335,7 @@ func TestManager_ListProviders(t *testing.T) {
 }
 
 func TestManager_ConcurrentAccess(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -368,7 +368,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 }
 
 func TestManager_StartWithTimeout(t *testing.T) {
-	manager := NewRuleSchedulerManager(nil)
+	manager := NewBoostSchedulerManager(nil)
 
 	slowProvider := NewMockTriggerProvider("slow", false)
 	slowProvider.On("Start", mock.Anything).Run(func(args mock.Arguments) {

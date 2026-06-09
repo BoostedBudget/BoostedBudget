@@ -17,7 +17,7 @@ type AdminUserListItem struct {
 	IsActive             bool       `json:"is_active"`
 	IsAdmin              bool       `json:"is_admin"`
 	LinkedAccountsCount  int        `json:"linked_accounts_count"`
-	AutomationRulesCount int        `json:"automation_rules_count"`
+	BoostsCount          int        `json:"boosts_count"`
 	ReferralsCount       int        `json:"referrals_count"`
 }
 

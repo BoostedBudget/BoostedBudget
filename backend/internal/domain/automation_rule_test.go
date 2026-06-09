@@ -10,21 +10,21 @@ import (
 )
 
 // =============================================================================
-// RuleType Tests
+// BoostType Tests
 // =============================================================================
 
 func TestRuleType_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
-		ruleType RuleType
+		ruleType BoostType
 		want     bool
 	}{
-		{"transfer_suggestion is valid", RuleTypeTransferSuggestion, true},
-		{"budget_alert is valid", RuleTypeBudgetAlert, true},
-		{"category_rollover is valid", RuleTypeCategoryRollover, true},
-		{"empty string is invalid", RuleType(""), false},
-		{"unknown type is invalid", RuleType("unknown"), false},
-		{"case sensitive - uppercase is invalid", RuleType("TRANSFER_SUGGESTION"), false},
+		{"transfer_suggestion is valid", BoostTypeTransferSuggestion, true},
+		{"budget_alert is valid", BoostTypeBudgetAlert, true},
+		{"category_rollover is valid", BoostTypeCategoryRollover, true},
+		{"empty string is invalid", BoostType(""), false},
+		{"unknown type is invalid", BoostType("unknown"), false},
+		{"case sensitive - uppercase is invalid", BoostType("TRANSFER_SUGGESTION"), false},
 	}
 
 	for _, tt := range tests {
@@ -60,19 +60,19 @@ func TestTriggerType_IsValid(t *testing.T) {
 }
 
 // =============================================================================
-// AutomationRuleCondition Tests
+// BoostCondition Tests
 // =============================================================================
 
 func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name          string
-		condition     AutomationRuleCondition
+		condition     BoostCondition
 		expectedJSON  string
 		expectKeyJSON bool
 	}{
 		{
 			name: "condition with category_id",
-			condition: AutomationRuleCondition{
+			condition: BoostCondition{
 				Field:      "budget_category.percent_used",
 				Operator:   ConditionOperatorGte,
 				Value:      80,
@@ -83,7 +83,7 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 		},
 		{
 			name: "condition without category_id omits key",
-			condition: AutomationRuleCondition{
+			condition: BoostCondition{
 				Field:    "account.balance",
 				Operator: ConditionOperatorGt,
 				Value:    1000,
@@ -108,7 +108,7 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 			}
 
 			// Unmarshal back and verify round-trip for CategoryID
-			var unmarshal AutomationRuleCondition
+			var unmarshal BoostCondition
 			err = json.Unmarshal(jsonData, &unmarshal)
 			require.NoError(t, err)
 
@@ -124,13 +124,13 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
 	tests := []struct {
 		name          string
-		condition     AutomationRuleCondition
+		condition     BoostCondition
 		expectedJSON  string
 		expectKeyJSON bool
 	}{
 		{
 			name: "condition with budget_id",
-			condition: AutomationRuleCondition{
+			condition: BoostCondition{
 				Field:    "budget.percent_used",
 				Operator: ConditionOperatorGte,
 				Value:    80,
@@ -141,7 +141,7 @@ func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
 		},
 		{
 			name: "condition without budget_id omits key",
-			condition: AutomationRuleCondition{
+			condition: BoostCondition{
 				Field:    "account.balance",
 				Operator: ConditionOperatorGt,
 				Value:    1000,
@@ -166,7 +166,7 @@ func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
 			}
 
 			// Unmarshal back and verify round-trip for BudgetID
-			var unmarshaled AutomationRuleCondition
+			var unmarshaled BoostCondition
 			err = json.Unmarshal(jsonData, &unmarshaled)
 			require.NoError(t, err)
 
@@ -312,11 +312,11 @@ func TestTriggerConfig_Validate(t *testing.T) {
 
 func TestAutomationRule_validateConditions(t *testing.T) {
 	// Helper: build a minimal valid event-triggered rule.
-	validEventRule := func(event string, conditions []AutomationRuleCondition) AutomationRule {
-		return AutomationRule{
+	validEventRule := func(event string, conditions []BoostCondition) Boost {
+		return Boost{
 			UserID:   "user-123",
 			Name:     "Test Rule",
-			RuleType: RuleTypeBudgetAlert,
+			BoostType: BoostTypeBudgetAlert,
 			TriggerConfig: TriggerConfig{
 				Type:  TriggerTypeEvent,
 				Event: event,
@@ -329,27 +329,27 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		rule    AutomationRule
+		rule    Boost
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid budget.percent_used field with eq operator",
-			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+			rule: validEventRule("budget_updated", []BoostCondition{
 				{Field: "budget.percent_used", Operator: ConditionOperatorEq, Value: 80},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "valid budget_category.percent_used with CategoryID set",
-			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+			rule: validEventRule("budget_updated", []BoostCondition{
 				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "unknown field returns not valid for event error",
-			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+			rule: validEventRule("budget_updated", []BoostCondition{
 				{Field: "budget.typo_field", Operator: ConditionOperatorEq, Value: 80},
 			}),
 			wantErr: true,
@@ -357,7 +357,7 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 		},
 		{
 			name: "operator between returns unsupported operator error",
-			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+			rule: validEventRule("budget_updated", []BoostCondition{
 				{Field: "budget.percent_used", Operator: ConditionOperatorBetween, Value: 80},
 			}),
 			wantErr: true,
@@ -366,25 +366,25 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 		{
 			// Issue #1271 Item 2: Validate() no longer rejects missing CategoryID.
 			// The strict check moved to ValidateForPersistence() (used by create/update).
-			// ExecuteRule uses Validate() so that legacy/partial rules don't brick.
+			// ExecuteBoost uses Validate() so that legacy/partial rules don't brick.
 			name: "budget_category field without CategoryID is accepted by Validate()",
-			rule: validEventRule("budget_updated", []AutomationRuleCondition{
+			rule: validEventRule("budget_updated", []BoostCondition{
 				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "schedule-type trigger rejects unsupported operator",
-			rule: AutomationRule{
+			rule: Boost{
 				UserID:   "user-123",
 				Name:     "Scheduled Transfer",
-				RuleType: RuleTypeTransferSuggestion,
+				BoostType: BoostTypeTransferSuggestion,
 				TriggerConfig: TriggerConfig{
 					Type:     TriggerTypeSchedule,
 					Cron:     "0 0 1 * *",
 					Timezone: "America/New_York",
 				},
-				Conditions: []AutomationRuleCondition{
+				Conditions: []BoostCondition{
 					{Field: "account.balance", Operator: ConditionOperatorBetween, Value: 1000},
 				},
 				ConditionLogic: "AND",
@@ -395,16 +395,16 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 		},
 		{
 			name: "schedule-type trigger accepts valid operator",
-			rule: AutomationRule{
+			rule: Boost{
 				UserID:   "user-123",
 				Name:     "Scheduled Transfer",
-				RuleType: RuleTypeTransferSuggestion,
+				BoostType: BoostTypeTransferSuggestion,
 				TriggerConfig: TriggerConfig{
 					Type:     TriggerTypeSchedule,
 					Cron:     "0 0 1 * *",
 					Timezone: "America/New_York",
 				},
-				Conditions: []AutomationRuleCondition{
+				Conditions: []BoostCondition{
 					{Field: "account.balance", Operator: ConditionOperatorGt, Value: 1000},
 				},
 				ConditionLogic: "AND",
@@ -428,45 +428,45 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 }
 
 // =============================================================================
-// AutomationRule Validation Tests
+// Boost Validation Tests
 // =============================================================================
 
 func TestAutomationRule_Validate_RequiredFields(t *testing.T) {
 	tests := []struct {
 		name    string
-		rule    AutomationRule
+		rule    Boost
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name:    "missing user_id",
-			rule:    AutomationRule{Name: "Test Rule", RuleType: RuleTypeTransferSuggestion},
+			rule:    Boost{Name: "Test Rule", BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "user_id is required",
 		},
 		{
 			name:    "missing name",
-			rule:    AutomationRule{UserID: "user-123", RuleType: RuleTypeTransferSuggestion},
+			rule:    Boost{UserID: "user-123", BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "name is required",
 		},
 		{
 			name:    "name too long",
-			rule:    AutomationRule{UserID: "user-123", Name: string(make([]byte, 101)), RuleType: RuleTypeTransferSuggestion},
+			rule:    Boost{UserID: "user-123", Name: string(make([]byte, 101)), BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "name must be 100 characters or less",
 		},
 		{
-			name:    "missing rule_type",
-			rule:    AutomationRule{UserID: "user-123", Name: "Test Rule"},
+			name:    "missing boost_type",
+			rule:    Boost{UserID: "user-123", Name: "Test Rule"},
 			wantErr: true,
-			errMsg:  "invalid rule_type",
+			errMsg:  "invalid boost_type",
 		},
 		{
-			name:    "invalid rule_type",
-			rule:    AutomationRule{UserID: "user-123", Name: "Test Rule", RuleType: RuleType("invalid")},
+			name:    "invalid boost_type",
+			rule:    Boost{UserID: "user-123", Name: "Test Rule", BoostType: BoostType("invalid")},
 			wantErr: true,
-			errMsg:  "invalid rule_type",
+			errMsg:  "invalid boost_type",
 		},
 	}
 
@@ -484,17 +484,17 @@ func TestAutomationRule_Validate_RequiredFields(t *testing.T) {
 }
 
 func TestAutomationRule_Validate_ConditionLogic(t *testing.T) {
-	baseRule := func() AutomationRule {
-		return AutomationRule{
+	baseRule := func() Boost {
+		return Boost{
 			UserID:   "user-123",
 			Name:     "Test Rule",
-			RuleType: RuleTypeTransferSuggestion,
+			BoostType: BoostTypeTransferSuggestion,
 			TriggerConfig: TriggerConfig{
 				Type:     TriggerTypeSchedule,
 				Cron:     "0 0 1 * *",
 				Timezone: "America/New_York",
 			},
-			Conditions: []AutomationRuleCondition{
+			Conditions: []BoostCondition{
 				{Field: "account.balance", Operator: ConditionOperatorGt, Value: 1000},
 			},
 			Actions: json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount":100}`),
@@ -529,16 +529,16 @@ func TestAutomationRule_Validate_ConditionLogic(t *testing.T) {
 }
 
 func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
-	validRule := AutomationRule{
+	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Excess Savings Transfer",
-		RuleType: RuleTypeTransferSuggestion,
+		BoostType: BoostTypeTransferSuggestion,
 		TriggerConfig: TriggerConfig{
 			Type:     TriggerTypeSchedule,
 			Cron:     "0 0 1 * *",
 			Timezone: "America/New_York",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "account.balance", Operator: ConditionOperatorGt, Value: 5000},
 		},
 		ConditionLogic: "AND",
@@ -632,10 +632,10 @@ func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
 // are also valid. This is the C9 contract guard — it locks the UI⊆backend invariant
 // so a UI-offered type can never be silently rejected at create/update time.
 func TestTransferAmountTypeContract_C9(t *testing.T) {
-	baseRule := AutomationRule{
+	baseRule := Boost{
 		UserID:   "user-c9",
 		Name:     "Transfer Contract Test",
-		RuleType: RuleTypeTransferSuggestion,
+		BoostType: BoostTypeTransferSuggestion,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "balance_changed",
@@ -703,15 +703,15 @@ func TestTransferAmountTypeContract_C9(t *testing.T) {
 }
 
 func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
-	validRule := AutomationRule{
+	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Budget Warning",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 		},
 		ConditionLogic: "AND",
@@ -741,15 +741,15 @@ func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
 }
 
 func TestAutomationRule_Validate_CategoryRolloverRule(t *testing.T) {
-	validRule := AutomationRule{
+	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Savings Rollover",
-		RuleType: RuleTypeCategoryRollover,
+		BoostType: BoostTypeCategoryRollover,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_period_end",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.remaining_amount", Operator: ConditionOperatorGt, Value: 0, CategoryID: "cat-1"},
 		},
 		ConditionLogic: "AND",
@@ -799,8 +799,8 @@ func TestAutomationRule_Validate_CategoryRolloverRule(t *testing.T) {
 // =============================================================================
 
 func TestAutomationRule_ParseTransferAction(t *testing.T) {
-	rule := AutomationRule{
-		RuleType: RuleTypeTransferSuggestion,
+	rule := Boost{
+		BoostType: BoostTypeTransferSuggestion,
 		Actions:  json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":150.50,"threshold":1000}`),
 	}
 
@@ -815,8 +815,8 @@ func TestAutomationRule_ParseTransferAction(t *testing.T) {
 }
 
 func TestAutomationRule_ParseAlertAction(t *testing.T) {
-	rule := AutomationRule{
-		RuleType: RuleTypeBudgetAlert,
+	rule := Boost{
+		BoostType: BoostTypeBudgetAlert,
 		Actions:  json.RawMessage(`{"notification_channels":["email","push"],"threshold_type":"percentage","threshold_value":80,"budget_id":"budget-1","category_id":"cat-1"}`),
 	}
 
@@ -831,8 +831,8 @@ func TestAutomationRule_ParseAlertAction(t *testing.T) {
 }
 
 func TestAutomationRule_ParseRolloverAction(t *testing.T) {
-	rule := AutomationRule{
-		RuleType: RuleTypeCategoryRollover,
+	rule := Boost{
+		BoostType: BoostTypeCategoryRollover,
 		Actions:  json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"capped","cap_amount":100}`),
 	}
 
@@ -846,7 +846,7 @@ func TestAutomationRule_ParseRolloverAction(t *testing.T) {
 }
 
 // =============================================================================
-// RuleExecution Tests
+// BoostExecution Tests
 // =============================================================================
 
 func TestRuleExecutionStatus_IsValid(t *testing.T) {
@@ -872,7 +872,7 @@ func TestRuleExecutionStatus_IsValid(t *testing.T) {
 }
 
 func TestRuleExecution_MarkComplete(t *testing.T) {
-	execution := &RuleExecution{
+	execution := &BoostExecution{
 		Status:    ExecutionStatusRunning,
 		StartedAt: time.Now().Add(-100 * time.Millisecond),
 	}
@@ -886,7 +886,7 @@ func TestRuleExecution_MarkComplete(t *testing.T) {
 }
 
 func TestRuleExecution_MarkFailed(t *testing.T) {
-	execution := &RuleExecution{
+	execution := &BoostExecution{
 		Status:    ExecutionStatusRunning,
 		StartedAt: time.Now().Add(-100 * time.Millisecond),
 	}
@@ -934,7 +934,7 @@ func TestTransferSuggestionSource_IsValid(t *testing.T) {
 		source SuggestionSource
 		want   bool
 	}{
-		{"rule is valid", SuggestionSourceRule, true},
+		{"rule is valid", SuggestionSourceBoost, true},
 		{"manual is valid", SuggestionSourceManual, true},
 		{"ai is valid", SuggestionSourceAI, true},
 		{"empty is invalid", SuggestionSource(""), false},
@@ -954,7 +954,7 @@ func TestTransferSuggestion_Validate(t *testing.T) {
 		UserID:       "user-123",
 		Amount:       100.00,
 		CurrencyCode: "USD",
-		Source:       SuggestionSourceRule,
+		Source:       SuggestionSourceBoost,
 		Status:       SuggestionStatusPending,
 	}
 
@@ -1098,8 +1098,8 @@ func TestTransferSuggestion_Complete(t *testing.T) {
 func TestErrorConstants(t *testing.T) {
 	// Verify error constants are defined and unique
 	errors := []error{
-		ErrAutomationRuleNotFound,
-		ErrAutomationRuleAlreadyExists,
+		ErrBoostNotFound,
+		ErrBoostAlreadyExists,
 		ErrTransferSuggestionNotFound,
 	}
 
@@ -1125,10 +1125,10 @@ func TestErrorConstants(t *testing.T) {
 // amount_type:"percentage" rejects amounts > 100 (a percentage cannot exceed 100%).
 // Without this bound, API-crafted rules could set percentage=500 and over-suggest 5× income.
 func TestValidateTransferAction_PercentageUpperBound(t *testing.T) {
-	base := AutomationRule{
+	base := Boost{
 		UserID:   "user-1",
 		Name:     "Transfer %",
-		RuleType: RuleTypeTransferSuggestion,
+		BoostType: BoostTypeTransferSuggestion,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: EventBudgetPeriodEnd,
@@ -1163,10 +1163,10 @@ func TestValidateTransferAction_PercentageUpperBound(t *testing.T) {
 // with amount_type:"remaining" rejects a negative threshold. A negative threshold would
 // make calculateSavingsGoalAmount compute remaining + |threshold| — an over-suggestion.
 func TestValidateSavingsGoalAction_RemainingThresholdBound(t *testing.T) {
-	base := AutomationRule{
+	base := Boost{
 		UserID:   "user-1",
 		Name:     "SG remaining",
-		RuleType: RuleTypeSavingsGoal,
+		BoostType: BoostTypeSavingsGoal,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: EventBudgetPeriodEnd,
@@ -1200,10 +1200,10 @@ func TestValidateSavingsGoalAction_RemainingThresholdBound(t *testing.T) {
 // TestValidateRolloverAction_PercentageBound verifies that a category_rollover rule with
 // rollover_type:"percentage" rejects out-of-range values (≤0 or >100).
 func TestValidateRolloverAction_PercentageBound(t *testing.T) {
-	base := AutomationRule{
+	base := Boost{
 		UserID:   "user-1",
 		Name:     "Rollover %",
-		RuleType: RuleTypeCategoryRollover,
+		BoostType: BoostTypeCategoryRollover,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: EventBudgetPeriodEnd,
@@ -1248,19 +1248,19 @@ func TestValidateRolloverAction_PercentageBound(t *testing.T) {
 // Issue #1271 Item 2 — strict-create/fail-safe-execute validation split (A-CR1)
 // =============================================================================
 
-// TestValidate_DoesNotRequireScopeIDs verifies that Validate() (used by ExecuteRule) does
+// TestValidate_DoesNotRequireScopeIDs verifies that Validate() (used by ExecuteBoost) does
 // NOT reject a budget_category.* condition that is missing CategoryID or BudgetID. Legacy /
 // partial rules must be allowed to run without bricking.
 func TestValidate_DoesNotRequireScopeIDs(t *testing.T) {
-	rule := AutomationRule{
+	rule := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
 		},
 		ConditionLogic: "AND",
@@ -1273,15 +1273,15 @@ func TestValidate_DoesNotRequireScopeIDs(t *testing.T) {
 // TestValidateForPersistence_RequiresCategoryID verifies that ValidateForPersistence() rejects
 // a budget_category.* condition with an empty CategoryID.
 func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
-	rule := AutomationRule{
+	rule := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
 		},
 		ConditionLogic: "AND",
@@ -1289,22 +1289,22 @@ func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
 	}
 	err := rule.ValidateForPersistence()
 	require.Error(t, err, "ValidateForPersistence() must reject a missing CategoryID")
-	assert.ErrorIs(t, err, ErrInvalidRule)
+	assert.ErrorIs(t, err, ErrInvalidBoost)
 	assert.Contains(t, err.Error(), "category_id")
 }
 
 // TestValidateForPersistence_RequiresBudgetID verifies that ValidateForPersistence() rejects
 // a budget_category.* condition that has CategoryID but no BudgetID.
 func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
-	rule := AutomationRule{
+	rule := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 		},
 		ConditionLogic: "AND",
@@ -1312,22 +1312,22 @@ func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
 	}
 	err := rule.ValidateForPersistence()
 	require.Error(t, err, "ValidateForPersistence() must reject a missing BudgetID")
-	assert.ErrorIs(t, err, ErrInvalidRule)
+	assert.ErrorIs(t, err, ErrInvalidBoost)
 	assert.Contains(t, err.Error(), "budget_id")
 }
 
 // TestValidateForPersistence_PassesWhenBothPresent verifies that ValidateForPersistence()
 // accepts a budget_category.* condition that has both CategoryID and BudgetID set.
 func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
-	rule := AutomationRule{
+	rule := Boost{
 		UserID:   "user-1",
 		Name:     "fully scoped rule",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-1"},
 		},
 		ConditionLogic: "AND",
@@ -1344,8 +1344,8 @@ func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
 // TestBoundBudgetID_SingleBudget verifies that BoundBudgetID returns the budget ID
 // from the first budget_category.* condition that has a BudgetID set.
 func TestBoundBudgetID_SingleBudget(t *testing.T) {
-	rule := AutomationRule{
-		Conditions: []AutomationRuleCondition{
+	rule := Boost{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-X"},
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
 		},
@@ -1358,8 +1358,8 @@ func TestBoundBudgetID_SingleBudget(t *testing.T) {
 // TestBoundBudgetID_None verifies that BoundBudgetID returns ("", false) when no
 // condition has a budget_category.* field with a BudgetID.
 func TestBoundBudgetID_None(t *testing.T) {
-	rule := AutomationRule{
-		Conditions: []AutomationRuleCondition{
+	rule := Boost{
+		Conditions: []BoostCondition{
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
 		},
 	}
@@ -1371,8 +1371,8 @@ func TestBoundBudgetID_None(t *testing.T) {
 // TestBoundBudgetID_IgnoresNonCategoryConditions verifies that BoundBudgetID ignores
 // BudgetID set on non-budget_category.* conditions (only category-scoped fields count).
 func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
-	rule := AutomationRule{
-		Conditions: []AutomationRuleCondition{
+	rule := Boost{
+		Conditions: []BoostCondition{
 			// budget.* condition with BudgetID set — should be ignored
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50, BudgetID: "budget-X"},
 			// budget_category.* condition WITHOUT BudgetID
@@ -1391,15 +1391,15 @@ func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
 // TestValidateForPersistence_RejectsMultipleBudgets verifies that ValidateForPersistence()
 // rejects a rule whose budget_category.* conditions bind more than one distinct budget.
 func TestValidateForPersistence_RejectsMultipleBudgets(t *testing.T) {
-	rule := AutomationRule{
+	rule := Boost{
 		UserID:   "user-1",
 		Name:     "multi-budget rule",
-		RuleType: RuleTypeBudgetAlert,
+		BoostType: BoostTypeBudgetAlert,
 		TriggerConfig: TriggerConfig{
 			Type:  TriggerTypeEvent,
 			Event: "budget_updated",
 		},
-		Conditions: []AutomationRuleCondition{
+		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-X"},
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 60, CategoryID: "cat-2", BudgetID: "budget-Y"},
 		},
@@ -1408,5 +1408,5 @@ func TestValidateForPersistence_RejectsMultipleBudgets(t *testing.T) {
 	}
 	err := rule.ValidateForPersistence()
 	require.Error(t, err, "ValidateForPersistence() must reject a rule binding more than one budget")
-	assert.ErrorIs(t, err, ErrInvalidRule)
+	assert.ErrorIs(t, err, ErrInvalidBoost)
 }

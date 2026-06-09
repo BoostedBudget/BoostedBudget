@@ -82,11 +82,11 @@ func newTestSuggestion(id, userID string) *domain.TransferSuggestion {
 	return &domain.TransferSuggestion{
 		ID:           id,
 		UserID:       userID,
-		RuleID:       &ruleID,
+		BoostID:       &ruleID,
 		Amount:       50.00,
 		CurrencyCode: "USD",
 		Reason:       &reason,
-		Source:       domain.SuggestionSourceRule,
+		Source:       domain.SuggestionSourceBoost,
 		Status:       domain.SuggestionStatusPending,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -188,7 +188,7 @@ func (r *inMemTransferSuggestionRepo) CountPendingByUserID(ctx context.Context, 
 func (r *inMemTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	var out []*domain.TransferSuggestion
 	for _, s := range r.suggestions {
-		if s.RuleID != nil && *s.RuleID == ruleID {
+		if s.BoostID != nil && *s.BoostID == ruleID {
 			out = append(out, s)
 		}
 	}

@@ -14,18 +14,18 @@ import (
 // Errors for ManualTriggerProvider.
 var ErrRuleDisabled = errors.New("rule is disabled")
 
-// ManualTriggerProvider implements RuleTriggerProvider for on-demand rule execution.
+// ManualTriggerProvider implements BoostTriggerProvider for on-demand rule execution.
 // It allows rules to be triggered manually via API with optional user-provided data.
 type ManualTriggerProvider struct {
 	logger   *slog.Logger
-	repo     RuleRepositoryInterface
-	executor RuleExecutorInterface
+	repo     BoostRepositoryInterface
+	executor BoostExecutorInterface
 }
 
 // NewManualTriggerProvider creates a new ManualTriggerProvider.
 func NewManualTriggerProvider(
-	repo RuleRepositoryInterface,
-	executor RuleExecutorInterface,
+	repo BoostRepositoryInterface,
+	executor BoostExecutorInterface,
 	logger *slog.Logger,
 ) *ManualTriggerProvider {
 	if logger == nil {
@@ -62,7 +62,7 @@ func (p *ManualTriggerProvider) Stop(ctx context.Context) error {
 
 // TriggerRule executes a rule on-demand with optional user-provided data.
 // The triggerData is merged with system-generated metadata before execution.
-func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	// Check context first
 	select {
 	case <-ctx.Done():
@@ -71,7 +71,7 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 	}
 
 	// Fetch the rule
-	rule, err := p.repo.GetByID(ctx, ruleID)
+	rule, err := p.repo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,37 +81,37 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, ruleID string, 
 		return nil, ErrRuleDisabled
 	}
 
-	p.logger.Info("triggering rule", "rule_id", ruleID, "user_id", rule.UserID)
+	p.logger.Info("triggering rule", "boost_id", boostID, "user_id", rule.UserID)
 
 	// Build trigger data by merging user data with system metadata
-	mergedTriggerData := p.buildTriggerData(ruleID, rule.UserID, triggerData)
+	mergedTriggerData := p.buildTriggerData(boostID, rule.UserID, triggerData)
 
 	// Execute the rule
-	execution, err := p.executor.ExecuteRule(ctx, rule, mergedTriggerData)
+	execution, err := p.executor.ExecuteBoost(ctx, rule, mergedTriggerData)
 	if err != nil {
-		p.logger.Error("error executing rule", "rule_id", ruleID, "error", err)
+		p.logger.Error("error executing rule", "boost_id", boostID, "error", err)
 		// Update execution count even on failure
-		_ = p.repo.IncrementExecutionCount(ctx, ruleID)
+		_ = p.repo.IncrementExecutionCount(ctx, boostID)
 		return nil, err
 	}
 
 	// Update execution statistics
-	if err := p.repo.IncrementExecutionCount(ctx, ruleID); err != nil {
-		p.logger.Error("error updating execution count", "rule_id", ruleID, "error", err)
+	if err := p.repo.IncrementExecutionCount(ctx, boostID); err != nil {
+		p.logger.Error("error updating execution count", "boost_id", boostID, "error", err)
 	}
 
 	if execution.Status == domain.ExecutionStatusCompleted {
-		if err := p.repo.UpdateLastSuccessful(ctx, ruleID); err != nil {
-			p.logger.Error("error updating last successful", "rule_id", ruleID, "error", err)
+		if err := p.repo.UpdateLastSuccessful(ctx, boostID); err != nil {
+			p.logger.Error("error updating last successful", "boost_id", boostID, "error", err)
 		}
 	}
 
-	p.logger.Info("rule execution completed", "rule_id", ruleID, "status", execution.Status)
+	p.logger.Info("rule execution completed", "boost_id", boostID, "status", execution.Status)
 	return execution, nil
 }
 
 // buildTriggerData merges user-provided data with system-generated metadata.
-func (p *ManualTriggerProvider) buildTriggerData(ruleID, userID string, userData map[string]interface{}) map[string]interface{} {
+func (p *ManualTriggerProvider) buildTriggerData(boostID, userID string, userData map[string]interface{}) map[string]interface{} {
 	// Start with user data if provided, otherwise empty map
 	result := make(map[string]interface{})
 	for k, v := range userData {
@@ -121,7 +121,7 @@ func (p *ManualTriggerProvider) buildTriggerData(ruleID, userID string, userData
 	// Add system metadata (these can overwrite user data for consistency)
 	result["trigger_type"] = "manual"
 	result["triggered_at"] = time.Now().UTC()
-	result["rule_id"] = ruleID
+	result["boost_id"] = boostID
 	result["user_id"] = userID
 
 	return result
