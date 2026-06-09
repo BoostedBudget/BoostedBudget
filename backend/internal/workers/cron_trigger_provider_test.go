@@ -20,57 +20,57 @@ import (
 // Mock Dependencies
 // ============================================================================
 
-// MockRuleRepository implements repository.AutomationRulesRepository for testing.
+// MockRuleRepository implements repository.BoostsRepository for testing.
 type MockRuleRepository struct {
 	mock.Mock
 }
 
-func (m *MockRuleRepository) Create(ctx context.Context, rule *domain.AutomationRule) error {
+func (m *MockRuleRepository) Create(ctx context.Context, rule *domain.Boost) error {
 	args := m.Called(ctx, rule)
 	return args.Error(0)
 }
 
-func (m *MockRuleRepository) GetByID(ctx context.Context, id string) (*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetByID(ctx context.Context, id string) (*domain.Boost, error) {
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
-	args := m.Called(ctx, userID, ruleTypes)
+func (m *MockRuleRepository) GetByUserIDFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostTypes)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetByName(ctx context.Context, userID, name string) (*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetByName(ctx context.Context, userID, name string) (*domain.Boost, error) {
 	args := m.Called(ctx, userID, name)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.AutomationRule), args.Error(1)
+	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) Update(ctx context.Context, rule *domain.AutomationRule) error {
+func (m *MockRuleRepository) Update(ctx context.Context, rule *domain.Boost) error {
 	args := m.Called(ctx, rule)
 	return args.Error(0)
 }
@@ -95,28 +95,28 @@ func (m *MockRuleRepository) UpdateLastSuccessful(ctx context.Context, ruleID st
 	return args.Error(0)
 }
 
-func (m *MockRuleRepository) GetRulesByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID, eventType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetBoostsByType(ctx context.Context, userID string, ruleType domain.BoostType) ([]*domain.Boost, error) {
 	args := m.Called(ctx, userID, ruleType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockRuleRepository) GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error) {
+func (m *MockRuleRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
 // MockRuleExecutor implements a mock for rule execution.
@@ -126,13 +126,13 @@ type MockRuleExecutor struct {
 	mu             sync.Mutex
 }
 
-func (m *MockRuleExecutor) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *MockRuleExecutor) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	atomic.AddInt32(&m.ExecutionCount, 1)
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleExecution), args.Error(1)
+	return args.Get(0).(*domain.BoostExecution), args.Error(1)
 }
 
 func (m *MockRuleExecutor) GetExecutionCount() int32 {
@@ -143,8 +143,8 @@ func (m *MockRuleExecutor) GetExecutionCount() int32 {
 // Test Helpers
 // ============================================================================
 
-func createTestRule(id, userID, cronExpr string) *domain.AutomationRule {
-	return &domain.AutomationRule{
+func createTestRule(id, userID, cronExpr string) *domain.Boost {
+	return &domain.Boost{
 		ID:      id,
 		UserID:  userID,
 		Name:    "Test Rule " + id,
@@ -153,12 +153,12 @@ func createTestRule(id, userID, cronExpr string) *domain.AutomationRule {
 			Type: domain.TriggerTypeSchedule,
 			Cron: cronExpr,
 		},
-		RuleType: domain.RuleTypeBudgetAlert,
+		BoostType: domain.BoostTypeBudgetAlert,
 		Actions:  json.RawMessage("[]"),
 	}
 }
 
-func createTestRuleWithTimezone(id, userID, cron, timezone string) *domain.AutomationRule {
+func createTestRuleWithTimezone(id, userID, cron, timezone string) *domain.Boost {
 	rule := createTestRule(id, userID, cron)
 	rule.TriggerConfig.Timezone = timezone
 	return rule
@@ -196,12 +196,12 @@ func TestCronProvider_Start_LoadsScheduledRules(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	rules := []*domain.AutomationRule{
+	rules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),  // 9am daily
 		createTestRule("rule-2", "user-2", "0 12 * * 1"), // noon on Mondays
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(rules, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -228,11 +228,11 @@ func TestCronProvider_Start_SkipsDisabledRules(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	// GetRulesByScheduleTrigger already filters enabled=true in SQL
+	// GetBoostsByScheduleTrigger already filters enabled=true in SQL
 	// This test verifies the query returns only enabled rules
 	enabledRule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{enabledRule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{enabledRule}, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -256,13 +256,13 @@ func TestCronProvider_Start_SkipsInvalidCronExpressions(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	rules := []*domain.AutomationRule{
+	rules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),     // Valid
 		createTestRule("rule-2", "user-2", "invalid-cron"),  // Invalid
 		createTestRule("rule-3", "user-3", "0 12 * * 1-5"),  // Valid
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(rules, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -284,7 +284,7 @@ func TestCronProvider_Start_HandlesEmptyRulesList(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{}, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -305,7 +305,7 @@ func TestCronProvider_Start_HandlesRepositoryError(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(nil, assert.AnError)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(nil, assert.AnError)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -322,7 +322,7 @@ func TestCronProvider_GracefulShutdown(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{}, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -349,18 +349,18 @@ func TestCronProvider_Refresh_PicksUpNewRules(t *testing.T) {
 	mockExecutor := new(MockRuleExecutor)
 
 	// Initial load: 1 rule
-	initialRules := []*domain.AutomationRule{
+	initialRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 	}
 
 	// After refresh: 2 rules
-	updatedRules := []*domain.AutomationRule{
+	updatedRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 		createTestRule("rule-2", "user-2", "0 12 * * *"),
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -388,18 +388,18 @@ func TestCronProvider_Refresh_RemovesDeletedRules(t *testing.T) {
 	mockExecutor := new(MockRuleExecutor)
 
 	// Initial load: 2 rules
-	initialRules := []*domain.AutomationRule{
+	initialRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 		createTestRule("rule-2", "user-2", "0 12 * * *"),
 	}
 
 	// After refresh: 1 rule (rule-2 deleted)
-	updatedRules := []*domain.AutomationRule{
+	updatedRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -427,17 +427,17 @@ func TestCronProvider_Refresh_UpdatesModifiedCron(t *testing.T) {
 	mockExecutor := new(MockRuleExecutor)
 
 	// Initial: rule runs at 9am
-	initialRules := []*domain.AutomationRule{
+	initialRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 	}
 
 	// Updated: rule now runs at 10am
-	updatedRules := []*domain.AutomationRule{
+	updatedRules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 10 * * *"),
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(initialRules, nil).Once()
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(updatedRules, nil).Once()
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -471,17 +471,17 @@ func TestCronProvider_ExecutesRuleOnSchedule(t *testing.T) {
 	// Create a rule that runs every second (for testing)
 	rule := createTestRule("rule-1", "user-1", "* * * * * *") // Every second (6-field cron)
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{rule}, nil)
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	// Use seconds-based cron for faster test
 	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, time.Minute, nil)
@@ -502,7 +502,7 @@ func TestCronProvider_ExecutesRuleOnSchedule(t *testing.T) {
 	defer stopCancel()
 	_ = provider.Stop(stopCtx)
 
-	mockExecutor.AssertCalled(t, "ExecuteRule", mock.Anything, rule, mock.Anything)
+	mockExecutor.AssertCalled(t, "ExecuteBoost", mock.Anything, rule, mock.Anything)
 }
 
 func TestCronProvider_RespectsTimezone(t *testing.T) {
@@ -512,7 +512,7 @@ func TestCronProvider_RespectsTimezone(t *testing.T) {
 	// Create rule with timezone
 	rule := createTestRuleWithTimezone("rule-1", "user-1", "0 9 * * *", "America/New_York")
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{rule}, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -536,9 +536,9 @@ func TestCronProvider_HandlesRuleNotFoundOnExecution(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "* * * * * *")
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{rule}, nil)
 	// Rule deleted between scheduling and execution
-	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(nil, domain.ErrBoostNotFound)
 
 	provider := NewCronTriggerProviderWithSeconds(mockRepo, mockExecutor, time.Minute, nil)
 
@@ -565,7 +565,7 @@ func TestCronProvider_HandlesDisabledRuleOnExecution(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "* * * * * *")
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{rule}, nil)
 
 	// Rule was disabled after scheduling
 	disabledRule := createTestRule("rule-1", "user-1", "* * * * * *")
@@ -597,11 +597,11 @@ func TestCronProvider_RecoversPanicInJob(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "* * * * * *")
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return([]*domain.AutomationRule{rule}, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return([]*domain.Boost{rule}, nil)
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 
 	// Executor panics
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		panic("simulated panic in executor")
 	})
 
@@ -627,11 +627,11 @@ func TestCronProvider_ConcurrentRefresh(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	rules := []*domain.AutomationRule{
+	rules := []*domain.Boost{
 		createTestRule("rule-1", "user-1", "0 9 * * *"),
 	}
 
-	mockRepo.On("GetRulesByScheduleTrigger", mock.Anything).Return(rules, nil)
+	mockRepo.On("GetBoostsByScheduleTrigger", mock.Anything).Return(rules, nil)
 
 	provider := NewCronTriggerProvider(mockRepo, mockExecutor, time.Minute, nil)
 

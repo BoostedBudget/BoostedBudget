@@ -8,7 +8,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// RuleTriggerProvider defines the interface for rule trigger mechanisms.
+// BoostTriggerProvider defines the interface for boost trigger mechanisms.
 // This abstraction allows support for multiple trigger types (cron, manual, event, etc.)
 // without changing the scheduler manager or execution logic.
 //
@@ -19,7 +19,7 @@ import (
 // Future implementations:
 //   - WebhookTriggerProvider (external webhook triggers)
 //   - ThresholdTriggerProvider (balance/budget threshold triggers)
-type RuleTriggerProvider interface {
+type BoostTriggerProvider interface {
 	// Name returns the unique identifier for this trigger provider.
 	// Examples: "cron", "manual", "event", "webhook"
 	Name() string
@@ -41,7 +41,7 @@ type RuleTriggerProvider interface {
 	//
 	// For manual provider: executes the rule immediately with provided data.
 	// For cron provider: not supported (returns ErrManualTriggerNotSupported).
-	TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error)
+	TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error)
 
 	// SupportsManualTrigger indicates if this provider supports TriggerRule().
 	// Cron: false (rules run on schedule, not on-demand)

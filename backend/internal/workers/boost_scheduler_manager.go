@@ -19,30 +19,30 @@ var (
 	ErrManagerNotStarted       = errors.New("scheduler manager is not started")
 )
 
-// RuleSchedulerManager orchestrates multiple RuleTriggerProvider implementations.
+// BoostSchedulerManager orchestrates multiple BoostTriggerProvider implementations.
 // It manages the lifecycle of all providers and routes manual trigger requests
 // to the appropriate provider.
-type RuleSchedulerManager struct {
+type BoostSchedulerManager struct {
 	logger    *slog.Logger
-	providers map[string]RuleTriggerProvider
+	providers map[string]BoostTriggerProvider
 	mu        sync.RWMutex
 	started   bool
 }
 
-// NewRuleSchedulerManager creates a new RuleSchedulerManager instance.
-func NewRuleSchedulerManager(logger *slog.Logger) *RuleSchedulerManager {
+// NewBoostSchedulerManager creates a new BoostSchedulerManager instance.
+func NewBoostSchedulerManager(logger *slog.Logger) *BoostSchedulerManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &RuleSchedulerManager{
+	return &BoostSchedulerManager{
 		logger:    logger,
-		providers: make(map[string]RuleTriggerProvider),
+		providers: make(map[string]BoostTriggerProvider),
 	}
 }
 
 // RegisterProvider adds a trigger provider to the manager.
 // If a provider with the same name already exists, it will be replaced.
-func (m *RuleSchedulerManager) RegisterProvider(provider RuleTriggerProvider) {
+func (m *BoostSchedulerManager) RegisterProvider(provider BoostTriggerProvider) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -58,7 +58,7 @@ func (m *RuleSchedulerManager) RegisterProvider(provider RuleTriggerProvider) {
 
 // Start starts all registered providers.
 // Returns the first error encountered, if any.
-func (m *RuleSchedulerManager) Start(ctx context.Context) error {
+func (m *BoostSchedulerManager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -82,7 +82,7 @@ func (m *RuleSchedulerManager) Start(ctx context.Context) error {
 
 // Stop stops all registered providers.
 // Attempts to stop all providers even if some fail, returns first error.
-func (m *RuleSchedulerManager) Stop(ctx context.Context) error {
+func (m *BoostSchedulerManager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -110,7 +110,7 @@ func (m *RuleSchedulerManager) Stop(ctx context.Context) error {
 
 // TriggerRule manually triggers a rule execution.
 // Routes to the first provider that supports manual triggering.
-func (m *RuleSchedulerManager) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *BoostSchedulerManager) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -129,14 +129,14 @@ func (m *RuleSchedulerManager) TriggerRule(ctx context.Context, ruleID string, t
 }
 
 // ProviderCount returns the number of registered providers.
-func (m *RuleSchedulerManager) ProviderCount() int {
+func (m *BoostSchedulerManager) ProviderCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.providers)
 }
 
 // HasProvider checks if a provider with the given name is registered.
-func (m *RuleSchedulerManager) HasProvider(name string) bool {
+func (m *BoostSchedulerManager) HasProvider(name string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, ok := m.providers[name]
@@ -144,14 +144,14 @@ func (m *RuleSchedulerManager) HasProvider(name string) bool {
 }
 
 // GetProvider returns a provider by name, or nil if not found.
-func (m *RuleSchedulerManager) GetProvider(name string) RuleTriggerProvider {
+func (m *BoostSchedulerManager) GetProvider(name string) BoostTriggerProvider {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.providers[name]
 }
 
 // ListProviders returns the names of all registered providers (sorted).
-func (m *RuleSchedulerManager) ListProviders() []string {
+func (m *BoostSchedulerManager) ListProviders() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -164,7 +164,7 @@ func (m *RuleSchedulerManager) ListProviders() []string {
 }
 
 // IsStarted returns whether the manager has been started.
-func (m *RuleSchedulerManager) IsStarted() bool {
+func (m *BoostSchedulerManager) IsStarted() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.started

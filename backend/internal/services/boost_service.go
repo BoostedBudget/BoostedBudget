@@ -1,4 +1,4 @@
-// Package services provides business logic for automation rules.
+// Package services provides business logic for boosts.
 // Issue #35: Rules Engine Core - CRUD operations.
 package services
 
@@ -12,53 +12,53 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
-// AutomationRuleService defines the interface for automation rule business logic.
-type AutomationRuleService interface {
+// BoostService defines the interface for boost business logic.
+type BoostService interface {
 	// CreateRule creates a new automation rule (unlimited rules for all tiers).
-	CreateRule(ctx context.Context, userID string, req *domain.CreateAutomationRuleRequest) (*domain.AutomationRule, error)
+	CreateRule(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error)
 
-	// GetUserRules retrieves all automation rules for a user, ordered by priority.
-	GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
+	// GetUserRules retrieves all boosts for a user, ordered by priority.
+	GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error)
 
-	// GetUserRulesFiltered retrieves automation rules optionally filtered by rule types.
-	// When ruleTypes is empty, all rules are returned (same as GetUserRules).
-	GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error)
+	// GetUserRulesFiltered retrieves boosts optionally filtered by boost types.
+	// When boostTypes is empty, all boosts are returned (same as GetUserRules).
+	GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error)
 
-	// GetRuleByID retrieves a specific rule by ID.
-	GetRuleByID(ctx context.Context, userID, ruleID string) (*domain.AutomationRule, error)
+	// GetRuleByID retrieves a specific boost by ID.
+	GetRuleByID(ctx context.Context, userID, boostID string) (*domain.Boost, error)
 
 	// UpdateRule updates a rule's configuration.
-	UpdateRule(ctx context.Context, userID, ruleID string, req *domain.UpdateAutomationRuleRequest) (*domain.AutomationRule, error)
+	UpdateRule(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error)
 
 	// DeleteRule removes a rule.
-	DeleteRule(ctx context.Context, userID, ruleID string) error
+	DeleteRule(ctx context.Context, userID, boostID string) error
 
 	// ToggleRule enables or disables a rule.
-	ToggleRule(ctx context.Context, userID, ruleID string, enabled bool) (*domain.AutomationRule, error)
+	ToggleRule(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error)
 
 	// GetEnabledRules retrieves all enabled rules for a user.
-	GetEnabledRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
+	GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error)
 
 	// GetRulesByType retrieves enabled rules of a specific type.
-	GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error)
+	GetRulesByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error)
 }
 
-// automationRuleService implements AutomationRuleService.
-type automationRuleService struct {
-	ruleRepo        repository.AutomationRulesRepository
+// boostService implements BoostService.
+type boostService struct {
+	ruleRepo        repository.BoostsRepository
 	savingsGoalRepo repository.SavingsGoalRepository // optional; used for ownership validation (GAP AE)
 	accountRepo     repository.AccountRepository     // optional; used for ownership validation (GAP AE)
 	budgetRepo      repository.BudgetRepository      // optional; used for category ownership validation (#1270)
 }
 
-// NewAutomationRuleService creates a new AutomationRuleService instance.
+// NewBoostService creates a new BoostService instance.
 // Returns the concrete type so callers in main.go can call optional setter methods
 // (SetSavingsGoalRepo, SetAccountRepo) without adding them to the interface — consistent
 // with NewRuleExecutionService's pattern.
-func NewAutomationRuleService(
-	ruleRepo repository.AutomationRulesRepository,
-) *automationRuleService {
-	return &automationRuleService{
+func NewBoostService(
+	ruleRepo repository.BoostsRepository,
+) *boostService {
+	return &boostService{
 		ruleRepo: ruleRepo,
 	}
 }
@@ -66,21 +66,21 @@ func NewAutomationRuleService(
 // SetSavingsGoalRepo injects the savings goal repository for ownership validation.
 // Must be called in production (cmd/server/main.go) to enable savings_goal_id IDOR protection.
 // Issue #972: GAP AE.
-func (s *automationRuleService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
+func (s *boostService) SetSavingsGoalRepo(repo repository.SavingsGoalRepository) {
 	s.savingsGoalRepo = repo
 }
 
 // SetAccountRepo injects the account repository for ownership validation.
 // Must be called in production (cmd/server/main.go) to enable from/to_account_id IDOR protection.
 // Issue #972: GAP AE.
-func (s *automationRuleService) SetAccountRepo(repo repository.AccountRepository) {
+func (s *boostService) SetAccountRepo(repo repository.AccountRepository) {
 	s.accountRepo = repo
 }
 
 // SetBudgetRepo injects the budget repository for category ownership validation.
 // Must be called in production to enable budget_category.* condition CategoryID IDOR protection.
 // Issue #1270.
-func (s *automationRuleService) SetBudgetRepo(repo repository.BudgetRepository) {
+func (s *boostService) SetBudgetRepo(repo repository.BudgetRepository) {
 	s.budgetRepo = repo
 }
 
@@ -91,9 +91,9 @@ func (s *automationRuleService) SetBudgetRepo(repo repository.BudgetRepository) 
 // Issue #972: GAP AE — prevents IDOR via crafted automation rules, including the chain-resolver
 // attack vector where an attacker supplies their own from_account_id (passes the ID check) plus a
 // victim's from_user_account_id (used by the chain resolver to overwrite the destination).
-func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Context, rule *domain.AutomationRule) error {
-	switch rule.RuleType {
-	case domain.RuleTypeSavingsGoal:
+func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule *domain.Boost) error {
+	switch rule.BoostType {
+	case domain.BoostTypeSavingsGoal:
 		action, err := rule.ParseSavingsGoalAction()
 		if err != nil {
 			return err
@@ -109,7 +109,7 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 			}
 		}
 
-	case domain.RuleTypeTransferSuggestion:
+	case domain.BoostTypeTransferSuggestion:
 		action, err := rule.ParseTransferAction()
 		if err != nil {
 			return err
@@ -157,7 +157,7 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID)
 			if err != nil {
 				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
-					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrRuleConditionForbidden)
+					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrBoostConditionForbidden)
 				}
 				return err
 			}
@@ -166,7 +166,7 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 			// A mismatch means the caller named a real category but paired it with a different
 			// budget → invalid request (400), not a 403.
 			if condition.BudgetID != "" && cat.BudgetID != condition.BudgetID {
-				return fmt.Errorf("%w: condition category_id is not in the selected budget_id", domain.ErrInvalidRule)
+				return fmt.Errorf("%w: condition category_id is not in the selected budget_id", domain.ErrInvalidBoost)
 			}
 		}
 	}
@@ -174,15 +174,15 @@ func (s *automationRuleService) validateRuleReferenceOwnership(ctx context.Conte
 }
 
 // CreateRule creates a new automation rule (unlimited rules for all tiers).
-func (s *automationRuleService) CreateRule(ctx context.Context, userID string, req *domain.CreateAutomationRuleRequest) (*domain.AutomationRule, error) {
+func (s *boostService) CreateRule(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error) {
 	// Create the rule
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		UserID:         userID,
 		Name:           req.Name,
 		Description:    req.Description,
 		Enabled:        true, // Default enabled
 		Priority:       req.Priority,
-		RuleType:       req.RuleType,
+		BoostType:      req.BoostType,
 		TriggerConfig:  req.TriggerConfig,
 		Conditions:     req.Conditions,
 		ConditionLogic: req.ConditionLogic,
@@ -215,42 +215,42 @@ func (s *automationRuleService) CreateRule(ctx context.Context, userID string, r
 }
 
 // GetUserRules retrieves all automation rules for a user, ordered by priority.
-func (s *automationRuleService) GetUserRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (s *boostService) GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	return s.ruleRepo.GetByUserID(ctx, userID)
 }
 
-// GetUserRulesFiltered retrieves automation rules optionally filtered by rule types.
-// When ruleTypes is empty, all rules are returned (delegates to GetUserRules).
-func (s *automationRuleService) GetUserRulesFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
-	return s.ruleRepo.GetByUserIDFiltered(ctx, userID, ruleTypes)
+// GetUserRulesFiltered retrieves boosts optionally filtered by boost types.
+// When boostTypes is empty, all boosts are returned (delegates to GetUserRules).
+func (s *boostService) GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+	return s.ruleRepo.GetByUserIDFiltered(ctx, userID, boostTypes)
 }
 
-// GetRuleByID retrieves a specific rule by ID.
-func (s *automationRuleService) GetRuleByID(ctx context.Context, userID, ruleID string) (*domain.AutomationRule, error) {
-	rule, err := s.ruleRepo.GetByID(ctx, ruleID)
+// GetRuleByID retrieves a specific boost by ID.
+func (s *boostService) GetRuleByID(ctx context.Context, userID, boostID string) (*domain.Boost, error) {
+	rule, err := s.ruleRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
 	if rule.UserID != userID {
-		return nil, domain.ErrAutomationRuleNotFound
+		return nil, domain.ErrBoostNotFound
 	}
 
 	return rule, nil
 }
 
 // UpdateRule updates a rule's configuration.
-func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID string, req *domain.UpdateAutomationRuleRequest) (*domain.AutomationRule, error) {
+func (s *boostService) UpdateRule(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
 	// Get existing rule
-	rule, err := s.ruleRepo.GetByID(ctx, ruleID)
+	rule, err := s.ruleRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
 	if rule.UserID != userID {
-		return nil, domain.ErrAutomationRuleNotFound
+		return nil, domain.ErrBoostNotFound
 	}
 
 	// Apply updates
@@ -300,31 +300,31 @@ func (s *automationRuleService) UpdateRule(ctx context.Context, userID, ruleID s
 }
 
 // DeleteRule removes a rule.
-func (s *automationRuleService) DeleteRule(ctx context.Context, userID, ruleID string) error {
+func (s *boostService) DeleteRule(ctx context.Context, userID, boostID string) error {
 	// Verify ownership first
-	rule, err := s.ruleRepo.GetByID(ctx, ruleID)
+	rule, err := s.ruleRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return err
 	}
 
 	if rule.UserID != userID {
-		return domain.ErrAutomationRuleNotFound
+		return domain.ErrBoostNotFound
 	}
 
-	return s.ruleRepo.Delete(ctx, ruleID)
+	return s.ruleRepo.Delete(ctx, boostID)
 }
 
 // ToggleRule enables or disables a rule.
-func (s *automationRuleService) ToggleRule(ctx context.Context, userID, ruleID string, enabled bool) (*domain.AutomationRule, error) {
+func (s *boostService) ToggleRule(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error) {
 	// Get existing rule
-	rule, err := s.ruleRepo.GetByID(ctx, ruleID)
+	rule, err := s.ruleRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
 	if rule.UserID != userID {
-		return nil, domain.ErrAutomationRuleNotFound
+		return nil, domain.ErrBoostNotFound
 	}
 
 	// Update enabled status
@@ -339,11 +339,11 @@ func (s *automationRuleService) ToggleRule(ctx context.Context, userID, ruleID s
 }
 
 // GetEnabledRules retrieves all enabled rules for a user.
-func (s *automationRuleService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (s *boostService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	return s.ruleRepo.GetEnabledByUserID(ctx, userID)
 }
 
 // GetRulesByType retrieves enabled rules of a specific type.
-func (s *automationRuleService) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
-	return s.ruleRepo.GetRulesByType(ctx, userID, ruleType)
+func (s *boostService) GetRulesByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
+	return s.ruleRepo.GetBoostsByType(ctx, userID, boostType)
 }

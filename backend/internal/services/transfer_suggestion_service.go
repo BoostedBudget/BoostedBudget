@@ -135,7 +135,7 @@ func (s *transferSuggestionService) AcceptSuggestion(
 			"amount":        suggestion.Amount,
 			"currency_code": suggestion.CurrencyCode,
 			"source":        string(suggestion.Source),
-			"rule_id":       suggestion.RuleID,
+			"boost_id":      suggestion.BoostID,
 		})
 	}
 
@@ -176,7 +176,7 @@ func (s *transferSuggestionService) RejectSuggestion(
 			"amount":        suggestion.Amount,
 			"currency_code": suggestion.CurrencyCode,
 			"source":        string(suggestion.Source),
-			"rule_id":       suggestion.RuleID,
+			"boost_id":      suggestion.BoostID,
 		})
 	}
 

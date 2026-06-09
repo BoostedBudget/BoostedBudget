@@ -55,11 +55,11 @@ func transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserA
 	return b
 }
 
-// newSavingsGoalRuleRequest builds a CreateAutomationRuleRequest for a savings_goal rule.
-func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.CreateAutomationRuleRequest {
-	return &domain.CreateAutomationRuleRequest{
+// newSavingsGoalRuleRequest builds a CreateBoostRequest for a savings_goal rule.
+func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.CreateBoostRequest {
+	return &domain.CreateBoostRequest{
 		Name:     "my savings rule",
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -68,11 +68,11 @@ func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.Crea
 	}
 }
 
-// newTransferRuleRequest builds a CreateAutomationRuleRequest for a transfer_suggestion rule.
-func newTransferRuleRequest(fromAccountID, toAccountID string) *domain.CreateAutomationRuleRequest {
-	return &domain.CreateAutomationRuleRequest{
+// newTransferRuleRequest builds a CreateBoostRequest for a transfer_suggestion rule.
+func newTransferRuleRequest(fromAccountID, toAccountID string) *domain.CreateBoostRequest {
+	return &domain.CreateBoostRequest{
 		Name:     "my transfer rule",
-		RuleType: domain.RuleTypeTransferSuggestion,
+		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -105,7 +105,7 @@ func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -133,7 +133,7 @@ func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -160,7 +160,7 @@ func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -183,7 +183,7 @@ func TestCreateRule_Transfer_FromAccountOwnership(t *testing.T) {
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 	// to_account_id check is not reached if from_account_id fails
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -206,7 +206,7 @@ func TestCreateRule_Transfer_ToAccountOwnership(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -229,7 +229,7 @@ func TestCreateRule_Transfer_HappyPath(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
 		Return(&domain.Account{ID: toAccountID}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	rule, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -245,12 +245,12 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 	goalID := "goal-other-user"
 	fromAccountID := "from-a"
 
-	existingRule := &domain.AutomationRule{
+	existingRule := &domain.Boost{
 		ID:       ruleID,
 		UserID:   userID,
 		Name:     "existing",
 		Enabled:  true,
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -259,7 +259,7 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			// goalID belongs to a different user, not userID
@@ -269,12 +269,12 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	newActions := savingsGoalRuleActions(goalID, fromAccountID)
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Actions: &newActions,
 	})
 	require.Error(t, err, "UpdateRule must reject updating to reference another user's goal")
@@ -289,7 +289,7 @@ func TestCreateRule_NoRepos_SkipsOwnershipCheck(t *testing.T) {
 	userID := "user-a"
 	ruleRepo := &mockAutomationRulesRepository{}
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	// No SetSavingsGoalRepo or SetAccountRepo calls — repos are nil
 
 	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest("any-goal", "any-account"))
@@ -323,13 +323,13 @@ func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, fromUserAccountID, attackerUserID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
-	req := &domain.CreateAutomationRuleRequest{
+	req := &domain.CreateBoostRequest{
 		Name:     "chain resolver idor test",
-		RuleType: domain.RuleTypeTransferSuggestion,
+		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -359,13 +359,13 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, toUserAccountID, attackerUserID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
-	req := &domain.CreateAutomationRuleRequest{
+	req := &domain.CreateBoostRequest{
 		Name:     "chain resolver idor test to",
-		RuleType: domain.RuleTypeTransferSuggestion,
+		BoostType: domain.BoostTypeTransferSuggestion,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -381,25 +381,25 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 // Tests — CreateRule category ownership validation (Issue #1270)
 // ============================================================================
 
-// budgetCategoryConditionRule builds a CreateAutomationRuleRequest with a single
+// budgetCategoryConditionRule builds a CreateBoostRequest with a single
 // budget_category.* condition for the given categoryID.
 // Issue #1271 Item 2: BudgetID is now required by ValidateForPersistence() in addition
 // to CategoryID; use a fixed sentinel budget ID so the rule passes persist validation.
-func budgetCategoryConditionRule(categoryID string) *domain.CreateAutomationRuleRequest {
+func budgetCategoryConditionRule(categoryID string) *domain.CreateBoostRequest {
 	b, _ := json.Marshal(map[string]interface{}{
 		"savings_goal_id": "goal-1",
 		"from_account_id": "acct-1",
 		"amount_type":     "fixed",
 		"amount":          10.0,
 	})
-	return &domain.CreateAutomationRuleRequest{
+	return &domain.CreateBoostRequest{
 		Name:     "category condition rule",
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Conditions: []domain.AutomationRuleCondition{
+		Conditions: []domain.BoostCondition{
 			{
 				Field:      "budget_category.percent_used",
 				CategoryID: categoryID,
@@ -421,7 +421,7 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	categoryID := "cat-alice-1"
 
 	ruleRepo := &mockAutomationRulesRepository{}
-	ruleRepo.rules = []*domain.AutomationRule{} // ensure Create stores the rule
+	ruleRepo.rules = []*domain.Boost{} // ensure Create stores the rule
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
 		Return(&domain.BudgetCategory{ID: categoryID, BudgetID: "budget-1"}, nil)
@@ -432,7 +432,7 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
@@ -456,7 +456,7 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
 		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
@@ -479,18 +479,18 @@ func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
 		Return((*domain.BudgetCategory)(nil), dbErr)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(categoryID)
 	_, err := svc.CreateRule(ctx, userID, req)
 	require.Error(t, err, "CreateRule must fail on DB error")
-	assert.False(t, errors.Is(err, domain.ErrRuleConditionForbidden),
-		"a DB infrastructure error must not be wrapped as ErrRuleConditionForbidden (would cause 403 instead of 500)")
+	assert.False(t, errors.Is(err, domain.ErrBoostConditionForbidden),
+		"a DB infrastructure error must not be wrapped as ErrBoostConditionForbidden (would cause 403 instead of 500)")
 }
 
 // TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped strengthens the
-// foreign-category rejection test to assert the error is wrapped as ErrRuleConditionForbidden,
+// foreign-category rejection test to assert the error is wrapped as ErrBoostConditionForbidden,
 // not just contain the text "category_id". Issue #1270 (Codex LOW finding).
 func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *testing.T) {
 	ctx := context.Background()
@@ -502,14 +502,14 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
 		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
 	_, err := svc.CreateRule(ctx, attackerUserID, req)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, domain.ErrRuleConditionForbidden),
-		"foreign category rejection must be wrapped as ErrRuleConditionForbidden for correct 403 mapping")
+	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
+		"foreign category rejection must be wrapped as ErrBoostConditionForbidden for correct 403 mapping")
 }
 
 // TestUpdateRule_CategoryCondition_RejectsForeignCategory verifies that UpdateRule rejects
@@ -522,12 +522,12 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	ruleID := "rule-update-cat"
 	victimCategoryID := "cat-victim-update"
 
-	existingRule := &domain.AutomationRule{
+	existingRule := &domain.Boost{
 		ID:       ruleID,
 		UserID:   userID,
 		Name:     "existing rule",
 		Enabled:  true,
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -536,7 +536,7 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
 	budgetRepo := &MockBudgetRepository{}
 	// GetCategoryByIDAndUser returns not-found → the category belongs to another user.
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, userID).
@@ -548,12 +548,12 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
 		Return(&domain.Account{ID: "acct-ok"}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	newConditions := []domain.AutomationRuleCondition{
+	newConditions := []domain.BoostCondition{
 		{
 			Field:      "budget_category.percent_used",
 			CategoryID: victimCategoryID,
@@ -562,24 +562,24 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
 	require.Error(t, err, "UpdateRule must reject an update introducing a foreign category condition")
-	assert.True(t, errors.Is(err, domain.ErrRuleConditionForbidden),
-		"foreign category rejection must be wrapped as ErrRuleConditionForbidden")
+	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
+		"foreign category rejection must be wrapped as ErrBoostConditionForbidden")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
 }
 
 // TestCreateRule_InvalidConditions_WrapsErrInvalidRule verifies that CreateRule wraps
-// field-allowlist violations (from rule.Validate()) as domain.ErrInvalidRule so the HTTP
+// field-allowlist violations (from rule.Validate()) as domain.ErrInvalidBoost so the HTTP
 // layer returns 400, not 500. Issue #1270 (Codex LOW finding — mapper tested, not service).
 func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-cond"
 
 	ruleRepo := &mockAutomationRulesRepository{}
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 
 	// budget_category.invalid_field is not in validConditionFieldsByEvent for budget_period_end.
 	b, _ := json.Marshal(map[string]interface{}{
@@ -588,14 +588,14 @@ func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		"amount_type":     "fixed",
 		"amount":          10.0,
 	})
-	req := &domain.CreateAutomationRuleRequest{
+	req := &domain.CreateBoostRequest{
 		Name:     "bad field rule",
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Conditions: []domain.AutomationRuleCondition{
+		Conditions: []domain.BoostCondition{
 			{
 				Field:    "budget_category.invalid_field",
 				Operator: domain.ConditionOperatorGt,
@@ -607,24 +607,24 @@ func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 
 	_, err := svc.CreateRule(ctx, userID, req)
 	require.Error(t, err, "CreateRule must reject conditions with an unknown field")
-	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-		"field-allowlist violation must be wrapped as domain.ErrInvalidRule for 400 mapping")
+	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+		"field-allowlist violation must be wrapped as domain.ErrInvalidBoost for 400 mapping")
 }
 
 // TestUpdateRule_InvalidConditions_WrapsErrInvalidRule verifies that UpdateRule wraps
-// field-allowlist violations as domain.ErrInvalidRule (same contract as CreateRule).
+// field-allowlist violations as domain.ErrInvalidBoost (same contract as CreateRule).
 // Issue #1270 (Codex LOW finding — only CreateRule sentinel wrapping was covered).
 func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-update"
 	ruleID := "rule-bad-cond"
 
-	existingRule := &domain.AutomationRule{
+	existingRule := &domain.Boost{
 		ID:       ruleID,
 		UserID:   userID,
 		Name:     "existing valid rule",
 		Enabled:  true,
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -633,23 +633,23 @@ func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
-	svc := NewAutomationRuleService(ruleRepo)
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
+	svc := NewBoostService(ruleRepo)
 
 	// Try to update with an invalid condition field.
-	invalidConditions := []domain.AutomationRuleCondition{
+	invalidConditions := []domain.BoostCondition{
 		{
 			Field:    "budget_category.invalid_field",
 			Operator: domain.ConditionOperatorGt,
 			Value:    "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &invalidConditions,
 	})
 	require.Error(t, err, "UpdateRule must reject conditions with an unknown field")
-	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-		"field-allowlist violation in UpdateRule must be wrapped as domain.ErrInvalidRule for 400 mapping")
+	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+		"field-allowlist violation in UpdateRule must be wrapped as domain.ErrInvalidBoost for 400 mapping")
 }
 
 // TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo
@@ -668,7 +668,7 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 	// intentionally NOT calling svc.SetBudgetRepo
@@ -704,7 +704,7 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
@@ -716,14 +716,14 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		"amount_type":     "fixed",
 		"amount":          10.0,
 	})
-	req := &domain.CreateAutomationRuleRequest{
+	req := &domain.CreateBoostRequest{
 		Name:     "category-not-in-budget rule",
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Conditions: []domain.AutomationRuleCondition{
+		Conditions: []domain.BoostCondition{
 			{
 				Field:      "budget_category.percent_used",
 				CategoryID: categoryID,
@@ -736,8 +736,8 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	}
 	_, err := svc.CreateRule(ctx, userID, req)
 	require.Error(t, err, "CreateRule must reject a condition whose category is not in the selected budget")
-	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-		"category-not-in-budget must be wrapped as domain.ErrInvalidRule (400), got: %v", err)
+	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+		"category-not-in-budget must be wrapped as domain.ErrInvalidBoost (400), got: %v", err)
 }
 
 // TestUpdateRule_CategoryNotInSelectedBudget_Returns400 verifies that UpdateRule applies
@@ -748,12 +748,12 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	ruleID := "rule-update-budget-check"
 	categoryID := "cat-1"
 
-	existingRule := &domain.AutomationRule{
+	existingRule := &domain.Boost{
 		ID:       ruleID,
 		UserID:   userID,
 		Name:     "existing rule",
 		Enabled:  true,
-		RuleType: domain.RuleTypeSavingsGoal,
+		BoostType: domain.BoostTypeSavingsGoal,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
@@ -762,7 +762,7 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.AutomationRule{existingRule}}
+	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
 	budgetRepo := &MockBudgetRepository{}
 	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
@@ -774,12 +774,12 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
 		Return(&domain.Account{ID: "acct-ok"}, nil)
 
-	svc := NewAutomationRuleService(ruleRepo)
+	svc := NewBoostService(ruleRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	newConditions := []domain.AutomationRuleCondition{
+	newConditions := []domain.BoostCondition{
 		{
 			Field:      "budget_category.percent_used",
 			CategoryID: categoryID,
@@ -788,10 +788,10 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateAutomationRuleRequest{
+	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
 	require.Error(t, err, "UpdateRule must reject a condition whose category is not in the selected budget")
-	assert.True(t, errors.Is(err, domain.ErrInvalidRule),
-		"category-not-in-budget must be wrapped as domain.ErrInvalidRule (400), got: %v", err)
+	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
+		"category-not-in-budget must be wrapped as domain.ErrInvalidBoost (400), got: %v", err)
 }

@@ -53,9 +53,9 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -63,7 +63,7 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -83,9 +83,9 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -93,9 +93,9 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	// Capture the trigger data passed to ExecuteRule
+	// Capture the trigger data passed to ExecuteBoost
 	var capturedTriggerData map[string]interface{}
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
@@ -124,7 +124,7 @@ func TestManualProvider_TriggerRule_RuleNotFound(t *testing.T) {
 	mockRepo := new(MockRuleRepository)
 	mockExecutor := new(MockRuleExecutor)
 
-	mockRepo.On("GetByID", mock.Anything, "rule-unknown").Return(nil, domain.ErrAutomationRuleNotFound)
+	mockRepo.On("GetByID", mock.Anything, "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -132,7 +132,7 @@ func TestManualProvider_TriggerRule_RuleNotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, domain.ErrAutomationRuleNotFound, err)
+	assert.Equal(t, domain.ErrBoostNotFound, err)
 }
 
 func TestManualProvider_TriggerRule_RuleDisabled(t *testing.T) {
@@ -159,16 +159,16 @@ func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusFailed,
 	}
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, assert.AnError)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, assert.AnError)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -199,9 +199,9 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -209,7 +209,7 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -227,16 +227,16 @@ func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusFailed,
 	}
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -254,9 +254,9 @@ func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -264,7 +264,7 @@ func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Return(execution, nil)
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Return(execution, nil)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
@@ -280,9 +280,9 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -291,7 +291,7 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
 	var capturedTriggerData map[string]interface{}
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
@@ -311,7 +311,7 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 	assert.Equal(t, "acc-123", capturedTriggerData["account_id"])
 	assert.Equal(t, "cat-456", capturedTriggerData["category_id"])
 	assert.Equal(t, "Manual test", capturedTriggerData["notes"])
-	assert.Equal(t, "rule-1", capturedTriggerData["rule_id"])
+	assert.Equal(t, "rule-1", capturedTriggerData["boost_id"])
 	assert.Equal(t, "user-1", capturedTriggerData["user_id"])
 
 	// Verify triggered_at is a valid time
@@ -326,9 +326,9 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 
 	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
 
-	execution := &domain.RuleExecution{
+	execution := &domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}
 
@@ -337,7 +337,7 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
 	var capturedTriggerData map[string]interface{}
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
 	}).Return(execution, nil)
 
@@ -349,7 +349,7 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 
 	// Verify base fields are still set
 	assert.Equal(t, "manual", capturedTriggerData["trigger_type"])
-	assert.Equal(t, "rule-1", capturedTriggerData["rule_id"])
+	assert.Equal(t, "rule-1", capturedTriggerData["boost_id"])
 }
 
 func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing.T) {
@@ -363,11 +363,11 @@ func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing
 	mockRepo.On("UpdateLastSuccessful", mock.Anything, "rule-1").Return(nil)
 
 	var capturedTriggerData map[string]interface{}
-	mockExecutor.On("ExecuteRule", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
+	mockExecutor.On("ExecuteBoost", mock.Anything, rule, mock.Anything).Run(func(args mock.Arguments) {
 		capturedTriggerData = args.Get(2).(map[string]interface{})
-	}).Return(&domain.RuleExecution{
+	}).Return(&domain.BoostExecution{
 		ID:     "exec-1",
-		RuleID: "rule-1",
+		BoostID: "rule-1",
 		Status: domain.ExecutionStatusCompleted,
 	}, nil)
 

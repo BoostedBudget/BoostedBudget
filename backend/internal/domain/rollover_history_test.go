@@ -86,8 +86,8 @@ func TestRolloverHistory_Validate(t *testing.T) {
 		rh := validRollover()
 		ruleID := "rule-1"
 		execID := "exec-1"
-		rh.RuleID = &ruleID
-		rh.RuleExecutionID = &execID
+		rh.BoostID = &ruleID
+		rh.BoostExecutionID = &execID
 		err := rh.Validate()
 		require.NoError(t, err)
 	})

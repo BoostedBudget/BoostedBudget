@@ -25,7 +25,7 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	suggRepo := &mockTransferSuggestionRepository{}
 	ruleRepo := &mockAutomationRulesRepository{}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -39,14 +39,14 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		Amount:            100,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-chain-001",
 		UserID:         "user-123",
 		Name:           "Transfer to Savings",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -57,7 +57,7 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	}
 
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -79,7 +79,7 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 	suggRepo := &mockTransferSuggestionRepository{}
 	ruleRepo := &mockAutomationRulesRepository{}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -91,14 +91,14 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 		Amount:        75,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-legacy-001",
 		UserID:         "user-123",
 		Name:           "Legacy Transfer Rule",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -109,7 +109,7 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 	}
 
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -142,7 +142,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()
@@ -157,14 +157,14 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		Amount:            500,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-chain-resolver-001",
 		UserID:         "user-123",
 		Name:           "Chain Resolver Transfer",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -174,7 +174,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -199,7 +199,7 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 	suggRepo := &mockTransferSuggestionRepository{}
 	ruleRepo := &mockAutomationRulesRepository{}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	// No SetChainResolver call — chainResolver stays nil.
 
 	ctx := context.Background()
@@ -214,14 +214,14 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		Amount:            100,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-chain-nil-001",
 		UserID:         "user-123",
 		Name:           "Nil Resolver Fallback",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -231,7 +231,7 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -257,7 +257,7 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()
@@ -271,14 +271,14 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		Amount:        75,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-legacy-empty-uaid",
 		UserID:         "user-123",
 		Name:           "Legacy No UAID",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -288,7 +288,7 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -306,7 +306,7 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 	suggRepo := &mockTransferSuggestionRepository{}
 	ruleRepo := &mockAutomationRulesRepository{}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -319,14 +319,14 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		Amount:            150,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-simulate-uaid",
 		UserID:         "user-sim",
 		Name:           "Simulate With UAID",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -336,7 +336,7 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	result, err := svc.TestRule(ctx, rule, map[string]interface{}{})
+	result, err := svc.TestBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -389,7 +389,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		},
 	}
 
-	svc := NewRuleExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()
@@ -404,14 +404,14 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		Amount:            1000,
 	})
 
-	rule := &domain.AutomationRule{
+	rule := &domain.Boost{
 		ID:             "rule-depth2-chain-001",
 		UserID:         "user-depth2",
 		Name:           "Depth-2 Chain Transfer",
 		Enabled:        true,
-		RuleType:       domain.RuleTypeTransferSuggestion,
+		BoostType:       domain.BoostTypeTransferSuggestion,
 		ConditionLogic: "AND",
-		Conditions:     []domain.AutomationRuleCondition{},
+		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 		TriggerConfig: domain.TriggerConfig{
 			Type:  domain.TriggerTypeEvent,
@@ -421,7 +421,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteRule(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)

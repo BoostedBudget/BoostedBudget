@@ -1,4 +1,4 @@
-// Package repository provides data access for automation rules engine.
+// Package repository provides data access for the boosts engine.
 // Issue #35: Rules Engine Core - separate from categorization rules (Issue #346).
 package repository
 
@@ -14,29 +14,29 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// AutomationRulesRepository defines the interface for automation rule data access.
-type AutomationRulesRepository interface {
+// BoostsRepository defines the interface for boost data access.
+type BoostsRepository interface {
 	// Create creates a new automation rule in the database.
-	Create(ctx context.Context, rule *domain.AutomationRule) error
+	Create(ctx context.Context, rule *domain.Boost) error
 
 	// GetByID retrieves a rule by its ID.
-	GetByID(ctx context.Context, id string) (*domain.AutomationRule, error)
+	GetByID(ctx context.Context, id string) (*domain.Boost, error)
 
-	// GetByUserID retrieves all rules for a specific user, ordered by priority (desc).
-	GetByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
+	// GetByUserID retrieves all boosts for a specific user, ordered by priority (desc).
+	GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error)
 
-	// GetByUserIDFiltered retrieves rules for a user optionally filtered by rule types.
-	// When ruleTypes is empty, returns all rules (same as GetByUserID).
-	GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error)
+	// GetByUserIDFiltered retrieves boosts for a user optionally filtered by boost types.
+	// When boostTypes is empty, returns all boosts (same as GetByUserID).
+	GetByUserIDFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error)
 
-	// GetEnabledByUserID retrieves all enabled rules for a user, ordered by priority (desc).
-	GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error)
+	// GetEnabledByUserID retrieves all enabled boosts for a user, ordered by priority (desc).
+	GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error)
 
 	// GetByName retrieves a rule by user ID and name.
-	GetByName(ctx context.Context, userID, name string) (*domain.AutomationRule, error)
+	GetByName(ctx context.Context, userID, name string) (*domain.Boost, error)
 
 	// Update updates an existing rule.
-	Update(ctx context.Context, rule *domain.AutomationRule) error
+	Update(ctx context.Context, rule *domain.Boost) error
 
 	// Delete removes a rule from the database.
 	Delete(ctx context.Context, id string) error
@@ -45,35 +45,35 @@ type AutomationRulesRepository interface {
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
 	// IncrementExecutionCount increments the execution count and updates last_executed_at.
-	IncrementExecutionCount(ctx context.Context, ruleID string) error
+	IncrementExecutionCount(ctx context.Context, boostID string) error
 
 	// UpdateLastSuccessful updates the last_successful_at timestamp.
-	UpdateLastSuccessful(ctx context.Context, ruleID string) error
+	UpdateLastSuccessful(ctx context.Context, boostID string) error
 
-	// GetRulesByEventTrigger retrieves enabled rules that trigger on a specific event type.
-	GetRulesByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.AutomationRule, error)
+	// GetBoostsByEventTrigger retrieves enabled rules that trigger on a specific event type.
+	GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error)
 
-	// GetRulesByType retrieves enabled rules of a specific type.
-	GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error)
+	// GetBoostsByType retrieves enabled rules of a specific type.
+	GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error)
 
-	// GetRulesByScheduleTrigger retrieves all enabled rules with schedule triggers.
+	// GetBoostsByScheduleTrigger retrieves all enabled rules with schedule triggers.
 	// Used by CronTriggerProvider to load all scheduled rules on startup and refresh.
 	// Issue #37: Rule Scheduler
-	GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error)
+	GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error)
 }
 
-// automationRulesRepository implements AutomationRulesRepository using PostgreSQL.
-type automationRulesRepository struct {
+// boostsRepository implements BoostsRepository using PostgreSQL.
+type boostsRepository struct {
 	db DB
 }
 
-// NewAutomationRulesRepository creates a new AutomationRulesRepository instance.
-func NewAutomationRulesRepository(db DB) AutomationRulesRepository {
-	return &automationRulesRepository{db: db}
+// NewBoostsRepository creates a new BoostsRepository instance.
+func NewBoostsRepository(db DB) BoostsRepository {
+	return &boostsRepository{db: db}
 }
 
 // Create creates a new automation rule in the database.
-func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.AutomationRule) error {
+func (r *boostsRepository) Create(ctx context.Context, rule *domain.Boost) error {
 	// Generate UUID if not already set
 	if rule.ID == "" {
 		rule.ID = uuid.New().String()
@@ -101,9 +101,9 @@ func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.Aut
 	}
 
 	query := `
-		INSERT INTO rules (
+		INSERT INTO boosts (
 			id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
@@ -116,7 +116,7 @@ func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.Aut
 		rule.Description,
 		rule.Enabled,
 		rule.Priority,
-		rule.RuleType,
+		rule.BoostType,
 		triggerJSON,
 		conditionsJSON,
 		rule.ConditionLogic,
@@ -130,9 +130,9 @@ func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.Aut
 
 	if err != nil {
 		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "unique_automation_rule_name_per_user") ||
+		if strings.Contains(err.Error(), "unique_boost_name_per_user") ||
 			strings.Contains(err.Error(), "duplicate key") {
-			return domain.ErrAutomationRuleAlreadyExists
+			return domain.ErrBoostAlreadyExists
 		}
 		return err
 	}
@@ -141,13 +141,13 @@ func (r *automationRulesRepository) Create(ctx context.Context, rule *domain.Aut
 }
 
 // GetByID retrieves a rule by its ID.
-func (r *automationRulesRepository) GetByID(ctx context.Context, id string) (*domain.AutomationRule, error) {
+func (r *boostsRepository) GetByID(ctx context.Context, id string) (*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE id = $1
 	`
 
@@ -155,13 +155,13 @@ func (r *automationRulesRepository) GetByID(ctx context.Context, id string) (*do
 }
 
 // GetByUserID retrieves all rules for a specific user, ordered by priority (desc).
-func (r *automationRulesRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+func (r *boostsRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE user_id = $1
 		ORDER BY priority DESC, created_at ASC
 	`
@@ -169,40 +169,41 @@ func (r *automationRulesRepository) GetByUserID(ctx context.Context, userID stri
 	return r.queryRules(ctx, query, userID)
 }
 
-// GetByUserIDFiltered retrieves rules for a user with an optional rule-type filter.
-// When ruleTypes is empty, all rules are returned (same as GetByUserID).
-func (r *automationRulesRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
-	if len(ruleTypes) == 0 {
+// GetByUserIDFiltered retrieves boosts for a user with an optional boost-type filter.
+// When boostTypes is empty, all boosts are returned (same as GetByUserID).
+func (r *boostsRepository) GetByUserIDFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+	if len(boostTypes) == 0 {
 		return r.GetByUserID(ctx, userID)
 	}
 
 	// Convert to string slice for pgx text array binding.
-	typeStrs := make([]string, len(ruleTypes))
-	for i, rt := range ruleTypes {
-		typeStrs[i] = string(rt)
+	typeStrs := make([]string, len(boostTypes))
+	for i, bt := range boostTypes {
+		typeStrs[i] = string(bt)
 	}
+
 
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
-		WHERE user_id = $1 AND rule_type = ANY($2::text[])
+		FROM boosts
+		WHERE user_id = $1 AND boost_type = ANY($2::text[])
 		ORDER BY priority DESC, created_at ASC
 	`
 
 	return r.queryRules(ctx, query, userID, typeStrs)
 }
 
-// GetEnabledByUserID retrieves all enabled rules for a user, ordered by priority (desc).
-func (r *automationRulesRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
+// GetEnabledByUserID retrieves all enabled boosts for a user, ordered by priority (desc).
+func (r *boostsRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE user_id = $1 AND enabled = true
 		ORDER BY priority DESC, created_at ASC
 	`
@@ -211,13 +212,13 @@ func (r *automationRulesRepository) GetEnabledByUserID(ctx context.Context, user
 }
 
 // GetByName retrieves a rule by user ID and name.
-func (r *automationRulesRepository) GetByName(ctx context.Context, userID, name string) (*domain.AutomationRule, error) {
+func (r *boostsRepository) GetByName(ctx context.Context, userID, name string) (*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE user_id = $1 AND name = $2
 	`
 
@@ -225,7 +226,7 @@ func (r *automationRulesRepository) GetByName(ctx context.Context, userID, name 
 }
 
 // Update updates an existing rule.
-func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.AutomationRule) error {
+func (r *boostsRepository) Update(ctx context.Context, rule *domain.Boost) error {
 	rule.UpdatedAt = time.Now()
 
 	// Marshal JSON fields
@@ -240,7 +241,7 @@ func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.Aut
 	}
 
 	query := `
-		UPDATE rules
+		UPDATE boosts
 		SET name = $1, description = $2, enabled = $3, priority = $4,
 			trigger_config = $5, conditions = $6, condition_logic = $7,
 			actions = $8, updated_at = $9
@@ -261,23 +262,23 @@ func (r *automationRulesRepository) Update(ctx context.Context, rule *domain.Aut
 	)
 	if err != nil {
 		// Check for unique constraint violations
-		if strings.Contains(err.Error(), "unique_automation_rule_name_per_user") ||
+		if strings.Contains(err.Error(), "unique_boost_name_per_user") ||
 			strings.Contains(err.Error(), "duplicate key") {
-			return domain.ErrAutomationRuleAlreadyExists
+			return domain.ErrBoostAlreadyExists
 		}
 		return err
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrAutomationRuleNotFound
+		return domain.ErrBoostNotFound
 	}
 
 	return nil
 }
 
 // Delete removes a rule from the database.
-func (r *automationRulesRepository) Delete(ctx context.Context, id string) error {
-	query := `DELETE FROM rules WHERE id = $1`
+func (r *boostsRepository) Delete(ctx context.Context, id string) error {
+	query := `DELETE FROM boosts WHERE id = $1`
 
 	ct, err := r.db.Exec(ctx, query, id)
 	if err != nil {
@@ -285,15 +286,15 @@ func (r *automationRulesRepository) Delete(ctx context.Context, id string) error
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrAutomationRuleNotFound
+		return domain.ErrBoostNotFound
 	}
 
 	return nil
 }
 
 // CountByUserID counts the total number of automation rules for a user.
-func (r *automationRulesRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
-	query := `SELECT COUNT(*) FROM rules WHERE user_id = $1`
+func (r *boostsRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
+	query := `SELECT COUNT(*) FROM boosts WHERE user_id = $1`
 
 	var count int
 	err := r.db.QueryRow(ctx, query, userID).Scan(&count)
@@ -305,54 +306,54 @@ func (r *automationRulesRepository) CountByUserID(ctx context.Context, userID st
 }
 
 // IncrementExecutionCount increments the execution count and updates last_executed_at.
-func (r *automationRulesRepository) IncrementExecutionCount(ctx context.Context, ruleID string) error {
+func (r *boostsRepository) IncrementExecutionCount(ctx context.Context, boostID string) error {
 	query := `
-		UPDATE rules
+		UPDATE boosts
 		SET execution_count = execution_count + 1, last_executed_at = $1, updated_at = $1
 		WHERE id = $2
 	`
 
-	ct, err := r.db.Exec(ctx, query, time.Now(), ruleID)
+	ct, err := r.db.Exec(ctx, query, time.Now(), boostID)
 	if err != nil {
 		return err
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrAutomationRuleNotFound
+		return domain.ErrBoostNotFound
 	}
 
 	return nil
 }
 
 // UpdateLastSuccessful updates the last_successful_at timestamp.
-func (r *automationRulesRepository) UpdateLastSuccessful(ctx context.Context, ruleID string) error {
+func (r *boostsRepository) UpdateLastSuccessful(ctx context.Context, boostID string) error {
 	query := `
-		UPDATE rules
+		UPDATE boosts
 		SET last_successful_at = $1, updated_at = $1
 		WHERE id = $2
 	`
 
-	ct, err := r.db.Exec(ctx, query, time.Now(), ruleID)
+	ct, err := r.db.Exec(ctx, query, time.Now(), boostID)
 	if err != nil {
 		return err
 	}
 
 	if ct.RowsAffected() == 0 {
-		return domain.ErrAutomationRuleNotFound
+		return domain.ErrBoostNotFound
 	}
 
 	return nil
 }
 
-// GetRulesByEventTrigger retrieves enabled rules that trigger on a specific event type.
+// GetBoostsByEventTrigger retrieves enabled rules that trigger on a specific event type.
 // Uses JSONB containment to match trigger_config.event field.
-func (r *automationRulesRepository) GetRulesByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.AutomationRule, error) {
+func (r *boostsRepository) GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE user_id = $1
 			AND enabled = true
 			AND trigger_config->>'type' = 'event'
@@ -363,30 +364,30 @@ func (r *automationRulesRepository) GetRulesByEventTrigger(ctx context.Context, 
 	return r.queryRules(ctx, query, userID, eventType)
 }
 
-// GetRulesByType retrieves enabled rules of a specific type.
-func (r *automationRulesRepository) GetRulesByType(ctx context.Context, userID string, ruleType domain.RuleType) ([]*domain.AutomationRule, error) {
+// GetBoostsByType retrieves enabled rules of a specific type.
+func (r *boostsRepository) GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
-		WHERE user_id = $1 AND enabled = true AND rule_type = $2
+		FROM boosts
+		WHERE user_id = $1 AND enabled = true AND boost_type = $2
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID, ruleType)
+	return r.queryRules(ctx, query, userID, boostType)
 }
 
-// GetRulesByScheduleTrigger retrieves all enabled rules with schedule triggers.
+// GetBoostsByScheduleTrigger retrieves all enabled rules with schedule triggers.
 // Issue #37: Rule Scheduler - used by CronTriggerProvider.
-func (r *automationRulesRepository) GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error) {
+func (r *boostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
-			rule_type, trigger_config, conditions, condition_logic,
+			boost_type, trigger_config, conditions, condition_logic,
 			actions, execution_count, last_executed_at, last_successful_at,
 			created_at, updated_at
-		FROM rules
+		FROM boosts
 		WHERE enabled = true
 			AND trigger_config->>'type' = 'schedule'
 			AND trigger_config->>'cron' IS NOT NULL
@@ -397,8 +398,8 @@ func (r *automationRulesRepository) GetRulesByScheduleTrigger(ctx context.Contex
 }
 
 // scanRule scans a single rule from a row.
-func (r *automationRulesRepository) scanRule(row pgx.Row) (*domain.AutomationRule, error) {
-	rule := &domain.AutomationRule{}
+func (r *boostsRepository) scanRule(row pgx.Row) (*domain.Boost, error) {
+	rule := &domain.Boost{}
 	var triggerJSON, conditionsJSON []byte
 
 	err := row.Scan(
@@ -408,7 +409,7 @@ func (r *automationRulesRepository) scanRule(row pgx.Row) (*domain.AutomationRul
 		&rule.Description,
 		&rule.Enabled,
 		&rule.Priority,
-		&rule.RuleType,
+		&rule.BoostType,
 		&triggerJSON,
 		&conditionsJSON,
 		&rule.ConditionLogic,
@@ -422,7 +423,7 @@ func (r *automationRulesRepository) scanRule(row pgx.Row) (*domain.AutomationRul
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrAutomationRuleNotFound
+			return nil, domain.ErrBoostNotFound
 		}
 		return nil, err
 	}
@@ -439,16 +440,16 @@ func (r *automationRulesRepository) scanRule(row pgx.Row) (*domain.AutomationRul
 }
 
 // queryRules is a helper to query and scan multiple rules.
-func (r *automationRulesRepository) queryRules(ctx context.Context, query string, args ...interface{}) ([]*domain.AutomationRule, error) {
+func (r *boostsRepository) queryRules(ctx context.Context, query string, args ...interface{}) ([]*domain.Boost, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var rules []*domain.AutomationRule
+	var rules []*domain.Boost
 	for rows.Next() {
-		rule := &domain.AutomationRule{}
+		rule := &domain.Boost{}
 		var triggerJSON, conditionsJSON []byte
 
 		err := rows.Scan(
@@ -458,7 +459,7 @@ func (r *automationRulesRepository) queryRules(ctx context.Context, query string
 			&rule.Description,
 			&rule.Enabled,
 			&rule.Priority,
-			&rule.RuleType,
+			&rule.BoostType,
 			&triggerJSON,
 			&conditionsJSON,
 			&rule.ConditionLogic,
