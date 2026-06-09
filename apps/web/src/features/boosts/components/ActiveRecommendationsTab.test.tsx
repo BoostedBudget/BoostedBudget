@@ -200,4 +200,49 @@ describe('ActiveRecommendationsTab', () => {
     // ReadOnlyGuard renders with pointer-events-none on the children wrapper
     expect(container.querySelector('.pointer-events-none')).toBeTruthy()
   })
+
+  // === R2-E: PII masking for destination and context columns ===
+
+  it('masks destination and context columns as well as amount (3+ ph-mask tds per row)', () => {
+    const { container } = render(
+      <ActiveRecommendationsTab
+        items={[enrichedItem]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    // Expect amount + destination + context all masked (≥ 3 data-ph-mask cells)
+    const masked = container.querySelectorAll('[data-ph-mask]')
+    expect(masked.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('renders EmptyState component (data-slot="empty-state") for empty items', () => {
+    const { container } = render(
+      <ActiveRecommendationsTab
+        items={[]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    expect(container.querySelector('[data-slot="empty-state"]')).toBeTruthy()
+  })
+
+  it('shows descriptive label (not bare "—") for missing destination (G8)', () => {
+    render(
+      <ActiveRecommendationsTab
+        items={[pendingItem]}
+        isLoading={false}
+        onAccept={mockOnAccept}
+        onReject={mockOnReject}
+        isPending={false}
+      />
+    )
+    const bodyText = document.body.textContent ?? ''
+    // Should say something more descriptive than bare dash
+    expect(bodyText).toContain('No destination')
+  })
 })

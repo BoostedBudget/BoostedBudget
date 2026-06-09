@@ -263,3 +263,18 @@ func TestMCPManifest_Issue1210_ReviewWorkflowEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPManifest_Issue1267_CancelTransferSuggestion verifies that
+// cancelTransferSuggestion is classified as MCPClassWrite. This mutation allows
+// the MCP server to cancel an accepted suggestion, transitioning it to rejected.
+func TestMCPManifest_Issue1267_CancelTransferSuggestion(t *testing.T) {
+	const opID = "cancelTransferSuggestion"
+	class, found := domain.MCPOperationManifest[opID]
+	if !found {
+		t.Errorf("MCPOperationManifest missing entry for %q (Issue #1267 gap R2-F)", opID)
+		return
+	}
+	if class != domain.MCPClassWrite {
+		t.Errorf("MCPOperationManifest[%q] = %q, want MCPClassWrite (Issue #1267 gap R2-F)", opID, class)
+	}
+}

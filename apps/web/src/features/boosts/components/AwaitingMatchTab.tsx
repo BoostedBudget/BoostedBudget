@@ -1,17 +1,13 @@
-import { CheckCircle2, XCircle } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock } from 'lucide-react'
 import type { TransferSuggestion } from '@boostedbudget/api-client/models'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { formatCurrency, formatDate } from '../constants'
 
 const COLUMN_IDS = ['accepted_date', 'amount', 'status_info', 'actions']
-
-const formatCurrency = (amount: number, currency: string) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
-
-const formatDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
 export interface AwaitingMatchTabProps {
   items: TransferSuggestion[]
@@ -30,23 +26,6 @@ export function AwaitingMatchTab({
   isPending,
 }: AwaitingMatchTabProps) {
   const { sizing, onSizingChange } = useTablePreferences('boosts-awaiting', COLUMN_IDS)
-
-  if (isLoading) {
-    return (
-      <div className="animate-pulse space-y-3 p-4">
-        {[0, 1, 2].map((i) => <div key={i} className="h-12 rounded bg-muted" />)}
-      </div>
-    )
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="py-16 text-center text-muted-foreground">
-        <p className="text-base font-medium">No transfers waiting to be matched</p>
-        <p className="text-sm mt-1">Accepted suggestions appear here while we watch for your transfer.</p>
-      </div>
-    )
-  }
 
   const columns: ColumnDef<TransferSuggestion>[] = [
     {
@@ -70,9 +49,10 @@ export function AwaitingMatchTab({
       defaultSize: 280,
       minSize: 160,
       render: (item) => {
+        const amountStr = formatCurrency(item.amount, item.currency_code)
         const destPart = item.to_account_name
-          ? ` to ${item.to_account_name} of ${formatCurrency(item.amount, item.currency_code)}`
-          : ''
+          ? ` to ${item.to_account_name} of ${amountStr}`
+          : ` of ${amountStr}`
         return (
           <span className="text-sm text-muted-foreground">
             Accepted on {formatDate(item.user_action_at ?? item.updated_at)} — watching for transfer{destPart}
@@ -127,7 +107,16 @@ export function AwaitingMatchTab({
       onFiltersChange={() => {}}
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
-      maskedColumnIds={['amount']}
+      loading={isLoading}
+      skeletonRows={3}
+      maskedColumnIds={['amount', 'status_info']}
+      emptyState={
+        <EmptyState
+          icon={<Clock />}
+          title="No transfers waiting to be matched"
+          description="Accepted suggestions appear here while we watch for your transfer."
+        />
+      }
     />
   )
 }

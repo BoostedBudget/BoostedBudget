@@ -318,6 +318,49 @@ describe('RuleCard', () => {
     })
   })
 
+  describe('Action summary (R2-B)', () => {
+    it('shows action summary for transfer_suggestion rule with amount', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        actions: { amount: 200 },
+      }
+      render(<RuleCard rule={transferRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Suggest transfer $200')
+    })
+
+    it('shows action summary for transfer_suggestion rule without amount', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        actions: {},
+      }
+      render(<RuleCard rule={transferRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Suggest transfer')
+    })
+
+    it('shows action summary for budget_alert rule', () => {
+      render(<RuleCard rule={mockRule} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Send budget alert notification')
+    })
+
+    it('masks action summary with data-ph-mask (PII — financial amount)', () => {
+      const transferRule = {
+        ...mockRule,
+        rule_type: 'transfer_suggestion',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        actions: { amount: 200 } as any,
+      }
+      const { container } = render(<RuleCard rule={transferRule} />)
+      // rule.name is always masked; action summary containing "$200" must also be masked
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
   describe('Read-only guarding (W6)', () => {
     it('wraps toggle + action buttons in ReadOnlyGuard in read-only mode', () => {
       const { container } = render(

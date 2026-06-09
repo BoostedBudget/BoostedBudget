@@ -1,4 +1,5 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { StatCard } from '@/components/ui/stat-card'
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('en-US', {
@@ -6,10 +7,6 @@ const formatCurrency = (amount: number) =>
     currency: 'USD',
     maximumFractionDigits: 0,
   }).format(amount)
-
-const STAT_CARD_CLASS = 'rounded-lg border border-border bg-card p-4'
-const STAT_LABEL_CLASS = 'text-xs text-muted-foreground uppercase tracking-wide mb-1'
-const STAT_VALUE_CLASS = 'text-2xl font-bold'
 
 export interface SavingsSummaryHeaderProps {
   totalMoved: number | null
@@ -41,42 +38,52 @@ export function SavingsSummaryHeader({
 
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-      <div className={STAT_CARD_CLASS}>
-        <p className={STAT_LABEL_CLASS}>Total Moved to Savings</p>
-        <p className={`${STAT_VALUE_CLASS} text-success`} data-ph-mask>
-          {totalMoved !== null ? formatCurrency(totalMoved) : '—'}
-        </p>
-      </div>
+      <StatCard
+        label="Total Moved to Savings"
+        value={totalMoved !== null ? formatCurrency(totalMoved) : '—'}
+        trend="up"
+        maskValue
+      />
 
-      <div className={STAT_CARD_CLASS}>
-        <p className={STAT_LABEL_CLASS}>vs. Last Month</p>
-        {momChange !== null ? (
-          <p
-            className={`${STAT_VALUE_CLASS} flex items-center gap-1 ${momPositive ? 'text-success' : 'text-destructive'}`}
-            data-ph-mask
-            data-testid="mom-change"
-          >
-            {momPositive ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
-            {momPositive ? '+' : ''}
-            {formatCurrency(momChange)}
-          </p>
-        ) : (
-          <p className={`${STAT_VALUE_CLASS} text-muted-foreground flex items-center gap-1`}>
-            <Minus className="h-5 w-5" />
-            No data
-          </p>
-        )}
-      </div>
+      <StatCard
+        label="vs. Last Month"
+        value={
+          momChange !== null ? (
+            <span
+              className="flex items-center gap-1"
+              data-testid="mom-change"
+            >
+              {momPositive ? (
+                <>
+                  <TrendingUp className="h-5 w-5 text-success" />
+                  +{formatCurrency(momChange)}
+                </>
+              ) : (
+                <>
+                  <TrendingDown className="h-5 w-5 text-destructive" />
+                  {formatCurrency(momChange)}
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Minus className="h-5 w-5" />
+              No data
+            </span>
+          )
+        }
+        maskValue={momChange !== null}
+      />
 
-      <div className={STAT_CARD_CLASS}>
-        <p className={STAT_LABEL_CLASS}>Transfers Completed</p>
-        <p className={STAT_VALUE_CLASS}>{completedCount !== null ? completedCount : '—'}</p>
-      </div>
+      <StatCard
+        label="Transfers Completed"
+        value={completedCount !== null ? completedCount : '—'}
+      />
 
-      <div className={STAT_CARD_CLASS}>
-        <p className={STAT_LABEL_CLASS}>Active Rules</p>
-        <p className={STAT_VALUE_CLASS}>{activeRulesCount}</p>
-      </div>
+      <StatCard
+        label="Active Rules"
+        value={activeRulesCount}
+      />
     </div>
   )
 }

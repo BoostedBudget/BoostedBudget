@@ -223,4 +223,49 @@ describe('AwaitingMatchTab', () => {
     )
     expect(container.querySelector('.pointer-events-none')).toBeTruthy()
   })
+
+  // === R2-E: PII masking + EmptyState + G5 amount in watching copy ===
+
+  it('masks status_info column in addition to amount (≥2 ph-mask tds)', () => {
+    const { container } = render(
+      <AwaitingMatchTab
+        items={[acceptedItem]}
+        isLoading={false}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    const masked = container.querySelectorAll('[data-ph-mask]')
+    expect(masked.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('renders EmptyState component (data-slot="empty-state") for empty items', () => {
+    const { container } = render(
+      <AwaitingMatchTab
+        items={[]}
+        isLoading={false}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    expect(container.querySelector('[data-slot="empty-state"]')).toBeTruthy()
+  })
+
+  it('includes formatted amount in watching copy even when to_account_name is absent (G5)', () => {
+    // acceptedItem has amount=750 but no to_account_name
+    render(
+      <AwaitingMatchTab
+        items={[acceptedItem]}
+        isLoading={false}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    const bodyText = document.body.textContent ?? ''
+    // Amount should appear in the watching copy row even without dest account
+    expect(bodyText).toContain('750')
+  })
 })
