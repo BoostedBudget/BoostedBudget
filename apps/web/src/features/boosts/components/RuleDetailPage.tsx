@@ -1,16 +1,16 @@
 // Issue #1267 Gap W5: /boosts/:id — rule detail + recent execution history (last 5)
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
-import { useGetAutomationRuleByID } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
+import { useGetBoostByID } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { EmptyState } from '@/components/ui/empty-state'
-import { RULE_TYPE_LABELS } from '@/features/rules/constants'
-import { RuleExecutionHistory } from '@/features/rules/components/RuleExecutionHistory'
-import type { RuleType } from '@/features/rules/types'
+import { BOOST_TYPE_LABELS } from '../boostConstants'
+import { BoostExecutionHistory } from './BoostExecutionHistory'
+import type { BoostType } from '../types'
 
 export function RuleDetailPage() {
   const { id } = useParams<{ id: string }>()
 
-  const { data: rule, isLoading } = useGetAutomationRuleByID(id ?? '')
+  const { data: rule, isLoading } = useGetBoostByID(id ?? '')
 
   if (isLoading) {
     return (
@@ -27,15 +27,15 @@ export function RuleDetailPage() {
       <div className="flex flex-col items-center justify-center p-6">
         <EmptyState
           icon={<AlertCircle />}
-          title="Rule not found"
-          description="We couldn't find a rule with this ID."
+          title="Boost not found"
+          description="We couldn't find a boost with this ID."
           action={
             <Link
-              to="/boosts?tab=rules"
+              to="/boosts?tab=boosts"
               className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to Rules
+              Back to Boosts
             </Link>
           }
         />
@@ -43,17 +43,17 @@ export function RuleDetailPage() {
     )
   }
 
-  const typeLabel = RULE_TYPE_LABELS[rule.rule_type as RuleType] ?? rule.rule_type
+  const typeLabel = BOOST_TYPE_LABELS[rule.boost_type as BoostType] ?? rule.boost_type
 
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center gap-3">
         <Link
-          to="/boosts?tab=rules"
+          to="/boosts?tab=boosts"
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Rules
+          Back to Boosts
         </Link>
       </div>
 
@@ -66,7 +66,7 @@ export function RuleDetailPage() {
       </div>
 
       <section>
-        <RuleExecutionHistory ruleId={id ?? ''} limit={5} />
+        <BoostExecutionHistory boostId={id ?? ''} limit={5} />
       </section>
     </div>
   )

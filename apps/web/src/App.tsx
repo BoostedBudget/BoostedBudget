@@ -71,8 +71,8 @@ const BoostsPage = lazy(() =>
 const RuleDetailPage = lazy(() =>
   import('./features/boosts').then(m => ({ default: m.RuleDetailPage }))
 )
-const RuleBuilder = lazy(() =>
-  import('./features/rules').then(m => ({ default: m.RuleBuilder }))
+const BoostBuilder = lazy(() =>
+  import('./features/boosts').then(m => ({ default: m.BoostBuilder }))
 )
 const SpendingReportsPage = lazy(() =>
   import('./features/reports').then(m => ({ default: m.SpendingReportsPage }))
@@ -378,7 +378,7 @@ function App() {
                 <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
-                      <RuleBuilder />
+                      <BoostBuilder />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
@@ -402,7 +402,7 @@ function App() {
                 <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
-                      <RuleBuilder />
+                      <BoostBuilder />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
