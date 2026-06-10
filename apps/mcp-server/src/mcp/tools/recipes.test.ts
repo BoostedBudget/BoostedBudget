@@ -214,14 +214,16 @@ describe('recipe.templates', () => {
     expect(opIds).toContain('getSavingsImpactAggregate')
   })
 
-  it('includes a "Transfer Rules Audit" template with getAutomationRules and getRuleExecutions', () => {
-    const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Transfer Rules Audit')
+  it('includes a "Transfer Boosts Audit" template with getBoosts and getBoostExecutions', () => {
+    // #1283: renamed from "Transfer Rules Audit" / getAutomationRules / getRuleExecutions
+    // Note: the query param name rule_type is intentionally unchanged (handler-side filter key)
+    const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Transfer Boosts Audit')
     expect(recipe).toBeDefined()
     const opIds = recipe!.calls.map((c) => c.operationId)
-    expect(opIds).toContain('getAutomationRules')
-    expect(opIds).toContain('getRuleExecutions')
-    // Should filter to transfer-generating rule types
-    const rulesCall = recipe!.calls.find((c) => c.operationId === 'getAutomationRules')
-    expect(rulesCall?.params?.['rule_type']).toEqual(['transfer_suggestion', 'savings_goal'])
+    expect(opIds).toContain('getBoosts')
+    expect(opIds).toContain('getBoostExecutions')
+    // Should filter to transfer-generating boost types
+    const boostsCall = recipe!.calls.find((c) => c.operationId === 'getBoosts')
+    expect(boostsCall?.params?.['rule_type']).toEqual(['transfer_suggestion', 'savings_goal'])
   })
 })

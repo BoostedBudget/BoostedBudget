@@ -22,9 +22,10 @@ beforeAll(async () => {
 
 describe('buildSpecIndex param extraction (R8-2b regression)', () => {
   it('keeps description-only path params (description || branch)', () => {
-    // getRuleExecutions.id: path param with description only, no enum.
+    // getBoostExecutions.id: path param with description only, no enum.
     // Guards the `!!(p.description || ...)` filter keeping it.
-    const entry = entries.find((e) => e.operationId === 'getRuleExecutions')
+    // (#1283: renamed from getRuleExecutions)
+    const entry = entries.find((e) => e.operationId === 'getBoostExecutions')
     expect(entry).toBeDefined()
 
     const idParam = entry?.parameters?.find((p) => p.name === 'id' && p.in === 'path')
@@ -47,10 +48,11 @@ describe('buildSpecIndex param extraction (R8-2b regression)', () => {
   })
 
   it('keeps array-type params with description even when they have no items.enum', () => {
-    // getAutomationRules.rule_type: type:array, has description, items have no enum.
+    // getBoosts.rule_type: type:array, has description, items have no enum.
     // The valid values are enforced handler-side (422); the OpenAPI schema uses plain items:{type:string}.
     // Guards that description-bearing array params are included but WITHOUT an enum field.
-    const entry = entries.find((e) => e.operationId === 'getAutomationRules')
+    // (#1283: operationId renamed from getAutomationRules; query param name rule_type unchanged)
+    const entry = entries.find((e) => e.operationId === 'getBoosts')
     expect(entry).toBeDefined()
 
     const ruleTypeParam = entry?.parameters?.find((p) => p.name === 'rule_type')

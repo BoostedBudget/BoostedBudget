@@ -6,11 +6,12 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { RolloverAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
+import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 
 // Mock budgets with categories
 const mockBudgets: Budget[] = [
@@ -100,12 +101,11 @@ const mockBudgets: Budget[] = [
   },
 ]
 
+// Use the centralized configurable mock to avoid process-global static stubs that
+// interfere with BudgetsPage.test.tsx (which configures mockUseBudgets in its own beforeEach).
+// See: https://github.com/BoostedBudget/BoostedBudget2/issues/1283 FIX-2
 mock.module('../../../budgets/hooks/useBudgets', () => ({
-  useBudgets: () => ({
-    budgets: mockBudgets,
-    loading: false,
-    error: null,
-  }),
+  useBudgets: () => mockUseBudgets(),
 }))
 
 import { RolloverActionForm } from './RolloverActionForm'
@@ -127,6 +127,13 @@ const defaultAction: RolloverAction = {
 }
 
 describe('RolloverActionForm', () => {
+  beforeEach(() => {
+    mockUseBudgets.mockReturnValue({
+      budgets: mockBudgets,
+      loading: false,
+      error: null,
+    })
+  })
 
   describe('Rendering', () => {
     it('should render source budget selector', () => {

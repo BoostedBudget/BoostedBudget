@@ -456,8 +456,9 @@ VALUES (
     NOW(), NOW()
 );
 
--- Migration 000070: transfer_suggestion rule with raw account IDs
-INSERT INTO rules (id, user_id, name, rule_type, trigger_config, actions, created_at, updated_at)
+-- Migration 000070: transfer_suggestion boost with raw account IDs
+-- Table/column renamed rules→boosts, rule_type→boost_type in migration 000095.
+INSERT INTO boosts (id, user_id, name, boost_type, trigger_config, actions, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000051'::uuid,
     '00000000-0000-0000-0000-000000000001'::uuid,
@@ -480,10 +481,59 @@ EOF
     # (no-op). golang-migrate marks them applied so the second apply_migrations won't re-run
     # them. We re-execute their SQL directly here so the JSONB assertions below have live data
     # to verify. Both migrations are idempotent (they check for missing keys before updating).
-    log_info "Applying backfill migrations against seeded data (000070, 000072)..."
+    #
+    # NOTE (#1283): Migration 000070 originally targeted the `rules` table, which was renamed
+    # to `boosts` (column rule_type → boost_type) by migration 000095. We cannot replay the
+    # historical file against the renamed schema; instead we run an equivalent inline query.
+    log_info "Applying backfill migrations against seeded data (000070-equivalent, 000072)..."
     local project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     local abs_migrations_dir="$project_root/backend/migrations"
-    psql "$DATABASE_URL" -f "$abs_migrations_dir/000070_backfill_user_account_id_in_rules.up.sql"
+
+    # 000070-equivalent: backfill user_account_id keys into boosts JSONB columns.
+    # Mirrors the original three UPDATE steps from 000070_backfill_user_account_id_in_rules.up.sql
+    # but targets the renamed table (boosts) and column (boost_type). Idempotent.
+    psql "$DATABASE_URL" <<'BACKFILL_SQL'
+UPDATE boosts r
+SET actions = jsonb_set(
+    r.actions,
+    '{transfer,from_user_account_id}',
+    to_jsonb(a.user_account_id::text)
+)
+FROM accounts a
+WHERE r.boost_type = 'transfer_suggestion'
+  AND r.actions->'transfer' ? 'from_account_id'
+  AND NOT (r.actions->'transfer' ? 'from_user_account_id')
+  AND a.id::text = r.actions->'transfer'->>'from_account_id'
+  AND a.user_account_id IS NOT NULL;
+
+UPDATE boosts r
+SET actions = jsonb_set(
+    r.actions,
+    '{transfer,to_user_account_id}',
+    to_jsonb(a.user_account_id::text)
+)
+FROM accounts a
+WHERE r.boost_type = 'transfer_suggestion'
+  AND r.actions->'transfer' ? 'to_account_id'
+  AND NOT (r.actions->'transfer' ? 'to_user_account_id')
+  AND a.id::text = r.actions->'transfer'->>'to_account_id'
+  AND a.user_account_id IS NOT NULL;
+
+UPDATE boosts r
+SET trigger_config = jsonb_set(
+    r.trigger_config,
+    '{filters}',
+    r.trigger_config->'filters' || jsonb_build_object('user_account_id', a.user_account_id::text)
+)
+FROM accounts a
+WHERE r.trigger_config->>'type' = 'event'
+  AND r.trigger_config->'filters' IS NOT NULL
+  AND r.trigger_config->'filters' ? 'account_id'
+  AND NOT (r.trigger_config->'filters' ? 'user_account_id')
+  AND a.id::text = r.trigger_config->'filters'->>'account_id'
+  AND a.user_account_id IS NOT NULL;
+BACKFILL_SQL
+
     psql "$DATABASE_URL" -f "$abs_migrations_dir/000072_backfill_user_account_id_in_categorization_rule_conditions.up.sql"
     log_success "Backfill migrations applied against seeded data"
 
@@ -566,8 +616,9 @@ EOF
         log_success "Migration 000072 Step 2: array condition backfilled"
     fi
 
-    # Migration 000070: rules actions and trigger_config
-    local transfer_from=$(run_psql "SELECT actions->'transfer'->>'from_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    # Migration 000070: boosts actions and trigger_config
+    # (#1283: table renamed rules→boosts, column rule_type→boost_type by migration 000095)
+    local transfer_from=$(run_psql "SELECT actions->'transfer'->>'from_user_account_id' FROM boosts WHERE id = '00000000-0000-0000-0000-000000000051'")
     if [ "$transfer_from" != "$ua_id_1" ]; then
         fail_test "Migration 000070 Step 1 failed: from_user_account_id should be '$ua_id_1', got '$transfer_from'"
         data_preserved=false
@@ -575,7 +626,7 @@ EOF
         log_success "Migration 000070 Step 1: from_user_account_id backfilled"
     fi
 
-    local transfer_to=$(run_psql "SELECT actions->'transfer'->>'to_user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    local transfer_to=$(run_psql "SELECT actions->'transfer'->>'to_user_account_id' FROM boosts WHERE id = '00000000-0000-0000-0000-000000000051'")
     if [ "$transfer_to" != "$ua_id_2" ]; then
         fail_test "Migration 000070 Step 2 failed: to_user_account_id should be '$ua_id_2', got '$transfer_to'"
         data_preserved=false
@@ -583,7 +634,7 @@ EOF
         log_success "Migration 000070 Step 2: to_user_account_id backfilled"
     fi
 
-    local trigger_ua=$(run_psql "SELECT trigger_config->'filters'->>'user_account_id' FROM rules WHERE id = '00000000-0000-0000-0000-000000000051'")
+    local trigger_ua=$(run_psql "SELECT trigger_config->'filters'->>'user_account_id' FROM boosts WHERE id = '00000000-0000-0000-0000-000000000051'")
     if [ "$trigger_ua" != "$ua_id_1" ]; then
         fail_test "Migration 000070 Step 3 failed: trigger_config user_account_id should be '$ua_id_1', got '$trigger_ua'"
         data_preserved=false
