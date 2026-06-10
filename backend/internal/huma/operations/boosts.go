@@ -122,11 +122,10 @@ type TriggerBoostOutput struct {
 	Body *domain.BoostExecution
 }
 
-// TestBoostInput represents the input for testing a rule execution (dry-run).
-// Issue #38: Rules API Endpoints.
+// TestBoostInput represents the input for testing a boost execution (dry-run).
 type TestBoostInput struct {
 	inputs.AuthenticatedInput
-	ID   string `path:"id" doc:"Automation Rule UUID"`
+	ID   string `path:"id" doc:"Automation Boost UUID"`
 	Body struct {
 		TriggerData map[string]interface{} `json:"trigger_data,omitempty" doc:"Optional test data to evaluate conditions against"`
 	}
@@ -137,16 +136,16 @@ type TestBoostOutput struct {
 	Body *domain.BoostTestResult
 }
 
-// EnableBoostInput represents the input for enabling an automation rule.
+// EnableBoostInput represents the input for enabling an automation boost.
 type EnableBoostInput struct {
 	inputs.AuthenticatedInput
-	ID string `path:"id" doc:"Automation Rule UUID"`
+	ID string `path:"id" doc:"Automation Boost UUID"`
 }
 
-// DisableBoostInput represents the input for disabling an automation rule.
+// DisableBoostInput represents the input for disabling an automation boost.
 type DisableBoostInput struct {
 	inputs.AuthenticatedInput
-	ID string `path:"id" doc:"Automation Rule UUID"`
+	ID string `path:"id" doc:"Automation Boost UUID"`
 }
 
 // GetBoostExecutionsInput represents the input for getting boost execution history.

@@ -4636,7 +4636,7 @@ components:
           readOnly: true
           type: string
         enabled:
-          description: Whether the rule should be enabled
+          description: Whether the boost should be enabled
           type: boolean
       required:
         - enabled
@@ -4956,7 +4956,7 @@ components:
           type: string
         trigger_data:
           additionalProperties: {}
-          description: Optional data to pass to the rule execution
+          description: Optional data to pass to the boost execution
           type: object
       type: object
     TriggerConfig:
@@ -8126,12 +8126,12 @@ paths:
       description: Removes a boost.
       operationId: deleteBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       responses:
         "204":
@@ -8151,12 +8151,12 @@ paths:
       description: Retrieves a specific boost by its UUID.
       operationId: getBoostByID
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       responses:
         "200":
@@ -8180,12 +8180,12 @@ paths:
       description: Updates a boost's configuration.
       operationId: updateBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       requestBody:
         content:
@@ -8216,12 +8216,12 @@ paths:
       description: Disables a boost from execution.
       operationId: disableBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       responses:
         "200":
@@ -8246,12 +8246,12 @@ paths:
       description: Enables a boost for execution.
       operationId: enableBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       responses:
         "200":
@@ -8276,12 +8276,12 @@ paths:
       description: Retrieves execution history for a specific boost with optional status filter.
       operationId: getBoostExecutions
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
         - description: "Filter by status: pending, running, completed, failed"
           explode: false
@@ -8334,12 +8334,12 @@ paths:
       description: Executes a dry-run of the boost to preview results without persisting changes.
       operationId: testBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       requestBody:
         content:
@@ -8370,12 +8370,12 @@ paths:
       description: Enables or disables a boost.
       operationId: toggleBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       requestBody:
         content:
@@ -8406,12 +8406,12 @@ paths:
       description: Triggers a boost for immediate execution with optional custom data.
       operationId: triggerBoost
       parameters:
-        - description: Automation Rule UUID
+        - description: Automation Boost UUID
           in: path
           name: id
           required: true
           schema:
-            description: Automation Rule UUID
+            description: Automation Boost UUID
             type: string
       requestBody:
         content:

@@ -1365,7 +1365,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1386,7 +1386,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1407,7 +1407,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1428,7 +1428,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1449,7 +1449,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1470,7 +1470,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         },
         {
@@ -1509,7 +1509,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1530,7 +1530,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]
@@ -1551,7 +1551,7 @@
           "name": "id",
           "in": "path",
           "required": true,
-          "description": "Automation Rule UUID",
+          "description": "Automation Boost UUID",
           "type": "string"
         }
       ]

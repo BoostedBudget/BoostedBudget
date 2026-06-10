@@ -32,6 +32,6 @@ import type { TriggerBoostInputBodyTriggerData } from './triggerBoostInputBodyTr
 export interface TriggerBoostInputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** Optional data to pass to the rule execution */
+  /** Optional data to pass to the boost execution */
   trigger_data?: TriggerBoostInputBodyTriggerData;
 }

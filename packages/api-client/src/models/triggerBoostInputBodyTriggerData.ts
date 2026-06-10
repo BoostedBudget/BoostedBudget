@@ -29,6 +29,6 @@
  */
 
 /**
- * Optional data to pass to the rule execution
+ * Optional data to pass to the boost execution
  */
 export type TriggerBoostInputBodyTriggerData = {[key: string]: unknown};
