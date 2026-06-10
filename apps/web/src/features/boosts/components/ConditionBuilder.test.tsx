@@ -1,10 +1,10 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ConditionBuilder } from './ConditionBuilder'
-import type { RuleCondition } from '../types'
+import type { BoostConditionLocal } from '../types'
 import type { Budget } from '../../budgets/types'
 
-const sampleConditions: RuleCondition[] = [
+const sampleConditions: BoostConditionLocal[] = [
   { field: 'budget.percent_used', operator: 'gte', value: 80 },
   { field: 'budget.remaining_amount', operator: 'lt', value: 100 },
 ]
@@ -263,7 +263,7 @@ describe('ConditionBuilder', () => {
   // Task 6: per-event field filtering and category picker tests
 
   it('should only show fields valid for the given trigger event (budget_updated)', () => {
-    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const budgetCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
     renderConditionBuilder({
       conditions: [budgetCondition],
       triggerEvent: 'budget_updated',
@@ -285,7 +285,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should show category picker when selected field starts with budget_category.', () => {
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -302,7 +302,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should not show category picker when selected field is not budget_category.*', () => {
-    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const budgetCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
     renderConditionBuilder({
       conditions: [budgetCondition],
       triggerEvent: 'budget_updated',
@@ -314,7 +314,7 @@ describe('ConditionBuilder', () => {
 
   it('should write category_id to condition when category picker changes', () => {
     const onConditionsChange = mock(() => {})
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -339,7 +339,7 @@ describe('ConditionBuilder', () => {
 
   it('should clear category_id when field changes away from budget_category.*', () => {
     const onConditionsChange = mock(() => {})
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -363,7 +363,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should not include between operator in the operator select', () => {
-    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const budgetCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
     renderConditionBuilder({
       conditions: [budgetCondition],
       triggerEvent: 'budget_updated',
@@ -377,7 +377,7 @@ describe('ConditionBuilder', () => {
   it('should reset condition field when triggerEvent changes and existing field is no longer valid', () => {
     const onConditionsChange = mock(() => {})
     // Use a synthetic unknown field that won't appear in any event's field list
-    const unknownFieldCondition: RuleCondition = { field: 'account.balance', operator: 'gte', value: 100 }
+    const unknownFieldCondition: BoostConditionLocal = { field: 'account.balance', operator: 'gte', value: 100 }
 
     render(
       <ConditionBuilder
@@ -403,7 +403,7 @@ describe('ConditionBuilder', () => {
 
   it('should not call onConditionsChange when all conditions have valid fields', () => {
     const onConditionsChange = mock(() => {})
-    const validCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const validCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
 
     render(
       <ConditionBuilder
@@ -422,7 +422,7 @@ describe('ConditionBuilder', () => {
   // Item 9: budget→category cascade tests
 
   it('should show budget picker for budget_category.* fields', () => {
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -437,7 +437,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should not show budget picker for non-category fields', () => {
-    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const budgetCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
     renderConditionBuilder({
       conditions: [budgetCondition],
       triggerEvent: 'budget_updated',
@@ -448,7 +448,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should scope category options to the selected budget', () => {
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -469,7 +469,7 @@ describe('ConditionBuilder', () => {
 
   it('should clear category_id when budget changes', () => {
     const onConditionsChange = mock(() => {})
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -494,7 +494,7 @@ describe('ConditionBuilder', () => {
 
   it('should clear both budget_id and category_id when field changes away from budget_category.*', () => {
     const onConditionsChange = mock(() => {})
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -522,7 +522,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should render disabled re-select option for stale budget_id', () => {
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -544,7 +544,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should render disabled re-select option for stale category_id', () => {
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -568,7 +568,7 @@ describe('ConditionBuilder', () => {
 
   it('should include budget_id and category_id in onChange callback', () => {
     const onConditionsChange = mock(() => {})
-    const categoryCondition: RuleCondition = {
+    const categoryCondition: BoostConditionLocal = {
       field: 'budget_category.percent_used',
       operator: 'gte',
       value: 80,
@@ -592,7 +592,7 @@ describe('ConditionBuilder', () => {
   })
 
   it('should include budget_category.allocated as a selectable field option', () => {
-    const budgetCondition: RuleCondition = { field: 'budget.percent_used', operator: 'gte', value: 80 }
+    const budgetCondition: BoostConditionLocal = { field: 'budget.percent_used', operator: 'gte', value: 80 }
     renderConditionBuilder({
       conditions: [budgetCondition],
       triggerEvent: 'budget_updated',

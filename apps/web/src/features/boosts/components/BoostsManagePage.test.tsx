@@ -628,8 +628,8 @@ describe('BoostsManagePage', () => {
     expect(mockTestBoostMutate).toHaveBeenCalled()
   })
 
-  // R8-1c: Rule type segment for Boosts Rules tab (#1267)
-  describe('Rule type segment (R8-1c)', () => {
+  // R8-1c: Boost type segment for Boosts tab (#1267)
+  describe('Boost type segment (R8-1c)', () => {
     it('renders segment control when showTypeSegment is true', async () => {
       renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 

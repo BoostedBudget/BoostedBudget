@@ -1,5 +1,5 @@
 /**
- * RuleExecutionHistory Component Tests
+ * BoostExecutionHistory Component Tests
  * Issue #39: Rule Builder UI
  */
 
@@ -15,7 +15,7 @@ const mockRefetch = mock(() => Promise.resolve())
 const mockExecutions: BoostExecution[] = [
   {
     id: 'exec-1',
-    boost_id: 'rule-1',
+    boost_id: 'boost-1',
     status: 'completed',
     started_at: '2024-01-15T10:00:00Z',
     completed_at: '2024-01-15T10:00:05Z',
@@ -26,7 +26,7 @@ const mockExecutions: BoostExecution[] = [
   },
   {
     id: 'exec-2',
-    boost_id: 'rule-1',
+    boost_id: 'boost-1',
     status: 'failed',
     started_at: '2024-01-14T10:00:00Z',
     completed_at: '2024-01-14T10:00:02Z',
@@ -39,7 +39,7 @@ const mockExecutions: BoostExecution[] = [
   },
   {
     id: 'exec-3',
-    boost_id: 'rule-1',
+    boost_id: 'boost-1',
     status: 'running',
     started_at: '2024-01-16T10:00:00Z',
     retry_count: 0,
@@ -63,7 +63,7 @@ function createTestWrapper() {
   }
 }
 
-describe('RuleExecutionHistory', () => {
+describe('BoostExecutionHistory', () => {
   beforeEach(() => {
     mockUseGetBoostExecutions.mockClear()
     mockRefetch.mockClear()
@@ -78,7 +78,7 @@ describe('RuleExecutionHistory', () => {
         refetch: mockRefetch,
       })
 
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -95,7 +95,7 @@ describe('RuleExecutionHistory', () => {
         refetch: mockRefetch,
       })
 
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -112,7 +112,7 @@ describe('RuleExecutionHistory', () => {
         refetch: mockRefetch,
       })
 
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -127,7 +127,7 @@ describe('RuleExecutionHistory', () => {
         refetch: mockRefetch,
       })
 
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -149,7 +149,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should render execution table', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -157,7 +157,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should display execution status', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -167,7 +167,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should display execution time', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -176,7 +176,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should display execution duration', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -186,7 +186,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should display trigger type', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -196,7 +196,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should display error message for failed executions', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -215,7 +215,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should apply success styling to completed status', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -224,7 +224,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should apply error styling to failed status', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -233,7 +233,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should apply running styling to running status', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -294,7 +294,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should have accessible table structure', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 
@@ -304,7 +304,7 @@ describe('RuleExecutionHistory', () => {
     })
 
     it('should have heading', () => {
-      render(<BoostExecutionHistory boostId="rule-1" />, {
+      render(<BoostExecutionHistory boostId="boost-1" />, {
         wrapper: createTestWrapper(),
       })
 

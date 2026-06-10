@@ -4,6 +4,10 @@
  *
  * Main page for viewing and managing automation boosts.
  * Supports card and table views.
+ *
+ * Accepts optional `showTypeSegment` + `boostTypeFilter` props used by BoostsTab
+ * (inside Boosts page) to scope the default view to transfer-generating boost types
+ * while still allowing "All boosts" navigation to avoid orphaning other types.
  */
 
 import { useCallback, useMemo, useState } from 'react'
@@ -42,13 +46,6 @@ interface BoostsManagePageProps {
    */
   boostTypeFilter?: readonly string[]
 }
-
-/**
- * BoostsManagePage displays the list of automation boosts with card/table toggle.
- * Accepts optional `showTypeSegment` + `boostTypeFilter` props used by BoostsTab
- * (inside Boosts page) to scope the default view to transfer-generating boost types
- * while still allowing "All boosts" navigation to avoid orphaning other types.
- */
 export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: BoostsManagePageProps = {}) {
   const trackEvent = useTrackEvent()
   const navigate = useNavigate()
@@ -210,7 +207,7 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
     )
   }
 
-  // Boost-type segment: shown on Boosts → Rules tab (#1267 R8-1c).
+  // Boost-type segment: shown on Boosts → Boosts tab (#1267 R8-1c).
   // Defined before the empty-state early-return so it is always reachable, even when
   // the filtered query returns zero results (R10-a: prevents orphaning non-transfer boosts).
   const boostTypeSegment = showTypeSegment ? (

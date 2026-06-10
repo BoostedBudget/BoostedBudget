@@ -18,7 +18,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={true}
         />
       )
@@ -34,7 +34,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={2500}
           momChange={null}
           completedCount={10}
-          activeRulesCount={3}
+          activeBoostsCount={3}
           isLoading={false}
         />
       )
@@ -48,7 +48,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={2500}
           momChange={null}
           completedCount={10}
-          activeRulesCount={3}
+          activeBoostsCount={3}
           isLoading={false}
         />
       )
@@ -62,7 +62,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={2500}
           momChange={150}
           completedCount={10}
-          activeRulesCount={3}
+          activeBoostsCount={3}
           isLoading={false}
         />
       )
@@ -75,7 +75,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={500}
           momChange={null}
           completedCount={2}
-          activeRulesCount={1}
+          activeBoostsCount={1}
           isLoading={false}
         />
       )
@@ -89,20 +89,20 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={1000}
           momChange={50}
           completedCount={15}
-          activeRulesCount={2}
+          activeBoostsCount={2}
           isLoading={false}
         />
       )
       expect(screen.getByText(/15/)).toBeTruthy()
     })
 
-    it('shows active rules count', () => {
+    it('shows active boosts count', () => {
       render(
         <SavingsSummaryHeader
           totalMoved={1000}
           momChange={50}
           completedCount={5}
-          activeRulesCount={4}
+          activeBoostsCount={4}
           isLoading={false}
         />
       )
@@ -115,7 +115,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={false}
         />
       )
@@ -129,7 +129,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={2500}
           momChange={100}
           completedCount={10}
-          activeRulesCount={3}
+          activeBoostsCount={3}
           isLoading={false}
         />
       )
@@ -147,7 +147,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={false}
           isError={true}
         />
@@ -161,7 +161,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={2500}
           momChange={100}
           completedCount={10}
-          activeRulesCount={3}
+          activeBoostsCount={3}
           isLoading={false}
           isError={true}
         />
@@ -177,7 +177,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={false}
           isError={true}
           onRetry={() => {}}
@@ -193,7 +193,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={false}
           isError={true}
           onRetry={onRetry}
@@ -209,7 +209,7 @@ describe('SavingsSummaryHeader', () => {
           totalMoved={null}
           momChange={null}
           completedCount={null}
-          activeRulesCount={0}
+          activeBoostsCount={0}
           isLoading={false}
           isError={true}
         />

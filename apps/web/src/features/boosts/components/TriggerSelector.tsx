@@ -4,6 +4,24 @@
  *
  * Component for selecting trigger type (schedule or event).
  * Integrates CronBuilder for scheduled triggers.
+ *
+ * @example
+ * ```tsx
+ * function BoostForm() {
+ *   const [config, setConfig] = useState<TriggerFormState>({
+ *     type: 'schedule',
+ *     cron: '0 9 * * *',
+ *     timezone: 'America/New_York',
+ *   })
+ *
+ *   return (
+ *     <TriggerSelector
+ *       config={config}
+ *       onChange={setConfig}
+ *     />
+ *   )
+ * }
+ * ```
  */
 
 import { useCallback } from 'react'
@@ -29,28 +47,6 @@ export interface TriggerSelectorProps {
   /** Additional CSS class */
   className?: string
 }
-
-/**
- * TriggerSelector component for choosing between scheduled and event-based triggers.
- *
- * @example
- * ```tsx
- * function RuleForm() {
- *   const [config, setConfig] = useState<TriggerFormState>({
- *     type: 'schedule',
- *     cron: '0 9 * * *',
- *     timezone: 'America/New_York',
- *   })
- *
- *   return (
- *     <TriggerSelector
- *       config={config}
- *       onChange={setConfig}
- *     />
- *   )
- * }
- * ```
- */
 export function TriggerSelector({
   config,
   onChange,
@@ -117,7 +113,7 @@ export function TriggerSelector({
         role="radiogroup"
         aria-label="Trigger type"
       >
-        <legend className="mb-3 text-base font-semibold text-foreground">When should this rule run?</legend>
+        <legend className="mb-3 text-base font-semibold text-foreground">When should this boost run?</legend>
 
         <div className="flex flex-col gap-3">
           {/* Schedule Option */}

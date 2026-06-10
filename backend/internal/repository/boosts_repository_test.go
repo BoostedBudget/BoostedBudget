@@ -36,7 +36,7 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 	defer mock.Close()
 
 	ctx := context.Background()
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 	userID := uuid.New().String()
 
 	// Complex JSONB data as specified in the migration
@@ -45,7 +45,7 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 	actions := `{"from_account_id":"uuid","to_account_id":"uuid","amount_type":"percentage","amount":10}`
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).WithArgs(
-		ruleID,
+		boostID,
 		userID,
 		"Test Transfer Rule",      // name
 		"Test description",        // description
@@ -69,7 +69,7 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 			boost_type, trigger_config, conditions, condition_logic, actions,
 			execution_count, last_executed_at, last_successful_at, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-		ruleID, userID, "Test Transfer Rule", "Test description", true, 10,
+		boostID, userID, "Test Transfer Rule", "Test description", true, 10,
 		"transfer_suggestion", triggerConfig, conditions, "AND", actions,
 		int64(0), nil, nil, time.Now(), time.Now(),
 	)
@@ -78,17 +78,17 @@ func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBoostsTable_RuleTypeConstraint verifies that the pgxmock layer accepts all valid boost_type
+// TestBoostsTable_BoostTypeConstraint verifies that the pgxmock layer accepts all valid boost_type
 // values. Note: pgxmock cannot validate DB CHECK constraints — real-Postgres acceptance is
-// covered by TestRuleType_AllValidTypesAccepted_Integration (rules_boost_type_integration_test.go).
+// covered by TestBoostType_AllValidTypesAccepted_Integration (boosts_boost_type_integration_test.go).
 // This test ensures service-layer code does not accidentally pass an unexpected literal.
-func TestBoostsTable_RuleTypeConstraint(t *testing.T) {
+func TestBoostsTable_BoostTypeConstraint(t *testing.T) {
 	// Keep in sync with migration 000088 and domain.BoostType* constants.
 	// 'savings_goal' was added by migration 000088 (#972, GAP CI).
 	validTypes := []string{"transfer_suggestion", "budget_alert", "category_rollover", "savings_goal"}
 
-	for _, ruleType := range validTypes {
-		t.Run("valid_type_"+ruleType, func(t *testing.T) {
+	for _, boostType := range validTypes {
+		t.Run("valid_type_"+boostType, func(t *testing.T) {
 			mock := setupBoostsMockDB(t)
 			defer mock.Close()
 			ctx := context.Background()
@@ -100,7 +100,7 @@ func TestBoostsTable_RuleTypeConstraint(t *testing.T) {
 				pgxmock.AnyArg(),
 				pgxmock.AnyArg(),
 				pgxmock.AnyArg(),
-				ruleType,
+				boostType,
 				pgxmock.AnyArg(),
 				pgxmock.AnyArg(),
 				pgxmock.AnyArg(),
@@ -108,7 +108,7 @@ func TestBoostsTable_RuleTypeConstraint(t *testing.T) {
 			).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			_, err := mock.Exec(ctx, `INSERT INTO boosts (id, user_id, name, description, enabled, priority, boost_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-				uuid.New().String(), uuid.New().String(), "Test", nil, true, 0, ruleType, "{}", "[]", "AND", "{}")
+				uuid.New().String(), uuid.New().String(), "Test", nil, true, 0, boostType, "{}", "[]", "AND", "{}")
 
 			assert.NoError(t, err)
 		})
@@ -122,7 +122,7 @@ func TestBoostsTable_UniqueNamePerUser(t *testing.T) {
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	ruleName := "My Transfer Rule"
+	boostName := "My Transfer Rule"
 
 	// First insert should succeed (8 arguments for rules table)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
@@ -141,11 +141,11 @@ func TestBoostsTable_UniqueNamePerUser(t *testing.T) {
 		WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	_, err1 := mock.Exec(ctx, `INSERT INTO boosts (id, user_id, name, boost_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		uuid.New().String(), userID, ruleName, "transfer_suggestion", "{}", "[]", "AND", "{}")
+		uuid.New().String(), userID, boostName, "transfer_suggestion", "{}", "[]", "AND", "{}")
 	assert.NoError(t, err1)
 
 	_, err2 := mock.Exec(ctx, `INSERT INTO boosts (id, user_id, name, boost_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		uuid.New().String(), userID, ruleName, "transfer_suggestion", "{}", "[]", "AND", "{}")
+		uuid.New().String(), userID, boostName, "transfer_suggestion", "{}", "[]", "AND", "{}")
 	assert.Error(t, err2) // Should fail due to unique constraint
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -155,16 +155,16 @@ func TestBoostsTable_UniqueNamePerUser(t *testing.T) {
 // Part 2: Boost Executions Table Tests
 // =============================================================================
 
-// TestRuleExecutionsTable_CascadeDeleteWithRule tests that executions are deleted when boost is deleted
-func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
+// TestBoostExecutionsTable_CascadeDeleteWithBoost tests that executions are deleted when boost is deleted
+func TestBoostExecutionsTable_CascadeDeleteWithBoost(t *testing.T) {
 	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 	executionID := uuid.New().String()
 
-	// Insert a rule (8 arguments)
+	// Insert a boost (8 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
 		WithArgs(
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
@@ -172,14 +172,14 @@ func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Insert an execution for that rule (4 arguments)
+	// Insert an execution for that boost (4 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boost_executions`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Delete the rule (should cascade to executions)
+	// Delete the boost (should cascade to executions)
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(ruleID).
+		WithArgs(boostID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Verify execution is also deleted (query returns no rows)
@@ -189,12 +189,12 @@ func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
 
 	// Execute the operations
 	_, _ = mock.Exec(ctx, `INSERT INTO boosts (id, user_id, name, boost_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		ruleID, uuid.New().String(), "Test", "transfer_suggestion", "{}", "[]", "AND", "{}")
+		boostID, uuid.New().String(), "Test", "transfer_suggestion", "{}", "[]", "AND", "{}")
 
 	_, _ = mock.Exec(ctx, `INSERT INTO boost_executions (id, boost_id, status, trigger_context) VALUES ($1, $2, $3, $4)`,
-		executionID, ruleID, "pending", "{}")
+		executionID, boostID, "pending", "{}")
 
-	_, _ = mock.Exec(ctx, `DELETE FROM boosts WHERE id = $1`, ruleID)
+	_, _ = mock.Exec(ctx, `DELETE FROM boosts WHERE id = $1`, boostID)
 
 	var foundID string
 	err := mock.QueryRow(ctx, `SELECT id FROM boost_executions WHERE id = $1`, executionID).Scan(&foundID)
@@ -204,8 +204,8 @@ func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestRuleExecutionsTable_StatusConstraint tests the CHECK constraint for status
-func TestRuleExecutionsTable_StatusConstraint(t *testing.T) {
+// TestBoostExecutionsTable_StatusConstraint tests the CHECK constraint for status
+func TestBoostExecutionsTable_StatusConstraint(t *testing.T) {
 	// Valid statuses should be: pending, running, completed, failed
 	validStatuses := []string{"pending", "running", "completed", "failed"}
 
@@ -227,14 +227,14 @@ func TestRuleExecutionsTable_StatusConstraint(t *testing.T) {
 	}
 }
 
-// TestRuleExecutionsTable_CanStoreJSONBContext tests JSONB storage for context data
-func TestRuleExecutionsTable_CanStoreJSONBContext(t *testing.T) {
+// TestBoostExecutionsTable_CanStoreJSONBContext tests JSONB storage for context data
+func TestBoostExecutionsTable_CanStoreJSONBContext(t *testing.T) {
 	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
 	executionID := uuid.New().String()
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 
 	// Complex JSONB context data
 	triggerContext := `{"event":"transaction_created","transaction_id":"tx-123","amount":150.50}`
@@ -243,7 +243,7 @@ func TestRuleExecutionsTable_CanStoreJSONBContext(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boost_executions`)).WithArgs(
 		executionID,
-		ruleID,
+		boostID,
 		"completed",
 		pgxmock.AnyArg(), // started_at
 		pgxmock.AnyArg(), // completed_at
@@ -263,7 +263,7 @@ func TestRuleExecutionsTable_CanStoreJSONBContext(t *testing.T) {
 			trigger_context, input_data, output_data, error_code, error_message,
 			retry_count, max_retries
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		executionID, ruleID, "completed", time.Now(), time.Now(), 100,
+		executionID, boostID, "completed", time.Now(), time.Now(), 100,
 		triggerContext, inputData, outputData, nil, nil, 0, 3,
 	)
 
@@ -283,14 +283,14 @@ func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
 
 	suggestionID := uuid.New().String()
 	userID := uuid.New().String()
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 	fromAccountID := uuid.New().String()
 	toAccountID := uuid.New().String()
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).WithArgs(
 		suggestionID,
 		userID,
-		ruleID,
+		boostID,
 		pgxmock.AnyArg(), // boost_execution_id
 		fromAccountID,
 		toAccountID,
@@ -312,7 +312,7 @@ func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
 			amount, currency_code, reason, source, status,
 			expires_at, user_action_at, user_notes, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-		suggestionID, userID, ruleID, nil, fromAccountID, toAccountID,
+		suggestionID, userID, boostID, nil, fromAccountID, toAccountID,
 		500.00, "USD", "Move excess funds to savings", "boost", "pending",
 		nil, nil, nil, time.Now(), time.Now(),
 	)
@@ -400,10 +400,10 @@ func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
 	defer mock.Close()
 	ctx := context.Background()
 
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 	suggestionID := uuid.New().String()
 
-	// Insert a rule (8 arguments)
+	// Insert a boost (8 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
 		WithArgs(
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
@@ -411,7 +411,7 @@ func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Insert a suggestion referencing that rule (7 arguments)
+	// Insert a suggestion referencing that boost (7 arguments)
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO transfer_suggestions`)).
 		WithArgs(
 			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
@@ -419,9 +419,9 @@ func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	// Delete the rule
+	// Delete the boost
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
-		WithArgs(ruleID).
+		WithArgs(boostID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Verify suggestion still exists but with NULL boost_id
@@ -431,12 +431,12 @@ func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
 
 	// Execute operations
 	_, _ = mock.Exec(ctx, `INSERT INTO boosts (id, user_id, name, boost_type, trigger_config, conditions, condition_logic, actions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		ruleID, uuid.New().String(), "Test", "transfer_suggestion", "{}", "[]", "AND", "{}")
+		boostID, uuid.New().String(), "Test", "transfer_suggestion", "{}", "[]", "AND", "{}")
 
 	_, _ = mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, boost_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		suggestionID, uuid.New().String(), ruleID, 100.00, "USD", "boost", "pending")
+		suggestionID, uuid.New().String(), boostID, 100.00, "USD", "boost", "pending")
 
-	_, _ = mock.Exec(ctx, `DELETE FROM boosts WHERE id = $1`, ruleID)
+	_, _ = mock.Exec(ctx, `DELETE FROM boosts WHERE id = $1`, boostID)
 
 	var nullBoostID *string
 	err := mock.QueryRow(ctx, `SELECT boost_id FROM transfer_suggestions WHERE id = $1`, suggestionID).Scan(&nullBoostID)

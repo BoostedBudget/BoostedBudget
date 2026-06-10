@@ -14,7 +14,7 @@ import { mockUseGetBoostByID } from '@/test/mocks/boosts-api'
 import { BoostDetailPage } from './BoostDetailPage'
 
 const mockBoost: Boost = {
-  id: 'rule-detail-1',
+  id: 'boost-detail-1',
   user_id: 'u1',
   name: 'Save Extra Cash',
   description: 'Transfer surplus to high-yield savings',
@@ -31,7 +31,7 @@ const mockBoost: Boost = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any
 
-const renderDetail = (id = 'rule-detail-1') =>
+const renderDetail = (id = 'boost-detail-1') =>
   render(
     <MemoryRouter initialEntries={[`/boosts/${id}`]}>
       <Routes>
@@ -49,19 +49,19 @@ describe('BoostDetailPage', () => {
     })
   })
 
-  it('renders the rule name as the page heading', () => {
+  it('renders the boost name as the page heading', () => {
     renderDetail()
     expect(screen.getByText('Save Extra Cash')).toBeTruthy()
   })
 
-  it('masks rule name with data-ph-mask in the heading (PII — rule names can contain financial context)', () => {
+  it('masks boost name with data-ph-mask in the heading (PII — boost names can contain financial context)', () => {
     const { container } = renderDetail()
     const maskedSpan = container.querySelector('h1 [data-ph-mask]')
     expect(maskedSpan).toBeTruthy()
     expect(maskedSpan?.textContent).toBe('Save Extra Cash')
   })
 
-  it('masks rule description with data-ph-mask (PII — descriptions can contain financial context)', () => {
+  it('masks boost description with data-ph-mask (PII — descriptions can contain financial context)', () => {
     const { container } = renderDetail()
     const allMasked = container.querySelectorAll('[data-ph-mask]')
     const descMasked = Array.from(allMasked).some(
@@ -70,26 +70,26 @@ describe('BoostDetailPage', () => {
     expect(descMasked).toBe(true)
   })
 
-  it('renders a back link to the rules tab', () => {
+  it('renders a back link to the boosts tab', () => {
     renderDetail()
     const bodyText = document.body.textContent ?? ''
     expect(/back.*boosts|boosts/i.test(bodyText)).toBe(true)
   })
 
-  it('renders RuleExecutionHistory section', () => {
+  it('renders BoostExecutionHistory section', () => {
     renderDetail()
-    // RuleExecutionHistory renders "No executions yet" when empty (mock returns [])
+    // BoostExecutionHistory renders "No executions yet" when empty (mock returns [])
     const bodyText = document.body.textContent ?? ''
     expect(/recent executions|executions/i.test(bodyText)).toBe(true)
   })
 
-  it('shows loading state when rule is loading', () => {
+  it('shows loading state when boost is loading', () => {
     mockUseGetBoostByID.mockReturnValue({ data: null, isLoading: true, error: null })
     const { container } = renderDetail()
     expect(container.querySelector('.animate-pulse') || screen.queryByText(/loading/i)).toBeTruthy()
   })
 
-  it('shows not-found message when rule fetch returns null', () => {
+  it('shows not-found message when boost fetch returns null', () => {
     mockUseGetBoostByID.mockReturnValue({ data: null, isLoading: false, error: null })
     renderDetail('nonexistent-id')
     const bodyText = document.body.textContent ?? ''

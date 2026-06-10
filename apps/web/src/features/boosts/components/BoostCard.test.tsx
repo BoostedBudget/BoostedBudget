@@ -1,5 +1,5 @@
 /**
- * RuleCard Component Tests
+ * BoostCard Component Tests
  * Issue #39: Rule Builder UI
  *
  * Tests for the rule card display component.
@@ -13,7 +13,7 @@ import { BoostCard } from './BoostCard'
 import type { Boost } from '@boostedbudget/api-client/models'
 
 const mockBoost: Boost = {
-  id: 'rule-1',
+  id: 'boost-1',
   user_id: 'user-1',
   name: 'Daily Budget Check',
   description: 'Check budget usage daily',
@@ -35,16 +35,16 @@ const mockBoost: Boost = {
   last_successful_at: '2024-01-15T09:00:00Z',
 } as const
 
-describe('RuleCard', () => {
+describe('BoostCard', () => {
 
   describe('Rendering', () => {
-    it('should render rule name', () => {
+    it('should render boost name', () => {
       render(<BoostCard boost={mockBoost} />)
 
       expect(screen.getByText('Daily Budget Check')).toBeInTheDocument()
     })
 
-    it('should render rule description when provided', () => {
+    it('should render boost description when provided', () => {
       render(<BoostCard boost={mockBoost} />)
 
       expect(screen.getByText('Check budget usage daily')).toBeInTheDocument()
@@ -57,7 +57,7 @@ describe('RuleCard', () => {
       expect(screen.queryByText('Check budget usage daily')).not.toBeInTheDocument()
     })
 
-    it('should render rule type label', () => {
+    it('should render boost type label', () => {
       render(<BoostCard boost={mockBoost} />)
 
       expect(screen.getByText('Budget Alert')).toBeInTheDocument()
@@ -70,8 +70,8 @@ describe('RuleCard', () => {
     })
 
     it('should render disabled status indicator when disabled', () => {
-      const disabledRule = { ...mockBoost, enabled: false }
-      render(<BoostCard boost={disabledRule} />)
+      const disabledBoost = { ...mockBoost, enabled: false }
+      render(<BoostCard boost={disabledBoost} />)
 
       expect(screen.getByText('Disabled')).toBeInTheDocument()
     })
@@ -89,8 +89,8 @@ describe('RuleCard', () => {
     })
 
     it('should show "Never run" when no last execution', () => {
-      const neverRunRule = { ...mockBoost, last_executed_at: undefined }
-      render(<BoostCard boost={neverRunRule} />)
+      const neverRunBoost = { ...mockBoost, last_executed_at: undefined }
+      render(<BoostCard boost={neverRunBoost} />)
 
       expect(screen.getByText(/never run/i)).toBeInTheDocument()
     })
@@ -115,7 +115,7 @@ describe('RuleCard', () => {
     })
   })
 
-  describe('Rule Types', () => {
+  describe('Boost Types', () => {
     it('should show transfer suggestion label', () => {
       const rule = { ...mockBoost, boost_type: 'transfer_suggestion' }
       render(<BoostCard boost={rule} />)
@@ -166,14 +166,14 @@ describe('RuleCard', () => {
       expect(onToggle).toHaveBeenCalledWith(mockBoost, false)
     })
 
-    it('should call onToggle with true when enabling disabled rule', () => {
+    it('should call onToggle with true when enabling disabled boost', () => {
       const onToggle = mock(() => {})
-      const disabledRule = { ...mockBoost, enabled: false }
-      render(<BoostCard boost={disabledRule} onToggle={onToggle} />)
+      const disabledBoost = { ...mockBoost, enabled: false }
+      render(<BoostCard boost={disabledBoost} onToggle={onToggle} />)
 
       fireEvent.click(screen.getByRole('switch'))
 
-      expect(onToggle).toHaveBeenCalledWith(disabledRule, true)
+      expect(onToggle).toHaveBeenCalledWith(disabledBoost, true)
     })
 
     it('should call onTest when test button is clicked', () => {
@@ -255,10 +255,10 @@ describe('RuleCard', () => {
       expect(toggle).toHaveAttribute('aria-checked', 'true')
     })
 
-    it('should have accessible toggle for disabled rule', () => {
+    it('should have accessible toggle for disabled boost', () => {
       const onToggle = mock(() => {})
-      const disabledRule = { ...mockBoost, enabled: false }
-      render(<BoostCard boost={disabledRule} onToggle={onToggle} />)
+      const disabledBoost = { ...mockBoost, enabled: false }
+      render(<BoostCard boost={disabledBoost} onToggle={onToggle} />)
 
       const toggle = screen.getByRole('switch')
       expect(toggle).toHaveAttribute('aria-checked', 'false')
@@ -280,13 +280,13 @@ describe('RuleCard', () => {
   })
 
   describe('Condition summary (W5)', () => {
-    const ruleWithConditions = {
+    const boostWithConditions = {
       ...mockBoost,
       conditions: [{ field: 'budget.percent_used', operator: 'gte', value: 80 }],
     }
 
     it('shows condition summary when conditions are present', () => {
-      render(<BoostCard boost={ruleWithConditions} />)
+      render(<BoostCard boost={boostWithConditions} />)
       // Expects "Budget % Used" label and the value "80"
       const bodyText = document.body.textContent ?? ''
       expect(/Budget % Used/i.test(bodyText)).toBe(true)
@@ -305,7 +305,7 @@ describe('RuleCard', () => {
       expect(screen.getByRole('button', { name: /view recent executions/i })).toBeTruthy()
     })
 
-    it('calls onViewExecutions with rule when link is clicked', () => {
+    it('calls onViewExecutions with boost when link is clicked', () => {
       const onViewExecutions = mock((_boost: Boost) => {})
       render(<BoostCard boost={mockBoost} onViewExecutions={onViewExecutions} />)
       fireEvent.click(screen.getByRole('button', { name: /view recent executions/i }))
@@ -319,24 +319,24 @@ describe('RuleCard', () => {
   })
 
   describe('Action summary (R2-B)', () => {
-    it('shows action summary for transfer_suggestion rule with amount', () => {
-      const transferRule = {
+    it('shows action summary for transfer_suggestion boost with amount', () => {
+      const transferBoost = {
         ...mockBoost,
         boost_type: 'transfer_suggestion',
         actions: { amount: 200 },
       }
-      render(<BoostCard boost={transferRule} />)
+      render(<BoostCard boost={transferBoost} />)
       const bodyText = document.body.textContent ?? ''
       expect(bodyText).toContain('Suggest transfer $200')
     })
 
-    it('shows action summary for transfer_suggestion rule without amount', () => {
-      const transferRule = {
+    it('shows action summary for transfer_suggestion boost without amount', () => {
+      const transferBoost = {
         ...mockBoost,
         boost_type: 'transfer_suggestion',
         actions: {},
       }
-      render(<BoostCard boost={transferRule} />)
+      render(<BoostCard boost={transferBoost} />)
       const bodyText = document.body.textContent ?? ''
       expect(bodyText).toContain('Suggest transfer')
     })
@@ -348,13 +348,13 @@ describe('RuleCard', () => {
     })
 
     it('masks action summary with data-ph-mask (PII — financial amount)', () => {
-      const transferRule = {
+      const transferBoost = {
         ...mockBoost,
         boost_type: 'transfer_suggestion',
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         actions: { amount: 200 } as any,
       }
-      const { container } = render(<BoostCard boost={transferRule} />)
+      const { container } = render(<BoostCard boost={transferBoost} />)
       // boost.name is always masked; action summary containing "$200" must also be masked
       const masked = container.querySelectorAll('[data-ph-mask]')
       expect(masked.length).toBeGreaterThanOrEqual(2)
@@ -363,11 +363,11 @@ describe('RuleCard', () => {
     it('masks condition summary with data-ph-mask (PII — condition values can be currency amounts)', () => {
       // R4-1: budget.total_spent is a currency field — condition summary "When Budget Total Spent ≥ 500"
       // must be masked just like the action summary on the line below it.
-      const ruleWithAmountCondition = {
+      const boostWithAmountCondition = {
         ...mockBoost,
         conditions: [{ field: 'budget.total_spent', operator: 'gte', value: 500 }],
       }
-      const { container } = render(<BoostCard boost={ruleWithAmountCondition} />)
+      const { container } = render(<BoostCard boost={boostWithAmountCondition} />)
       // At least: boost.name mask + condition summary mask (+ optional action mask)
       const masked = container.querySelectorAll('[data-ph-mask]')
       expect(masked.length).toBeGreaterThanOrEqual(2)

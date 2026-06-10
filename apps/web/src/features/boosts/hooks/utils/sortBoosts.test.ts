@@ -6,7 +6,7 @@ import { sortBoosts } from './sortBoosts'
 const boost = (overrides: Record<string, any> = {}): Boost =>
   ({
     id: 'r',
-    name: 'rule',
+    name: 'boost',
     description: '',
     enabled: true,
     boost_type: 'tag',

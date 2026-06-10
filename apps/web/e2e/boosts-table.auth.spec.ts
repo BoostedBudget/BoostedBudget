@@ -24,7 +24,7 @@ import type { Page } from '@playwright/test'
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const FIXTURE_RULES = [
+const FIXTURE_BOOSTS = [
   {
     id: 'boost-1',
     user_id: 'user-123',
@@ -61,7 +61,7 @@ const FIXTURE_RULES = [
   },
 ]
 
-async function mockRulesDependencies(page: Page) {
+async function mockBoostsDependencies(page: Page) {
   await mockAuthDependencies(page)
 
   await page.route('**/api/v1/boosts*', (route) => {
@@ -69,7 +69,7 @@ async function mockRulesDependencies(page: Page) {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(FIXTURE_RULES),
+        body: JSON.stringify(FIXTURE_BOOSTS),
       })
     } else {
       route.continue()
@@ -125,14 +125,14 @@ test.describe('Boosts Page — Core Rendering', () => {
   })
 
   test('renders the page heading', async ({ page }) => {
-    await mockRulesDependencies(page)
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('heading', { level: 1, name: /boosts/i })).toBeVisible()
   })
 
-  test('shows the rule count badge', async ({ page }) => {
-    await mockRulesDependencies(page)
+  test('shows the boost count badge', async ({ page }) => {
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
     await expect(page.getByText('2 boosts')).toBeVisible()
@@ -149,7 +149,7 @@ test.describe('Boosts Page — Table View', () => {
   })
 
   test('switching to table view renders a table element', async ({ page }) => {
-    await mockRulesDependencies(page)
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
 
@@ -161,8 +161,8 @@ test.describe('Boosts Page — Table View', () => {
     await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
   })
 
-  test('table view shows at least one rule row', async ({ page }) => {
-    await mockRulesDependencies(page)
+  test('table view shows at least one boost row', async ({ page }) => {
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
 
@@ -179,8 +179,8 @@ test.describe('Boosts Page — Table View', () => {
     expect(rowCount).toBeGreaterThanOrEqual(2) // header + at least 1 data row
   })
 
-  test('table view shows the rule name', async ({ page }) => {
-    await mockRulesDependencies(page)
+  test('table view shows the boost name', async ({ page }) => {
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
 
@@ -192,7 +192,7 @@ test.describe('Boosts Page — Table View', () => {
   })
 
   test('clicking the Name header cycles aria-sort asc → desc → unsorted (#1134)', async ({ page }) => {
-    await mockRulesDependencies(page)
+    await mockBoostsDependencies(page)
     await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
 
