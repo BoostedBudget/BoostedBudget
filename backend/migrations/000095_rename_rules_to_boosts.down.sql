@@ -129,6 +129,10 @@ BEGIN
     END IF;
 END $$;
 
+-- Restore source data values BEFORE altering the constraint (non-empty table safety).
+-- Must run UPDATE first so existing 'boost' rows don't violate the restored CHECK.
+UPDATE transfer_suggestions SET source = 'rule' WHERE source = 'boost';
+
 -- Restore valid_suggestion_source to accept 'rule' instead of 'boost'
 DO $$
 BEGIN
@@ -148,9 +152,6 @@ BEGIN
             CHECK (source IN ('rule', 'manual', 'ai'));
     END IF;
 END $$;
-
--- Restore source data values
-UPDATE transfer_suggestions SET source = 'rule' WHERE source = 'boost';
 
 -- =============================================================================
 -- STEP 4: Restore column names

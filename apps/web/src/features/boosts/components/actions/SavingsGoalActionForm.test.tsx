@@ -6,10 +6,12 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { SavingsGoalAction } from '../../types'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
 
 // Mock savings goals
 const mockSavingsGoals = [
@@ -55,21 +57,10 @@ const mockAccounts = [
   },
 ]
 
-mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
-  useGetAccounts: () => ({
-    data: { accounts: mockAccounts },
-    isLoading: false,
-    error: null,
-  }),
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useGetSavingsGoals: () => ({
-    data: mockSavingsGoals,
-    isLoading: false,
-    error: null,
-  }),
-}))
+// Inline mock.module() removed: both endpoints are registered via preloaded centralized mocks
+// (accounts-api.ts and savings-goals-api.ts in bunfig.toml). Using configurable beforeEach
+// instead of static stubs avoids polluting other test files' mock state.
+// See: https://github.com/BoostedBudget/BoostedBudget2/issues/1283 FIX-2
 
 import { SavingsGoalActionForm } from './SavingsGoalActionForm'
 
@@ -91,6 +82,19 @@ const defaultAction: SavingsGoalAction = {
 }
 
 describe('SavingsGoalActionForm', () => {
+  beforeEach(() => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: mockAccounts },
+      isLoading: false,
+      error: null,
+    })
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: mockSavingsGoals,
+      isLoading: false,
+      error: null,
+    })
+  })
+
   describe('Rendering', () => {
     it('should render savings goal selector', () => {
       renderWithProviders(

@@ -6,10 +6,11 @@
  * TDD RED: Writing tests before implementation.
  */
 
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { TransferAction } from '../../types'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 
 // Mock accounts
 const mockAccounts = [
@@ -39,13 +40,10 @@ const mockAccounts = [
   },
 ]
 
-mock.module('@boostedbudget/api-client/endpoints/accounts/accounts', () => ({
-  useGetAccounts: () => ({
-    data: { accounts: mockAccounts },
-    isLoading: false,
-    error: null,
-  }),
-}))
+// Inline mock.module() removed: accounts endpoint is registered via preloaded centralized mock
+// (accounts-api.ts in bunfig.toml). Using configurable beforeEach instead of static stubs
+// avoids polluting other test files' mock state.
+// See: https://github.com/BoostedBudget/BoostedBudget2/issues/1283 FIX-2
 
 import { TransferActionForm } from './TransferActionForm'
 
@@ -67,6 +65,14 @@ const defaultAction: TransferAction = {
 }
 
 describe('TransferActionForm', () => {
+  beforeEach(() => {
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: mockAccounts },
+      isLoading: false,
+      error: null,
+    })
+  })
+
   describe('Rendering', () => {
     it('should render from account selector', () => {
       renderWithProviders(
