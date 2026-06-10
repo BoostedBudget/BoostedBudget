@@ -28,7 +28,7 @@ import (
 
 func TestGetByUserIDFiltered_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewAutomationRulesRepository(pool)
+	repo := NewBoostsRepository(pool)
 	ctx := context.Background()
 
 	tx, err := pool.Begin(ctx)
@@ -71,7 +71,7 @@ func TestGetByUserIDFiltered_Integration(t *testing.T) {
 	})
 
 	t.Run("filters to transfer_suggestion and savings_goal only", func(t *testing.T) {
-		filter := []domain.RuleType{domain.RuleTypeTransferSuggestion, domain.RuleTypeSavingsGoal}
+		filter := []domain.BoostType{domain.BoostTypeTransferSuggestion, domain.BoostTypeSavingsGoal}
 		rules, err := repo.GetByUserIDFiltered(ctx, userID.String(), filter)
 		require.NoError(t, err)
 
@@ -94,7 +94,7 @@ func TestGetByUserIDFiltered_Integration(t *testing.T) {
 	})
 
 	t.Run("unknown rule_type in filter returns empty, not an error", func(t *testing.T) {
-		filter := []domain.RuleType{"nonexistent_type"}
+		filter := []domain.BoostType{"nonexistent_type"}
 		rules, err := repo.GetByUserIDFiltered(ctx, userID.String(), filter)
 		require.NoError(t, err)
 		assert.Empty(t, rules, "unknown rule type should yield zero results")

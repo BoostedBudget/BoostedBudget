@@ -631,7 +631,7 @@ describe('BoostsManagePage', () => {
   // R8-1c: Rule type segment for Boosts Rules tab (#1267)
   describe('Rule type segment (R8-1c)', () => {
     it('renders segment control when showTypeSegment is true', async () => {
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
         expect(screen.getByRole('group', { name: /boost type filter/i })).toBeInTheDocument()
@@ -649,19 +649,19 @@ describe('BoostsManagePage', () => {
       expect(screen.queryByRole('group', { name: /boost type filter/i })).not.toBeInTheDocument()
     })
 
-    it('calls useGetBoosts with rule_type when default is Transfer & Savings', async () => {
+    it('calls useGetBoosts with boost_type when default is Transfer & Savings', async () => {
       mockUseGetBoosts.mockClear()
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
         expect(screen.getByRole('group', { name: /boost type filter/i })).toBeInTheDocument()
       })
       const lastCallParams = mockUseGetBoosts.mock.calls.at(-1)?.[0]
-      expect(lastCallParams).toEqual({ rule_type: ['transfer_suggestion', 'savings_goal'] })
+      expect(lastCallParams).toEqual({ boost_type: ['transfer_suggestion', 'savings_goal'] })
     })
 
-    it('calls useGetBoosts without rule_type when All rules is selected', async () => {
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+    it('calls useGetBoosts without boost_type when All rules is selected', async () => {
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument()
@@ -676,7 +676,7 @@ describe('BoostsManagePage', () => {
     })
 
     it('fires boosts_filter_changed when segment is changed', async () => {
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
         expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument()
@@ -693,7 +693,7 @@ describe('BoostsManagePage', () => {
     })
 
     it('fires boosts_filter_changed with filter:transfer_savings when switching back', async () => {
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       // First switch to "All rules"
       await waitFor(() => expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument())
@@ -723,7 +723,7 @@ describe('BoostsManagePage', () => {
         refetch: mockRefetchBoosts,
       })
 
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
         expect(screen.getByRole('group', { name: /boost type filter/i })).toBeInTheDocument()
@@ -732,7 +732,7 @@ describe('BoostsManagePage', () => {
       expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument()
     })
 
-    it('clicking All rules in filtered-empty state fires boosts_filter_changed and clears rule_type', async () => {
+    it('clicking All rules in filtered-empty state fires boosts_filter_changed and clears boost_type', async () => {
       mockUseGetBoosts.mockReturnValue({
         data: [],
         isLoading: false,
@@ -740,7 +740,7 @@ describe('BoostsManagePage', () => {
         refetch: mockRefetchBoosts,
       })
 
-      renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+      renderWithProviders(<BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument())
       mockUseGetBoosts.mockClear()
@@ -816,7 +816,7 @@ describe('BoostsManagePage', () => {
       }
 
       // Pre-seed the FILTERED cache key — this is the key the segment view reads.
-      const filteredParams = { rule_type: ['transfer_suggestion', 'savings_goal'] }
+      const filteredParams = { boost_type: ['transfer_suggestion', 'savings_goal'] }
       queryClient.setQueryData(getGetBoostsQueryKey(filteredParams), [seedRule])
 
       mockUseGetBoosts.mockReturnValueOnce({
@@ -829,7 +829,7 @@ describe('BoostsManagePage', () => {
       render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter>
-            <BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />
+            <BoostsManagePage showTypeSegment boostTypeFilter={['transfer_suggestion', 'savings_goal']} />
           </MemoryRouter>
         </QueryClientProvider>
       )

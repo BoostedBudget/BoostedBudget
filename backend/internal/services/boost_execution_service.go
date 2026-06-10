@@ -187,8 +187,8 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 
 	if s.analytics != nil {
 		s.analytics.Capture(boost.UserID, phclient.EventBoostTriggered, map[string]interface{}{
-			"rule_id":   boost.ID,
-			"rule_type": string(boost.BoostType),
+			"rule_id":    boost.ID,
+			"boost_type": string(boost.BoostType),
 		})
 	}
 

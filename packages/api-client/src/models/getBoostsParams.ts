@@ -30,8 +30,8 @@
 
 export type GetBoostsParams = {
 /**
- * Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
+ * Filter by boost type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
  * @nullable
  */
-rule_type?: string[] | null;
+boost_type?: string[] | null;
 };

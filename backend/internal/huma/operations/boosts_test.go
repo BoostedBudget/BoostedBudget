@@ -219,7 +219,7 @@ func TestAutomationRuleHandler_GetAutomationRules_WithRuleTypeFilter(t *testing.
 
 	input := &GetBoostsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
-		RuleType:           []string{"transfer_suggestion", "savings_goal"},
+		BoostType:          []string{"transfer_suggestion", "savings_goal"},
 	}
 
 	result, err := handler.GetBoosts(context.Background(), input)
@@ -236,7 +236,7 @@ func TestAutomationRuleHandler_GetAutomationRules_InvalidRuleType(t *testing.T) 
 
 	input := &GetBoostsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
-		RuleType:           []string{"transfer_suggestion", "invalid_type"},
+		BoostType:          []string{"transfer_suggestion", "invalid_type"},
 	}
 
 	_, err := handler.GetBoosts(context.Background(), input)

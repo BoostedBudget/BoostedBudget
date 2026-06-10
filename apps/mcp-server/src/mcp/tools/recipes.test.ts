@@ -216,7 +216,7 @@ describe('recipe.templates', () => {
 
   it('includes a "Transfer Boosts Audit" template with getBoosts and getBoostExecutions', () => {
     // #1283: renamed from "Transfer Rules Audit" / getAutomationRules / getRuleExecutions
-    // Note: the query param name rule_type is intentionally unchanged (handler-side filter key)
+    // #1287: query param also renamed from rule_type to boost_type
     const recipe = STARTER_RECIPE_TEMPLATES.find((t) => t.name === 'Transfer Boosts Audit')
     expect(recipe).toBeDefined()
     const opIds = recipe!.calls.map((c) => c.operationId)
@@ -224,6 +224,6 @@ describe('recipe.templates', () => {
     expect(opIds).toContain('getBoostExecutions')
     // Should filter to transfer-generating boost types
     const boostsCall = recipe!.calls.find((c) => c.operationId === 'getBoosts')
-    expect(boostsCall?.params?.['rule_type']).toEqual(['transfer_suggestion', 'savings_goal'])
+    expect(boostsCall?.params?.['boost_type']).toEqual(['transfer_suggestion', 'savings_goal'])
   })
 })

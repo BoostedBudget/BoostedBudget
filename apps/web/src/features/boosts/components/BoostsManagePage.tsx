@@ -40,23 +40,23 @@ interface BoostsManagePageProps {
    * Accepts readonly arrays (e.g. `as const` tuples from constants files).
    * Defaults to showing all boosts when omitted (no segment).
    */
-  ruleTypeFilter?: readonly string[]
+  boostTypeFilter?: readonly string[]
 }
 
 /**
  * BoostsManagePage displays the list of automation boosts with card/table toggle.
- * Accepts optional `showTypeSegment` + `ruleTypeFilter` props used by RulesTab
+ * Accepts optional `showTypeSegment` + `boostTypeFilter` props used by RulesTab
  * (inside Boosts page) to scope the default view to transfer-generating boost types
  * while still allowing "All boosts" navigation to avoid orphaning other types.
  */
-export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: BoostsManagePageProps = {}) {
+export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: BoostsManagePageProps = {}) {
   const trackEvent = useTrackEvent()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   // Copy to mutable array so the state setter and query params receive the right type.
-  const [activeRuleTypeFilter, setActiveRuleTypeFilter] = useState<string[] | undefined>(
-    ruleTypeFilter ? [...ruleTypeFilter] : undefined
+  const [activeBoostTypeFilter, setActiveBoostTypeFilter] = useState<string[] | undefined>(
+    boostTypeFilter ? [...boostTypeFilter] : undefined
   )
 
   const [view, setView] = useState<ListView>(() => {
@@ -76,8 +76,8 @@ export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: Bo
   const sortColumn = sort?.columnId as SortColumn | undefined
   const sortDirection = sort?.direction ?? 'asc'
 
-  // Fetch boosts — pass rule_type filter when segment is active
-  const queryParams = activeRuleTypeFilter ? { rule_type: activeRuleTypeFilter } : undefined
+  // Fetch boosts — pass boost_type filter when segment is active
+  const queryParams = activeBoostTypeFilter ? { boost_type: activeBoostTypeFilter } : undefined
   const {
     data,
     isLoading,
@@ -174,7 +174,7 @@ export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: Bo
 
   const handleSegmentChange = useCallback(
     (filter: readonly string[] | undefined) => {
-      setActiveRuleTypeFilter(filter ? [...filter] : undefined)
+      setActiveBoostTypeFilter(filter ? [...filter] : undefined)
       trackEvent(ANALYTICS_EVENTS.BOOSTS_FILTER_CHANGED, {
         filter: filter ? 'transfer_savings' : 'all',
       })
@@ -220,14 +220,14 @@ export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: Bo
       className="mb-4 flex gap-2"
     >
       <Button
-        variant={activeRuleTypeFilter ? 'default' : 'outline'}
+        variant={activeBoostTypeFilter ? 'default' : 'outline'}
         size="sm"
-        onClick={() => handleSegmentChange(ruleTypeFilter)}
+        onClick={() => handleSegmentChange(boostTypeFilter)}
       >
         Transfer &amp; Savings
       </Button>
       <Button
-        variant={!activeRuleTypeFilter ? 'default' : 'outline'}
+        variant={!activeBoostTypeFilter ? 'default' : 'outline'}
         size="sm"
         onClick={() => handleSegmentChange(undefined)}
       >
@@ -247,12 +247,12 @@ export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: Bo
         <EmptyState
           icon={<Zap />}
           title={
-            activeRuleTypeFilter
+            activeBoostTypeFilter
               ? 'No transfer or savings boosts'
               : 'No automation boosts yet'
           }
           description={
-            activeRuleTypeFilter
+            activeBoostTypeFilter
               ? 'You have no transfer suggestion or savings goal boosts. Switch to "All boosts" to see your other boost types, or create a new one.'
               : 'Create your first automation boost to automatically manage your budgets, transfers, and savings.'
           }
