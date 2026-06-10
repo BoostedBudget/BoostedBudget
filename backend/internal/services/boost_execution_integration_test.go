@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package services provides real-Postgres integration tests for category-scoped rule execution.
-// These tests exercise the full rule evaluation stack (BoostService.CreateRule →
+// These tests exercise the full boost evaluation stack (BoostService.CreateBoost →
 // BoostExecutionService.ProcessEventTrigger → transfer_suggestions insert) against a live
 // database — a level of coverage that pgxmock cannot provide because it never sends SQL to a
 // real planner and thus cannot verify constraint enforcement or multi-table behavior.
@@ -151,7 +151,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Shared service constructor helper — wires real repos onto the transaction-scoped repos.
-	buildServices := func(txDB repository.DB) (*automationRuleService, *ruleExecutionService) {
+	buildServices := func(txDB repository.DB) (*boostService, *boostExecutionService) {
 		budgetRepo := repository.NewBudgetRepository(txDB)
 		rulesRepo := repository.NewBoostsRepository(txDB)
 		execRepo := repository.NewBoostExecutionRepository(txDB)
@@ -177,7 +177,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		// Create a rule scoped to Budget X / Category C with threshold 30 % → fires at 40 %.
 		req := buildCategoryScopedRuleReq(t, fix.budgetXID, fix.catCID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
 		// EventData: budget_id = X, categories has C at 40 % used.
@@ -215,7 +215,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		// Rule scoped to Budget X / Category C.
 		req := buildCategoryScopedRuleReq(t, fix.budgetXID, fix.catCID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
 		// EventData: budget_id = Y (wrong budget) — rule must be skipped entirely.
@@ -275,10 +275,10 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		// user1 tries to create a rule scoped to user2's category → must be rejected.
 		// We use budget2ID as BudgetID so the budget+category binding is consistent for
-		// ValidateForPersistence; the ownership check fires in validateRuleReferenceOwnership.
+		// ValidateForPersistence; the ownership check fires in validateBoostReferenceOwnership.
 		req := buildCategoryScopedRuleReq(t, budget2ID, cat2ID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
-		require.Error(t, err, "CreateRule with another user's category must fail")
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
+		require.Error(t, err, "CreateBoost with another user's category must fail")
 		assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
 			"expected ErrBoostConditionForbidden, got: %v", err)
 	})
@@ -296,7 +296,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		// Category C is in Budget X but we claim it belongs to Budget Y → must fail.
 		req := buildCategoryScopedRuleReq(t, fix.budgetYID, fix.catCID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.Error(t, err, "category C is not in Budget Y — must be rejected")
 		assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 			"expected ErrInvalidBoost (category not in budget), got: %v", err)
@@ -342,7 +342,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 			Actions: buildTransferActionsJSON(t),
 		}
 
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.Error(t, err, "rule spanning two budgets must be rejected")
 		assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 			"expected ErrInvalidBoost (multi-budget), got: %v", err)
@@ -360,7 +360,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 		ruleSvc, execSvc := buildServices(tx)
 
 		req := buildCategoryScopedRuleReq(t, fix.budgetXID, fix.catCID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
 		// Build event data using the typed map shape, then JSON round-trip it to produce
@@ -403,7 +403,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 		ruleSvc, execSvc := buildServices(tx)
 
 		req := buildCategoryScopedRuleReq(t, fix.budgetXID, fix.catCID, 30.0)
-		_, err = ruleSvc.CreateRule(ctx, fix.userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
 		// EventData contains Budget X's ID but an empty categories map — Category C is absent.
@@ -457,7 +457,7 @@ func TestRuleExecution_CategoryScoped_Integration(t *testing.T) {
 
 		// Rule: percent_used > 50 — should fire because PercentUsed() = 100.
 		req := buildCategoryScopedRuleReq(t, budgetID, catID, 50.0)
-		_, err = ruleSvc.CreateRule(ctx, userID, req)
+		_, err = ruleSvc.CreateBoost(ctx, userID, req)
 		require.NoError(t, err)
 
 		zeroCat := domain.BudgetCategory{

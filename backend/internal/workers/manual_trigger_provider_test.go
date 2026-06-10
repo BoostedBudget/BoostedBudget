@@ -47,11 +47,11 @@ func TestManualProvider_Stop(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestManualProvider_TriggerRule_Success(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_Success(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -67,7 +67,7 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, "exec-1", result.ID)
@@ -77,11 +77,11 @@ func TestManualProvider_TriggerRule_Success(t *testing.T) {
 	mockExecutor.AssertExpectations(t)
 }
 
-func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_WithUserData(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -106,7 +106,7 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 		"amount":       1500.00,
 	}
 
-	result, err := provider.TriggerRule(context.Background(), "rule-1", userData)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", userData)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -120,44 +120,44 @@ func TestManualProvider_TriggerRule_WithUserData(t *testing.T) {
 	assert.NotNil(t, capturedTriggerData["triggered_at"])
 }
 
-func TestManualProvider_TriggerRule_RuleNotFound(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_RuleNotFound(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
 	mockRepo.On("GetByID", mock.Anything, "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(context.Background(), "rule-unknown", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-unknown", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, domain.ErrBoostNotFound, err)
 }
 
-func TestManualProvider_TriggerRule_RuleDisabled(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_RuleDisabled(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 	rule.Enabled = false
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, ErrRuleDisabled, err)
+	assert.Equal(t, ErrBoostDisabled, err)
 }
 
-func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_ExecutorError(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -172,32 +172,32 @@ func TestManualProvider_TriggerRule_ExecutorError(t *testing.T) {
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
-func TestManualProvider_TriggerRule_ContextCancelled(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_ContextCancelled(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(ctx, "rule-1", nil)
+	result, err := provider.TriggerBoost(ctx, "rule-1", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
 }
 
-func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_UpdatesExecutionStats(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -213,7 +213,7 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	_, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	_, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
 
 	// Verify execution stats were updated
@@ -221,11 +221,11 @@ func TestManualProvider_TriggerRule_UpdatesExecutionStats(t *testing.T) {
 	mockRepo.AssertCalled(t, "UpdateLastSuccessful", mock.Anything, "rule-1")
 }
 
-func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_FailedExecution_NoLastSuccessful(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -240,7 +240,7 @@ func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.
 
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
 	assert.Equal(t, domain.ExecutionStatusFailed, result.Status)
 
@@ -248,11 +248,11 @@ func TestManualProvider_TriggerRule_FailedExecution_NoLastSuccessful(t *testing.
 	mockRepo.AssertNotCalled(t, "UpdateLastSuccessful")
 }
 
-func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_VerifiesUserOwnership(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -269,16 +269,16 @@ func TestManualProvider_TriggerRule_VerifiesUserOwnership(t *testing.T) {
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	// The provider uses the rule's UserID for execution
-	result, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	result, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
 
-func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_MergesTriggerDataCorrectly(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -303,7 +303,7 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 		"notes":       "Manual test",
 	}
 
-	_, err := provider.TriggerRule(context.Background(), "rule-1", userData)
+	_, err := provider.TriggerBoost(context.Background(), "rule-1", userData)
 	require.NoError(t, err)
 
 	// Verify all expected fields are present
@@ -320,11 +320,11 @@ func TestManualProvider_TriggerRule_MergesTriggerDataCorrectly(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), triggeredAt, 5*time.Second)
 }
 
-func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_HandlesEmptyTriggerData(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	execution := &domain.BoostExecution{
 		ID:     "exec-1",
@@ -344,7 +344,7 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 	provider := NewManualTriggerProvider(mockRepo, mockExecutor, nil)
 
 	// nil trigger data should still work
-	_, err := provider.TriggerRule(context.Background(), "rule-1", nil)
+	_, err := provider.TriggerBoost(context.Background(), "rule-1", nil)
 	require.NoError(t, err)
 
 	// Verify base fields are still set
@@ -352,11 +352,11 @@ func TestManualProvider_TriggerRule_HandlesEmptyTriggerData(t *testing.T) {
 	assert.Equal(t, "rule-1", capturedTriggerData["boost_id"])
 }
 
-func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing.T) {
-	mockRepo := new(MockRuleRepository)
-	mockExecutor := new(MockRuleExecutor)
+func TestManualProvider_TriggerBoost_SerializesTriggerDataForExecution(t *testing.T) {
+	mockRepo := new(MockBoostsRepository)
+	mockExecutor := new(MockBoostExecutor)
 
-	rule := createTestRule("rule-1", "user-1", "0 9 * * *")
+	rule := createTestBoost("rule-1", "user-1", "0 9 * * *")
 
 	mockRepo.On("GetByID", mock.Anything, "rule-1").Return(rule, nil)
 	mockRepo.On("IncrementExecutionCount", mock.Anything, "rule-1").Return(nil)
@@ -380,7 +380,7 @@ func TestManualProvider_TriggerRule_SerializesTriggerDataForExecution(t *testing
 		"array": []string{"a", "b", "c"},
 	}
 
-	_, err := provider.TriggerRule(context.Background(), "rule-1", complexData)
+	_, err := provider.TriggerBoost(context.Background(), "rule-1", complexData)
 	require.NoError(t, err)
 
 	// Verify complex data is properly handled

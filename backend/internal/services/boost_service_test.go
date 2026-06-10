@@ -19,8 +19,8 @@ import (
 // Helpers
 // ============================================================================
 
-// savingsGoalRuleActions returns a marshalled savings_goal action JSON for the given IDs.
-func savingsGoalRuleActions(savingsGoalID, fromAccountID string) json.RawMessage {
+// savingsGoalBoostActions returns a marshalled savings_goal action JSON for the given IDs.
+func savingsGoalBoostActions(savingsGoalID, fromAccountID string) json.RawMessage {
 	b, _ := json.Marshal(map[string]interface{}{
 		"savings_goal_id":  savingsGoalID,
 		"from_account_id":  fromAccountID,
@@ -30,8 +30,8 @@ func savingsGoalRuleActions(savingsGoalID, fromAccountID string) json.RawMessage
 	return b
 }
 
-// transferRuleActions returns a marshalled transfer_suggestion action JSON.
-func transferRuleActions(fromAccountID, toAccountID string) json.RawMessage {
+// transferBoostActions returns a marshalled transfer_suggestion action JSON.
+func transferBoostActions(fromAccountID, toAccountID string) json.RawMessage {
 	b, _ := json.Marshal(map[string]interface{}{
 		"from_account_id": fromAccountID,
 		"to_account_id":   toAccountID,
@@ -41,9 +41,9 @@ func transferRuleActions(fromAccountID, toAccountID string) json.RawMessage {
 	return b
 }
 
-// transferRuleActionsWithUserAccountIDs returns a marshalled transfer_suggestion action JSON
+// transferBoostActionsWithUserAccountIDs returns a marshalled transfer_suggestion action JSON
 // that includes stable from_user_account_id/to_user_account_id fields (Issue #1109 re-link refs).
-func transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, toUserAccountID string) json.RawMessage {
+func transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, toUserAccountID string) json.RawMessage {
 	b, _ := json.Marshal(map[string]interface{}{
 		"from_account_id":      fromAccountID,
 		"to_account_id":        toAccountID,
@@ -55,8 +55,8 @@ func transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserA
 	return b
 }
 
-// newSavingsGoalRuleRequest builds a CreateBoostRequest for a savings_goal rule.
-func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.CreateBoostRequest {
+// newSavingsGoalBoostRequest builds a CreateBoostRequest for a savings_goal rule.
+func newSavingsGoalBoostRequest(savingsGoalID, fromAccountID string) *domain.CreateBoostRequest {
 	return &domain.CreateBoostRequest{
 		Name:     "my savings rule",
 		BoostType: domain.BoostTypeSavingsGoal,
@@ -64,12 +64,12 @@ func newSavingsGoalRuleRequest(savingsGoalID, fromAccountID string) *domain.Crea
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions: savingsGoalRuleActions(savingsGoalID, fromAccountID),
+		Actions: savingsGoalBoostActions(savingsGoalID, fromAccountID),
 	}
 }
 
-// newTransferRuleRequest builds a CreateBoostRequest for a transfer_suggestion rule.
-func newTransferRuleRequest(fromAccountID, toAccountID string) *domain.CreateBoostRequest {
+// newTransferBoostRequest builds a CreateBoostRequest for a transfer_suggestion rule.
+func newTransferBoostRequest(fromAccountID, toAccountID string) *domain.CreateBoostRequest {
 	return &domain.CreateBoostRequest{
 		Name:     "my transfer rule",
 		BoostType: domain.BoostTypeTransferSuggestion,
@@ -77,17 +77,17 @@ func newTransferRuleRequest(fromAccountID, toAccountID string) *domain.CreateBoo
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions: transferRuleActions(fromAccountID, toAccountID),
+		Actions: transferBoostActions(fromAccountID, toAccountID),
 	}
 }
 
 // ============================================================================
-// Tests — CreateRule ownership validation (GAP AE)
+// Tests — CreateBoost ownership validation (GAP AE)
 // ============================================================================
 
-// TestCreateRule_SavingsGoal_SavingsGoalIDOwnership verifies that CreateRule rejects
+// TestCreateBoost_SavingsGoal_SavingsGoalIDOwnership verifies that CreateBoost rejects
 // a savings_goal rule whose savings_goal_id belongs to a different user (IDOR prevention).
-func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
+func TestCreateBoost_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
 	ctx := context.Background()
 	ownerUserID := "user-owner"
 	attackerUserID := "user-attacker"
@@ -109,14 +109,14 @@ func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	_, err := svc.CreateRule(ctx, attackerUserID, newSavingsGoalRuleRequest(goalID, fromAccountID))
-	require.Error(t, err, "CreateRule must reject a savings_goal rule referencing another user's goal")
+	_, err := svc.CreateBoost(ctx, attackerUserID, newSavingsGoalBoostRequest(goalID, fromAccountID))
+	require.Error(t, err, "CreateBoost must reject a savings_goal rule referencing another user's goal")
 	assert.Contains(t, err.Error(), "savings_goal_id", "error must identify which ID failed ownership")
 }
 
-// TestCreateRule_SavingsGoal_FromAccountOwnership verifies that CreateRule rejects
+// TestCreateBoost_SavingsGoal_FromAccountOwnership verifies that CreateBoost rejects
 // a savings_goal rule whose from_account_id belongs to a different user.
-func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
+func TestCreateBoost_SavingsGoal_FromAccountOwnership(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	goalID := "goal-owned-by-user-a"
@@ -137,14 +137,14 @@ func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest(goalID, fromAccountID))
-	require.Error(t, err, "CreateRule must reject a savings_goal rule referencing another user's account")
+	_, err := svc.CreateBoost(ctx, userID, newSavingsGoalBoostRequest(goalID, fromAccountID))
+	require.Error(t, err, "CreateBoost must reject a savings_goal rule referencing another user's account")
 	assert.Contains(t, err.Error(), "from_account_id", "error must identify which ID failed ownership")
 }
 
-// TestCreateRule_SavingsGoal_HappyPath verifies that CreateRule accepts a valid
+// TestCreateBoost_SavingsGoal_HappyPath verifies that CreateBoost accepts a valid
 // savings_goal rule where all referenced IDs belong to the rule owner.
-func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
+func TestCreateBoost_SavingsGoal_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	goalID := "goal-a"
@@ -164,14 +164,14 @@ func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	rule, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest(goalID, fromAccountID))
-	require.NoError(t, err, "CreateRule must succeed when all IDs belong to the rule owner")
+	rule, err := svc.CreateBoost(ctx, userID, newSavingsGoalBoostRequest(goalID, fromAccountID))
+	require.NoError(t, err, "CreateBoost must succeed when all IDs belong to the rule owner")
 	assert.Equal(t, userID, rule.UserID)
 }
 
-// TestCreateRule_Transfer_FromAccountOwnership verifies that CreateRule rejects
+// TestCreateBoost_Transfer_FromAccountOwnership verifies that CreateBoost rejects
 // a transfer rule whose from_account_id belongs to a different user.
-func TestCreateRule_Transfer_FromAccountOwnership(t *testing.T) {
+func TestCreateBoost_Transfer_FromAccountOwnership(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	fromAccountID := "from-acct-other"
@@ -186,14 +186,14 @@ func TestCreateRule_Transfer_FromAccountOwnership(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
-	require.Error(t, err, "CreateRule must reject a transfer rule referencing another user's from_account_id")
+	_, err := svc.CreateBoost(ctx, userID, newTransferBoostRequest(fromAccountID, toAccountID))
+	require.Error(t, err, "CreateBoost must reject a transfer rule referencing another user's from_account_id")
 	assert.Contains(t, err.Error(), "from_account_id")
 }
 
-// TestCreateRule_Transfer_ToAccountOwnership verifies that CreateRule rejects
+// TestCreateBoost_Transfer_ToAccountOwnership verifies that CreateBoost rejects
 // a transfer rule whose to_account_id belongs to a different user.
-func TestCreateRule_Transfer_ToAccountOwnership(t *testing.T) {
+func TestCreateBoost_Transfer_ToAccountOwnership(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	fromAccountID := "from-acct-user-a"
@@ -209,14 +209,14 @@ func TestCreateRule_Transfer_ToAccountOwnership(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
-	require.Error(t, err, "CreateRule must reject a transfer rule referencing another user's to_account_id")
+	_, err := svc.CreateBoost(ctx, userID, newTransferBoostRequest(fromAccountID, toAccountID))
+	require.Error(t, err, "CreateBoost must reject a transfer rule referencing another user's to_account_id")
 	assert.Contains(t, err.Error(), "to_account_id")
 }
 
-// TestCreateRule_Transfer_HappyPath verifies that CreateRule accepts a transfer rule
+// TestCreateBoost_Transfer_HappyPath verifies that CreateBoost accepts a transfer rule
 // where both account IDs belong to the rule owner.
-func TestCreateRule_Transfer_HappyPath(t *testing.T) {
+func TestCreateBoost_Transfer_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	fromAccountID := "from-a"
@@ -232,13 +232,13 @@ func TestCreateRule_Transfer_HappyPath(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	rule, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
+	rule, err := svc.CreateBoost(ctx, userID, newTransferBoostRequest(fromAccountID, toAccountID))
 	require.NoError(t, err)
 	assert.Equal(t, userID, rule.UserID)
 }
 
-// TestUpdateRule_OwnershipEnforced verifies that UpdateRule also enforces ID ownership.
-func TestUpdateRule_OwnershipEnforced(t *testing.T) {
+// TestUpdateBoost_OwnershipEnforced verifies that UpdateBoost also enforces ID ownership.
+func TestUpdateBoost_OwnershipEnforced(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	ruleID := "rule-1"
@@ -255,7 +255,7 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions:        savingsGoalRuleActions("old-goal-id", fromAccountID),
+		Actions:        savingsGoalBoostActions("old-goal-id", fromAccountID),
 		ConditionLogic: "AND",
 	}
 
@@ -273,18 +273,18 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	newActions := savingsGoalRuleActions(goalID, fromAccountID)
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	newActions := savingsGoalBoostActions(goalID, fromAccountID)
+	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Actions: &newActions,
 	})
-	require.Error(t, err, "UpdateRule must reject updating to reference another user's goal")
+	require.Error(t, err, "UpdateBoost must reject updating to reference another user's goal")
 	assert.Contains(t, err.Error(), "savings_goal_id")
 }
 
-// TestCreateRule_NoRepos_SkipsOwnershipCheck verifies that when repos are not injected
-// (e.g. in tests that don't set them), CreateRule silently skips the ownership check.
+// TestCreateBoost_NoRepos_SkipsOwnershipCheck verifies that when repos are not injected
+// (e.g. in tests that don't set them), CreateBoost silently skips the ownership check.
 // This preserves backward compatibility for tests and nil-guarded production paths.
-func TestCreateRule_NoRepos_SkipsOwnershipCheck(t *testing.T) {
+func TestCreateBoost_NoRepos_SkipsOwnershipCheck(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
 	boostRepo := &mockBoostsRepository{}
@@ -292,20 +292,20 @@ func TestCreateRule_NoRepos_SkipsOwnershipCheck(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	// No SetSavingsGoalRepo or SetAccountRepo calls — repos are nil
 
-	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest("any-goal", "any-account"))
-	require.NoError(t, err, "CreateRule must succeed when ownership repos are not configured (nil guard)")
+	_, err := svc.CreateBoost(ctx, userID, newSavingsGoalBoostRequest("any-goal", "any-account"))
+	require.NoError(t, err, "CreateBoost must succeed when ownership repos are not configured (nil guard)")
 }
 
 // ============================================================================
 // Tests — chain-resolver IDOR (GAP AE, Issue #972)
 // ============================================================================
 
-// TestCreateRule_Transfer_FromUserAccountIDOwnership verifies that CreateRule rejects
+// TestCreateBoost_Transfer_FromUserAccountIDOwnership verifies that CreateBoost rejects
 // a transfer rule whose from_user_account_id belongs to a different user.
 // This closes the chain-resolver IDOR attack: an attacker could supply their own
 // from_account_id (passes GetByIDAndUser check) but a victim's from_user_account_id —
 // the unscoped ResolveActiveID would then overwrite the suggestion with the victim's account.
-func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
+func TestCreateBoost_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 	ctx := context.Background()
 	attackerUserID := "user-attacker"
 	fromAccountID := "from-attacker"   // attacker's own account — passes standard check
@@ -326,7 +326,7 @@ func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
+	actions := transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
 	req := &domain.CreateBoostRequest{
 		Name:     "chain resolver idor test",
 		BoostType: domain.BoostTypeTransferSuggestion,
@@ -336,14 +336,14 @@ func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 		},
 		Actions: actions,
 	}
-	_, err := svc.CreateRule(ctx, attackerUserID, req)
-	require.Error(t, err, "CreateRule must reject a transfer rule with another user's from_user_account_id")
+	_, err := svc.CreateBoost(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateBoost must reject a transfer rule with another user's from_user_account_id")
 	assert.Contains(t, err.Error(), "from_user_account_id", "error must identify the chain-resolver ref that failed ownership")
 }
 
-// TestCreateRule_Transfer_ToUserAccountIDOwnership verifies that CreateRule rejects
+// TestCreateBoost_Transfer_ToUserAccountIDOwnership verifies that CreateBoost rejects
 // a transfer rule whose to_user_account_id belongs to a different user.
-func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
+func TestCreateBoost_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	ctx := context.Background()
 	attackerUserID := "user-attacker"
 	fromAccountID := "from-attacker"
@@ -362,7 +362,7 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
+	actions := transferBoostActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
 	req := &domain.CreateBoostRequest{
 		Name:     "chain resolver idor test to",
 		BoostType: domain.BoostTypeTransferSuggestion,
@@ -372,13 +372,13 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 		},
 		Actions: actions,
 	}
-	_, err := svc.CreateRule(ctx, attackerUserID, req)
-	require.Error(t, err, "CreateRule must reject a transfer rule with another user's to_user_account_id")
+	_, err := svc.CreateBoost(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateBoost must reject a transfer rule with another user's to_user_account_id")
 	assert.Contains(t, err.Error(), "to_user_account_id", "error must identify the chain-resolver ref that failed ownership")
 }
 
 // ============================================================================
-// Tests — CreateRule category ownership validation (Issue #1270)
+// Tests — CreateBoost category ownership validation (Issue #1270)
 // ============================================================================
 
 // budgetCategoryConditionRule builds a CreateBoostRequest with a single
@@ -412,10 +412,10 @@ func budgetCategoryConditionRule(categoryID string) *domain.CreateBoostRequest {
 	}
 }
 
-// TestCreateRule_CategoryCondition_AcceptsOwnedCategory verifies that CreateRule accepts
+// TestCreateBoost_CategoryCondition_AcceptsOwnedCategory verifies that CreateBoost accepts
 // a rule whose budget_category.* condition references a category owned by the rule's user.
 // Issue #1270: SetBudgetRepo + GetCategoryByIDAndUser happy path.
-func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
+func TestCreateBoost_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-alice"
 	categoryID := "cat-alice-1"
@@ -438,15 +438,15 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	svc.SetAccountRepo(acctRepo)
 
 	req := budgetCategoryConditionRule(categoryID)
-	rule, err := svc.CreateRule(ctx, userID, req)
-	require.NoError(t, err, "CreateRule must accept a rule whose category_id belongs to the user")
+	rule, err := svc.CreateBoost(ctx, userID, req)
+	require.NoError(t, err, "CreateBoost must accept a rule whose category_id belongs to the user")
 	assert.NotNil(t, rule)
 }
 
-// TestCreateRule_CategoryCondition_RejectsForeignCategory verifies that CreateRule rejects
+// TestCreateBoost_CategoryCondition_RejectsForeignCategory verifies that CreateBoost rejects
 // a rule whose budget_category.* condition references a category owned by a different user
 // (IDOR prevention). Issue #1270.
-func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
+func TestCreateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	ctx := context.Background()
 	attackerUserID := "user-attacker"
 	victimCategoryID := "cat-victim-99"
@@ -460,15 +460,15 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
-	_, err := svc.CreateRule(ctx, attackerUserID, req)
-	require.Error(t, err, "CreateRule must reject a rule whose category_id belongs to a different user")
+	_, err := svc.CreateBoost(ctx, attackerUserID, req)
+	require.Error(t, err, "CreateBoost must reject a rule whose category_id belongs to a different user")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
 }
 
-// TestCreateRule_CategoryCondition_DBError_Propagates verifies that an infrastructure error
+// TestCreateBoost_CategoryCondition_DBError_Propagates verifies that an infrastructure error
 // from GetCategoryByIDAndUser is NOT silently converted to 403 — it must propagate as-is
 // so the HTTP layer returns 500. Issue #1270 (Codex LOW finding).
-func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
+func TestCreateBoost_CategoryCondition_DBError_Propagates(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-alice"
 	categoryID := "cat-alice-1"
@@ -483,16 +483,16 @@ func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(categoryID)
-	_, err := svc.CreateRule(ctx, userID, req)
-	require.Error(t, err, "CreateRule must fail on DB error")
+	_, err := svc.CreateBoost(ctx, userID, req)
+	require.Error(t, err, "CreateBoost must fail on DB error")
 	assert.False(t, errors.Is(err, domain.ErrBoostConditionForbidden),
 		"a DB infrastructure error must not be wrapped as ErrBoostConditionForbidden (would cause 403 instead of 500)")
 }
 
-// TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped strengthens the
+// TestCreateBoost_CategoryCondition_RejectsForeignCategory_SentinelWrapped strengthens the
 // foreign-category rejection test to assert the error is wrapped as ErrBoostConditionForbidden,
 // not just contain the text "category_id". Issue #1270 (Codex LOW finding).
-func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *testing.T) {
+func TestCreateBoost_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *testing.T) {
 	ctx := context.Background()
 	attackerUserID := "user-attacker-2"
 	victimCategoryID := "cat-victim-sentinel"
@@ -506,17 +506,17 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
-	_, err := svc.CreateRule(ctx, attackerUserID, req)
+	_, err := svc.CreateBoost(ctx, attackerUserID, req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
 		"foreign category rejection must be wrapped as ErrBoostConditionForbidden for correct 403 mapping")
 }
 
-// TestUpdateRule_CategoryCondition_RejectsForeignCategory verifies that UpdateRule rejects
+// TestUpdateBoost_CategoryCondition_RejectsForeignCategory verifies that UpdateBoost rejects
 // an update that introduces a budget_category.* condition referencing a category owned by a
-// different user. UpdateRule routes through the same validateRuleReferenceOwnership as CreateRule,
-// so this pins the UpdateRule entry point. Issue #1270 (Codex LOW finding — only CreateRule tested).
-func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
+// different user. UpdateBoost routes through the same validateRuleReferenceOwnership as CreateBoost,
+// so this pins the UpdateBoost entry point. Issue #1270 (Codex LOW finding — only CreateBoost tested).
+func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-bob"
 	ruleID := "rule-update-cat"
@@ -532,7 +532,7 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions:        savingsGoalRuleActions("goal-ok", "acct-ok"),
+		Actions:        savingsGoalBoostActions("goal-ok", "acct-ok"),
 		ConditionLogic: "AND",
 	}
 
@@ -562,19 +562,19 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
-	require.Error(t, err, "UpdateRule must reject an update introducing a foreign category condition")
+	require.Error(t, err, "UpdateBoost must reject an update introducing a foreign category condition")
 	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
 		"foreign category rejection must be wrapped as ErrBoostConditionForbidden")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
 }
 
-// TestCreateRule_InvalidConditions_WrapsErrInvalidRule verifies that CreateRule wraps
+// TestCreateBoost_InvalidConditions_WrapsErrInvalidRule verifies that CreateBoost wraps
 // field-allowlist violations (from rule.Validate()) as domain.ErrInvalidBoost so the HTTP
 // layer returns 400, not 500. Issue #1270 (Codex LOW finding — mapper tested, not service).
-func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+func TestCreateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-cond"
 
@@ -605,16 +605,16 @@ func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		Actions: b,
 	}
 
-	_, err := svc.CreateRule(ctx, userID, req)
-	require.Error(t, err, "CreateRule must reject conditions with an unknown field")
+	_, err := svc.CreateBoost(ctx, userID, req)
+	require.Error(t, err, "CreateBoost must reject conditions with an unknown field")
 	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 		"field-allowlist violation must be wrapped as domain.ErrInvalidBoost for 400 mapping")
 }
 
-// TestUpdateRule_InvalidConditions_WrapsErrInvalidRule verifies that UpdateRule wraps
-// field-allowlist violations as domain.ErrInvalidBoost (same contract as CreateRule).
-// Issue #1270 (Codex LOW finding — only CreateRule sentinel wrapping was covered).
-func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+// TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule verifies that UpdateBoost wraps
+// field-allowlist violations as domain.ErrInvalidBoost (same contract as CreateBoost).
+// Issue #1270 (Codex LOW finding — only CreateBoost sentinel wrapping was covered).
+func TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-update"
 	ruleID := "rule-bad-cond"
@@ -629,7 +629,7 @@ func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions:        savingsGoalRuleActions("goal-y", "acct-y"),
+		Actions:        savingsGoalBoostActions("goal-y", "acct-y"),
 		ConditionLogic: "AND",
 	}
 
@@ -644,18 +644,18 @@ func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 			Value:    "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &invalidConditions,
 	})
-	require.Error(t, err, "UpdateRule must reject conditions with an unknown field")
+	require.Error(t, err, "UpdateBoost must reject conditions with an unknown field")
 	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
-		"field-allowlist violation in UpdateRule must be wrapped as domain.ErrInvalidBoost for 400 mapping")
+		"field-allowlist violation in UpdateBoost must be wrapped as domain.ErrInvalidBoost for 400 mapping")
 }
 
-// TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo
+// TestCreateBoost_CategoryCondition_NoBudgetRepo_SkipsCheck verifies that when SetBudgetRepo
 // is not called the category ownership check is skipped (backwards-compat for test setups that
 // don't inject budgetRepo). Issue #1270.
-func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
+func TestCreateBoost_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-bob"
 	categoryID := "cat-any"
@@ -674,8 +674,8 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	// intentionally NOT calling svc.SetBudgetRepo
 
 	req := budgetCategoryConditionRule(categoryID)
-	rule, err := svc.CreateRule(ctx, userID, req)
-	require.NoError(t, err, "CreateRule must skip the category check when budgetRepo is not injected")
+	rule, err := svc.CreateBoost(ctx, userID, req)
+	require.NoError(t, err, "CreateBoost must skip the category check when budgetRepo is not injected")
 	assert.NotNil(t, rule)
 }
 
@@ -683,11 +683,11 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 // Tests — category-not-in-budget ownership chain (Issue #1271 Item 3, A-CR4)
 // ============================================================================
 
-// TestCreateRule_CategoryNotInSelectedBudget_Returns400 verifies that CreateRule rejects
+// TestCreateBoost_CategoryNotInSelectedBudget_Returns400 verifies that CreateBoost rejects
 // a rule whose condition references a category that belongs to the user but lives in a
 // different budget than the one specified in condition.BudgetID. The category IS owned by
 // the user (GetCategoryByIDAndUser succeeds) but cat.BudgetID != condition.BudgetID → 400.
-func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
+func TestCreateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-alice"
 	categoryID := "cat-1"
@@ -734,15 +734,15 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		},
 		Actions: b,
 	}
-	_, err := svc.CreateRule(ctx, userID, req)
-	require.Error(t, err, "CreateRule must reject a condition whose category is not in the selected budget")
+	_, err := svc.CreateBoost(ctx, userID, req)
+	require.Error(t, err, "CreateBoost must reject a condition whose category is not in the selected budget")
 	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 		"category-not-in-budget must be wrapped as domain.ErrInvalidBoost (400), got: %v", err)
 }
 
-// TestUpdateRule_CategoryNotInSelectedBudget_Returns400 verifies that UpdateRule applies
-// the same category-not-in-budget check as CreateRule. Issue #1271 Item 3 (A-CR4).
-func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
+// TestUpdateBoost_CategoryNotInSelectedBudget_Returns400 verifies that UpdateBoost applies
+// the same category-not-in-budget check as CreateBoost. Issue #1271 Item 3 (A-CR4).
+func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-bob"
 	ruleID := "rule-update-budget-check"
@@ -758,7 +758,7 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 			Type:  domain.TriggerTypeEvent,
 			Event: domain.EventBudgetPeriodEnd,
 		},
-		Actions:        savingsGoalRuleActions("goal-ok", "acct-ok"),
+		Actions:        savingsGoalBoostActions("goal-ok", "acct-ok"),
 		ConditionLogic: "AND",
 	}
 
@@ -788,10 +788,10 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateRule(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
-	require.Error(t, err, "UpdateRule must reject a condition whose category is not in the selected budget")
+	require.Error(t, err, "UpdateBoost must reject a condition whose category is not in the selected budget")
 	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 		"category-not-in-budget must be wrapped as domain.ErrInvalidBoost (400), got: %v", err)
 }

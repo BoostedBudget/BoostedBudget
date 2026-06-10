@@ -1,5 +1,5 @@
 // Package operations provides HTTP handlers for the BoostedBudget API.
-// Issue #37: Rule Scheduler - Automation rule operations including manual triggering.
+// Issue #37: Boost Scheduler - Automation boost operations including manual triggering.
 package operations
 
 import (
@@ -33,7 +33,7 @@ func NewBoostHandler(
 }
 
 // SetExecutionService sets the boost execution service for test and execution history endpoints.
-// Issue #38: Rules API Endpoints - Test and execution history.
+// Issue #38: Boosts API Endpoints - Test and execution history.
 func (h *BoostHandler) SetExecutionService(executionService services.BoostExecutionService) {
 	h.executionService = executionService
 }
@@ -184,56 +184,56 @@ func (h *BoostHandler) GetBoosts(ctx context.Context, input *GetBoostsInput) (*G
 		boostTypes = append(boostTypes, canonical)
 	}
 
-	rules, err := h.service.GetUserRulesFiltered(ctx, input.UserID, boostTypes)
+	boosts, err := h.service.GetUserBoostsFiltered(ctx, input.UserID, boostTypes)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	// Return empty array instead of null if no rules
-	if rules == nil {
-		rules = []*domain.Boost{}
+	// Return empty array instead of null if no boosts
+	if boosts == nil {
+		boosts = []*domain.Boost{}
 	}
 
-	return &GetBoostsOutput{Body: rules}, nil
+	return &GetBoostsOutput{Body: boosts}, nil
 }
 
 // GetBoostByID handles GET /api/v1/boosts/:id requests.
 // Retrieves a specific automation boost by ID.
 func (h *BoostHandler) GetBoostByID(ctx context.Context, input *GetBoostByIDInput) (*GetBoostByIDOutput, error) {
-	rule, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	boost, err := h.service.GetBoostByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetBoostByIDOutput{Body: rule}, nil
+	return &GetBoostByIDOutput{Body: boost}, nil
 }
 
 // CreateBoost handles POST /api/v1/boosts requests.
 // Creates a new automation boost for the authenticated user.
 func (h *BoostHandler) CreateBoost(ctx context.Context, input *CreateBoostInput) (*CreateBoostOutput, error) {
-	rule, err := h.service.CreateRule(ctx, input.UserID, &input.Body)
+	boost, err := h.service.CreateBoost(ctx, input.UserID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &CreateBoostOutput{Body: rule}, nil
+	return &CreateBoostOutput{Body: boost}, nil
 }
 
 // UpdateBoost handles PUT /api/v1/boosts/:id requests.
 // Updates an automation boost's configuration.
 func (h *BoostHandler) UpdateBoost(ctx context.Context, input *UpdateBoostInput) (*UpdateBoostOutput, error) {
-	rule, err := h.service.UpdateRule(ctx, input.UserID, input.ID, &input.Body)
+	boost, err := h.service.UpdateBoost(ctx, input.UserID, input.ID, &input.Body)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &UpdateBoostOutput{Body: rule}, nil
+	return &UpdateBoostOutput{Body: boost}, nil
 }
 
 // DeleteBoost handles DELETE /api/v1/boosts/:id requests.
 // Removes an automation boost.
 func (h *BoostHandler) DeleteBoost(ctx context.Context, input *DeleteBoostInput) (*struct{}, error) {
-	err := h.service.DeleteRule(ctx, input.UserID, input.ID)
+	err := h.service.DeleteBoost(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -244,12 +244,12 @@ func (h *BoostHandler) DeleteBoost(ctx context.Context, input *DeleteBoostInput)
 // ToggleBoost handles POST /api/v1/boosts/:id/toggle requests.
 // Enables or disables an automation boost.
 func (h *BoostHandler) ToggleBoost(ctx context.Context, input *ToggleBoostInput) (*ToggleBoostOutput, error) {
-	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, input.Body.Enabled)
+	boost, err := h.service.ToggleBoost(ctx, input.UserID, input.ID, input.Body.Enabled)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleBoostOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: boost}, nil
 }
 
 // TriggerBoost handles POST /api/v1/boosts/:id/trigger requests.
@@ -257,7 +257,7 @@ func (h *BoostHandler) ToggleBoost(ctx context.Context, input *ToggleBoostInput)
 // Issue #37: Rule Scheduler - Manual trigger support.
 func (h *BoostHandler) TriggerBoost(ctx context.Context, input *TriggerBoostInput) (*TriggerBoostOutput, error) {
 	// Verify user owns the boost first
-	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	_, err := h.service.GetBoostByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -273,7 +273,7 @@ func (h *BoostHandler) TriggerBoost(ctx context.Context, input *TriggerBoostInpu
 	}
 
 	// Trigger the boost via the scheduler manager
-	execution, err := h.schedulerManager.TriggerRule(ctx, input.ID, input.Body.TriggerData)
+	execution, err := h.schedulerManager.TriggerBoost(ctx, input.ID, input.Body.TriggerData)
 	if err != nil {
 		// Map known errors to appropriate HTTP statuses
 		switch err {
@@ -281,7 +281,7 @@ func (h *BoostHandler) TriggerBoost(ctx context.Context, input *TriggerBoostInpu
 			return nil, huma.Error501NotImplemented("Manual triggering is not available")
 		case workers.ErrManagerNotStarted:
 			return nil, huma.Error503ServiceUnavailable("Boost scheduler is not running")
-		case workers.ErrRuleDisabled:
+		case workers.ErrBoostDisabled:
 			return nil, huma.Error400BadRequest("Boost is disabled")
 		default:
 			return nil, humaerrors.LoggingMapError(ctx, err)
@@ -293,10 +293,10 @@ func (h *BoostHandler) TriggerBoost(ctx context.Context, input *TriggerBoostInpu
 
 // TestBoost handles POST /api/v1/boosts/:id/test requests.
 // Performs a dry-run of the boost to preview results without persisting changes.
-// Issue #38: Rules API Endpoints.
+// Issue #38: Boosts API Endpoints.
 func (h *BoostHandler) TestBoost(ctx context.Context, input *TestBoostInput) (*TestBoostOutput, error) {
 	// Verify user owns the boost
-	boost, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	boost, err := h.service.GetBoostByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -317,26 +317,26 @@ func (h *BoostHandler) TestBoost(ctx context.Context, input *TestBoostInput) (*T
 
 // EnableBoost handles POST /api/v1/boosts/:id/enable requests.
 // Convenience wrapper for enabling a boost.
-// Issue #38: Rules API Endpoints.
+// Issue #38: Boosts API Endpoints.
 func (h *BoostHandler) EnableBoost(ctx context.Context, input *EnableBoostInput) (*ToggleBoostOutput, error) {
-	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, true)
+	boost, err := h.service.ToggleBoost(ctx, input.UserID, input.ID, true)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleBoostOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: boost}, nil
 }
 
 // DisableBoost handles POST /api/v1/boosts/:id/disable requests.
 // Convenience wrapper for disabling a boost.
-// Issue #38: Rules API Endpoints.
+// Issue #38: Boosts API Endpoints.
 func (h *BoostHandler) DisableBoost(ctx context.Context, input *DisableBoostInput) (*ToggleBoostOutput, error) {
-	rule, err := h.service.ToggleRule(ctx, input.UserID, input.ID, false)
+	boost, err := h.service.ToggleBoost(ctx, input.UserID, input.ID, false)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &ToggleBoostOutput{Body: rule}, nil
+	return &ToggleBoostOutput{Body: boost}, nil
 }
 
 // GetBoostExecutions handles GET /api/v1/boosts/:id/executions requests.
@@ -344,7 +344,7 @@ func (h *BoostHandler) DisableBoost(ctx context.Context, input *DisableBoostInpu
 // Issue #38: Rules API Endpoints.
 func (h *BoostHandler) GetBoostExecutions(ctx context.Context, input *GetBoostExecutionsInput) (*GetBoostExecutionsOutput, error) {
 	// Verify user owns the boost
-	_, err := h.service.GetRuleByID(ctx, input.UserID, input.ID)
+	_, err := h.service.GetBoostByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

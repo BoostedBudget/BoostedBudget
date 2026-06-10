@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockRuleExecutionService mocks the BoostExecutionService interface
-type MockRuleExecutionService struct {
+// MockBoostExecutionService mocks the BoostExecutionService interface
+type MockBoostExecutionService struct {
 	mock.Mock
 }
 
-func (m *MockRuleExecutionService) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
+func (m *MockBoostExecutionService) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -30,12 +30,12 @@ func (m *MockRuleExecutionService) ExecuteBoost(ctx context.Context, rule *domai
 	return args.Get(0).(*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockRuleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
+func (m *MockBoostExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
 	args := m.Called(ctx, userID, eventType, eventData)
 	return args.Error(0)
 }
 
-func (m *MockRuleExecutionService) GetBoostExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
+func (m *MockBoostExecutionService) GetBoostExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	args := m.Called(ctx, ruleID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -43,7 +43,7 @@ func (m *MockRuleExecutionService) GetBoostExecutionHistory(ctx context.Context,
 	return args.Get(0).([]*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	args := m.Called(ctx, ruleID, status, limit, offset)
 	if args.Get(0) == nil {
 		return nil, 0, args.Error(2)
@@ -51,7 +51,7 @@ func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Con
 	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
-func (m *MockRuleExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
+func (m *MockBoostExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -84,7 +84,7 @@ func TestRuleEvaluationWorker_Work_Success(t *testing.T) {
 		"percent_used": 85.0,
 	}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).Return(nil)
 
 	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
@@ -110,7 +110,7 @@ func TestRuleEvaluationWorker_Work_ServiceError(t *testing.T) {
 	eventType := "budget_updated"
 	eventData := map[string]interface{}{}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).
 		Return(errors.New("database connection error"))
 
@@ -143,7 +143,7 @@ func TestRuleEvaluationWorker_Work_TransactionCreatedEvent(t *testing.T) {
 		"category":       []string{"Food and Drink", "Coffee"},
 	}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).Return(nil)
 
 	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
@@ -173,7 +173,7 @@ func TestRuleEvaluationUniqueOpts(t *testing.T) {
 }
 
 func TestNewRuleEvaluationWorker_DefaultLogger(t *testing.T) {
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 
 	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
 		BoostExecutionService: mockService,

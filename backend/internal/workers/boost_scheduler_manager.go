@@ -1,5 +1,5 @@
-// Package workers provides background job processing for automation rules.
-// Issue #37: Rule Scheduler - RuleSchedulerManager orchestrates all trigger providers.
+// Package workers provides background job processing for automation boosts.
+// Issue #37: Boost Scheduler - BoostSchedulerManager orchestrates all trigger providers.
 package workers
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
-// Errors for RuleSchedulerManager.
+// Errors for BoostSchedulerManager.
 var (
 	ErrNoManualTriggerProvider = errors.New("no provider supports manual triggering")
 	ErrManagerNotStarted       = errors.New("scheduler manager is not started")
@@ -108,9 +108,9 @@ func (m *BoostSchedulerManager) Stop(ctx context.Context) error {
 	return firstErr
 }
 
-// TriggerRule manually triggers a rule execution.
+// TriggerBoost manually triggers a boost execution.
 // Routes to the first provider that supports manual triggering.
-func (m *BoostSchedulerManager) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
+func (m *BoostSchedulerManager) TriggerBoost(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -121,7 +121,7 @@ func (m *BoostSchedulerManager) TriggerRule(ctx context.Context, ruleID string, 
 	// Find a provider that supports manual triggering
 	for _, provider := range m.providers {
 		if provider.SupportsManualTrigger() {
-			return provider.TriggerRule(ctx, ruleID, triggerData)
+			return provider.TriggerBoost(ctx, boostID, triggerData)
 		}
 	}
 
