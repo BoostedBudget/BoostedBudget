@@ -132,7 +132,7 @@ describe('GettingStartedChecklist', () => {
 
     it('renders incomplete steps with different routes correctly', () => {
       renderComponent()
-      const rulesLink = screen.getByRole('link', { name: /create an automation rule/i })
+      const rulesLink = screen.getByRole('link', { name: /create a boost/i })
       expect(rulesLink).toHaveAttribute('href', '/boosts')
 
       const autoCatLink = screen.getByRole('link', { name: /set up auto-categorization/i })

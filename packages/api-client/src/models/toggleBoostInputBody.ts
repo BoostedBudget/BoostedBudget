@@ -31,6 +31,6 @@
 export interface ToggleBoostInputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
-  /** Whether the rule should be enabled */
+  /** Whether the boost should be enabled */
   enabled: boolean;
 }
