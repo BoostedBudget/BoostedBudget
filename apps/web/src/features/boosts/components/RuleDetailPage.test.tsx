@@ -9,16 +9,16 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import type { AutomationRule } from '@boostedbudget/api-client/models'
-import { mockUseGetAutomationRuleByID } from '@/test/mocks/automation-rules-api'
+import type { Boost } from '@boostedbudget/api-client/models'
+import { mockUseGetBoostByID } from '@/test/mocks/boosts-api'
 import { RuleDetailPage } from './RuleDetailPage'
 
-const mockRule: AutomationRule = {
+const mockBoost: Boost = {
   id: 'rule-detail-1',
   user_id: 'u1',
   name: 'Save Extra Cash',
   description: 'Transfer surplus to high-yield savings',
-  rule_type: 'transfer_suggestion',
+  boost_type: 'transfer_suggestion',
   enabled: true,
   priority: 10,
   execution_count: 8,
@@ -28,7 +28,8 @@ const mockRule: AutomationRule = {
   actions: { amount: 200 },
   created_at: '2025-01-01T00:00:00Z',
   updated_at: '2025-01-10T00:00:00Z',
-}
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+} as any
 
 const renderDetail = (id = 'rule-detail-1') =>
   render(
@@ -41,8 +42,8 @@ const renderDetail = (id = 'rule-detail-1') =>
 
 describe('RuleDetailPage', () => {
   beforeEach(() => {
-    mockUseGetAutomationRuleByID.mockReturnValue({
-      data: mockRule,
+    mockUseGetBoostByID.mockReturnValue({
+      data: mockBoost,
       isLoading: false,
       error: null,
     })
@@ -72,7 +73,7 @@ describe('RuleDetailPage', () => {
   it('renders a back link to the rules tab', () => {
     renderDetail()
     const bodyText = document.body.textContent ?? ''
-    expect(/back.*rules|rules/i.test(bodyText)).toBe(true)
+    expect(/back.*boosts|boosts/i.test(bodyText)).toBe(true)
   })
 
   it('renders RuleExecutionHistory section', () => {
@@ -83,13 +84,13 @@ describe('RuleDetailPage', () => {
   })
 
   it('shows loading state when rule is loading', () => {
-    mockUseGetAutomationRuleByID.mockReturnValue({ data: null, isLoading: true, error: null })
+    mockUseGetBoostByID.mockReturnValue({ data: null, isLoading: true, error: null })
     const { container } = renderDetail()
     expect(container.querySelector('.animate-pulse') || screen.queryByText(/loading/i)).toBeTruthy()
   })
 
   it('shows not-found message when rule fetch returns null', () => {
-    mockUseGetAutomationRuleByID.mockReturnValue({ data: null, isLoading: false, error: null })
+    mockUseGetBoostByID.mockReturnValue({ data: null, isLoading: false, error: null })
     renderDetail('nonexistent-id')
     const bodyText = document.body.textContent ?? ''
     expect(/not found|not exist|couldn't find/i.test(bodyText)).toBe(true)

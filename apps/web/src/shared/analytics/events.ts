@@ -36,10 +36,10 @@ export const ANALYTICS_EVENTS = {
   BUDGET_CATEGORY_UPDATED: 'budget_category_updated',
   BUDGET_CATEGORY_DELETED: 'budget_category_deleted',
 
-  // Rules
-  RULE_CREATED: 'rule_created',
-  RULE_EDITED: 'rule_edited',
-  RULE_DELETED: 'rule_deleted',
+  // Boosts (formerly Rules)
+  BOOST_CREATED: 'boost_created',
+  BOOST_EDITED: 'boost_edited',
+  BOOST_DELETED: 'boost_deleted',
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',

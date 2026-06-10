@@ -140,7 +140,7 @@ export function BoostsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="rules">
+        <TabsContent value="boosts">
           <RulesTab />
         </TabsContent>
       </Tabs>

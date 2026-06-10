@@ -43,7 +43,7 @@ import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
 } from '@/test/mocks/analytics-api'
-import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
+import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
 import { mockUseGetBudgets } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
@@ -63,7 +63,7 @@ const { SavingsPage } = await import('@/features/savings/SavingsPage')
 const { ProfilePage } = await import('@/features/profile/ProfilePage')
 const { CategoryEditor } = await import('@/features/categories/components/CategoryEditor')
 const { BudgetsPage } = await import('@/features/budgets/components/BudgetsPage')
-const { RulesPage } = await import('@/features/rules/components/RulesPage')
+const { BoostsManagePage } = await import('@/features/boosts/components/BoostsManagePage')
 const { AutoCategorizationPage } = await import(
   '@/features/auto-categorization/components/AutoCategorizationPage'
 )
@@ -495,16 +495,16 @@ describe('PII coverage — Budgets list page', () => {
 describe('PII coverage — Rules page', () => {
   beforeEach(() => {
     cleanup()
-    mockUseGetAutomationRules.mockReturnValue({
+    mockUseGetBoosts.mockReturnValue({
       data: [
         {
           id: 'rule-sentinel',
           user_id: 'user-1',
           name: SENTINEL_RULE_NAME,
           description: 'Sentinel rule description',
-          is_enabled: true,
+          enabled: true,
           priority: 1,
-          trigger_type: 'transaction',
+          boost_type: 'transfer_suggestion',
           created_at: '2024-01-01T00:00:00Z',
           updated_at: '2024-01-01T00:00:00Z',
         },
@@ -515,7 +515,7 @@ describe('PII coverage — Rules page', () => {
   })
 
   test('masks all PII', async () => {
-    render(<RulesPage />, { wrapper: createWrapper() })
+    render(<BoostsManagePage />, { wrapper: createWrapper() })
     const sentinels: PIISentinel[] = [
       { value: SENTINEL_RULE_NAME, fieldDescription: 'rule.name' },
     ]
