@@ -5,6 +5,7 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -57,14 +58,31 @@ func NewTransferSuggestionHandler(service services.TransferSuggestionService, de
 
 // --- Input / Output types ---
 
-// GetTransferSuggestionsInput is the input for listing pending transfer suggestions.
+// GetTransferSuggestionsInput is the input for listing transfer suggestions.
+// When Status is empty, returns pending-only (backward compat with notification center).
 type GetTransferSuggestionsInput struct {
 	inputs.AuthenticatedInput
+	// Status is an optional comma-separated list of suggestion statuses to filter by.
+	// Valid values: pending, accepted, rejected, expired, completed.
+	// When omitted, returns all pending suggestions (backward compat).
+	Status string `query:"status" doc:"Comma-separated list of statuses to filter by (e.g. completed,rejected,expired). Omit for pending-only." required:"false"`
+	// Limit is the maximum number of suggestions to return (1-100, default 20).
+	Limit int `query:"limit" default:"20" minimum:"1" maximum:"100" doc:"Maximum number of suggestions to return."`
+	// Offset is the number of suggestions to skip for pagination (default 0).
+	Offset int `query:"offset" default:"0" minimum:"0" doc:"Number of suggestions to skip for pagination."`
 }
 
-// GetTransferSuggestionsOutput is the response for listing pending transfer suggestions.
+// TransferSuggestionListResponse is the paginated envelope for listing transfer suggestions.
+type TransferSuggestionListResponse struct {
+	Items  []*domain.TransferSuggestion `json:"items" doc:"List of transfer suggestions"`
+	Total  int                          `json:"total" doc:"Total number of matching suggestions across all pages"`
+	Limit  int                          `json:"limit" doc:"Maximum results per page as requested"`
+	Offset int                          `json:"offset" doc:"Number of results skipped"`
+}
+
+// GetTransferSuggestionsOutput is the response for listing transfer suggestions.
 type GetTransferSuggestionsOutput struct {
-	Body []*domain.TransferSuggestion
+	Body TransferSuggestionListResponse
 }
 
 // AcceptTransferSuggestionInput is the input for accepting a transfer suggestion.
@@ -113,22 +131,96 @@ func maskReservation(s *domain.TransferSuggestion) *domain.TransferSuggestion {
 // --- Handler Methods ---
 
 // GetTransferSuggestions handles GET /api/v1/transfer-suggestions.
-// Returns all pending transfer suggestions for the authenticated user.
+// When no status param is provided, returns pending suggestions (backward compat with
+// notification center). When status is provided as a CSV, filters by those statuses
+// and returns a paginated envelope with total count.
 func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, input *GetTransferSuggestionsInput) (*GetTransferSuggestionsOutput, error) {
-	suggestions, err := h.service.GetPendingSuggestions(ctx, input.UserID)
-	if err != nil {
-		return nil, humaerrors.LoggingMapError(ctx, err)
+	var items []*domain.TransferSuggestion
+	var total int
+
+	if input.Status == "" {
+		// Legacy path: no status param → pending only (notification center compat).
+		pending, err := h.service.GetPendingSuggestions(ctx, input.UserID)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if pending == nil {
+			pending = []*domain.TransferSuggestion{}
+		}
+		items = pending
+		total = len(pending)
+	} else {
+		// Filtered path: parse and validate the CSV status list.
+		statuses, err := parseSuggestionStatuses(input.Status)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
+		}
+		filtered, t, err := h.service.GetSuggestionsByStatus(ctx, input.UserID, statuses, input.Limit, input.Offset)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		if filtered == nil {
+			filtered = []*domain.TransferSuggestion{}
+		}
+		items = filtered
+		total = t
 	}
 
-	if suggestions == nil {
-		suggestions = []*domain.TransferSuggestion{}
+	for i := range items {
+		// Compute can_confirm_match BEFORE masking clears matched_transaction_id.
+		canConfirm := items[i].MatchedTransactionID != nil &&
+			items[i].Status == domain.SuggestionStatusAccepted
+		items[i].CanConfirmMatch = &canConfirm
+		maskReservation(items[i])
 	}
 
-	for i := range suggestions {
-		maskReservation(suggestions[i])
+	limit := input.Limit
+	if limit == 0 {
+		limit = 20
 	}
 
-	return &GetTransferSuggestionsOutput{Body: suggestions}, nil
+	return &GetTransferSuggestionsOutput{Body: TransferSuggestionListResponse{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: input.Offset,
+	}}, nil
+}
+
+// parseSuggestionStatuses parses a comma-separated status string and validates each value.
+// Returns a 422-ready error if any value is unknown.
+func parseSuggestionStatuses(csv string) ([]domain.SuggestionStatus, error) {
+	parts := splitCSV(csv)
+	statuses := make([]domain.SuggestionStatus, 0, len(parts))
+	for _, p := range parts {
+		s := domain.SuggestionStatus(p)
+		if !s.IsValid() {
+			return nil, fmt.Errorf("invalid status %q: must be one of pending, accepted, rejected, expired, completed", p)
+		}
+		statuses = append(statuses, s)
+	}
+	return statuses, nil
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			part := ""
+			for j := start; j < i; j++ {
+				if s[j] != ' ' {
+					part += string(s[j])
+				}
+			}
+			if part != "" {
+				parts = append(parts, part)
+			}
+			start = i + 1
+		}
+	}
+	return parts
 }
 
 // AcceptTransferSuggestion handles PATCH /api/v1/transfer-suggestions/{id}/accept.
@@ -374,17 +466,53 @@ func (h *TransferSuggestionHandler) DeclineMatch(ctx context.Context, input *Dec
 	return buildOutput(suggestion, true), nil
 }
 
+// CancelTransferSuggestionInput is the input for cancelling a pending/accepted suggestion.
+type CancelTransferSuggestionInput struct {
+	inputs.AuthenticatedInput
+	ID   string `path:"id" doc:"Transfer suggestion UUID to cancel"`
+	Body struct {
+		Notes *string `json:"notes,omitempty" doc:"Optional notes for the cancellation"`
+	}
+}
+
+// CancelTransferSuggestionOutput is the response for cancelling a transfer suggestion.
+type CancelTransferSuggestionOutput struct {
+	Body struct {
+		Message    string                     `json:"message"`
+		Suggestion *domain.TransferSuggestion `json:"suggestion"`
+	}
+}
+
+// CancelSuggestion handles POST /api/v1/transfer-suggestions/{id}/cancel.
+// Transitions a pending or accepted suggestion to rejected so it leaves the Awaiting Match tab.
+// Distinct from decline-match, which only clears the fuzzy-match reservation.
+func (h *TransferSuggestionHandler) CancelSuggestion(ctx context.Context, input *CancelTransferSuggestionInput) (*CancelTransferSuggestionOutput, error) {
+	suggestion, err := h.service.CancelAcceptedSuggestion(ctx, input.UserID, input.ID, input.Body.Notes)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+
+	output := &CancelTransferSuggestionOutput{}
+	output.Body.Message = "Transfer suggestion cancelled"
+	output.Body.Suggestion = maskReservation(suggestion)
+	return output, nil
+}
+
 // RegisterTransferSuggestionRoutes registers transfer suggestion routes with the Huma API.
 func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionHandler) {
-	// GET /api/v1/transfer-suggestions — list pending suggestions for authenticated user
+	// GET /api/v1/transfer-suggestions — list suggestions for authenticated user (filterable by status)
 	huma.Register(api, huma.Operation{
 		OperationID: "getTransferSuggestions",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/transfer-suggestions",
-		Summary:     "Get pending transfer suggestions",
-		Description: "Returns all pending transfer suggestions for the authenticated user.",
-		Tags:        []string{"TransferSuggestions"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Summary:     "List transfer suggestions (filter by status)",
+		Description: "Returns transfer suggestions for the authenticated user. " +
+			"Use the `status` query parameter (comma-separated) to filter by status. " +
+			"Valid values: pending, accepted, completed, rejected, expired. " +
+			"When omitted, returns only pending suggestions (backward-compatible default). " +
+			"Supports `limit` (1–100, default 20) and `offset` pagination.",
+		Tags:     []string{"TransferSuggestions"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GetTransferSuggestions)
 
 	// PATCH /api/v1/transfer-suggestions/{id}/accept — accept a suggestion
@@ -432,4 +560,16 @@ func RegisterTransferSuggestionRoutes(api huma.API, handler *TransferSuggestionH
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusOK,
 	}, handler.DeclineMatch)
+
+	// POST /api/v1/transfer-suggestions/{id}/cancel — cancel a pending/accepted suggestion
+	huma.Register(api, huma.Operation{
+		OperationID:   "cancelTransferSuggestion",
+		Method:        http.MethodPost,
+		Path:          "/api/v1/transfer-suggestions/{id}/cancel",
+		Summary:       "Cancel a transfer suggestion",
+		Description:   "Cancels a pending or accepted suggestion, transitioning it to rejected so it leaves the Awaiting Match tab. Distinct from decline-match (which only clears the fuzzy-match reservation without changing status).",
+		Tags:          []string{"TransferSuggestions"},
+		Security:      []map[string][]string{{"clerk": {}}},
+		DefaultStatus: http.StatusOK,
+	}, handler.CancelSuggestion)
 }

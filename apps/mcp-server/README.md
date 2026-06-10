@@ -196,6 +196,72 @@ Agent responds:
   This will return the API calls to pass to execute().
 ```
 
+---
+
+### 4. "Show my pending savings transfer recommendations" (Boosts)
+
+The Boosts feature surfaces automated transfer suggestions. Use the `status` parameter to view different stages:
+
+```
+You: Show me my pending savings recommendations.
+
+Agent calls:
+  search({ query: "transfer suggestions status" })
+  → finds getTransferSuggestions
+  → description: "Use the `status` query parameter... Valid values: pending, accepted, completed, rejected, expired."
+
+  execute({
+    calls: [{
+      operationId: "getTransferSuggestions",
+      params: { status: "pending" }
+    }]
+  })
+  → { items: [...], total: 3, ... }
+
+You: Which ones are waiting for a matching transaction?
+
+  execute({
+    calls: [{
+      operationId: "getTransferSuggestions",
+      params: { status: "accepted" }
+    }]
+  })
+  → { items: [{id: "ts-1", to_account_name: "High-Yield Savings", amount: 500, ...}], total: 1 }
+
+Agent: You have 1 accepted suggestion awaiting a match: $500 to High-Yield Savings.
+       It'll auto-complete when a matching transfer is detected.
+```
+
+**Valid `status` values:** `pending` · `accepted` · `completed` · `rejected` · `expired`
+
+---
+
+### 5. "List my transfer automation rules" (Boosts)
+
+Use the `rule_type` parameter to scope the rules list to transfer-generating types:
+
+```
+You: What automation rules do I have set up for savings transfers?
+
+Agent calls:
+  search({ query: "automation rules filter type" })
+  → finds getAutomationRules
+  → description: "Use the repeatable `rule_type` query parameter... Transfer-generating types are transfer_suggestion and savings_goal."
+
+  execute({
+    calls: [{
+      operationId: "getAutomationRules",
+      params: { rule_type: ["transfer_suggestion", "savings_goal"] }
+    }]
+  })
+  → [{ name: "Monthly Savings", rule_type: "savings_goal", enabled: true, ... }]
+
+Agent: You have 1 transfer rule: "Monthly Savings" (savings_goal type, enabled).
+```
+
+**Transfer-generating `rule_type` values:** `transfer_suggestion` · `savings_goal`
+**All types:** `transfer_suggestion` · `savings_goal` · `budget_alert` · `category_rollover`
+
 > **Note:** Scheduled recipe execution (running recipes automatically on a cron) is planned
 > for a future release — see [follow-up #1220](https://github.com/BoostedBudget/BoostedBudget/issues/1220).
 > In v1, recipes are saved and run on-demand.

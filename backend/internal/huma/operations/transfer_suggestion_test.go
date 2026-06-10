@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,16 +25,21 @@ import (
 // =============================================================================
 
 type mockTransferSuggestionService struct {
-	getPendingResult    []*domain.TransferSuggestion
-	getPendingErr       error
-	acceptResult        *domain.TransferSuggestion
-	acceptErr           error
-	rejectResult        *domain.TransferSuggestion
-	rejectErr           error
-	confirmMatchResult  *domain.TransferSuggestion
-	confirmMatchErr     error
-	declineMatchResult  *domain.TransferSuggestion
-	declineMatchErr     error
+	getPendingResult           []*domain.TransferSuggestion
+	getPendingErr              error
+	acceptResult               *domain.TransferSuggestion
+	acceptErr                  error
+	rejectResult               *domain.TransferSuggestion
+	rejectErr                  error
+	confirmMatchResult         *domain.TransferSuggestion
+	confirmMatchErr            error
+	declineMatchResult         *domain.TransferSuggestion
+	declineMatchErr            error
+	getSuggestionsByStatResult []*domain.TransferSuggestion
+	getSuggestionsByStatTotal  int
+	getSuggestionsByStatErr    error
+	cancelResult               *domain.TransferSuggestion
+	cancelErr                  error
 }
 
 func (m *mockTransferSuggestionService) GetPendingSuggestions(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
@@ -54,6 +60,14 @@ func (m *mockTransferSuggestionService) ConfirmTransferSuggestionMatch(ctx conte
 
 func (m *mockTransferSuggestionService) DeclineTransferSuggestionMatch(ctx context.Context, userID, suggestionID string) (*domain.TransferSuggestion, error) {
 	return m.declineMatchResult, m.declineMatchErr
+}
+
+func (m *mockTransferSuggestionService) GetSuggestionsByStatus(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
+	return m.getSuggestionsByStatResult, m.getSuggestionsByStatTotal, m.getSuggestionsByStatErr
+}
+
+func (m *mockTransferSuggestionService) CancelAcceptedSuggestion(ctx context.Context, userID, suggestionID string, notes *string) (*domain.TransferSuggestion, error) {
+	return m.cancelResult, m.cancelErr
 }
 
 // =============================================================================
@@ -99,8 +113,9 @@ func TestGetTransferSuggestions_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
-	assert.Len(t, output.Body, 2)
-	assert.Equal(t, "s1", output.Body[0].ID)
+	assert.Len(t, output.Body.Items, 2)
+	assert.Equal(t, 2, output.Body.Total)
+	assert.Equal(t, "s1", output.Body.Items[0].ID)
 }
 
 func TestGetTransferSuggestions_EmptyList(t *testing.T) {
@@ -118,8 +133,9 @@ func TestGetTransferSuggestions_EmptyList(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
-	assert.NotNil(t, output.Body, "should return empty slice, not nil")
-	assert.Len(t, output.Body, 0)
+	assert.NotNil(t, output.Body.Items, "should return empty slice, not nil")
+	assert.Len(t, output.Body.Items, 0)
+	assert.Equal(t, 0, output.Body.Total)
 }
 
 func TestGetTransferSuggestions_Error(t *testing.T) {
@@ -555,8 +571,8 @@ func TestGetTransferSuggestions_MasksReservation(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Len(t, output.Body, 1)
-	assert.Nil(t, output.Body[0].MatchedTransactionID,
+	require.Len(t, output.Body.Items, 1)
+	assert.Nil(t, output.Body.Items[0].MatchedTransactionID,
 		"pending suggestion in list response must not expose matched_transaction_id")
 }
 
@@ -1515,4 +1531,246 @@ func TestConfirmMatch_SubCent_IdempotencyRounding_GAPCG(t *testing.T) {
 		assert.InDelta(t, 1.00, svc.capturedAmount, 0.0001,
 			"IEEE-754: 1.005 rounds to 1.00 (not 1.01) — documented expected behavior for sub-cent edge case")
 	})
+}
+
+// =============================================================================
+// GetTransferSuggestions — status/limit/offset filter tests (#1267)
+// =============================================================================
+
+// TestGetTransferSuggestions_StatusFilter_DelegatesToGetSuggestionsByStatus proves
+// that when a status query param is provided, the handler calls GetSuggestionsByStatus
+// and returns the paginated envelope.
+func TestGetTransferSuggestions_StatusFilter_DelegatesToGetSuggestionsByStatus(t *testing.T) {
+	userID := "user-filter"
+	completed := newTestSuggestionItem("s-complete", userID)
+	completed.Status = domain.SuggestionStatusCompleted
+
+	svc := &mockTransferSuggestionService{
+		getSuggestionsByStatResult: []*domain.TransferSuggestion{completed},
+		getSuggestionsByStatTotal:  1,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		Status:             "completed",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, 1, output.Body.Total)
+	require.Len(t, output.Body.Items, 1)
+	assert.Equal(t, "s-complete", output.Body.Items[0].ID)
+}
+
+// TestGetTransferSuggestions_InvalidStatus_Returns422 proves that an unknown
+// status value causes a 422 Unprocessable Entity response.
+func TestGetTransferSuggestions_InvalidStatus_Returns422(t *testing.T) {
+	svc := &mockTransferSuggestionService{}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-bad"},
+		Status:             "invalid_status_xyz",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	// Huma returns HTTP 422 for validation errors.
+	var humaErr huma.StatusError
+	require.ErrorAs(t, err, &humaErr)
+	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus())
+}
+
+// TestGetTransferSuggestions_NoStatusParam_BackwardCompat_ReturnsPending proves
+// that when no status param is supplied the handler still returns pending suggestions
+// via GetPendingSuggestions, preserving backward compat for the notification center.
+func TestGetTransferSuggestions_NoStatusParam_BackwardCompat_ReturnsPending(t *testing.T) {
+	userID := "user-compat"
+	pending := newTestSuggestionItem("s-pending", userID)
+
+	svc := &mockTransferSuggestionService{
+		getPendingResult: []*domain.TransferSuggestion{pending},
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		// No Status / Limit / Offset set — legacy path.
+	}
+
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, 1, output.Body.Total)
+	require.Len(t, output.Body.Items, 1)
+	assert.Equal(t, "s-pending", output.Body.Items[0].ID)
+}
+
+// TestGetTransferSuggestions_MaskingPreserved_MultiStatus proves that
+// maskReservation is applied to all returned rows regardless of status,
+// so matched_transaction_id is only exposed for completed rows.
+func TestGetTransferSuggestions_MaskingPreserved_MultiStatus(t *testing.T) {
+	userID := "user-mask"
+	txnID := "txn-secret"
+
+	accepted := newTestSuggestionItem("s-accepted", userID)
+	accepted.Status = domain.SuggestionStatusAccepted
+	accepted.MatchedTransactionID = &txnID // should be masked
+
+	completed := newTestSuggestionItem("s-completed", userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.MatchedTransactionID = &txnID // should NOT be masked
+
+	svc := &mockTransferSuggestionService{
+		getSuggestionsByStatResult: []*domain.TransferSuggestion{accepted, completed},
+		getSuggestionsByStatTotal:  2,
+	}
+
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		Status:             "accepted,completed",
+		Limit:              20,
+		Offset:             0,
+	}
+
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.Len(t, output.Body.Items, 2)
+
+	// accepted row: matched_transaction_id must be nil (masked)
+	acceptedRow := output.Body.Items[0]
+	assert.Nil(t, acceptedRow.MatchedTransactionID, "accepted row must have matched_transaction_id masked")
+
+	// completed row: matched_transaction_id must be preserved
+	completedRow := output.Body.Items[1]
+	assert.NotNil(t, completedRow.MatchedTransactionID, "completed row must expose matched_transaction_id")
+}
+
+// TestGetTransferSuggestions_CanConfirmMatch_SetBeforeMasking proves that
+// can_confirm_match is computed before maskReservation clears matched_transaction_id:
+//   - accepted row with a non-nil reservation → can_confirm_match = true
+//   - accepted row with no reservation        → can_confirm_match = false
+//   - completed row (match visible)           → can_confirm_match = false (not accepted)
+func TestGetTransferSuggestions_CanConfirmMatch_SetBeforeMasking(t *testing.T) {
+	userID := "user-ccm"
+	txnID := "txn-id-1"
+
+	acceptedWithReservation := newTestSuggestionItem("s-acc-reserved", userID)
+	acceptedWithReservation.Status = domain.SuggestionStatusAccepted
+	acceptedWithReservation.MatchedTransactionID = &txnID // reservation present → can_confirm_match true
+
+	acceptedNoReservation := newTestSuggestionItem("s-acc-nores", userID)
+	acceptedNoReservation.Status = domain.SuggestionStatusAccepted
+	acceptedNoReservation.MatchedTransactionID = nil // no reservation → can_confirm_match false
+
+	completed := newTestSuggestionItem("s-completed", userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.MatchedTransactionID = &txnID // completed, not accepted → can_confirm_match false
+
+	svc := &mockTransferSuggestionService{
+		getSuggestionsByStatResult: []*domain.TransferSuggestion{
+			acceptedWithReservation, acceptedNoReservation, completed,
+		},
+		getSuggestionsByStatTotal: 3,
+	}
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		Status:             "accepted,completed",
+		Limit:              20,
+	}
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, output.Body.Items, 3)
+
+	row0 := output.Body.Items[0]
+	require.NotNil(t, row0.CanConfirmMatch)
+	assert.True(t, *row0.CanConfirmMatch, "accepted+reservation → can_confirm_match true")
+	assert.Nil(t, row0.MatchedTransactionID, "matched_transaction_id must still be masked after can_confirm_match is set")
+
+	row1 := output.Body.Items[1]
+	require.NotNil(t, row1.CanConfirmMatch)
+	assert.False(t, *row1.CanConfirmMatch, "accepted+no-reservation → can_confirm_match false")
+
+	row2 := output.Body.Items[2]
+	require.NotNil(t, row2.CanConfirmMatch)
+	assert.False(t, *row2.CanConfirmMatch, "completed row is not accepted → can_confirm_match false")
+	assert.NotNil(t, row2.MatchedTransactionID, "completed row must expose matched_transaction_id")
+}
+
+// TestCancelSuggestion_Success proves the handler delegates to service and returns 200.
+func TestCancelSuggestion_Success(t *testing.T) {
+	userID := "user-cancel"
+	suggID := "sugg-cancel"
+	now := time.Now()
+
+	cancelled := &domain.TransferSuggestion{
+		ID:        suggID,
+		UserID:    userID,
+		Amount:    150.00,
+		Status:    domain.SuggestionStatusRejected,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	svc := &mockTransferSuggestionService{cancelResult: cancelled}
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &CancelTransferSuggestionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 suggID,
+	}
+	output, err := handler.CancelSuggestion(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Transfer suggestion cancelled", output.Body.Message)
+	assert.Equal(t, domain.SuggestionStatusRejected, output.Body.Suggestion.Status)
+}
+
+// TestCancelSuggestion_NotFound proves the handler returns 404 via service error.
+func TestCancelSuggestion_NotFound(t *testing.T) {
+	userID := "user-cancel"
+	svc := &mockTransferSuggestionService{cancelErr: domain.ErrTransferSuggestionNotFound}
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &CancelTransferSuggestionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 "nonexistent",
+	}
+	_, err := handler.CancelSuggestion(context.Background(), input)
+
+	require.Error(t, err)
+}
+
+// TestCancelSuggestion_AlreadyActioned proves the handler returns 409 via service error.
+func TestCancelSuggestion_AlreadyActioned(t *testing.T) {
+	userID := "user-cancel"
+	svc := &mockTransferSuggestionService{cancelErr: domain.ErrTransferSuggestionAlreadyActioned}
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &CancelTransferSuggestionInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 "sugg-done",
+	}
+	_, err := handler.CancelSuggestion(context.Background(), input)
+
+	require.Error(t, err)
 }

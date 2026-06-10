@@ -1,10 +1,11 @@
 /**
- * Rules Page — Table E2E Smoke Tests
+ * Boosts/Rules Page — Table E2E Smoke Tests
  * Issue #1110: Verify RuleTable renders correctly after DataTable migration.
  * Issue #1134: Sort wiring — full asc/desc/unsorted cycle verified end-to-end.
+ * Issue #1267: /rules rebranded to /boosts; rules management is the "Rules" tab.
  *
  * Covers:
- * - Page loads and renders the "Automation Rules" heading
+ * - Page loads at /boosts?tab=rules and renders the "Boosts" heading
  * - Switching to table view renders a <table> element
  * - Table shows expected column headers (Name, Priority, Status, Actions)
  * - At least one rule row is visible
@@ -71,6 +72,31 @@ async function mockRulesDependencies(page: Page) {
       route.continue()
     }
   })
+
+  // BoostsPage also fetches transfer-suggestions (3 tabs) and savings-impact on mount.
+  await page.route('**/api/v1/transfer-suggestions*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ items: [], total: 0, limit: 20, offset: 0 }),
+      })
+    } else {
+      route.continue()
+    }
+  })
+
+  await page.route('**/api/v1/savings-impact*', (route) => {
+    if (route.request().method() === 'GET') {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ completed_count: 0, month_amount: 0, prev_month_amount: 0, recent_items: null }),
+      })
+    } else {
+      route.continue()
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -80,9 +106,9 @@ async function mockRulesDependencies(page: Page) {
 test.describe('Rules Page — Protected Route', () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 
-  test('redirects unauthenticated users away from /rules', async ({ page }) => {
-    await page.goto('/rules')
-    await expect(page).not.toHaveURL(/\/rules/, { timeout: 10000 })
+  test('redirects unauthenticated users away from /boosts', async ({ page }) => {
+    await page.goto('/boosts')
+    await expect(page).not.toHaveURL(/\/boosts/, { timeout: 10000 })
   })
 })
 
@@ -97,14 +123,14 @@ test.describe('Rules Page — Core Rendering', () => {
 
   test('renders the page heading', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { level: 1, name: /automation rules/i })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: /boosts/i })).toBeVisible()
   })
 
   test('shows the rule count badge', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
     await expect(page.getByText('2 rules')).toBeVisible()
   })
@@ -121,7 +147,7 @@ test.describe('Rules Page — Table View', () => {
 
   test('switching to table view renders a table element', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
 
     // Switch to table view using the ListViewToggle.
@@ -134,7 +160,7 @@ test.describe('Rules Page — Table View', () => {
 
   test('table view shows at least one rule row', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
 
     // Switch to table view
@@ -152,7 +178,7 @@ test.describe('Rules Page — Table View', () => {
 
   test('table view shows the rule name', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
 
     // Switch to table view
@@ -164,7 +190,7 @@ test.describe('Rules Page — Table View', () => {
 
   test('clicking the Name header cycles aria-sort asc → desc → unsorted (#1134)', async ({ page }) => {
     await mockRulesDependencies(page)
-    await page.goto('/rules')
+    await page.goto('/boosts?tab=rules')
     await page.waitForLoadState('networkidle')
 
     await page.getByTitle('Table view').click()

@@ -37,7 +37,7 @@ const MOCK_STEPS: GettingStartedStep[] = [
     label: 'Create an automation rule',
     description: 'Automate budget alerts',
     complete: false,
-    href: '/rules',
+    href: '/boosts',
   },
   {
     id: 'set-up-auto-categorization',
@@ -133,7 +133,7 @@ describe('GettingStartedChecklist', () => {
     it('renders incomplete steps with different routes correctly', () => {
       renderComponent()
       const rulesLink = screen.getByRole('link', { name: /create an automation rule/i })
-      expect(rulesLink).toHaveAttribute('href', '/rules')
+      expect(rulesLink).toHaveAttribute('href', '/boosts')
 
       const autoCatLink = screen.getByRole('link', { name: /set up auto-categorization/i })
       expect(autoCatLink).toHaveAttribute('href', '/auto-categorization')

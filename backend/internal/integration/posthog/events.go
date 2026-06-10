@@ -39,6 +39,7 @@ const (
 	// Transfer suggestion events
 	TransferSuggestionAccepted = "transfer_suggestion_accepted"
 	TransferSuggestionRejected = "transfer_suggestion_rejected"
+	TransferSuggestionCanceled = "transfer_suggestion_canceled"
 
 	// Issue #972: Savings transfer automation events
 	EventTransferSuggestionMatched   = "transfer_suggestion_matched"

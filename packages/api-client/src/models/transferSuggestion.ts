@@ -31,21 +31,26 @@
 export interface TransferSuggestion {
   actual_amount?: number;
   amount: number;
+  can_confirm_match?: boolean;
   completed_at?: string;
   completion_source?: string;
   created_at: string;
   currency_code: string;
   expires_at?: string;
   from_account_id?: string;
+  from_account_name?: string;
   from_user_account_id?: string;
   id: string;
+  matched_transaction_at?: string;
   matched_transaction_id?: string;
   reason?: string;
   rule_execution_id?: string;
   rule_id?: string;
+  rule_name?: string;
   source: string;
   status: string;
   to_account_id?: string;
+  to_account_name?: string;
   to_user_account_id?: string;
   updated_at: string;
   user_action_at?: string;

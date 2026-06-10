@@ -54,7 +54,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
 
   const budgetsQuery = useGetBudgets({ query: { staleTime: 60_000, enabled: shouldFetch } })
   const savingsGoalsQuery = useGetSavingsGoals({ query: { staleTime: 60_000, enabled: shouldFetch } })
-  const automationRulesQuery = useGetAutomationRules({ query: { staleTime: 60_000, enabled: shouldFetch } })
+  const automationRulesQuery = useGetAutomationRules(undefined, { query: { staleTime: 60_000, enabled: shouldFetch } })
   const categorizationRulesQuery = useGetUserRules({ query: { staleTime: 60_000, enabled: shouldFetch } })
 
   const isLoading =
@@ -91,7 +91,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
       label: 'Create an automation rule',
       description: 'Set up rules to automate budget alerts and financial actions',
       complete: (automationRulesQuery.data?.length ?? 0) > 0,
-      href: '/rules',
+      href: '/boosts',
     },
     {
       id: 'set-up-auto-categorization',

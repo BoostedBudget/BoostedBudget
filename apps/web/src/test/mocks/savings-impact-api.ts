@@ -6,10 +6,12 @@ import { mock } from 'bun:test'
 import * as RealSavingsImpactModule from '@boostedbudget/api-client/endpoints/savings-impact/savings-impact'
 
 // === useGetSavingsImpactMe ===
+export const mockRefetch = mock(() => Promise.resolve())
 export const mockUseGetSavingsImpactMe = mock(() => ({
   data: null,
   isLoading: false,
   error: null,
+  refetch: mockRefetch,
 }))
 
 // === useGetSavingsImpactAggregate ===
