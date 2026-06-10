@@ -203,8 +203,8 @@ func TestAutomationRuleHandler_GetAutomationRules_Empty(t *testing.T) {
 	assert.Len(t, result.Body, 0)
 }
 
-// R8-1b: rule_type filter returns only requested types.
-func TestAutomationRuleHandler_GetAutomationRules_WithRuleTypeFilter(t *testing.T) {
+// R8-1b: boost_type filter returns only requested types.
+func TestBoostHandler_GetBoosts_WithBoostTypeFilter(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 
 	filtered := []*domain.Boost{
@@ -229,8 +229,8 @@ func TestAutomationRuleHandler_GetAutomationRules_WithRuleTypeFilter(t *testing.
 	mockService.AssertExpectations(t)
 }
 
-// R8-1b: invalid rule_type value returns 422.
-func TestAutomationRuleHandler_GetAutomationRules_InvalidRuleType(t *testing.T) {
+// R8-1b: invalid boost_type value returns 422.
+func TestBoostHandler_GetBoosts_InvalidBoostType(t *testing.T) {
 	mockService := new(MockAutomationRuleService)
 	handler := NewBoostHandler(mockService, nil)
 

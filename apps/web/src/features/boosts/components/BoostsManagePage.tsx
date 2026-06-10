@@ -45,7 +45,7 @@ interface BoostsManagePageProps {
 
 /**
  * BoostsManagePage displays the list of automation boosts with card/table toggle.
- * Accepts optional `showTypeSegment` + `boostTypeFilter` props used by RulesTab
+ * Accepts optional `showTypeSegment` + `boostTypeFilter` props used by BoostsTab
  * (inside Boosts page) to scope the default view to transfer-generating boost types
  * while still allowing "All boosts" navigation to avoid orphaning other types.
  */
@@ -213,7 +213,7 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
   // Boost-type segment: shown on Boosts → Rules tab (#1267 R8-1c).
   // Defined before the empty-state early-return so it is always reachable, even when
   // the filtered query returns zero results (R10-a: prevents orphaning non-transfer boosts).
-  const ruleTypeSegment = showTypeSegment ? (
+  const boostTypeSegment = showTypeSegment ? (
     <div
       role="group"
       aria-label="Boost type filter"
@@ -240,7 +240,7 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
   if (!isLoading && boosts.length === 0) {
     return (
       <div className="mx-auto max-w-[1200px] p-6">
-        {ruleTypeSegment}
+        {boostTypeSegment}
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <h1 className="text-2xl font-semibold text-foreground">Automation Boosts</h1>
         </header>
@@ -271,7 +271,7 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
 
   return (
     <div className="mx-auto max-w-[1200px] p-6">
-      {ruleTypeSegment}
+      {boostTypeSegment}
 
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">

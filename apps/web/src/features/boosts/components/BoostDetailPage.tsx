@@ -10,7 +10,7 @@ import type { BoostType } from '../types'
 export function BoostDetailPage() {
   const { id } = useParams<{ id: string }>()
 
-  const { data: rule, isLoading } = useGetBoostByID(id ?? '')
+  const { data: boost, isLoading } = useGetBoostByID(id ?? '')
 
   if (isLoading) {
     return (
@@ -22,7 +22,7 @@ export function BoostDetailPage() {
     )
   }
 
-  if (!rule) {
+  if (!boost) {
     return (
       <div className="flex flex-col items-center justify-center p-6">
         <EmptyState
@@ -43,7 +43,7 @@ export function BoostDetailPage() {
     )
   }
 
-  const typeLabel = BOOST_TYPE_LABELS[rule.boost_type as BoostType] ?? rule.boost_type
+  const typeLabel = BOOST_TYPE_LABELS[boost.boost_type as BoostType] ?? boost.boost_type
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -58,10 +58,10 @@ export function BoostDetailPage() {
       </div>
 
       <div>
-        <h1 className="text-2xl font-semibold text-foreground"><span data-ph-mask>{rule.name}</span></h1>
+        <h1 className="text-2xl font-semibold text-foreground"><span data-ph-mask>{boost.name}</span></h1>
         <p className="mt-1 text-sm text-muted-foreground">{typeLabel}</p>
-        {rule.description && (
-          <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
+        {boost.description && (
+          <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{boost.description}</span></p>
         )}
       </div>
 
