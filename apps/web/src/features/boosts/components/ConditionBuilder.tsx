@@ -4,6 +4,23 @@
  *
  * Component for building dynamic condition rows with field/operator/value.
  * Supports AND/OR logic toggle.
+ *
+ * @example
+ * ```tsx
+ * function BoostForm() {
+ *   const [conditions, setConditions] = useState<BoostConditionLocal[]>([])
+ *   const [logic, setLogic] = useState<ConditionLogic>('AND')
+ *
+ *   return (
+ *     <ConditionBuilder
+ *       conditions={conditions}
+ *       logic={logic}
+ *       onConditionsChange={setConditions}
+ *       onLogicChange={setLogic}
+ *     />
+ *   )
+ * }
+ * ```
  */
 
 import { useCallback, useEffect } from 'react'
@@ -281,26 +298,6 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
   )
 }
 
-/**
- * ConditionBuilder component for building rule conditions.
- *
- * @example
- * ```tsx
- * function RuleForm() {
- *   const [conditions, setConditions] = useState<BoostConditionLocal[]>([])
- *   const [logic, setLogic] = useState<ConditionLogic>('AND')
- *
- *   return (
- *     <ConditionBuilder
- *       conditions={conditions}
- *       logic={logic}
- *       onConditionsChange={setConditions}
- *       onLogicChange={setLogic}
- *     />
- *   )
- * }
- * ```
- */
 export function ConditionBuilder({
   conditions,
   logic,
@@ -404,7 +401,7 @@ export function ConditionBuilder({
       {/* Conditions list */}
       {conditions.length === 0 ? (
         <div className="rounded-lg border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm text-muted-foreground">No conditions added yet. This rule will run unconditionally.</p>
+          <p className="text-sm text-muted-foreground">No conditions added yet. This boost will run unconditionally.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3">

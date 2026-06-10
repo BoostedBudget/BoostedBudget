@@ -25,7 +25,7 @@ import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
 import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 
 mock.module('./BoostsTab', () => ({
-  BoostsTab: () => <div data-testid="rules-page-mock">Rules Page</div>,
+  BoostsTab: () => <div data-testid="boosts-page-mock">Boosts Page</div>,
 }))
 
 mock.module('@/shared/hooks/useTrackEvent', () => ({

@@ -6,7 +6,7 @@ import type { Boost } from '@boostedbudget/api-client/models'
 
 const mockBoosts: Boost[] = [
   {
-    id: 'rule-1',
+    id: 'boost-1',
     user_id: 'user-1',
     name: 'Daily Budget Check',
     description: 'Check budget usage daily',
@@ -30,7 +30,7 @@ const mockBoosts: Boost[] = [
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,
   {
-    id: 'rule-2',
+    id: 'boost-2',
     user_id: 'user-1',
     name: 'Monthly Savings',
     description: 'Transfer to savings monthly',
@@ -52,7 +52,7 @@ const mockBoosts: Boost[] = [
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any,
   {
-    id: 'rule-3',
+    id: 'boost-3',
     user_id: 'user-1',
     name: 'Event Transfer',
     boost_type: 'transfer_suggestion',
@@ -74,7 +74,7 @@ const mockBoosts: Boost[] = [
   } as any,
 ]
 
-describe('RuleTable', () => {
+describe('BoostTable', () => {
   describe('Rendering', () => {
     it('should render a table', () => {
       render(<BoostTable boosts={mockBoosts} />)
@@ -92,7 +92,7 @@ describe('RuleTable', () => {
       expect(screen.getByText('Last Run')).toBeInTheDocument()
     })
 
-    it('should render all rules', () => {
+    it('should render all boosts', () => {
       render(<BoostTable boosts={mockBoosts} />)
 
       expect(screen.getByText('Daily Budget Check')).toBeInTheDocument()
@@ -100,7 +100,7 @@ describe('RuleTable', () => {
       expect(screen.getByText('Event Transfer')).toBeInTheDocument()
     })
 
-    it('should render rule types', () => {
+    it('should render boost types', () => {
       render(<BoostTable boosts={mockBoosts} />)
 
       expect(screen.getByText('Budget Alert')).toBeInTheDocument()
@@ -128,21 +128,21 @@ describe('RuleTable', () => {
       expect(triggerCells.length).toBe(1)
     })
 
-    it('should render last run time for rules with executions', () => {
+    it('should render last run time for boosts with executions', () => {
       render(<BoostTable boosts={mockBoosts} />)
 
       const lastRunCells = screen.getAllByText(/last run/i)
       expect(lastRunCells.length).toBeGreaterThan(0)
     })
 
-    it('should show "Never" for rules without executions', () => {
+    it('should show "Never" for boosts without executions', () => {
       render(<BoostTable boosts={mockBoosts} />)
 
       const neverCells = screen.getAllByText(/never/i)
       expect(neverCells.length).toBeGreaterThan(0)
     })
 
-    it('should show empty state when no rules', () => {
+    it('should show empty state when no boosts', () => {
       render(<BoostTable boosts={[]} />)
 
       expect(screen.getByText(/no boosts/i)).toBeInTheDocument()
@@ -180,7 +180,7 @@ describe('RuleTable', () => {
       expect(onToggle).toHaveBeenCalledWith(mockBoosts[0], false)
     })
 
-    it('should call onToggle with true when enabling disabled rule', () => {
+    it('should call onToggle with true when enabling disabled boost', () => {
       const onToggle = mock(() => {})
       render(<BoostTable boosts={mockBoosts} onToggle={onToggle} />)
 
@@ -327,7 +327,7 @@ describe('RuleTable', () => {
       const checkboxes = screen.getAllByRole('checkbox')
       fireEvent.click(checkboxes[1])
 
-      expect(onSelectionChange).toHaveBeenCalledWith(['rule-1'])
+      expect(onSelectionChange).toHaveBeenCalledWith(['boost-1'])
     })
 
     it('should select all when header checkbox clicked', () => {
@@ -343,12 +343,12 @@ describe('RuleTable', () => {
       const checkboxes = screen.getAllByRole('checkbox')
       fireEvent.click(checkboxes[0])
 
-      expect(onSelectionChange).toHaveBeenCalledWith(['rule-1', 'rule-2', 'rule-3'])
+      expect(onSelectionChange).toHaveBeenCalledWith(['boost-1', 'boost-2', 'boost-3'])
     })
 
-    it('row checkboxes do not embed rule name in aria-label (attribute-path PII leak)', () => {
+    it('row checkboxes do not embed boost name in aria-label (attribute-path PII leak)', () => {
       // R4-2: session replay records attributes verbatim; data-ph-mask cannot cover them.
-      // The per-row checkbox aria-label must NOT contain the rule name.
+      // The per-row checkbox aria-label must NOT contain the boost name.
       render(<BoostTable boosts={mockBoosts} selectable />)
       const checkboxes = screen.getAllByRole('checkbox')
       // Skip index 0 (Select all) — verify row checkboxes (1..n)
@@ -365,7 +365,7 @@ describe('RuleTable', () => {
         <BoostTable
           boosts={mockBoosts}
           selectable
-          selectedIds={['rule-1', 'rule-3']}
+          selectedIds={['boost-1', 'boost-3']}
         />
       )
 
@@ -407,12 +407,12 @@ describe('RuleTable', () => {
   })
 
   describe('Details column — condition + action summary (R2-C)', () => {
-    const ruleWithConditions: Boost = {
+    const boostWithConditions: Boost = {
       ...(mockBoosts[0] as Boost),
       conditions: [{ field: 'budget.percent_used', operator: 'gte', value: 80 }],
     }
 
-    const transferRuleWithAmount: Boost = {
+    const transferBoostWithAmount: Boost = {
       ...(mockBoosts[2] as Boost),
       boost_type: 'transfer_suggestion',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -421,14 +421,14 @@ describe('RuleTable', () => {
     }
 
     it('renders condition summary in details column', () => {
-      render(<BoostTable boosts={[ruleWithConditions]} />)
+      render(<BoostTable boosts={[boostWithConditions]} />)
       const bodyText = document.body.textContent ?? ''
       // condition: "When Budget % Used ≥ 80"
       expect(/Budget % Used/i.test(bodyText)).toBe(true)
     })
 
-    it('renders action summary for transfer_suggestion rule', () => {
-      render(<BoostTable boosts={[transferRuleWithAmount]} />)
+    it('renders action summary for transfer_suggestion boost', () => {
+      render(<BoostTable boosts={[transferBoostWithAmount]} />)
       const bodyText = document.body.textContent ?? ''
       expect(bodyText).toContain('Suggest transfer $200')
     })
@@ -439,7 +439,7 @@ describe('RuleTable', () => {
     })
 
     it('applies data-ph-mask to details column cells (PII — financial amounts in action summary)', () => {
-      const { container } = render(<BoostTable boosts={[transferRuleWithAmount]} />)
+      const { container } = render(<BoostTable boosts={[transferBoostWithAmount]} />)
       expect(container.querySelectorAll('[data-ph-mask]').length).toBeGreaterThanOrEqual(1)
     })
   })

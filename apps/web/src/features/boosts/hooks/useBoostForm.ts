@@ -81,7 +81,7 @@ function createInitialState(initialValues?: Partial<BoostFormState>): BoostFormS
  *     formState,
  *     errors,
  *     setName,
- *     setRuleType,
+ *     setBoostType,
  *     validate,
  *     buildApiRequest,
  *   } = useBoostForm()

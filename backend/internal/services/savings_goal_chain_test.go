@@ -150,7 +150,7 @@ func TestSavingsGoalService_ValidateOwnership_MatchesByUserAccountID(t *testing.
 // resolves the savings goal's linked account via the chain resolver when UserAccountID is set.
 // Issue #1109: B.3 fix.
 func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
@@ -199,7 +199,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		Amount:        500,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-savings-chain-001",
 		UserID:         "user-savings-001",
 		Name:           "Savings Chain Rule",
@@ -216,7 +216,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -232,7 +232,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 // TestSavingsGoalExecutor_ChainResolver_NilFallback verifies that when chainResolver is nil,
 // executeSavingsGoal falls back to goal.AccountID (the raw account_id from the goal row).
 func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
@@ -268,7 +268,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 		Amount:        200,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-savings-nil-resolver",
 		UserID:         "user-savings-002",
 		Name:           "Nil Resolver Savings",
@@ -285,7 +285,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -301,7 +301,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 	// Depth-2 chain: acct_old -> acct_mid -> acct_current
 	// The savings goal was created against acct_old and carries the stable user_account_id.
 	// The chain resolver returns acct_current (the current active ID) after two re-links.
-	execRepo := &mockRuleExecutionRepository{}
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
@@ -347,7 +347,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		Amount:        750,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-savings-depth2-001",
 		UserID:         "user-savings-depth2",
 		Name:           "Depth-2 Savings Rule",
@@ -364,7 +364,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)

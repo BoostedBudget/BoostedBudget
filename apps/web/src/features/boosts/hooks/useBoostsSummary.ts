@@ -1,4 +1,4 @@
-// Issue #1267: Boosts page — savings impact + active rules summary
+// Issue #1267: Boosts page — savings impact + active boosts summary
 import { useGetSavingsImpactMe } from '@boostedbudget/api-client/endpoints/savings-impact/savings-impact'
 import { useGetBoosts } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { TRANSFER_GENERATING_BOOST_TYPES } from '../constants'
@@ -8,7 +8,7 @@ export interface UseBoostsSummaryResult {
   /** Month-over-month change (null when prev month was $0 to avoid misleading % display) */
   momChange: number | null
   completedCount: number | null
-  activeRulesCount: number
+  activeBoostsCount: number
   isLoading: boolean
   error: Error | null
   refetch: () => void
@@ -27,7 +27,7 @@ export function useBoostsSummary(): UseBoostsSummaryResult {
     totalMoved: data?.total_amount ?? null,
     momChange,
     completedCount: data?.completed_count ?? null,
-    activeRulesCount: boosts.filter(
+    activeBoostsCount: boosts.filter(
       (b) => b.enabled && TRANSFER_GENERATING_BOOST_TYPES.includes(b.boost_type as (typeof TRANSFER_GENERATING_BOOST_TYPES)[number])
     ).length,
     isLoading: impactQuery.isLoading || boostsQuery.isLoading,

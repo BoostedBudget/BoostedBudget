@@ -15,9 +15,9 @@ import (
 
 func TestBoostType_IsValid(t *testing.T) {
 	tests := []struct {
-		name     string
-		ruleType BoostType
-		want     bool
+		name      string
+		boostType BoostType
+		want      bool
 	}{
 		{"transfer_suggestion is valid", BoostTypeTransferSuggestion, true},
 		{"budget_alert is valid", BoostTypeBudgetAlert, true},
@@ -29,7 +29,7 @@ func TestBoostType_IsValid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.ruleType.IsValid()
+			got := tt.boostType.IsValid()
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -311,11 +311,11 @@ func TestTriggerConfig_Validate(t *testing.T) {
 // =============================================================================
 
 func TestBoost_validateConditions(t *testing.T) {
-	// Helper: build a minimal valid event-triggered rule.
-	validEventRule := func(event string, conditions []BoostCondition) Boost {
+	// Helper: build a minimal valid event-triggered boost.
+	validEventBoost := func(event string, conditions []BoostCondition) Boost {
 		return Boost{
 			UserID:   "user-123",
-			Name:     "Test Rule",
+			Name:     "Test Boost",
 			BoostType: BoostTypeBudgetAlert,
 			TriggerConfig: TriggerConfig{
 				Type:  TriggerTypeEvent,
@@ -329,27 +329,27 @@ func TestBoost_validateConditions(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		rule    Boost
+		boost   Boost
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "valid budget.percent_used field with eq operator",
-			rule: validEventRule("budget_updated", []BoostCondition{
+			boost: validEventBoost("budget_updated", []BoostCondition{
 				{Field: "budget.percent_used", Operator: ConditionOperatorEq, Value: 80},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "valid budget_category.percent_used with CategoryID set",
-			rule: validEventRule("budget_updated", []BoostCondition{
+			boost: validEventBoost("budget_updated", []BoostCondition{
 				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "unknown field returns not valid for event error",
-			rule: validEventRule("budget_updated", []BoostCondition{
+			boost: validEventBoost("budget_updated", []BoostCondition{
 				{Field: "budget.typo_field", Operator: ConditionOperatorEq, Value: 80},
 			}),
 			wantErr: true,
@@ -357,7 +357,7 @@ func TestBoost_validateConditions(t *testing.T) {
 		},
 		{
 			name: "operator between returns unsupported operator error",
-			rule: validEventRule("budget_updated", []BoostCondition{
+			boost: validEventBoost("budget_updated", []BoostCondition{
 				{Field: "budget.percent_used", Operator: ConditionOperatorBetween, Value: 80},
 			}),
 			wantErr: true,
@@ -366,16 +366,16 @@ func TestBoost_validateConditions(t *testing.T) {
 		{
 			// Issue #1271 Item 2: Validate() no longer rejects missing CategoryID.
 			// The strict check moved to ValidateForPersistence() (used by create/update).
-			// ExecuteBoost uses Validate() so that legacy/partial rules don't brick.
+			// ExecuteBoost uses Validate() so that legacy/partial boosts don't brick.
 			name: "budget_category field without CategoryID is accepted by Validate()",
-			rule: validEventRule("budget_updated", []BoostCondition{
+			boost: validEventBoost("budget_updated", []BoostCondition{
 				{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80},
 			}),
 			wantErr: false,
 		},
 		{
 			name: "schedule-type trigger rejects unsupported operator",
-			rule: Boost{
+			boost: Boost{
 				UserID:   "user-123",
 				Name:     "Scheduled Transfer",
 				BoostType: BoostTypeTransferSuggestion,
@@ -395,7 +395,7 @@ func TestBoost_validateConditions(t *testing.T) {
 		},
 		{
 			name: "schedule-type trigger accepts valid operator",
-			rule: Boost{
+			boost: Boost{
 				UserID:   "user-123",
 				Name:     "Scheduled Transfer",
 				BoostType: BoostTypeTransferSuggestion,
@@ -416,7 +416,7 @@ func TestBoost_validateConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.rule.Validate()
+			err := tt.boost.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -434,37 +434,37 @@ func TestBoost_validateConditions(t *testing.T) {
 func TestBoost_Validate_RequiredFields(t *testing.T) {
 	tests := []struct {
 		name    string
-		rule    Boost
+		boost   Boost
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name:    "missing user_id",
-			rule:    Boost{Name: "Test Rule", BoostType: BoostTypeTransferSuggestion},
+			boost:   Boost{Name: "Test Boost", BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "user_id is required",
 		},
 		{
 			name:    "missing name",
-			rule:    Boost{UserID: "user-123", BoostType: BoostTypeTransferSuggestion},
+			boost:   Boost{UserID: "user-123", BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "name is required",
 		},
 		{
 			name:    "name too long",
-			rule:    Boost{UserID: "user-123", Name: string(make([]byte, 101)), BoostType: BoostTypeTransferSuggestion},
+			boost:   Boost{UserID: "user-123", Name: string(make([]byte, 101)), BoostType: BoostTypeTransferSuggestion},
 			wantErr: true,
 			errMsg:  "name must be 100 characters or less",
 		},
 		{
 			name:    "missing boost_type",
-			rule:    Boost{UserID: "user-123", Name: "Test Rule"},
+			boost:   Boost{UserID: "user-123", Name: "Test Boost"},
 			wantErr: true,
 			errMsg:  "invalid boost_type",
 		},
 		{
 			name:    "invalid boost_type",
-			rule:    Boost{UserID: "user-123", Name: "Test Rule", BoostType: BoostType("invalid")},
+			boost:   Boost{UserID: "user-123", Name: "Test Boost", BoostType: BoostType("invalid")},
 			wantErr: true,
 			errMsg:  "invalid boost_type",
 		},
@@ -472,7 +472,7 @@ func TestBoost_Validate_RequiredFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.rule.Validate()
+			err := tt.boost.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -484,10 +484,10 @@ func TestBoost_Validate_RequiredFields(t *testing.T) {
 }
 
 func TestBoost_Validate_ConditionLogic(t *testing.T) {
-	baseRule := func() Boost {
+	baseBoost := func() Boost {
 		return Boost{
 			UserID:   "user-123",
-			Name:     "Test Rule",
+			Name:     "Test Boost",
 			BoostType: BoostTypeTransferSuggestion,
 			TriggerConfig: TriggerConfig{
 				Type:     TriggerTypeSchedule,
@@ -515,9 +515,9 @@ func TestBoost_Validate_ConditionLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule := baseRule()
-			rule.ConditionLogic = tt.conditionLogic
-			err := rule.Validate()
+			boost := baseBoost()
+			boost.ConditionLogic = tt.conditionLogic
+			err := boost.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errMsg)
@@ -529,7 +529,7 @@ func TestBoost_Validate_ConditionLogic(t *testing.T) {
 }
 
 func TestBoost_Validate_TransferSuggestionRule(t *testing.T) {
-	validRule := Boost{
+	validBoost := Boost{
 		UserID:   "user-123",
 		Name:     "Excess Savings Transfer",
 		BoostType: BoostTypeTransferSuggestion,
@@ -546,81 +546,81 @@ func TestBoost_Validate_TransferSuggestionRule(t *testing.T) {
 	}
 
 	t.Run("valid transfer suggestion rule", func(t *testing.T) {
-		err := validRule.Validate()
+		err := validBoost.Validate()
 		assert.NoError(t, err)
 	})
 
 	t.Run("transfer suggestion requires from_account_id in actions", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"to_account_id":"acc-2","amount":100}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"to_account_id":"acc-2","amount":100}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "from_account_id")
 	})
 
 	t.Run("transfer suggestion requires to_account_id in actions", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","amount":100}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","amount":100}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "to_account_id")
 	})
 
 	t.Run("transfer suggestion requires positive amount for fixed type", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":-100}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":-100}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "amount must be positive")
 	})
 
 	// Issue #972 GAP AC: excess amount_type must be accepted even when amount=0 (threshold drives amount).
 	t.Run("excess amount_type with zero amount and threshold is valid", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":50}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "excess rules have amount=0; amount>0 check must be skipped for excess")
 	})
 
 	// Issue #972 GAP AC: remaining amount_type must be accepted when amount=0 (derived from triggerData).
 	t.Run("remaining amount_type with zero amount is valid", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"remaining","amount":0}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "remaining rules have amount=0; amount>0 check must be skipped for remaining")
 	})
 
 	// Issue #972 GAP AC: invalid amount_type must be rejected.
 	t.Run("invalid amount_type is rejected", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"bogus","amount":100}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"bogus","amount":100}`)
+		err := boost.Validate()
 		require.Error(t, err, "bogus amount_type must be rejected by validateTransferAction")
 		assert.Contains(t, err.Error(), "amount_type")
 	})
 
-	// Issue #972 GAP AC (Codex Q4): legacy 'threshold' type must still be accepted so saved rules keep firing.
+	// Issue #972 GAP AC (Codex Q4): legacy 'threshold' type must still be accepted so saved boosts keep firing.
 	t.Run("legacy threshold amount_type is valid", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":100}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "threshold is a legacy amount_type and must remain valid")
 	})
 
-	// Issue #972 GAP AC (Codex Q6): negative threshold on excess rule must be rejected to prevent over-transfer.
+	// Issue #972 GAP AC (Codex Q6): negative threshold on excess boost must be rejected to prevent over-transfer.
 	t.Run("negative threshold on excess is rejected", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":-10}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"excess","amount":0,"threshold":-10}`)
+		err := boost.Validate()
 		require.Error(t, err, "negative threshold must be rejected")
 		assert.Contains(t, err.Error(), "threshold")
 	})
 
 	// Issue #972 GAP AC (Codex Q6): negative threshold on legacy 'threshold' type is also rejected.
 	t.Run("negative threshold on threshold type is rejected", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":-5}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"threshold","threshold":-5}`)
+		err := boost.Validate()
 		require.Error(t, err, "negative threshold must be rejected for threshold type too")
 		assert.Contains(t, err.Error(), "threshold")
 	})
@@ -632,7 +632,7 @@ func TestBoost_Validate_TransferSuggestionRule(t *testing.T) {
 // are also valid. This is the C9 contract guard — it locks the UI⊆backend invariant
 // so a UI-offered type can never be silently rejected at create/update time.
 func TestTransferAmountTypeContract_C9(t *testing.T) {
-	baseRule := Boost{
+	baseBoost := Boost{
 		UserID:   "user-c9",
 		Name:     "Transfer Contract Test",
 		BoostType: BoostTypeTransferSuggestion,
@@ -669,16 +669,16 @@ func TestTransferAmountTypeContract_C9(t *testing.T) {
 
 	for _, tt := range uiOfferedTypes {
 		t.Run("UI type "+tt.amountType+" must be accepted: "+tt.desc, func(t *testing.T) {
-			rule := baseRule
-			rule.Actions = json.RawMessage(tt.actions)
-			err := rule.Validate()
+			boost := baseBoost
+			boost.Actions = json.RawMessage(tt.actions)
+			err := boost.Validate()
 			assert.NoError(t, err,
 				"amount_type %q is offered by the UI and must be accepted by validateTransferAction (UI ⊆ backend allow-set)",
 				tt.amountType)
 		})
 	}
 
-	// Backend-only amount_types (not in the UI but must remain valid for API-created rules).
+	// Backend-only amount_types (not in the UI but must remain valid for API-created boosts).
 	backendOnlyTypes := []struct {
 		amountType string
 		actions    string
@@ -694,16 +694,16 @@ func TestTransferAmountTypeContract_C9(t *testing.T) {
 	}
 	for _, tt := range backendOnlyTypes {
 		t.Run("backend-only type "+tt.amountType+" must also be accepted", func(t *testing.T) {
-			rule := baseRule
-			rule.Actions = json.RawMessage(tt.actions)
-			err := rule.Validate()
-			assert.NoError(t, err, "backend-only amount_type %q must remain valid for API-created rules", tt.amountType)
+			boost := baseBoost
+			boost.Actions = json.RawMessage(tt.actions)
+			err := boost.Validate()
+			assert.NoError(t, err, "backend-only amount_type %q must remain valid for API-created boosts", tt.amountType)
 		})
 	}
 }
 
 func TestBoost_Validate_BudgetAlertRule(t *testing.T) {
-	validRule := Boost{
+	validBoost := Boost{
 		UserID:   "user-123",
 		Name:     "Budget Warning",
 		BoostType: BoostTypeBudgetAlert,
@@ -719,29 +719,29 @@ func TestBoost_Validate_BudgetAlertRule(t *testing.T) {
 	}
 
 	t.Run("valid budget alert rule", func(t *testing.T) {
-		err := validRule.Validate()
+		err := validBoost.Validate()
 		assert.NoError(t, err)
 	})
 
 	t.Run("budget alert requires notification_channels", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"threshold_type":"percentage","threshold_value":80}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"threshold_type":"percentage","threshold_value":80}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "notification_channels")
 	})
 
 	t.Run("budget alert requires valid threshold_type", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"notification_channels":["email"],"threshold_type":"invalid","threshold_value":80}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"notification_channels":["email"],"threshold_type":"invalid","threshold_value":80}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "threshold_type")
 	})
 }
 
 func TestBoost_Validate_CategoryRolloverRule(t *testing.T) {
-	validRule := Boost{
+	validBoost := Boost{
 		UserID:   "user-123",
 		Name:     "Savings Rollover",
 		BoostType: BoostTypeCategoryRollover,
@@ -757,38 +757,38 @@ func TestBoost_Validate_CategoryRolloverRule(t *testing.T) {
 	}
 
 	t.Run("valid category rollover rule", func(t *testing.T) {
-		err := validRule.Validate()
+		err := validBoost.Validate()
 		assert.NoError(t, err)
 	})
 
 	t.Run("category rollover requires source_budget_category_id", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"rollover_type":"full"}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"rollover_type":"full"}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "source_budget_category_id")
 	})
 
 	t.Run("category rollover requires valid rollover_type", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"invalid"}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"invalid"}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "rollover_type")
 	})
 
 	t.Run("category rollover capped type requires cap_amount", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"capped"}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"capped"}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cap_amount")
 	})
 
 	t.Run("category rollover percentage type requires percentage", func(t *testing.T) {
-		rule := validRule
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"percentage"}`)
-		err := rule.Validate()
+		boost := validBoost
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"percentage"}`)
+		err := boost.Validate()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "percentage")
 	})
@@ -799,12 +799,12 @@ func TestBoost_Validate_CategoryRolloverRule(t *testing.T) {
 // =============================================================================
 
 func TestBoost_ParseTransferAction(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		BoostType: BoostTypeTransferSuggestion,
 		Actions:  json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":150.50,"threshold":1000}`),
 	}
 
-	action, err := rule.ParseTransferAction()
+	action, err := boost.ParseTransferAction()
 	require.NoError(t, err)
 
 	assert.Equal(t, "acc-1", action.FromAccountID)
@@ -815,12 +815,12 @@ func TestBoost_ParseTransferAction(t *testing.T) {
 }
 
 func TestBoost_ParseAlertAction(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		BoostType: BoostTypeBudgetAlert,
 		Actions:  json.RawMessage(`{"notification_channels":["email","push"],"threshold_type":"percentage","threshold_value":80,"budget_id":"budget-1","category_id":"cat-1"}`),
 	}
 
-	action, err := rule.ParseAlertAction()
+	action, err := boost.ParseAlertAction()
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"email", "push"}, action.NotificationChannels)
@@ -831,12 +831,12 @@ func TestBoost_ParseAlertAction(t *testing.T) {
 }
 
 func TestBoost_ParseRolloverAction(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		BoostType: BoostTypeCategoryRollover,
 		Actions:  json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"capped","cap_amount":100}`),
 	}
 
-	action, err := rule.ParseRolloverAction()
+	action, err := boost.ParseRolloverAction()
 	require.NoError(t, err)
 
 	assert.Equal(t, "cat-1", action.SourceBudgetCategoryID)
@@ -849,7 +849,7 @@ func TestBoost_ParseRolloverAction(t *testing.T) {
 // BoostExecution Tests
 // =============================================================================
 
-func TestRuleExecutionStatus_IsValid(t *testing.T) {
+func TestBoostExecutionStatus_IsValid(t *testing.T) {
 	tests := []struct {
 		name   string
 		status ExecutionStatus
@@ -871,7 +871,7 @@ func TestRuleExecutionStatus_IsValid(t *testing.T) {
 	}
 }
 
-func TestRuleExecution_MarkComplete(t *testing.T) {
+func TestBoostExecution_MarkComplete(t *testing.T) {
 	execution := &BoostExecution{
 		Status:    ExecutionStatusRunning,
 		StartedAt: time.Now().Add(-100 * time.Millisecond),
@@ -885,7 +885,7 @@ func TestRuleExecution_MarkComplete(t *testing.T) {
 	assert.Greater(t, *execution.ExecutionDurationMs, 0)
 }
 
-func TestRuleExecution_MarkFailed(t *testing.T) {
+func TestBoostExecution_MarkFailed(t *testing.T) {
 	execution := &BoostExecution{
 		Status:    ExecutionStatusRunning,
 		StartedAt: time.Now().Add(-100 * time.Millisecond),
@@ -1137,24 +1137,24 @@ func TestValidateTransferAction_PercentageUpperBound(t *testing.T) {
 	}
 
 	t.Run("percentage=200 is rejected (over 100%)", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":200}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":200}`)
+		err := boost.Validate()
 		require.Error(t, err, "percentage > 100 must be rejected")
 		assert.Contains(t, err.Error(), "percentage")
 	})
 
 	t.Run("percentage=100 is accepted (exactly 100%)", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":100}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":100}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "exactly 100% must be valid")
 	})
 
 	t.Run("percentage=50 is accepted", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":50}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"from_account_id":"a","to_account_id":"b","amount_type":"percentage","amount":50}`)
+		err := boost.Validate()
 		assert.NoError(t, err)
 	})
 }
@@ -1175,24 +1175,24 @@ func TestValidateSavingsGoalAction_RemainingThresholdBound(t *testing.T) {
 	}
 
 	t.Run("remaining with negative threshold is rejected", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":-100}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":-100}`)
+		err := boost.Validate()
 		require.Error(t, err, "negative threshold for remaining amount_type must be rejected")
 		assert.Contains(t, err.Error(), "threshold")
 	})
 
 	t.Run("remaining with threshold=0 is accepted (full remaining)", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":0}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":0}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "threshold=0 means transfer full remaining amount")
 	})
 
 	t.Run("remaining with positive threshold is accepted", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":100}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"savings_goal_id":"g","from_account_id":"a","amount_type":"remaining","threshold":100}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "positive threshold is valid for remaining type")
 	})
 }
@@ -1213,33 +1213,33 @@ func TestValidateRolloverAction_PercentageBound(t *testing.T) {
 
 	t.Run("rollover percentage=150 is rejected (over 100%)", func(t *testing.T) {
 		pct := float64(150)
-		rule := base
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":150}`)
+		boost := base
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":150}`)
 		_ = pct
-		err := rule.Validate()
+		err := boost.Validate()
 		require.Error(t, err, "rollover percentage > 100 must be rejected")
 		assert.Contains(t, err.Error(), "percentage")
 	})
 
 	t.Run("rollover percentage=0 is rejected (must be positive)", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":0}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":0}`)
+		err := boost.Validate()
 		require.Error(t, err, "rollover percentage=0 must be rejected")
 		assert.Contains(t, err.Error(), "percentage")
 	})
 
 	t.Run("rollover percentage=100 is accepted", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":100}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":100}`)
+		err := boost.Validate()
 		assert.NoError(t, err, "rollover percentage=100 must be valid")
 	})
 
 	t.Run("rollover percentage=50 is accepted", func(t *testing.T) {
-		rule := base
-		rule.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":50}`)
-		err := rule.Validate()
+		boost := base
+		boost.Actions = json.RawMessage(`{"source_budget_category_id":"cat","rollover_type":"percentage","percentage":50}`)
+		err := boost.Validate()
 		assert.NoError(t, err)
 	})
 }
@@ -1252,7 +1252,7 @@ func TestValidateRolloverAction_PercentageBound(t *testing.T) {
 // NOT reject a budget_category.* condition that is missing CategoryID or BudgetID. Legacy /
 // partial rules must be allowed to run without bricking.
 func TestValidate_DoesNotRequireScopeIDs(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
 		BoostType: BoostTypeBudgetAlert,
@@ -1266,14 +1266,14 @@ func TestValidate_DoesNotRequireScopeIDs(t *testing.T) {
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
 	}
-	err := rule.Validate()
+	err := boost.Validate()
 	assert.NoError(t, err, "Validate() must not require CategoryID — that check belongs in ValidateForPersistence()")
 }
 
 // TestValidateForPersistence_RequiresCategoryID verifies that ValidateForPersistence() rejects
 // a budget_category.* condition with an empty CategoryID.
 func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
 		BoostType: BoostTypeBudgetAlert,
@@ -1287,7 +1287,7 @@ func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
 	}
-	err := rule.ValidateForPersistence()
+	err := boost.ValidateForPersistence()
 	require.Error(t, err, "ValidateForPersistence() must reject a missing CategoryID")
 	assert.ErrorIs(t, err, ErrInvalidBoost)
 	assert.Contains(t, err.Error(), "category_id")
@@ -1296,7 +1296,7 @@ func TestValidateForPersistence_RequiresCategoryID(t *testing.T) {
 // TestValidateForPersistence_RequiresBudgetID verifies that ValidateForPersistence() rejects
 // a budget_category.* condition that has CategoryID but no BudgetID.
 func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		UserID:   "user-1",
 		Name:     "partial rule",
 		BoostType: BoostTypeBudgetAlert,
@@ -1310,7 +1310,7 @@ func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
 	}
-	err := rule.ValidateForPersistence()
+	err := boost.ValidateForPersistence()
 	require.Error(t, err, "ValidateForPersistence() must reject a missing BudgetID")
 	assert.ErrorIs(t, err, ErrInvalidBoost)
 	assert.Contains(t, err.Error(), "budget_id")
@@ -1319,7 +1319,7 @@ func TestValidateForPersistence_RequiresBudgetID(t *testing.T) {
 // TestValidateForPersistence_PassesWhenBothPresent verifies that ValidateForPersistence()
 // accepts a budget_category.* condition that has both CategoryID and BudgetID set.
 func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		UserID:   "user-1",
 		Name:     "fully scoped rule",
 		BoostType: BoostTypeBudgetAlert,
@@ -1333,7 +1333,7 @@ func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
 	}
-	err := rule.ValidateForPersistence()
+	err := boost.ValidateForPersistence()
 	assert.NoError(t, err, "ValidateForPersistence() must accept a condition with both CategoryID and BudgetID")
 }
 
@@ -1344,13 +1344,13 @@ func TestValidateForPersistence_PassesWhenBothPresent(t *testing.T) {
 // TestBoundBudgetID_SingleBudget verifies that BoundBudgetID returns the budget ID
 // from the first budget_category.* condition that has a BudgetID set.
 func TestBoundBudgetID_SingleBudget(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		Conditions: []BoostCondition{
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1", BudgetID: "budget-X"},
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
 		},
 	}
-	id, bound := rule.BoundBudgetID()
+	id, bound := boost.BoundBudgetID()
 	assert.True(t, bound, "BoundBudgetID should return bound=true when a budget_category.* condition has a BudgetID")
 	assert.Equal(t, "budget-X", id)
 }
@@ -1358,12 +1358,12 @@ func TestBoundBudgetID_SingleBudget(t *testing.T) {
 // TestBoundBudgetID_None verifies that BoundBudgetID returns ("", false) when no
 // condition has a budget_category.* field with a BudgetID.
 func TestBoundBudgetID_None(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		Conditions: []BoostCondition{
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50},
 		},
 	}
-	id, bound := rule.BoundBudgetID()
+	id, bound := boost.BoundBudgetID()
 	assert.False(t, bound, "BoundBudgetID should return bound=false when no budget_category.* condition has a BudgetID")
 	assert.Equal(t, "", id)
 }
@@ -1371,7 +1371,7 @@ func TestBoundBudgetID_None(t *testing.T) {
 // TestBoundBudgetID_IgnoresNonCategoryConditions verifies that BoundBudgetID ignores
 // BudgetID set on non-budget_category.* conditions (only category-scoped fields count).
 func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		Conditions: []BoostCondition{
 			// budget.* condition with BudgetID set — should be ignored
 			{Field: "budget.percent_used", Operator: ConditionOperatorGte, Value: 50, BudgetID: "budget-X"},
@@ -1379,7 +1379,7 @@ func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
 			{Field: "budget_category.percent_used", Operator: ConditionOperatorGte, Value: 80, CategoryID: "cat-1"},
 		},
 	}
-	id, bound := rule.BoundBudgetID()
+	id, bound := boost.BoundBudgetID()
 	assert.False(t, bound, "BoundBudgetID should only count budget_category.* fields; budget.* BudgetID must be ignored")
 	assert.Equal(t, "", id)
 }
@@ -1391,7 +1391,7 @@ func TestBoundBudgetID_IgnoresNonCategoryConditions(t *testing.T) {
 // TestValidateForPersistence_RejectsMultipleBudgets verifies that ValidateForPersistence()
 // rejects a rule whose budget_category.* conditions bind more than one distinct budget.
 func TestValidateForPersistence_RejectsMultipleBudgets(t *testing.T) {
-	rule := Boost{
+	boost := Boost{
 		UserID:   "user-1",
 		Name:     "multi-budget rule",
 		BoostType: BoostTypeBudgetAlert,
@@ -1406,7 +1406,7 @@ func TestValidateForPersistence_RejectsMultipleBudgets(t *testing.T) {
 		ConditionLogic: "AND",
 		Actions:        json.RawMessage(`{"notification_channels":["email"],"threshold_type":"percentage","threshold_value":80}`),
 	}
-	err := rule.ValidateForPersistence()
-	require.Error(t, err, "ValidateForPersistence() must reject a rule binding more than one budget")
+	err := boost.ValidateForPersistence()
+	require.Error(t, err, "ValidateForPersistence() must reject a boost binding more than one budget")
 	assert.ErrorIs(t, err, ErrInvalidBoost)
 }

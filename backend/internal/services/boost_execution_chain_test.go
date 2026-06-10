@@ -1,8 +1,8 @@
 package services
 
-// Issue #1109: Chain-transparency tests for rule execution service.
-// Verifies that transfer suggestions created by rules carry FromUserAccountID
-// and ToUserAccountID when the rule action has those stable IDs.
+// Issue #1109: Chain-transparency tests for boost execution service.
+// Verifies that transfer suggestions created by boosts carry FromUserAccountID
+// and ToUserAccountID when the boost action has those stable IDs.
 
 import (
 	"errors"
@@ -16,12 +16,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRuleExecution_TransferAction_WritesUserAccountIDs verifies that when a
-// transfer_suggestion rule has FromUserAccountID/ToUserAccountID in its actions
+// TestBoostExecution_TransferAction_WritesUserAccountIDs verifies that when a
+// transfer_suggestion boost has FromUserAccountID/ToUserAccountID in its actions
 // JSONB (backfilled by migration 000070), the created TransferSuggestion carries
 // those stable IDs in the From/ToUserAccountID fields.
-func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -39,7 +39,7 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 		Amount:            100,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-chain-001",
 		UserID:         "user-123",
 		Name:           "Transfer to Savings",
@@ -57,7 +57,7 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	}
 
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -71,11 +71,11 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	assert.Equal(t, "stable-to-user-acct", *s.ToUserAccountID)
 }
 
-// TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs verifies backward
-// compat: a rule action without user_account_id keys creates a suggestion with
+// TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs verifies backward
+// compat: a boost action without user_account_id keys creates a suggestion with
 // nil From/ToUserAccountID (pre-migration data).
-func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -91,7 +91,7 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 		Amount:        75,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-legacy-001",
 		UserID:         "user-123",
 		Name:           "Legacy Transfer Rule",
@@ -109,7 +109,7 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 	}
 
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -117,16 +117,16 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 
 	assert.Equal(t, "from-account-legacy", *s.FromAccountID)
 	assert.Equal(t, "to-account-legacy", *s.ToAccountID)
-	assert.Nil(t, s.FromUserAccountID, "Legacy rules should have nil FromUserAccountID")
-	assert.Nil(t, s.ToUserAccountID, "Legacy rules should have nil ToUserAccountID")
+	assert.Nil(t, s.FromUserAccountID, "Legacy boosts should have nil FromUserAccountID")
+	assert.Nil(t, s.ToUserAccountID, "Legacy boosts should have nil ToUserAccountID")
 }
 
-// TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID verifies that when
+// TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID verifies that when
 // a chainResolver is set and FromUserAccountID is non-empty, the suggestion's
 // FromAccountID is updated to the active account resolved by the chain resolver.
 // Issue #1109: B.2 fix.
-func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -157,7 +157,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		Amount:            500,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-chain-resolver-001",
 		UserID:         "user-123",
 		Name:           "Chain Resolver Transfer",
@@ -174,7 +174,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -192,10 +192,10 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 	assert.Equal(t, "stable-to-uaid", *s.ToUserAccountID)
 }
 
-// TestRuleExecution_TransferAction_ChainResolver_NilFallback verifies that when
+// TestBoostExecution_TransferAction_ChainResolver_NilFallback verifies that when
 // chainResolver is nil, FromAccountID falls back to the raw value in the action.
-func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -214,7 +214,7 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		Amount:            100,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-chain-nil-001",
 		UserID:         "user-123",
 		Name:           "Nil Resolver Fallback",
@@ -231,7 +231,7 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -244,10 +244,10 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 	assert.Equal(t, "raw-to-account", *s.ToAccountID, "fallback: raw ToAccountID")
 }
 
-// TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID verifies that when
+// TestBoostExecution_TransferAction_ChainResolver_EmptyUserAccountID verifies that when
 // FromUserAccountID is empty, the raw account ID is used regardless of resolver.
-func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -271,7 +271,7 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		Amount:        75,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-legacy-empty-uaid",
 		UserID:         "user-123",
 		Name:           "Legacy No UAID",
@@ -288,7 +288,7 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)
@@ -299,10 +299,10 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 	assert.Equal(t, "raw-to-account-legacy", *s.ToAccountID)
 }
 
-// TestRuleExecution_SimulateAction_IncludesFromUserAccountID verifies that simulateAction
+// TestBoostExecution_SimulateAction_IncludesFromUserAccountID verifies that simulateAction
 // adds from_user_account_id to the result when it is set. Issue #1109: B.2 fix.
-func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
-	execRepo := &mockRuleExecutionRepository{}
+func TestBoostExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -319,7 +319,7 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		Amount:            150,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-simulate-uaid",
 		UserID:         "user-sim",
 		Name:           "Simulate With UAID",
@@ -336,7 +336,7 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	result, err := svc.TestBoost(ctx, rule, map[string]interface{}{})
+	result, err := svc.TestBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -346,7 +346,7 @@ func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 }
 
 // mockAccountChainResolver is a lightweight mock for AccountChainResolver used in
-// rule_execution_chain_test.go.
+// boost_execution_chain_test.go.
 type mockAccountChainResolver struct {
 	resolveActiveIDFunc func(ctx context.Context, userAccountID string) (string, error)
 }
@@ -366,11 +366,11 @@ func (m *mockAccountChainResolver) ChainAccountIDs(ctx context.Context, userAcco
 	return nil, nil
 }
 
-func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *testing.T) {
+func TestBoostExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *testing.T) {
 	// Depth-2 chain: acct_old -> acct_mid -> acct_current
 	// Rule actions carry the stable user_account_id. The chain resolver must return
 	// the current-generation account ID even after two re-links.
-	execRepo := &mockRuleExecutionRepository{}
+	execRepo := &mockBoostExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
 	boostRepo := &mockBoostsRepository{}
 
@@ -404,7 +404,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		Amount:            1000,
 	})
 
-	rule := &domain.Boost{
+	boost := &domain.Boost{
 		ID:             "rule-depth2-chain-001",
 		UserID:         "user-depth2",
 		Name:           "Depth-2 Chain Transfer",
@@ -421,7 +421,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		UpdatedAt: now,
 	}
 
-	_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
+	_, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{})
 	require.NoError(t, err)
 
 	require.Len(t, suggRepo.suggestions, 1)

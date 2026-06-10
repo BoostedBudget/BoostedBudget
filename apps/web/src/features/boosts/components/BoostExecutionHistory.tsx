@@ -49,10 +49,6 @@ function getTriggerType(context: unknown): string {
   const ctx = context as Record<string, unknown>
   return (ctx.type as string) || 'unknown'
 }
-
-/**
- * RuleExecutionHistory displays a table of past rule executions.
- */
 export function BoostExecutionHistory({
   boostId,
   limit,

@@ -130,7 +130,7 @@ const FIXTURE_BUDGETS = [
 
 const FIXTURE_RULES = [
   {
-    id: 'rule-1',
+    id: 'boost-1',
     user_id: 'user-123',
     name: 'Tag Coffee',
     description: 'Tag coffee purchases',
@@ -147,7 +147,7 @@ const FIXTURE_RULES = [
     updated_at: '2026-05-01T10:00:00Z',
   },
   {
-    id: 'rule-2',
+    id: 'boost-2',
     user_id: 'user-123',
     name: 'Categorize Groceries',
     description: 'Set grocery category',

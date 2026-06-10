@@ -1,5 +1,5 @@
 /**
- * RuleTestResults Component Tests
+ * BoostTestResults Component Tests
  * Issue #39: Rule Builder UI
  *
  * Tests for the rule test results display component.
@@ -12,7 +12,7 @@ import { BoostTestResults } from './BoostTestResults'
 import type { BoostTestResult } from '@boostedbudget/api-client/models'
 
 const mockTestResult: BoostTestResult = {
-  boost_id: 'rule-1',
+  boost_id: 'boost-1',
   boost_name: 'Daily Budget Check',
   boost_type: 'budget_alert',
   conditions_met: true,
@@ -37,7 +37,7 @@ const mockTestResult: BoostTestResult = {
 }
 
 const mockFailedResult: BoostTestResult = {
-  boost_id: 'rule-2',
+  boost_id: 'boost-2',
   boost_name: 'Monthly Savings',
   boost_type: 'savings_goal',
   conditions_met: false,
@@ -57,7 +57,7 @@ const mockFailedResult: BoostTestResult = {
 }
 
 const mockErrorResult: BoostTestResult = {
-  boost_id: 'rule-3',
+  boost_id: 'boost-3',
   boost_name: 'Error Rule',
   boost_type: 'transfer_suggestion',
   conditions_met: false,
@@ -67,9 +67,9 @@ const mockErrorResult: BoostTestResult = {
   error: 'Failed to evaluate conditions',
 }
 
-describe('RuleTestResults', () => {
+describe('BoostTestResults', () => {
   describe('Rendering', () => {
-    it('should render rule name', () => {
+    it('should render boost name', () => {
       render(
         <BoostTestResults result={mockTestResult} onClose={() => {}} />
       )
@@ -98,7 +98,7 @@ describe('RuleTestResults', () => {
         <BoostTestResults result={mockErrorResult} onClose={() => {}} />
       )
 
-      // Check for error status indicator (not rule name which is "Error Rule")
+      // Check for error status indicator (not boost name which is "Error Boost")
       const errorStatus = screen.getByText('Error')
       expect(errorStatus).toBeInTheDocument()
       expect(screen.getByText(/failed to evaluate/i)).toBeInTheDocument()

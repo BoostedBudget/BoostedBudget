@@ -41,29 +41,29 @@ func (m *MockBoostService) GetUserBoosts(ctx context.Context, userID string) ([]
 	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockBoostService) GetBoostByID(ctx context.Context, userID, ruleID string) (*domain.Boost, error) {
-	args := m.Called(ctx, userID, ruleID)
+func (m *MockBoostService) GetBoostByID(ctx context.Context, userID, boostID string) (*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockBoostService) UpdateBoost(ctx context.Context, userID, ruleID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
-	args := m.Called(ctx, userID, ruleID, req)
+func (m *MockBoostService) UpdateBoost(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostID, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.Boost), args.Error(1)
 }
 
-func (m *MockBoostService) DeleteBoost(ctx context.Context, userID, ruleID string) error {
-	args := m.Called(ctx, userID, ruleID)
+func (m *MockBoostService) DeleteBoost(ctx context.Context, userID, boostID string) error {
+	args := m.Called(ctx, userID, boostID)
 	return args.Error(0)
 }
 
-func (m *MockBoostService) ToggleBoost(ctx context.Context, userID, ruleID string, enabled bool) (*domain.Boost, error) {
-	args := m.Called(ctx, userID, ruleID, enabled)
+func (m *MockBoostService) ToggleBoost(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostID, enabled)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -86,8 +86,8 @@ func (m *MockBoostService) GetUserBoostsFiltered(ctx context.Context, userID str
 	return args.Get(0).([]*domain.Boost), args.Error(1)
 }
 
-func (m *MockBoostService) GetBoostsByType(ctx context.Context, userID string, ruleType domain.BoostType) ([]*domain.Boost, error) {
-	args := m.Called(ctx, userID, ruleType)
+func (m *MockBoostService) GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
+	args := m.Called(ctx, userID, boostType)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -100,8 +100,8 @@ type MockBoostExecutionService struct {
 	mock.Mock
 }
 
-func (m *MockBoostExecutionService) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
-	args := m.Called(ctx, rule, triggerData)
+func (m *MockBoostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
+	args := m.Called(ctx, boost, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -113,24 +113,24 @@ func (m *MockBoostExecutionService) ProcessEventTrigger(ctx context.Context, use
 	return args.Error(0)
 }
 
-func (m *MockBoostExecutionService) GetBoostExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
-	args := m.Called(ctx, ruleID, limit, offset)
+func (m *MockBoostExecutionService) GetBoostExecutionHistory(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
+	args := m.Called(ctx, boostID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
-	args := m.Called(ctx, ruleID, status, limit, offset)
+func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
+	args := m.Called(ctx, boostID, status, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Int(1), args.Error(2)
 	}
 	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
-func (m *MockBoostExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
-	args := m.Called(ctx, rule, triggerData)
+func (m *MockBoostExecutionService) TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
+	args := m.Called(ctx, boost, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -141,7 +141,7 @@ func (m *MockBoostExecutionService) TestBoost(ctx context.Context, rule *domain.
 // Test Helpers
 // ============================================================================
 
-func createMockRule(id, userID string) *domain.Boost {
+func createMockBoost(id, userID string) *domain.Boost {
 	return &domain.Boost{
 		ID:       id,
 		UserID:   userID,
@@ -163,13 +163,13 @@ func createMockRule(id, userID string) *domain.Boost {
 func TestBoostHandler_GetBoosts(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rules := []*domain.Boost{
-		createMockRule("rule-1", "user-1"),
-		createMockRule("rule-2", "user-1"),
+	boosts := []*domain.Boost{
+		createMockBoost("rule-1", "user-1"),
+		createMockBoost("rule-2", "user-1"),
 	}
 
 	// No boost_type filter → empty slice passed to GetUserBoostsFiltered.
-	mockService.On("GetUserBoostsFiltered", mock.Anything, "user-1", []domain.BoostType(nil)).Return(rules, nil)
+	mockService.On("GetUserBoostsFiltered", mock.Anything, "user-1", []domain.BoostType(nil)).Return(boosts, nil)
 
 	handler := NewBoostHandler(mockService, nil)
 
@@ -250,8 +250,8 @@ func TestBoostHandler_GetBoosts_InvalidBoostType(t *testing.T) {
 func TestBoostHandler_GetBoostByID(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	handler := NewBoostHandler(mockService, nil)
 
@@ -287,8 +287,8 @@ func TestBoostHandler_GetBoostByID_NotFound(t *testing.T) {
 func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	// Create a manager with a mock manual provider
 	manager := workers.NewBoostSchedulerManager(nil)
@@ -320,8 +320,8 @@ func TestBoostHandler_TriggerBoost_Success(t *testing.T) {
 func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	manager := workers.NewBoostSchedulerManager(nil)
 	mockProvider := &mockManualProvider{
@@ -354,7 +354,7 @@ func TestBoostHandler_TriggerBoost_WithTriggerData(t *testing.T) {
 	assert.Equal(t, "value", mockProvider.lastTriggerData["custom_field"])
 }
 
-func TestBoostHandler_TriggerBoost_RuleNotFound(t *testing.T) {
+func TestBoostHandler_TriggerBoost_BoostNotFound(t *testing.T) {
 	mockService := new(MockBoostService)
 
 	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
@@ -375,8 +375,8 @@ func TestBoostHandler_TriggerBoost_RuleNotFound(t *testing.T) {
 func TestBoostHandler_TriggerBoost_ManagerNotStarted(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	// Manager not started
 	manager := workers.NewBoostSchedulerManager(nil)
@@ -395,8 +395,8 @@ func TestBoostHandler_TriggerBoost_ManagerNotStarted(t *testing.T) {
 func TestBoostHandler_TriggerBoost_NoSchedulerManager(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	// No scheduler manager
 	handler := NewBoostHandler(mockService, nil)
@@ -414,10 +414,10 @@ func TestBoostHandler_TriggerBoost_NoSchedulerManager(t *testing.T) {
 func TestBoostHandler_ToggleBoost(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	rule.Enabled = false
+	boost := createMockBoost("rule-1", "user-1")
+	boost.Enabled = false
 
-	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", true).Return(rule, nil)
+	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", true).Return(boost, nil)
 
 	handler := NewBoostHandler(mockService, nil)
 
@@ -487,16 +487,16 @@ func (m *mockManualProvider) TriggerBoost(ctx context.Context, boostID string, t
 // ============================================================================
 
 func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
 		BoostID:        "rule-1",
-		BoostName:      rule.Name,
-		BoostType:      rule.BoostType,
+		BoostName:      boost.Name,
+		BoostType:      boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{Field: "amount", Operator: "gt", Value: "50", Actual: float64(100), Met: true},
@@ -504,9 +504,9 @@ func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
 		SimulatedAction: map[string]interface{}{"action_type": "budget_alert"},
 		TriggerDataUsed: map[string]interface{}{"amount": float64(100)},
 	}
-	mockExecService.On("TestBoost", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+	mockExecService.On("TestBoost", mock.Anything, boost, mock.Anything).Return(testResult, nil)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &TestBoostInput{
@@ -521,17 +521,17 @@ func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
 	assert.Equal(t, "rule-1", result.Body.BoostID)
 	assert.True(t, result.Body.ConditionsMet)
 	assert.Len(t, result.Body.ConditionResults, 1)
-	mockRuleService.AssertExpectations(t)
+	mockBoostService.AssertExpectations(t)
 	mockExecService.AssertExpectations(t)
 }
 
-func TestBoostHandler_TestBoostExecution_RuleNotFound(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+func TestBoostHandler_TestBoostExecution_BoostNotFound(t *testing.T) {
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &TestBoostInput{
@@ -545,12 +545,12 @@ func TestBoostHandler_TestBoostExecution_RuleNotFound(t *testing.T) {
 }
 
 func TestBoostHandler_TestBoostExecution_NoExecutionService(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+	mockBoostService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	// No execution service set
 
 	input := &TestBoostInput{
@@ -564,16 +564,16 @@ func TestBoostHandler_TestBoostExecution_NoExecutionService(t *testing.T) {
 }
 
 func TestBoostHandler_TestBoostExecution_PFCDisplayFieldsPassThrough(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	testResult := &domain.BoostTestResult{
 		BoostID:        "rule-1",
-		BoostName:      rule.Name,
-		BoostType:      rule.BoostType,
+		BoostName:      boost.Name,
+		BoostType:      boost.BoostType,
 		ConditionsMet: true,
 		ConditionResults: []domain.ConditionEvalResult{
 			{
@@ -588,9 +588,9 @@ func TestBoostHandler_TestBoostExecution_PFCDisplayFieldsPassThrough(t *testing.
 		},
 		TriggerDataUsed: map[string]interface{}{"transaction.pfc_primary": "FOOD_AND_DRINK"},
 	}
-	mockExecService.On("TestBoost", mock.Anything, rule, mock.Anything).Return(testResult, nil)
+	mockExecService.On("TestBoost", mock.Anything, boost, mock.Anything).Return(testResult, nil)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &TestBoostInput{
@@ -605,17 +605,17 @@ func TestBoostHandler_TestBoostExecution_PFCDisplayFieldsPassThrough(t *testing.
 	require.Len(t, result.Body.ConditionResults, 1)
 	assert.Equal(t, "Food And Drink", result.Body.ConditionResults[0].ValueDisplay)
 	assert.Equal(t, "Food And Drink", result.Body.ConditionResults[0].ActualDisplay)
-	mockRuleService.AssertExpectations(t)
+	mockBoostService.AssertExpectations(t)
 	mockExecService.AssertExpectations(t)
 }
 
 func TestBoostHandler_EnableBoost(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	rule.Enabled = true
+	boost := createMockBoost("rule-1", "user-1")
+	boost.Enabled = true
 
-	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", true).Return(rule, nil)
+	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", true).Return(boost, nil)
 
 	handler := NewBoostHandler(mockService, nil)
 
@@ -635,10 +635,10 @@ func TestBoostHandler_EnableBoost(t *testing.T) {
 func TestBoostHandler_DisableBoost(t *testing.T) {
 	mockService := new(MockBoostService)
 
-	rule := createMockRule("rule-1", "user-1")
-	rule.Enabled = false
+	boost := createMockBoost("rule-1", "user-1")
+	boost.Enabled = false
 
-	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", false).Return(rule, nil)
+	mockService.On("ToggleBoost", mock.Anything, "user-1", "rule-1", false).Return(boost, nil)
 
 	handler := NewBoostHandler(mockService, nil)
 
@@ -655,12 +655,12 @@ func TestBoostHandler_DisableBoost(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
-func TestBoostHandler_GetRuleExecutions_Success(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+func TestBoostHandler_GetBoostExecutions_Success(t *testing.T) {
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	executions := []*domain.BoostExecution{
 		{ID: "exec-1", BoostID: "rule-1", Status: domain.ExecutionStatusCompleted},
@@ -668,7 +668,7 @@ func TestBoostHandler_GetRuleExecutions_Success(t *testing.T) {
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", (*domain.ExecutionStatus)(nil), 20, 0).Return(executions, 2, nil)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &GetBoostExecutionsInput{
@@ -685,16 +685,16 @@ func TestBoostHandler_GetRuleExecutions_Success(t *testing.T) {
 	assert.Equal(t, 2, result.Body.Total)
 	assert.Equal(t, 20, result.Body.Limit)
 	assert.Equal(t, 0, result.Body.Offset)
-	mockRuleService.AssertExpectations(t)
+	mockBoostService.AssertExpectations(t)
 	mockExecService.AssertExpectations(t)
 }
 
-func TestBoostHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+func TestBoostHandler_GetBoostExecutions_WithStatusFilter(t *testing.T) {
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	rule := createMockRule("rule-1", "user-1")
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(rule, nil)
+	boost := createMockBoost("rule-1", "user-1")
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-1").Return(boost, nil)
 
 	completedStatus := domain.ExecutionStatusCompleted
 	executions := []*domain.BoostExecution{
@@ -702,7 +702,7 @@ func TestBoostHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) {
 	}
 	mockExecService.On("GetExecutionHistoryWithFilter", mock.Anything, "rule-1", &completedStatus, 20, 0).Return(executions, 1, nil)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &GetBoostExecutionsInput{
@@ -720,13 +720,13 @@ func TestBoostHandler_GetRuleExecutions_WithStatusFilter(t *testing.T) {
 	assert.Equal(t, 1, result.Body.Total)
 }
 
-func TestBoostHandler_GetRuleExecutions_RuleNotFound(t *testing.T) {
-	mockRuleService := new(MockBoostService)
+func TestBoostHandler_GetBoostExecutions_BoostNotFound(t *testing.T) {
+	mockBoostService := new(MockBoostService)
 	mockExecService := new(MockBoostExecutionService)
 
-	mockRuleService.On("GetBoostByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
+	mockBoostService.On("GetBoostByID", mock.Anything, "user-1", "rule-unknown").Return(nil, domain.ErrBoostNotFound)
 
-	handler := NewBoostHandler(mockRuleService, nil)
+	handler := NewBoostHandler(mockBoostService, nil)
 	handler.SetExecutionService(mockExecService)
 
 	input := &GetBoostExecutionsInput{

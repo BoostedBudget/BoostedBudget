@@ -88,7 +88,7 @@ export function BoostsPage() {
         totalMoved={summary.totalMoved}
         momChange={summary.momChange}
         completedCount={summary.completedCount}
-        activeRulesCount={summary.activeRulesCount}
+        activeBoostsCount={summary.activeBoostsCount}
         isLoading={summary.isLoading}
         isError={summary.error !== null}
         onRetry={summary.refetch}

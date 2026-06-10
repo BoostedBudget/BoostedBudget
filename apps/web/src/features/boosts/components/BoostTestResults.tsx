@@ -21,11 +21,6 @@ export interface BoostTestResultsProps {
   /** Additional CSS class */
   className?: string
 }
-
-
-/**
- * BoostTestResults displays the results of a boost test execution.
- */
 export function BoostTestResults({
   result,
   isLoading = false,
@@ -45,7 +40,7 @@ export function BoostTestResults({
           <div className="flex flex-col items-center justify-center py-12 px-8 text-center gap-4">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
             <h2 id="test-results-title">Running Backtest...</h2>
-            <p>Analyzing your recent data to show what this rule would have done.</p>
+            <p>Analyzing your recent data to show what this boost would have done.</p>
           </div>
         </div>
       </div>

@@ -164,9 +164,9 @@ func TestCreateBoost_SavingsGoal_HappyPath(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	rule, err := svc.CreateBoost(ctx, userID, newSavingsGoalBoostRequest(goalID, fromAccountID))
-	require.NoError(t, err, "CreateBoost must succeed when all IDs belong to the rule owner")
-	assert.Equal(t, userID, rule.UserID)
+	boost, err := svc.CreateBoost(ctx, userID, newSavingsGoalBoostRequest(goalID, fromAccountID))
+	require.NoError(t, err, "CreateBoost must succeed when all IDs belong to the boost owner")
+	assert.Equal(t, userID, boost.UserID)
 }
 
 // TestCreateBoost_Transfer_FromAccountOwnership verifies that CreateBoost rejects
@@ -232,21 +232,21 @@ func TestCreateBoost_Transfer_HappyPath(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	rule, err := svc.CreateBoost(ctx, userID, newTransferBoostRequest(fromAccountID, toAccountID))
+	boost, err := svc.CreateBoost(ctx, userID, newTransferBoostRequest(fromAccountID, toAccountID))
 	require.NoError(t, err)
-	assert.Equal(t, userID, rule.UserID)
+	assert.Equal(t, userID, boost.UserID)
 }
 
 // TestUpdateBoost_OwnershipEnforced verifies that UpdateBoost also enforces ID ownership.
 func TestUpdateBoost_OwnershipEnforced(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
-	ruleID := "rule-1"
+	boostID := "rule-1"
 	goalID := "goal-other-user"
 	fromAccountID := "from-a"
 
-	existingRule := &domain.Boost{
-		ID:       ruleID,
+	existingBoost := &domain.Boost{
+		ID:       boostID,
 		UserID:   userID,
 		Name:     "existing",
 		Enabled:  true,
@@ -259,7 +259,7 @@ func TestUpdateBoost_OwnershipEnforced(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingBoost}}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			// goalID belongs to a different user, not userID
@@ -274,7 +274,7 @@ func TestUpdateBoost_OwnershipEnforced(t *testing.T) {
 	svc.SetAccountRepo(acctRepo)
 
 	newActions := savingsGoalBoostActions(goalID, fromAccountID)
-	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, boostID, &domain.UpdateBoostRequest{
 		Actions: &newActions,
 	})
 	require.Error(t, err, "UpdateBoost must reject updating to reference another user's goal")
@@ -381,11 +381,11 @@ func TestCreateBoost_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 // Tests — CreateBoost category ownership validation (Issue #1270)
 // ============================================================================
 
-// budgetCategoryConditionRule builds a CreateBoostRequest with a single
+// budgetCategoryConditionBoost builds a CreateBoostRequest with a single
 // budget_category.* condition for the given categoryID.
 // Issue #1271 Item 2: BudgetID is now required by ValidateForPersistence() in addition
 // to CategoryID; use a fixed sentinel budget ID so the rule passes persist validation.
-func budgetCategoryConditionRule(categoryID string) *domain.CreateBoostRequest {
+func budgetCategoryConditionBoost(categoryID string) *domain.CreateBoostRequest {
 	b, _ := json.Marshal(map[string]interface{}{
 		"savings_goal_id": "goal-1",
 		"from_account_id": "acct-1",
@@ -437,10 +437,10 @@ func TestCreateBoost_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
-	req := budgetCategoryConditionRule(categoryID)
-	rule, err := svc.CreateBoost(ctx, userID, req)
-	require.NoError(t, err, "CreateBoost must accept a rule whose category_id belongs to the user")
-	assert.NotNil(t, rule)
+	req := budgetCategoryConditionBoost(categoryID)
+	boost, err := svc.CreateBoost(ctx, userID, req)
+	require.NoError(t, err, "CreateBoost must accept a boost whose category_id belongs to the user")
+	assert.NotNil(t, boost)
 }
 
 // TestCreateBoost_CategoryCondition_RejectsForeignCategory verifies that CreateBoost rejects
@@ -459,7 +459,7 @@ func TestCreateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
-	req := budgetCategoryConditionRule(victimCategoryID)
+	req := budgetCategoryConditionBoost(victimCategoryID)
 	_, err := svc.CreateBoost(ctx, attackerUserID, req)
 	require.Error(t, err, "CreateBoost must reject a rule whose category_id belongs to a different user")
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
@@ -482,7 +482,7 @@ func TestCreateBoost_CategoryCondition_DBError_Propagates(t *testing.T) {
 	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
-	req := budgetCategoryConditionRule(categoryID)
+	req := budgetCategoryConditionBoost(categoryID)
 	_, err := svc.CreateBoost(ctx, userID, req)
 	require.Error(t, err, "CreateBoost must fail on DB error")
 	assert.False(t, errors.Is(err, domain.ErrBoostConditionForbidden),
@@ -505,7 +505,7 @@ func TestCreateBoost_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t 
 	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
-	req := budgetCategoryConditionRule(victimCategoryID)
+	req := budgetCategoryConditionBoost(victimCategoryID)
 	_, err := svc.CreateBoost(ctx, attackerUserID, req)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
@@ -514,16 +514,16 @@ func TestCreateBoost_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t 
 
 // TestUpdateBoost_CategoryCondition_RejectsForeignCategory verifies that UpdateBoost rejects
 // an update that introduces a budget_category.* condition referencing a category owned by a
-// different user. UpdateBoost routes through the same validateRuleReferenceOwnership as CreateBoost,
+// different user. UpdateBoost routes through the same validateBoostReferenceOwnership as CreateBoost,
 // so this pins the UpdateBoost entry point. Issue #1270 (Codex LOW finding — only CreateBoost tested).
 func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-bob"
-	ruleID := "rule-update-cat"
+	boostID := "rule-update-cat"
 	victimCategoryID := "cat-victim-update"
 
-	existingRule := &domain.Boost{
-		ID:       ruleID,
+	existingBoost := &domain.Boost{
+		ID:       boostID,
 		UserID:   userID,
 		Name:     "existing rule",
 		Enabled:  true,
@@ -536,7 +536,7 @@ func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingBoost}}
 	budgetRepo := &MockBudgetRepository{}
 	// GetCategoryByIDAndUser returns not-found → the category belongs to another user.
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, userID).
@@ -562,7 +562,7 @@ func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, boostID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
 	require.Error(t, err, "UpdateBoost must reject an update introducing a foreign category condition")
@@ -571,10 +571,10 @@ func TestUpdateBoost_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	assert.Contains(t, err.Error(), "category_id", "error must identify the category_id ownership failure")
 }
 
-// TestCreateBoost_InvalidConditions_WrapsErrInvalidRule verifies that CreateBoost wraps
-// field-allowlist violations (from rule.Validate()) as domain.ErrInvalidBoost so the HTTP
+// TestCreateBoost_InvalidConditions_WrapsErrInvalidBoost verifies that CreateBoost wraps
+// field-allowlist violations (from boost.Validate()) as domain.ErrInvalidBoost so the HTTP
 // layer returns 400, not 500. Issue #1270 (Codex LOW finding — mapper tested, not service).
-func TestCreateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+func TestCreateBoost_InvalidConditions_WrapsErrInvalidBoost(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-cond"
 
@@ -611,16 +611,16 @@ func TestCreateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		"field-allowlist violation must be wrapped as domain.ErrInvalidBoost for 400 mapping")
 }
 
-// TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule verifies that UpdateBoost wraps
+// TestUpdateBoost_InvalidConditions_WrapsErrInvalidBoost verifies that UpdateBoost wraps
 // field-allowlist violations as domain.ErrInvalidBoost (same contract as CreateBoost).
 // Issue #1270 (Codex LOW finding — only CreateBoost sentinel wrapping was covered).
-func TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
+func TestUpdateBoost_InvalidConditions_WrapsErrInvalidBoost(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-update"
-	ruleID := "rule-bad-cond"
+	boostID := "rule-bad-cond"
 
-	existingRule := &domain.Boost{
-		ID:       ruleID,
+	existingBoost := &domain.Boost{
+		ID:       boostID,
 		UserID:   userID,
 		Name:     "existing valid rule",
 		Enabled:  true,
@@ -633,7 +633,7 @@ func TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingBoost}}
 	svc := NewBoostService(boostRepo)
 
 	// Try to update with an invalid condition field.
@@ -644,7 +644,7 @@ func TestUpdateBoost_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 			Value:    "80",
 		},
 	}
-	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, boostID, &domain.UpdateBoostRequest{
 		Conditions: &invalidConditions,
 	})
 	require.Error(t, err, "UpdateBoost must reject conditions with an unknown field")
@@ -673,10 +673,10 @@ func TestCreateBoost_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	svc.SetAccountRepo(acctRepo)
 	// intentionally NOT calling svc.SetBudgetRepo
 
-	req := budgetCategoryConditionRule(categoryID)
-	rule, err := svc.CreateBoost(ctx, userID, req)
+	req := budgetCategoryConditionBoost(categoryID)
+	boost, err := svc.CreateBoost(ctx, userID, req)
 	require.NoError(t, err, "CreateBoost must skip the category check when budgetRepo is not injected")
-	assert.NotNil(t, rule)
+	assert.NotNil(t, boost)
 }
 
 // ============================================================================
@@ -745,11 +745,11 @@ func TestCreateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-bob"
-	ruleID := "rule-update-budget-check"
+	boostID := "rule-update-budget-check"
 	categoryID := "cat-1"
 
-	existingRule := &domain.Boost{
-		ID:       ruleID,
+	existingBoost := &domain.Boost{
+		ID:       boostID,
 		UserID:   userID,
 		Name:     "existing rule",
 		Enabled:  true,
@@ -762,7 +762,7 @@ func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingBoost}}
 	budgetRepo := &MockBudgetRepository{}
 	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
@@ -788,7 +788,7 @@ func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 			Value:      "80",
 		},
 	}
-	_, err := svc.UpdateBoost(ctx, userID, ruleID, &domain.UpdateBoostRequest{
+	_, err := svc.UpdateBoost(ctx, userID, boostID, &domain.UpdateBoostRequest{
 		Conditions: &newConditions,
 	})
 	require.Error(t, err, "UpdateBoost must reject a condition whose category is not in the selected budget")

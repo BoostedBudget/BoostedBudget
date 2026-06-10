@@ -1,5 +1,5 @@
 /**
- * RuleBuilder Component Tests
+ * BoostBuilder Component Tests
  * Issue #39: Rule Builder UI
  * Issue #575: Migrated to bun:test with centralized mocks
  *
@@ -96,7 +96,7 @@ function renderWithProviders(
   )
 }
 
-describe('RuleBuilder', () => {
+describe('BoostBuilder', () => {
   beforeEach(() => {
     // Clear all mocks
     mockNavigate.mockClear()
@@ -155,7 +155,7 @@ describe('RuleBuilder', () => {
   })
 
   describe('Rendering - Create Mode', () => {
-    it('should render page title for new rule', async () => {
+    it('should render page title for new boost', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -179,7 +179,7 @@ describe('RuleBuilder', () => {
       })
     })
 
-    it('should render rule type selector', async () => {
+    it('should render boost type selector', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -187,7 +187,7 @@ describe('RuleBuilder', () => {
       })
     })
 
-    it('should show all rule type options', async () => {
+    it('should show all boost type options', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -216,7 +216,7 @@ describe('RuleBuilder', () => {
     })
   })
 
-  describe('Rule Type Selection', () => {
+  describe('Boost Type Selection', () => {
     it('should show budget alert action form when budget_alert selected', async () => {
       renderWithProviders(<BoostBuilder />)
 
@@ -294,7 +294,7 @@ describe('RuleBuilder', () => {
       })
     })
 
-    it('should require rule type', async () => {
+    it('should require boost type', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -314,7 +314,7 @@ describe('RuleBuilder', () => {
   })
 
   describe('Form Submission - Create', () => {
-    it('should call createRule mutation on save', async () => {
+    it('should call createBoost mutation on save', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -343,7 +343,7 @@ describe('RuleBuilder', () => {
       })
 
       const nameInput = screen.getByLabelText(/boost name/i)
-      fireEvent.change(nameInput, { target: { value: 'New Test Rule' } })
+      fireEvent.change(nameInput, { target: { value: 'New Test Boost' } })
 
       const typeSelect = screen.getByLabelText(/boost type/i)
       fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
@@ -356,7 +356,7 @@ describe('RuleBuilder', () => {
       })
     })
 
-    it('fires RULE_CREATED analytics after successful create', async () => {
+    it('fires BOOST_CREATED analytics after successful create', async () => {
       renderWithProviders(<BoostBuilder />)
 
       await waitFor(() => {
@@ -364,7 +364,7 @@ describe('RuleBuilder', () => {
       })
 
       const nameInput = screen.getByLabelText(/boost name/i)
-      fireEvent.change(nameInput, { target: { value: 'Analytics Test Rule' } })
+      fireEvent.change(nameInput, { target: { value: 'Analytics Test Boost' } })
 
       const typeSelect = screen.getByLabelText(/boost type/i)
       fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
@@ -388,16 +388,16 @@ describe('RuleBuilder', () => {
       return renderWithProviders(<BoostBuilder />, { route: '/boosts/rule-1/edit' })
     }
 
-    it('fires RULE_EDITED analytics after successful edit save', async () => {
+    it('fires BOOST_EDITED analytics after successful edit save', async () => {
       renderEditMode()
 
       await waitFor(() => {
         expect(screen.getByLabelText(/boost name/i)).toBeInTheDocument()
       })
 
-      // Touch the name so the save is valid (field is pre-populated from mockRule)
+      // Touch the name so the save is valid (field is pre-populated from mockBoost)
       const nameInput = screen.getByLabelText(/boost name/i)
-      fireEvent.change(nameInput, { target: { value: 'Updated Rule Name' } })
+      fireEvent.change(nameInput, { target: { value: 'Updated Boost Name' } })
 
       const saveButton = screen.getByRole('button', { name: /save/i })
       fireEvent.click(saveButton)

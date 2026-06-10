@@ -78,7 +78,7 @@ describe('useBoostsSummary', () => {
     expect(result.current.completedCount).toBe(15)
   })
 
-  it('counts only enabled transfer-generating rules for activeRulesCount (AC1: type ∈ {transfer_suggestion, savings_goal})', () => {
+  it('counts only enabled transfer-generating boosts for activeBoostsCount (AC1: type ∈ {transfer_suggestion, savings_goal})', () => {
     mockUseGetBoosts.mockReturnValue({
       data: [
         { id: 'r1', enabled: true, name: 'Rule 1', boost_type: 'transfer_suggestion', priority: 1, created_at: '', updated_at: '' },
@@ -95,23 +95,23 @@ describe('useBoostsSummary', () => {
 
     // Only r1 (transfer_suggestion, enabled) + r2 (savings_goal, enabled) count.
     // r3 (budget_alert), r4 (category_rollover), r5 (disabled transfer_suggestion) do not.
-    expect(result.current.activeRulesCount).toBe(2)
+    expect(result.current.activeBoostsCount).toBe(2)
   })
 
-  it('returns activeRulesCount of 0 when rules list is empty', () => {
+  it('returns activeBoostsCount of 0 when boosts list is empty', () => {
     mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
-    expect(result.current.activeRulesCount).toBe(0)
+    expect(result.current.activeBoostsCount).toBe(0)
   })
 
-  it('returns activeRulesCount of 0 when rules data is null/undefined', () => {
+  it('returns activeBoostsCount of 0 when boosts data is null/undefined', () => {
     mockUseGetBoosts.mockReturnValue({ data: undefined, isLoading: false, error: null })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
-    expect(result.current.activeRulesCount).toBe(0)
+    expect(result.current.activeBoostsCount).toBe(0)
   })
 
   it('propagates isLoading as true when either query is loading', () => {
