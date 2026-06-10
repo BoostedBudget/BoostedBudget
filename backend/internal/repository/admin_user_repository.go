@@ -82,7 +82,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
 		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
-		       COALESCE(r.count, 0) as automation_rules_count,
+		       COALESCE(r.count, 0) as boosts_count,
 		       COALESCE(ref.count, 0) as referrals_count
 		FROM users u
 		LEFT JOIN (
@@ -93,7 +93,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 		) la ON la.user_id = u.id
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
-			FROM rules
+			FROM boosts
 			GROUP BY user_id
 		) r ON r.user_id = u.id
 		LEFT JOIN (
@@ -128,7 +128,7 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			&user.LastLoginAt,
 			&user.IsActive,
 			&user.LinkedAccountsCount,
-			&user.AutomationRulesCount,
+			&user.BoostsCount,
 			&user.ReferralsCount,
 		)
 		if err != nil {
@@ -158,7 +158,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
 		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
-		       COALESCE(r.count, 0) as automation_rules_count,
+		       COALESCE(r.count, 0) as boosts_count,
 		       COALESCE(ref.count, 0) as referrals_count,
 		       COALESCE(t.count, 0) as transactions_count,
 		       COALESCE(b.count, 0) as budgets_count
@@ -171,7 +171,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		) la ON la.user_id = u.id
 		LEFT JOIN (
 			SELECT user_id, COUNT(*) as count
-			FROM rules
+			FROM boosts
 			GROUP BY user_id
 		) r ON r.user_id = u.id
 		LEFT JOIN (
@@ -206,7 +206,7 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		&detail.LastLoginAt,
 		&detail.IsActive,
 		&detail.LinkedAccountsCount,
-		&detail.AutomationRulesCount,
+		&detail.BoostsCount,
 		&detail.ReferralsCount,
 		&detail.TransactionsCount,
 		&detail.BudgetsCount,

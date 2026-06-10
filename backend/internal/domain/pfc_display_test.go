@@ -528,7 +528,7 @@ func TestConditionEvalResult_PopulatePFCDisplay_Idempotent(t *testing.T) {
 }
 
 func TestRuleTestResult_PopulatePFCDisplay_PropagatesToAllConditions(t *testing.T) {
-	r := &RuleTestResult{
+	r := &BoostTestResult{
 		ConditionResults: []ConditionEvalResult{
 			{Field: "transaction.pfc_primary", Value: "FOOD_AND_DRINK"},
 			{Field: "amount", Value: 50.0},

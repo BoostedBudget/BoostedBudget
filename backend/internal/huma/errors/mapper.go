@@ -39,8 +39,8 @@ func MapError(err error) error {
 	// Domain errors
 	case errors.Is(err, domain.ErrRolloverHistoryNotFound):
 		return huma.Error404NotFound("Rollover history not found")
-	case errors.Is(err, domain.ErrRuleExecutionNotFound):
-		return huma.Error404NotFound("Rule execution not found")
+	case errors.Is(err, domain.ErrBoostExecutionNotFound):
+		return huma.Error404NotFound("Boost execution not found")
 	case errors.Is(err, domain.ErrBudgetNotFound):
 		return huma.Error404NotFound("Budget not found")
 	case errors.Is(err, domain.ErrBudgetCategoryNotFound):
@@ -59,8 +59,8 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Categorization rule not found")
 	case errors.Is(err, domain.ErrSavingsGoalNotFound):
 		return huma.Error404NotFound("Savings goal not found")
-	case errors.Is(err, domain.ErrAutomationRuleNotFound):
-		return huma.Error404NotFound("Automation rule not found")
+	case errors.Is(err, domain.ErrBoostNotFound):
+		return huma.Error404NotFound("Boost not found")
 	case errors.Is(err, domain.ErrTransferSuggestionNotFound):
 		return huma.Error404NotFound("Transfer suggestion not found")
 	case errors.Is(err, domain.ErrTransferSuggestionAlreadyActioned):
@@ -151,7 +151,7 @@ func MapError(err error) error {
 	case errors.Is(err, repository.ErrNotificationAccessDenied):
 		return huma.Error403Forbidden("Access denied to this notification")
 	// Issue #1270: GAP-L — foreign category_id in a condition belongs to another user.
-	case errors.Is(err, domain.ErrRuleConditionForbidden):
+	case errors.Is(err, domain.ErrBoostConditionForbidden):
 		return huma.Error403Forbidden("Access denied: condition category belongs to another user")
 	// ================================
 	// 400 Bad Request - Validation errors
@@ -187,7 +187,7 @@ func MapError(err error) error {
 		return huma.Error400BadRequest("page_size must be between 1 and 100")
 	// Issue #1270: GAP-L — rule validation failed (unknown event, unsupported operator, bad field).
 	// Strip the "invalid automation rule: " prefix to expose only the user-facing detail.
-	case errors.Is(err, domain.ErrInvalidRule):
+	case errors.Is(err, domain.ErrInvalidBoost):
 		detail := strings.TrimPrefix(err.Error(), "invalid automation rule: ")
 		return huma.Error400BadRequest(detail)
 

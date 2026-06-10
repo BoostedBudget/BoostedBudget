@@ -70,8 +70,8 @@ type RolloverHistory struct {
 	ID                     string         `json:"id" db:"id"`
 	UserID                 string         `json:"user_id" db:"user_id"`
 	BudgetID               string         `json:"budget_id" db:"budget_id"`
-	RuleID                 *string        `json:"rule_id,omitempty" db:"rule_id"`
-	RuleExecutionID        *string        `json:"rule_execution_id,omitempty" db:"rule_execution_id"`
+	BoostID                 *string        `json:"boost_id,omitempty" db:"boost_id"`
+	BoostExecutionID        *string        `json:"boost_execution_id,omitempty" db:"boost_execution_id"`
 	SourceBudgetCategoryID string         `json:"source_budget_category_id" db:"source_budget_category_id"`
 	TargetBudgetCategoryID *string        `json:"target_budget_category_id,omitempty" db:"target_budget_category_id"` // nil = to unallocated funds
 	Amount                 float64        `json:"amount" db:"amount"`

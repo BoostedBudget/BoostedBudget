@@ -164,18 +164,19 @@ describe('excluded operations', () => {
     expect(isExcluded('resetDashboardPreferences')).toBe(true)
   })
 
-  it('excludes automation-rule writes (need standing-auth)', () => {
-    const automationWriteOps = [
-      'createAutomationRule',
-      'updateAutomationRule',
-      'deleteAutomationRule',
-      'disableAutomationRule',
-      'enableAutomationRule',
-      'toggleAutomationRule',
-      'triggerAutomationRule',
-      'testAutomationRule',
+  it('excludes boost writes (need standing-auth)', () => {
+    // #1283: renamed from automation-rule writes
+    const boostWriteOps = [
+      'createBoost',
+      'updateBoost',
+      'deleteBoost',
+      'disableBoost',
+      'enableBoost',
+      'toggleBoost',
+      'triggerBoost',
+      'testBoost',
     ]
-    for (const opId of automationWriteOps) {
+    for (const opId of boostWriteOps) {
       expect(isExcluded(opId)).toBe(true)
     }
   })

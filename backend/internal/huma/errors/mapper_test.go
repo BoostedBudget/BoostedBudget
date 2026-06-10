@@ -40,7 +40,7 @@ func TestLoggingMapError_500(t *testing.T) {
 
 // Issue #1270: GAP-L — rule validation errors must return 400, not 500.
 func TestLoggingMapError_400_InvalidRule(t *testing.T) {
-	wrapped := fmt.Errorf("%w: condition field 'budget_category.bad_field' is not allowed for event 'budget_period_end'", domain.ErrInvalidRule)
+	wrapped := fmt.Errorf("%w: condition field 'budget_category.bad_field' is not allowed for event 'budget_period_end'", domain.ErrInvalidBoost)
 	result := humaerrors.LoggingMapError(context.Background(), wrapped)
 	require.NotNil(t, result)
 
@@ -51,7 +51,7 @@ func TestLoggingMapError_400_InvalidRule(t *testing.T) {
 
 // Issue #1270: GAP-L — foreign category_id in condition must return 403, not 500.
 func TestLoggingMapError_403_RuleConditionForbidden(t *testing.T) {
-	wrapped := fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrRuleConditionForbidden)
+	wrapped := fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrBoostConditionForbidden)
 	result := humaerrors.LoggingMapError(context.Background(), wrapped)
 	require.NotNil(t, result)
 

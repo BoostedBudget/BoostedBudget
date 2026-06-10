@@ -38,7 +38,7 @@ preload = [
   "./src/test/mocks/categories-api.ts",
   "./src/test/mocks/privacy-api.ts",
   "./src/test/mocks/sonner.ts",
-  "./src/test/mocks/automation-rules-api.ts",
+  "./src/test/mocks/boosts-api.ts",
   "./src/test/mocks/react-router.ts",
   "./src/test/mocks/budgets-wrapper.ts",
   "./src/test/mocks/shared-charts.ts",

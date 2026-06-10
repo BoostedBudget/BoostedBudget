@@ -32,8 +32,8 @@ echo "Running isolated tests (polluted by DashboardPage.test.tsx in full suite).
 TEST_FILES=(
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
-    # RulesPage polluted by RuleBuilder (sets empty rules array)
-    "src/features/rules/components/RulesPage.test.tsx"
+    # BoostsManagePage polluted by BoostBuilder (sets empty boosts array)
+    "src/features/boosts/components/BoostsManagePage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
     # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)

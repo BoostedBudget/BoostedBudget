@@ -17,50 +17,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// MockRuleExecutionService mocks the RuleExecutionService interface
-type MockRuleExecutionService struct {
+// MockBoostExecutionService mocks the BoostExecutionService interface
+type MockBoostExecutionService struct {
 	mock.Mock
 }
 
-func (m *MockRuleExecutionService) ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+func (m *MockBoostExecutionService) ExecuteBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleExecution), args.Error(1)
+	return args.Get(0).(*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockRuleExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
+func (m *MockBoostExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
 	args := m.Called(ctx, userID, eventType, eventData)
 	return args.Error(0)
 }
 
-func (m *MockRuleExecutionService) GetExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.RuleExecution, error) {
+func (m *MockBoostExecutionService) GetBoostExecutionHistory(ctx context.Context, ruleID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	args := m.Called(ctx, ruleID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*domain.RuleExecution), args.Error(1)
+	return args.Get(0).([]*domain.BoostExecution), args.Error(1)
 }
 
-func (m *MockRuleExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.RuleExecution, int, error) {
+func (m *MockBoostExecutionService) GetExecutionHistoryWithFilter(ctx context.Context, ruleID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	args := m.Called(ctx, ruleID, status, limit, offset)
 	if args.Get(0) == nil {
 		return nil, 0, args.Error(2)
 	}
-	return args.Get(0).([]*domain.RuleExecution), args.Int(1), args.Error(2)
+	return args.Get(0).([]*domain.BoostExecution), args.Int(1), args.Error(2)
 }
 
-func (m *MockRuleExecutionService) TestRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleTestResult, error) {
+func (m *MockBoostExecutionService) TestBoost(ctx context.Context, rule *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {
 	args := m.Called(ctx, rule, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*domain.RuleTestResult), args.Error(1)
+	return args.Get(0).(*domain.BoostTestResult), args.Error(1)
 }
 
-func newTestRuleEvaluationJob(args RuleEvaluationArgs) *river.Job[RuleEvaluationArgs] {
-	return &river.Job[RuleEvaluationArgs]{
+func newTestRuleEvaluationJob(args BoostEvaluationArgs) *river.Job[BoostEvaluationArgs] {
+	return &river.Job[BoostEvaluationArgs]{
 		JobRow: &rivertype.JobRow{
 			ID:      1,
 			Attempt: 1,
@@ -70,8 +70,8 @@ func newTestRuleEvaluationJob(args RuleEvaluationArgs) *river.Job[RuleEvaluation
 }
 
 func TestRuleEvaluationArgs_Kind(t *testing.T) {
-	args := RuleEvaluationArgs{}
-	assert.Equal(t, "rule_evaluation", args.Kind())
+	args := BoostEvaluationArgs{}
+	assert.Equal(t, "boost_evaluation", args.Kind())
 }
 
 func TestRuleEvaluationWorker_Work_Success(t *testing.T) {
@@ -84,15 +84,15 @@ func TestRuleEvaluationWorker_Work_Success(t *testing.T) {
 		"percent_used": 85.0,
 	}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).Return(nil)
 
-	worker := NewRuleEvaluationWorker(RuleEvaluationWorkerDeps{
-		RuleExecutionService: mockService,
+	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
+		BoostExecutionService: mockService,
 		Logger:               slog.Default(),
 	})
 
-	job := newTestRuleEvaluationJob(RuleEvaluationArgs{
+	job := newTestRuleEvaluationJob(BoostEvaluationArgs{
 		UserID:    userID,
 		EventType: eventType,
 		EventData: eventData,
@@ -110,16 +110,16 @@ func TestRuleEvaluationWorker_Work_ServiceError(t *testing.T) {
 	eventType := "budget_updated"
 	eventData := map[string]interface{}{}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).
 		Return(errors.New("database connection error"))
 
-	worker := NewRuleEvaluationWorker(RuleEvaluationWorkerDeps{
-		RuleExecutionService: mockService,
+	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
+		BoostExecutionService: mockService,
 		Logger:               slog.Default(),
 	})
 
-	job := newTestRuleEvaluationJob(RuleEvaluationArgs{
+	job := newTestRuleEvaluationJob(BoostEvaluationArgs{
 		UserID:    userID,
 		EventType: eventType,
 		EventData: eventData,
@@ -143,15 +143,15 @@ func TestRuleEvaluationWorker_Work_TransactionCreatedEvent(t *testing.T) {
 		"category":       []string{"Food and Drink", "Coffee"},
 	}
 
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 	mockService.On("ProcessEventTrigger", ctx, userID, eventType, eventData).Return(nil)
 
-	worker := NewRuleEvaluationWorker(RuleEvaluationWorkerDeps{
-		RuleExecutionService: mockService,
+	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
+		BoostExecutionService: mockService,
 		Logger:               slog.Default(),
 	})
 
-	job := newTestRuleEvaluationJob(RuleEvaluationArgs{
+	job := newTestRuleEvaluationJob(BoostEvaluationArgs{
 		UserID:    userID,
 		EventType: eventType,
 		EventData: eventData,
@@ -164,7 +164,7 @@ func TestRuleEvaluationWorker_Work_TransactionCreatedEvent(t *testing.T) {
 }
 
 func TestRuleEvaluationUniqueOpts(t *testing.T) {
-	opts := RuleEvaluationUniqueOpts()
+	opts := BoostEvaluationUniqueOpts()
 
 	assert.True(t, opts.ByArgs)
 	assert.Equal(t, 1*time.Minute, opts.ByPeriod)
@@ -173,10 +173,10 @@ func TestRuleEvaluationUniqueOpts(t *testing.T) {
 }
 
 func TestNewRuleEvaluationWorker_DefaultLogger(t *testing.T) {
-	mockService := new(MockRuleExecutionService)
+	mockService := new(MockBoostExecutionService)
 
-	worker := NewRuleEvaluationWorker(RuleEvaluationWorkerDeps{
-		RuleExecutionService: mockService,
+	worker := NewBoostEvaluationWorker(BoostEvaluationWorkerDeps{
+		BoostExecutionService: mockService,
 		// Logger is nil
 	})
 
