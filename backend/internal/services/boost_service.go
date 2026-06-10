@@ -45,7 +45,7 @@ type BoostService interface {
 
 // boostService implements BoostService.
 type boostService struct {
-	ruleRepo        repository.BoostsRepository
+	boostRepo        repository.BoostsRepository
 	savingsGoalRepo repository.SavingsGoalRepository // optional; used for ownership validation (GAP AE)
 	accountRepo     repository.AccountRepository     // optional; used for ownership validation (GAP AE)
 	budgetRepo      repository.BudgetRepository      // optional; used for category ownership validation (#1270)
@@ -56,10 +56,10 @@ type boostService struct {
 // (SetSavingsGoalRepo, SetAccountRepo) without adding them to the interface — consistent
 // with NewRuleExecutionService's pattern.
 func NewBoostService(
-	ruleRepo repository.BoostsRepository,
+	boostRepo repository.BoostsRepository,
 ) *boostService {
 	return &boostService{
-		ruleRepo: ruleRepo,
+		boostRepo: boostRepo,
 	}
 }
 
@@ -207,7 +207,7 @@ func (s *boostService) CreateRule(ctx context.Context, userID string, req *domai
 	}
 
 	// Save to database
-	if err := s.ruleRepo.Create(ctx, rule); err != nil {
+	if err := s.boostRepo.Create(ctx, rule); err != nil {
 		return nil, err
 	}
 
@@ -216,18 +216,18 @@ func (s *boostService) CreateRule(ctx context.Context, userID string, req *domai
 
 // GetUserRules retrieves all automation rules for a user, ordered by priority.
 func (s *boostService) GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
-	return s.ruleRepo.GetByUserID(ctx, userID)
+	return s.boostRepo.GetByUserID(ctx, userID)
 }
 
 // GetUserRulesFiltered retrieves boosts optionally filtered by boost types.
 // When boostTypes is empty, all boosts are returned (delegates to GetUserRules).
 func (s *boostService) GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
-	return s.ruleRepo.GetByUserIDFiltered(ctx, userID, boostTypes)
+	return s.boostRepo.GetByUserIDFiltered(ctx, userID, boostTypes)
 }
 
 // GetRuleByID retrieves a specific boost by ID.
 func (s *boostService) GetRuleByID(ctx context.Context, userID, boostID string) (*domain.Boost, error) {
-	rule, err := s.ruleRepo.GetByID(ctx, boostID)
+	rule, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func (s *boostService) GetRuleByID(ctx context.Context, userID, boostID string) 
 // UpdateRule updates a rule's configuration.
 func (s *boostService) UpdateRule(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
 	// Get existing rule
-	rule, err := s.ruleRepo.GetByID(ctx, boostID)
+	rule, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func (s *boostService) UpdateRule(ctx context.Context, userID, boostID string, r
 	}
 
 	// Save updates
-	if err := s.ruleRepo.Update(ctx, rule); err != nil {
+	if err := s.boostRepo.Update(ctx, rule); err != nil {
 		return nil, err
 	}
 
@@ -302,7 +302,7 @@ func (s *boostService) UpdateRule(ctx context.Context, userID, boostID string, r
 // DeleteRule removes a rule.
 func (s *boostService) DeleteRule(ctx context.Context, userID, boostID string) error {
 	// Verify ownership first
-	rule, err := s.ruleRepo.GetByID(ctx, boostID)
+	rule, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return err
 	}
@@ -311,13 +311,13 @@ func (s *boostService) DeleteRule(ctx context.Context, userID, boostID string) e
 		return domain.ErrBoostNotFound
 	}
 
-	return s.ruleRepo.Delete(ctx, boostID)
+	return s.boostRepo.Delete(ctx, boostID)
 }
 
 // ToggleRule enables or disables a rule.
 func (s *boostService) ToggleRule(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error) {
 	// Get existing rule
-	rule, err := s.ruleRepo.GetByID(ctx, boostID)
+	rule, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func (s *boostService) ToggleRule(ctx context.Context, userID, boostID string, e
 	rule.Enabled = enabled
 
 	// Save update
-	if err := s.ruleRepo.Update(ctx, rule); err != nil {
+	if err := s.boostRepo.Update(ctx, rule); err != nil {
 		return nil, err
 	}
 
@@ -340,10 +340,10 @@ func (s *boostService) ToggleRule(ctx context.Context, userID, boostID string, e
 
 // GetEnabledRules retrieves all enabled rules for a user.
 func (s *boostService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
-	return s.ruleRepo.GetEnabledByUserID(ctx, userID)
+	return s.boostRepo.GetEnabledByUserID(ctx, userID)
 }
 
 // GetRulesByType retrieves enabled rules of a specific type.
 func (s *boostService) GetRulesByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
-	return s.ruleRepo.GetBoostsByType(ctx, userID, boostType)
+	return s.boostRepo.GetBoostsByType(ctx, userID, boostType)
 }
