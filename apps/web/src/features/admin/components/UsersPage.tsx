@@ -266,7 +266,7 @@ export function UsersPage() {
       defaultSize: 100,
       minSize: 80,
       maxSize: 130,
-      key: 'automation_rules_count',
+      key: 'boosts_count',
     },
     {
       id: 'referrals',

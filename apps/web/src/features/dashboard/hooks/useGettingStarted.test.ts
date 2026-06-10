@@ -12,7 +12,7 @@ import { useGettingStarted } from './useGettingStarted'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUseGetBudgets } from '@/test/mocks/budgets-api'
 import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
-import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
+import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
 
 const ACTIVATED_KEY = 'getting-started-activated'
@@ -32,7 +32,7 @@ function setupNewUser() {
   })
   mockUseGetBudgets.mockReturnValue({ data: undefined, isLoading: false, error: null })
   mockUseGetSavingsGoals.mockReturnValue({ data: undefined, isLoading: false, error: null })
-  mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+  mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null })
   mockUseGetUserRules.mockReturnValue({ data: undefined, isLoading: false, error: null })
 }
 
@@ -50,7 +50,7 @@ function setupFullyOnboardedUser() {
   })
   mockUseGetBudgets.mockReturnValue({ data: [{ id: 'b1', name: 'Monthly' }], isLoading: false, error: null })
   mockUseGetSavingsGoals.mockReturnValue({ data: [{ id: 'g1', name: 'Emergency' }], isLoading: false, error: null })
-  mockUseGetAutomationRules.mockReturnValue({ data: [{ id: 'r1', name: 'Budget Alert' }], isLoading: false, error: null })
+  mockUseGetBoosts.mockReturnValue({ data: [{ id: 'r1', name: 'Budget Alert' }], isLoading: false, error: null })
   mockUseGetUserRules.mockReturnValue({ data: [{ id: 'c1' }], isLoading: false, error: null })
 }
 
@@ -68,7 +68,7 @@ function setupExistingUserWithAccounts() {
   })
   mockUseGetBudgets.mockReturnValue({ data: undefined, isLoading: false, error: null })
   mockUseGetSavingsGoals.mockReturnValue({ data: undefined, isLoading: false, error: null })
-  mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+  mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null })
   mockUseGetUserRules.mockReturnValue({ data: undefined, isLoading: false, error: null })
 }
 
@@ -114,7 +114,7 @@ describe('useGettingStarted', () => {
       expect(steps[1].href).toBe('/budgets')
       expect(steps[2].id).toBe('create-savings-goal')
       expect(steps[2].href).toBe('/savings')
-      expect(steps[3].id).toBe('create-automation-rule')
+      expect(steps[3].id).toBe('create-boost')
       expect(steps[3].href).toBe('/boosts')
       expect(steps[4].id).toBe('set-up-auto-categorization')
       expect(steps[4].href).toBe('/auto-categorization')
@@ -153,8 +153,8 @@ describe('useGettingStarted', () => {
       expect(result.current.steps[2].complete).toBe(true)
     })
 
-    it('marks create-automation-rule complete when automation rules data is non-empty', () => {
-      mockUseGetAutomationRules.mockReturnValue({ data: [{ id: 'r1' }], isLoading: false, error: null })
+    it('marks create-boost complete when automation rules data is non-empty', () => {
+      mockUseGetBoosts.mockReturnValue({ data: [{ id: 'r1' }], isLoading: false, error: null })
 
       const { result } = renderHook(() => useGettingStarted())
       expect(result.current.steps[3].complete).toBe(true)

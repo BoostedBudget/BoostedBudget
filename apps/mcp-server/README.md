@@ -236,30 +236,30 @@ Agent: You have 1 accepted suggestion awaiting a match: $500 to High-Yield Savin
 
 ---
 
-### 5. "List my transfer automation rules" (Boosts)
+### 5. "List my transfer automation boosts" (Boosts)
 
-Use the `rule_type` parameter to scope the rules list to transfer-generating types:
+Use the `boost_type` parameter to scope the boosts list to transfer-generating types:
 
 ```
-You: What automation rules do I have set up for savings transfers?
+You: What automation boosts do I have set up for savings transfers?
 
 Agent calls:
-  search({ query: "automation rules filter type" })
-  → finds getAutomationRules
-  → description: "Use the repeatable `rule_type` query parameter... Transfer-generating types are transfer_suggestion and savings_goal."
+  search({ query: "automation boosts filter type" })
+  → finds getBoosts
+  → description: "Use the repeatable `boost_type` query parameter... Transfer-generating types are transfer_suggestion and savings_goal."
 
   execute({
     calls: [{
-      operationId: "getAutomationRules",
-      params: { rule_type: ["transfer_suggestion", "savings_goal"] }
+      operationId: "getBoosts",
+      params: { boost_type: ["transfer_suggestion", "savings_goal"] }
     }]
   })
-  → [{ name: "Monthly Savings", rule_type: "savings_goal", enabled: true, ... }]
+  → [{ name: "Monthly Savings", boost_type: "savings_goal", enabled: true, ... }]
 
-Agent: You have 1 transfer rule: "Monthly Savings" (savings_goal type, enabled).
+Agent: You have 1 transfer boost: "Monthly Savings" (savings_goal type, enabled).
 ```
 
-**Transfer-generating `rule_type` values:** `transfer_suggestion` · `savings_goal`
+**Transfer-generating `boost_type` values:** `transfer_suggestion` · `savings_goal`
 **All types:** `transfer_suggestion` · `savings_goal` · `budget_alert` · `category_rollover`
 
 > **Note:** Scheduled recipe execution (running recipes automatically on a cron) is planned

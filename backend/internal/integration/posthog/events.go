@@ -32,8 +32,8 @@ const (
 	EventDeletionCancelled  = "deletion_cancelled"
 	EventEmailChanged       = "email_changed"
 
-	// Rule and automation events
-	EventRuleTriggered              = "rule_triggered"
+	// Boost and automation events
+	EventBoostTriggered             = "boost_triggered"
 	EventAutoCategorizationExecuted = "auto_categorization_executed"
 
 	// Transfer suggestion events

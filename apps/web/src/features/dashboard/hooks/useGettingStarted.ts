@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useGetBudgets } from '@boostedbudget/api-client/endpoints/budgets/budgets'
 import { useGetSavingsGoals } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
-import { useGetAutomationRules } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
+import { useGetBoosts } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { useGetUserRules } from '@boostedbudget/api-client/endpoints/auto-categorization/auto-categorization'
 import { useDashboardContext } from '../context/DashboardContext'
 
@@ -54,14 +54,14 @@ export function useGettingStarted(): UseGettingStartedReturn {
 
   const budgetsQuery = useGetBudgets({ query: { staleTime: 60_000, enabled: shouldFetch } })
   const savingsGoalsQuery = useGetSavingsGoals({ query: { staleTime: 60_000, enabled: shouldFetch } })
-  const automationRulesQuery = useGetAutomationRules(undefined, { query: { staleTime: 60_000, enabled: shouldFetch } })
+  const boostsQuery = useGetBoosts(undefined, { query: { staleTime: 60_000, enabled: shouldFetch } })
   const categorizationRulesQuery = useGetUserRules({ query: { staleTime: 60_000, enabled: shouldFetch } })
 
   const isLoading =
     accountsLoading ||
     budgetsQuery.isLoading ||
     savingsGoalsQuery.isLoading ||
-    automationRulesQuery.isLoading ||
+    boostsQuery.isLoading ||
     categorizationRulesQuery.isLoading
 
   const steps: GettingStartedStep[] = useMemo(() => [
@@ -87,10 +87,10 @@ export function useGettingStarted(): UseGettingStartedReturn {
       href: '/savings',
     },
     {
-      id: 'create-automation-rule',
-      label: 'Create an automation rule',
-      description: 'Set up rules to automate budget alerts and financial actions',
-      complete: (automationRulesQuery.data?.length ?? 0) > 0,
+      id: 'create-boost',
+      label: 'Create a boost',
+      description: 'Set up boosts to automate budget alerts and financial actions',
+      complete: (boostsQuery.data?.length ?? 0) > 0,
       href: '/boosts',
     },
     {
@@ -100,7 +100,7 @@ export function useGettingStarted(): UseGettingStartedReturn {
       complete: (categorizationRulesQuery.data?.length ?? 0) > 0,
       href: '/auto-categorization',
     },
-  ], [hasAccounts, budgetsQuery.data?.length, savingsGoalsQuery.data?.length, automationRulesQuery.data?.length, categorizationRulesQuery.data?.length])
+  ], [hasAccounts, budgetsQuery.data?.length, savingsGoalsQuery.data?.length, boostsQuery.data?.length, categorizationRulesQuery.data?.length])
 
   const completedCount = steps.filter(s => s.complete).length
   const totalSteps = steps.length

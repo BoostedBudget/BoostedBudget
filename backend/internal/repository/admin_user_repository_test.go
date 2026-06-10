@@ -43,12 +43,12 @@ func TestListUsers_Success(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).
 		AddRow(user1ID, "user1@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 3, 5, 2).
 		AddRow(user2ID, "user2@example.com", "free", "trial", nil, nil, "iad", now, nil, true, 1, 2, 0)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(20, 0).
 		WillReturnRows(rows)
 
@@ -64,7 +64,7 @@ func TestListUsers_Success(t *testing.T) {
 	assert.Equal(t, "user1@example.com", users[0].Email)
 	assert.Equal(t, "premium", users[0].SubscriptionTier)
 	assert.Equal(t, 3, users[0].LinkedAccountsCount)
-	assert.Equal(t, 5, users[0].AutomationRulesCount)
+	assert.Equal(t, 5, users[0].BoostsCount)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -88,10 +88,10 @@ func TestListUsers_WithEmailSearch(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).AddRow(userID, "test@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 2, 3, 0)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(pgxmock.AnyArg(), 20, 0).
 		WillReturnRows(rows)
 
@@ -127,10 +127,10 @@ func TestListUsers_WithTierFilter(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).AddRow(userID, "premium@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 4, 8, 1)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs("premium", 20, 0).
 		WillReturnRows(rows)
 
@@ -166,10 +166,10 @@ func TestListUsers_WithBothFilters(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).AddRow(userID, "test@example.com", "premium", "active", nil, nil, "iad", now, &now, true, 2, 3, 0)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(pgxmock.AnyArg(), "premium", 20, 0).
 		WillReturnRows(rows)
 
@@ -202,10 +202,10 @@ func TestListUsers_EmptyResult(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	})
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(pgxmock.AnyArg(), 20, 0).
 		WillReturnRows(rows)
 
@@ -239,10 +239,10 @@ func TestListUsers_Pagination(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).AddRow(userID, "user41@example.com", "free", "active", nil, nil, "iad", now, nil, true, 1, 0, 0)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(20, 40).
 		WillReturnRows(rows)
 
@@ -276,10 +276,10 @@ func TestListUsers_ReturnsManualTierEndsAt(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at",
 		"primary_region", "created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 	}).AddRow(userID, "user@example.com", "trial", "trial", &tierOverride, &expiresAt, "iad", now, &now, true, 1, 2, 0)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count FROM users u LEFT JOIN`)).
 		WithArgs(20, 0).
 		WillReturnRows(rows)
 
@@ -308,7 +308,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at", "primary_region",
 		"created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "user@example.com", "premium", "active",
@@ -317,7 +317,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 		5, 10, 3, 1500, 4,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -333,7 +333,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 	assert.Equal(t, "active", detail.SubscriptionStatus)
 	assert.Equal(t, "iad", detail.PrimaryRegion)
 	assert.Equal(t, 5, detail.LinkedAccountsCount)
-	assert.Equal(t, 10, detail.AutomationRulesCount)
+	assert.Equal(t, 10, detail.BoostsCount)
 	assert.Equal(t, 1500, detail.TransactionsCount)
 	assert.Equal(t, 4, detail.BudgetsCount)
 	assert.True(t, detail.IsActive)
@@ -348,7 +348,7 @@ func TestGetUserDetail_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
 		WithArgs(userID).
 		WillReturnError(pgx.ErrNoRows)
 
@@ -375,7 +375,7 @@ func TestGetUserDetail_ZeroCounts(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at", "primary_region",
 		"created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "newuser@example.com", "free", "trial",
@@ -384,7 +384,7 @@ func TestGetUserDetail_ZeroCounts(t *testing.T) {
 		0, 0, 0, 0, 0,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -395,7 +395,7 @@ func TestGetUserDetail_ZeroCounts(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, detail)
 	assert.Equal(t, 0, detail.LinkedAccountsCount)
-	assert.Equal(t, 0, detail.AutomationRulesCount)
+	assert.Equal(t, 0, detail.BoostsCount)
 	assert.Equal(t, 0, detail.TransactionsCount)
 	assert.Equal(t, 0, detail.BudgetsCount)
 	assert.Nil(t, detail.LastLoginAt)
@@ -417,7 +417,7 @@ func TestGetUserDetail_ReturnsManualTierOverride(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at", "primary_region",
 		"created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "user@example.com", "trial", "trial",
@@ -426,7 +426,7 @@ func TestGetUserDetail_ReturnsManualTierOverride(t *testing.T) {
 		1, 2, 0, 100, 1,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -453,7 +453,7 @@ func TestGetUserDetail_NilManualTierOverride(t *testing.T) {
 		"id", "email", "subscription_tier", "subscription_status",
 		"manual_tier_override", "manual_tier_ends_at", "primary_region",
 		"created_at", "last_login_at", "is_active",
-		"linked_accounts_count", "automation_rules_count", "referrals_count",
+		"linked_accounts_count", "boosts_count", "referrals_count",
 		"transactions_count", "budgets_count",
 	}).AddRow(
 		userID, "user@example.com", "premium", "active",
@@ -462,7 +462,7 @@ func TestGetUserDetail_NilManualTierOverride(t *testing.T) {
 		3, 5, 0, 500, 2,
 	)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as automation_rules_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT u.id, u.email, u.subscription_tier, u.subscription_status, u.manual_tier_override, u.manual_tier_ends_at, u.primary_region, u.created_at, u.last_login_at, u.is_active, COALESCE(la.count, 0) as linked_accounts_count, COALESCE(r.count, 0) as boosts_count, COALESCE(ref.count, 0) as referrals_count, COALESCE(t.count, 0) as transactions_count, COALESCE(b.count, 0) as budgets_count FROM users u LEFT JOIN`)).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -551,7 +551,7 @@ func TestListUsersSort(t *testing.T) {
 					"id", "email", "subscription_tier", "subscription_status",
 					"manual_tier_override", "manual_tier_ends_at", "primary_region",
 					"created_at", "last_login_at", "is_active",
-					"linked_accounts_count", "automation_rules_count", "referrals_count",
+					"linked_accounts_count", "boosts_count", "referrals_count",
 				}))
 
 			_, _, err = repo.ListUsers(ctx, filters, 20, 0)

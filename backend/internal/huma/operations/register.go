@@ -50,8 +50,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	deletionHandler := &DeletionHandler{}
 	plaidWebhookHandler := &PlaidWebhookHandler{}
 
-	// Automation Rules (Issues #34-38)
-	automationRuleHandler := &AutomationRuleHandler{}
+	// Boosts (Issues #34-38)
+	boostHandler := &BoostHandler{}
 
 	// Issue #45, #46: Paddle payment integration
 	paddleCheckoutHandler := &PaddleCheckoutHandler{}
@@ -97,8 +97,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterDeletionRoutes(api, deletionHandler)
 	RegisterPlaidWebhookRoutes(api, plaidWebhookHandler)
 
-	// Automation Rules (Issues #34-38)
-	RegisterAutomationRuleRoutes(api, automationRuleHandler)
+	// Boosts (Issues #34-38)
+	RegisterBoostRoutes(api, boostHandler)
 
 	// Issue #171: Stable user account references
 	RegisterUserAccountRoutes(api, userAccountHandler)

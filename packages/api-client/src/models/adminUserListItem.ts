@@ -29,7 +29,7 @@
  */
 
 export interface AdminUserListItem {
-  automation_rules_count: number;
+  boosts_count: number;
   created_at: string;
   email: string;
   id: string;

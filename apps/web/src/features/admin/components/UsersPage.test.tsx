@@ -39,7 +39,7 @@ const mockUsers = [
     is_active: true,
     is_admin: false,
     linked_accounts_count: 5,
-    automation_rules_count: 10,
+    boosts_count: 10,
     referrals_count: 2,
   },
   {
@@ -55,7 +55,7 @@ const mockUsers = [
     is_active: true,
     is_admin: false,
     linked_accounts_count: 2,
-    automation_rules_count: 1,
+    boosts_count: 1,
     referrals_count: 0,
   },
 ]

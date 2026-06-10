@@ -44,7 +44,7 @@ describe('useBoostSuggestions', () => {
   it('returns items from the envelope response', () => {
     const mockData: TransferSuggestionListResponse = {
       items: [
-        { id: 'ts-1', status: 'pending', amount: 100, currency_code: 'USD', source: 'rule', user_id: 'u1', created_at: '2025-01-01', updated_at: '2025-01-01' },
+        { id: 'ts-1', status: 'pending', amount: 100, currency_code: 'USD', source: 'boost', user_id: 'u1', created_at: '2025-01-01', updated_at: '2025-01-01' },
       ],
       total: 1,
       limit: 20,

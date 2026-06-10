@@ -20,7 +20,7 @@ const pendingItem: TransferSuggestion = {
   status: 'pending',
   amount: 500,
   currency_code: 'USD',
-  source: 'rule',
+  source: 'boost',
   user_id: 'u1',
   created_at: '2025-01-15T10:00:00Z',
   updated_at: '2025-01-15T10:00:00Z',
@@ -31,24 +31,24 @@ const pendingItem2: TransferSuggestion = {
   status: 'pending',
   amount: 250,
   currency_code: 'USD',
-  source: 'rule',
+  source: 'boost',
   user_id: 'u1',
   created_at: '2025-01-14T10:00:00Z',
   updated_at: '2025-01-14T10:00:00Z',
 }
 
-// Enriched item with destination account + rule name (from W1 backend enrichment)
+// Enriched item with destination account + boost name (from W1 backend enrichment)
 const enrichedItem: TransferSuggestion = {
   id: 'ts-enriched',
   status: 'pending',
   amount: 600,
   currency_code: 'USD',
-  source: 'rule',
+  source: 'boost',
   user_id: 'u1',
   created_at: '2025-01-16T10:00:00Z',
   updated_at: '2025-01-16T10:00:00Z',
   to_account_name: 'Emergency Fund',
-  rule_name: 'Save Extra Cash',
+  boost_name: 'Save Extra Cash',
 }
 
 describe('ActiveRecommendationsTab', () => {
@@ -154,7 +154,7 @@ describe('ActiveRecommendationsTab', () => {
     expect(screen.getByText('Emergency Fund')).toBeTruthy()
   })
 
-  it('shows rule name as source context', () => {
+  it('shows boost name as source context', () => {
     render(
       <ActiveRecommendationsTab
         items={[enrichedItem]}
