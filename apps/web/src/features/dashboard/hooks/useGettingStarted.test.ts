@@ -114,7 +114,7 @@ describe('useGettingStarted', () => {
       expect(steps[1].href).toBe('/budgets')
       expect(steps[2].id).toBe('create-savings-goal')
       expect(steps[2].href).toBe('/savings')
-      expect(steps[3].id).toBe('create-automation-rule')
+      expect(steps[3].id).toBe('create-boost')
       expect(steps[3].href).toBe('/boosts')
       expect(steps[4].id).toBe('set-up-auto-categorization')
       expect(steps[4].href).toBe('/auto-categorization')
@@ -153,7 +153,7 @@ describe('useGettingStarted', () => {
       expect(result.current.steps[2].complete).toBe(true)
     })
 
-    it('marks create-automation-rule complete when automation rules data is non-empty', () => {
+    it('marks create-boost complete when automation rules data is non-empty', () => {
       mockUseGetBoosts.mockReturnValue({ data: [{ id: 'r1' }], isLoading: false, error: null })
 
       const { result } = renderHook(() => useGettingStarted())
