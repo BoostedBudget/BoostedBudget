@@ -40,11 +40,6 @@ const mockAccounts = [
   },
 ]
 
-// Inline mock.module() removed: accounts endpoint is registered via preloaded centralized mock
-// (accounts-api.ts in bunfig.toml). Using configurable beforeEach instead of static stubs
-// avoids polluting other test files' mock state.
-// See: https://github.com/BoostedBudget/BoostedBudget2/issues/1283 FIX-2
-
 import { TransferActionForm } from './TransferActionForm'
 
 function renderWithProviders(ui: React.ReactElement) {

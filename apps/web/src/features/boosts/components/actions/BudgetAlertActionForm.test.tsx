@@ -13,7 +13,6 @@ import type { AlertAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 
-// Mock useBudgets hook
 const mockBudgets: Budget[] = [
   {
     id: 'budget-1',

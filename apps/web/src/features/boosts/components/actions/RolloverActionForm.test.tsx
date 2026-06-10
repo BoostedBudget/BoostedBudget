@@ -13,7 +13,6 @@ import type { RolloverAction } from '../../types'
 import type { Budget } from '../../../budgets/types'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 
-// Mock budgets with categories
 const mockBudgets: Budget[] = [
   {
     id: 'budget-1',

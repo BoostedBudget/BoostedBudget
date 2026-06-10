@@ -57,11 +57,6 @@ const mockAccounts = [
   },
 ]
 
-// Inline mock.module() removed: both endpoints are registered via preloaded centralized mocks
-// (accounts-api.ts and savings-goals-api.ts in bunfig.toml). Using configurable beforeEach
-// instead of static stubs avoids polluting other test files' mock state.
-// See: https://github.com/BoostedBudget/BoostedBudget2/issues/1283 FIX-2
-
 import { SavingsGoalActionForm } from './SavingsGoalActionForm'
 
 function renderWithProviders(ui: React.ReactElement) {
