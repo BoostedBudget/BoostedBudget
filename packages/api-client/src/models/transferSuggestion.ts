@@ -27,6 +27,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { TransferSuggestionMatchState } from './transferSuggestionMatchState';
 
 export interface TransferSuggestion {
   actual_amount?: number;
@@ -44,6 +45,7 @@ export interface TransferSuggestion {
   from_account_name?: string;
   from_user_account_id?: string;
   id: string;
+  match_state?: TransferSuggestionMatchState;
   matched_transaction_at?: string;
   matched_transaction_id?: string;
   reason?: string;
