@@ -168,7 +168,7 @@ func TestAutomationRuleHandler_GetAutomationRules(t *testing.T) {
 		createMockRule("rule-2", "user-1"),
 	}
 
-	// No rule_type filter → empty slice passed to GetUserRulesFiltered.
+	// No boost_type filter → empty slice passed to GetUserRulesFiltered.
 	mockService.On("GetUserRulesFiltered", mock.Anything, "user-1", []domain.BoostType(nil)).Return(rules, nil)
 
 	handler := NewBoostHandler(mockService, nil)

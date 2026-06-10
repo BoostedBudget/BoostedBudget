@@ -33,6 +33,7 @@ export interface TransferSuggestion {
   amount: number;
   boost_execution_id?: string;
   boost_id?: string;
+  boost_name?: string;
   can_confirm_match?: boolean;
   completed_at?: string;
   completion_source?: string;
@@ -46,7 +47,6 @@ export interface TransferSuggestion {
   matched_transaction_at?: string;
   matched_transaction_id?: string;
   reason?: string;
-  rule_name?: string;
   source: string;
   status: string;
   to_account_id?: string;

@@ -94,7 +94,7 @@ func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
 	goalID := "goal-owned-by-other"
 	fromAccountID := "from-acct-attacker"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			{ID: goalID, UserID: ownerUserID}, // owned by DIFFERENT user
@@ -105,7 +105,7 @@ func TestCreateRule_SavingsGoal_SavingsGoalIDOwnership(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -122,7 +122,7 @@ func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
 	goalID := "goal-owned-by-user-a"
 	fromAccountID := "from-acct-owned-by-other"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			{ID: goalID, UserID: userID}, // goal belongs to the same user
@@ -133,7 +133,7 @@ func TestCreateRule_SavingsGoal_FromAccountOwnership(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -150,7 +150,7 @@ func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
 	goalID := "goal-a"
 	fromAccountID := "from-acct-a"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			{ID: goalID, UserID: userID},
@@ -160,7 +160,7 @@ func TestCreateRule_SavingsGoal_HappyPath(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -177,13 +177,13 @@ func TestCreateRule_Transfer_FromAccountOwnership(t *testing.T) {
 	fromAccountID := "from-acct-other"
 	toAccountID := "to-acct-user-a"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 	// to_account_id check is not reached if from_account_id fails
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -199,14 +199,14 @@ func TestCreateRule_Transfer_ToAccountOwnership(t *testing.T) {
 	fromAccountID := "from-acct-user-a"
 	toAccountID := "to-acct-other"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	_, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -222,14 +222,14 @@ func TestCreateRule_Transfer_HappyPath(t *testing.T) {
 	fromAccountID := "from-a"
 	toAccountID := "to-a"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 	acctRepo.On("GetByIDAndUser", mock.Anything, toAccountID, userID).
 		Return(&domain.Account{ID: toAccountID}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	rule, err := svc.CreateRule(ctx, userID, newTransferRuleRequest(fromAccountID, toAccountID))
@@ -259,7 +259,7 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
 	goalRepo := &mockSavingsGoalRepository{
 		goals: []*domain.SavingsGoal{
 			// goalID belongs to a different user, not userID
@@ -269,7 +269,7 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, userID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 
@@ -287,9 +287,9 @@ func TestUpdateRule_OwnershipEnforced(t *testing.T) {
 func TestCreateRule_NoRepos_SkipsOwnershipCheck(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-a"
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	// No SetSavingsGoalRepo or SetAccountRepo calls — repos are nil
 
 	_, err := svc.CreateRule(ctx, userID, newSavingsGoalRuleRequest("any-goal", "any-account"))
@@ -312,7 +312,7 @@ func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 	toAccountID := "to-attacker"       // attacker's own account
 	fromUserAccountID := "ua-victim-1" // victim's stable re-link ref — must be rejected
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 	// Both account IDs belong to the attacker (standard checks pass)
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
@@ -323,7 +323,7 @@ func TestCreateRule_Transfer_FromUserAccountIDOwnership(t *testing.T) {
 	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, fromUserAccountID, attackerUserID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, fromUserAccountID, "")
@@ -350,7 +350,7 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	toAccountID := "to-attacker"
 	toUserAccountID := "ua-victim-2" // victim's stable re-link ref
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 	acctRepo.On("GetByIDAndUser", mock.Anything, fromAccountID, attackerUserID).
 		Return(&domain.Account{ID: fromAccountID}, nil)
@@ -359,7 +359,7 @@ func TestCreateRule_Transfer_ToUserAccountIDOwnership(t *testing.T) {
 	acctRepo.On("GetByUserAccountIDAndUser", mock.Anything, toUserAccountID, attackerUserID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetAccountRepo(acctRepo)
 
 	actions := transferRuleActionsWithUserAccountIDs(fromAccountID, toAccountID, "", toUserAccountID)
@@ -420,8 +420,8 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	userID := "user-alice"
 	categoryID := "cat-alice-1"
 
-	ruleRepo := &mockAutomationRulesRepository{}
-	ruleRepo.rules = []*domain.Boost{} // ensure Create stores the rule
+	boostRepo := &mockBoostsRepository{}
+	boostRepo.boosts = []*domain.Boost{} // ensure Create stores the rule
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
 		Return(&domain.BudgetCategory{ID: categoryID, BudgetID: "budget-1"}, nil)
@@ -432,7 +432,7 @@ func TestCreateRule_CategoryCondition_AcceptsOwnedCategory(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
@@ -451,12 +451,12 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	attackerUserID := "user-attacker"
 	victimCategoryID := "cat-victim-99"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
 		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
@@ -474,12 +474,12 @@ func TestCreateRule_CategoryCondition_DBError_Propagates(t *testing.T) {
 	categoryID := "cat-alice-1"
 	dbErr := errors.New("connection timeout")
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
 		Return((*domain.BudgetCategory)(nil), dbErr)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(categoryID)
@@ -497,12 +497,12 @@ func TestCreateRule_CategoryCondition_RejectsForeignCategory_SentinelWrapped(t *
 	attackerUserID := "user-attacker-2"
 	victimCategoryID := "cat-victim-sentinel"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	budgetRepo := &MockBudgetRepository{}
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, attackerUserID).
 		Return((*domain.BudgetCategory)(nil), domain.ErrBudgetCategoryNotFound)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 
 	req := budgetCategoryConditionRule(victimCategoryID)
@@ -536,7 +536,7 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
 	budgetRepo := &MockBudgetRepository{}
 	// GetCategoryByIDAndUser returns not-found → the category belongs to another user.
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, victimCategoryID, userID).
@@ -548,7 +548,7 @@ func TestUpdateRule_CategoryCondition_RejectsForeignCategory(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
 		Return(&domain.Account{ID: "acct-ok"}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
@@ -578,8 +578,8 @@ func TestCreateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-invalid-cond"
 
-	ruleRepo := &mockAutomationRulesRepository{}
-	svc := NewBoostService(ruleRepo)
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostService(boostRepo)
 
 	// budget_category.invalid_field is not in validConditionFieldsByEvent for budget_period_end.
 	b, _ := json.Marshal(map[string]interface{}{
@@ -633,8 +633,8 @@ func TestUpdateRule_InvalidConditions_WrapsErrInvalidRule(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
-	svc := NewBoostService(ruleRepo)
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
+	svc := NewBoostService(boostRepo)
 
 	// Try to update with an invalid condition field.
 	invalidConditions := []domain.BoostCondition{
@@ -660,7 +660,7 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	userID := "user-bob"
 	categoryID := "cat-any"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &MockSavingsGoalRepository{}
 	goalRepo.On("GetByIDForUser", mock.Anything, "goal-1", userID).
 		Return(&domain.SavingsGoal{ID: "goal-1"}, nil)
@@ -668,7 +668,7 @@ func TestCreateRule_CategoryCondition_NoBudgetRepo_SkipsCheck(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
 	// intentionally NOT calling svc.SetBudgetRepo
@@ -692,7 +692,7 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	userID := "user-alice"
 	categoryID := "cat-1"
 
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	budgetRepo := &MockBudgetRepository{}
 	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
@@ -704,7 +704,7 @@ func TestCreateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-1", userID).
 		Return(&domain.Account{ID: "acct-1"}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)
@@ -762,7 +762,7 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 		ConditionLogic: "AND",
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{existingRule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{existingRule}}
 	budgetRepo := &MockBudgetRepository{}
 	// Category is owned by the user but lives in "budget-OTHER", not "budget-MINE".
 	budgetRepo.On("GetCategoryByIDAndUser", mock.Anything, categoryID, userID).
@@ -774,7 +774,7 @@ func TestUpdateRule_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, "acct-ok", userID).
 		Return(&domain.Account{ID: "acct-ok"}, nil)
 
-	svc := NewBoostService(ruleRepo)
+	svc := NewBoostService(boostRepo)
 	svc.SetBudgetRepo(budgetRepo)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetAccountRepo(acctRepo)

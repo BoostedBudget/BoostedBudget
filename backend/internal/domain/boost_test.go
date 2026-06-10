@@ -13,7 +13,7 @@ import (
 // BoostType Tests
 // =============================================================================
 
-func TestRuleType_IsValid(t *testing.T) {
+func TestBoostType_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
 		ruleType BoostType
@@ -63,7 +63,7 @@ func TestTriggerType_IsValid(t *testing.T) {
 // BoostCondition Tests
 // =============================================================================
 
-func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
+func TestBoostCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name          string
 		condition     BoostCondition
@@ -121,7 +121,7 @@ func TestAutomationRuleCondition_CategoryID_JSON_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
+func TestBoostCondition_BudgetIDRoundTrips(t *testing.T) {
 	tests := []struct {
 		name          string
 		condition     BoostCondition
@@ -177,7 +177,7 @@ func TestAutomationRuleCondition_BudgetIDRoundTrips(t *testing.T) {
 	}
 }
 
-func TestAutomationRuleConditionOperator_IsValid(t *testing.T) {
+func TestBoostConditionOperator_IsValid(t *testing.T) {
 	tests := []struct {
 		name     string
 		operator ConditionOperator
@@ -310,7 +310,7 @@ func TestTriggerConfig_Validate(t *testing.T) {
 // validateConditions Tests
 // =============================================================================
 
-func TestAutomationRule_validateConditions(t *testing.T) {
+func TestBoost_validateConditions(t *testing.T) {
 	// Helper: build a minimal valid event-triggered rule.
 	validEventRule := func(event string, conditions []BoostCondition) Boost {
 		return Boost{
@@ -431,7 +431,7 @@ func TestAutomationRule_validateConditions(t *testing.T) {
 // Boost Validation Tests
 // =============================================================================
 
-func TestAutomationRule_Validate_RequiredFields(t *testing.T) {
+func TestBoost_Validate_RequiredFields(t *testing.T) {
 	tests := []struct {
 		name    string
 		rule    Boost
@@ -483,7 +483,7 @@ func TestAutomationRule_Validate_RequiredFields(t *testing.T) {
 	}
 }
 
-func TestAutomationRule_Validate_ConditionLogic(t *testing.T) {
+func TestBoost_Validate_ConditionLogic(t *testing.T) {
 	baseRule := func() Boost {
 		return Boost{
 			UserID:   "user-123",
@@ -528,7 +528,7 @@ func TestAutomationRule_Validate_ConditionLogic(t *testing.T) {
 	}
 }
 
-func TestAutomationRule_Validate_TransferSuggestionRule(t *testing.T) {
+func TestBoost_Validate_TransferSuggestionRule(t *testing.T) {
 	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Excess Savings Transfer",
@@ -702,7 +702,7 @@ func TestTransferAmountTypeContract_C9(t *testing.T) {
 	}
 }
 
-func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
+func TestBoost_Validate_BudgetAlertRule(t *testing.T) {
 	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Budget Warning",
@@ -740,7 +740,7 @@ func TestAutomationRule_Validate_BudgetAlertRule(t *testing.T) {
 	})
 }
 
-func TestAutomationRule_Validate_CategoryRolloverRule(t *testing.T) {
+func TestBoost_Validate_CategoryRolloverRule(t *testing.T) {
 	validRule := Boost{
 		UserID:   "user-123",
 		Name:     "Savings Rollover",
@@ -798,7 +798,7 @@ func TestAutomationRule_Validate_CategoryRolloverRule(t *testing.T) {
 // Action Parsing Tests
 // =============================================================================
 
-func TestAutomationRule_ParseTransferAction(t *testing.T) {
+func TestBoost_ParseTransferAction(t *testing.T) {
 	rule := Boost{
 		BoostType: BoostTypeTransferSuggestion,
 		Actions:  json.RawMessage(`{"from_account_id":"acc-1","to_account_id":"acc-2","amount_type":"fixed","amount":150.50,"threshold":1000}`),
@@ -814,7 +814,7 @@ func TestAutomationRule_ParseTransferAction(t *testing.T) {
 	assert.Equal(t, 1000.0, action.Threshold)
 }
 
-func TestAutomationRule_ParseAlertAction(t *testing.T) {
+func TestBoost_ParseAlertAction(t *testing.T) {
 	rule := Boost{
 		BoostType: BoostTypeBudgetAlert,
 		Actions:  json.RawMessage(`{"notification_channels":["email","push"],"threshold_type":"percentage","threshold_value":80,"budget_id":"budget-1","category_id":"cat-1"}`),
@@ -830,7 +830,7 @@ func TestAutomationRule_ParseAlertAction(t *testing.T) {
 	assert.Equal(t, "cat-1", action.CategoryID)
 }
 
-func TestAutomationRule_ParseRolloverAction(t *testing.T) {
+func TestBoost_ParseRolloverAction(t *testing.T) {
 	rule := Boost{
 		BoostType: BoostTypeCategoryRollover,
 		Actions:  json.RawMessage(`{"source_budget_category_id":"cat-1","rollover_type":"capped","cap_amount":100}`),

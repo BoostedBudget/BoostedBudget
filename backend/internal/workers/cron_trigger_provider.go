@@ -240,26 +240,26 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 		newBoostIDs[rule.ID] = true
 	}
 
-	// Remove rules that no longer exist
+	// Remove boosts that no longer exist
 	for boostID, sr := range p.scheduledBoosts {
 		if !newBoostIDs[boostID] {
 			p.cron.Remove(sr.entryID)
 			delete(p.scheduledBoosts, boostID)
-			p.logger.Info("removed rule from schedule", "rule_id", boostID)
+			p.logger.Info("removed boost from schedule", "boost_id", boostID)
 		}
 	}
 
-	// Add or update rules
+	// Add or update boosts
 	for _, rule := range rules {
 		cronExpr := rule.TriggerConfig.Cron
 
 		// Validate cron expression (use appropriate parser based on mode)
 		if err := p.validateCronExpression(cronExpr); err != nil {
-			p.logger.Warn("skipping rule with invalid cron expression", "rule_id", rule.ID, "error", err)
+			p.logger.Warn("skipping boost with invalid cron expression", "boost_id", rule.ID, "error", err)
 			continue
 		}
 
-		// Check if rule already exists with same cron
+		// Check if boost already exists with same cron
 		if existing, ok := p.scheduledBoosts[rule.ID]; ok {
 			if existing.cron == cronExpr {
 				// No change needed
@@ -275,10 +275,10 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 			fullCronExpr = fmt.Sprintf("CRON_TZ=%s %s", rule.TriggerConfig.Timezone, cronExpr)
 		}
 
-		// Schedule the rule
+		// Schedule the boost
 		entryID, err := p.cron.AddFunc(fullCronExpr, p.createJobFunc(rule.ID, rule.UserID))
 		if err != nil {
-			p.logger.Error("failed to schedule rule", "rule_id", rule.ID, "error", err)
+			p.logger.Error("failed to schedule boost", "boost_id", rule.ID, "error", err)
 			continue
 		}
 
@@ -289,13 +289,13 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 			entryID: entryID,
 		}
 
-		p.logger.Info("scheduled rule", "rule_id", rule.ID, "cron", fullCronExpr)
+		p.logger.Info("scheduled boost", "boost_id", rule.ID, "cron", fullCronExpr)
 	}
 
 	return nil
 }
 
-// createJobFunc creates the job function for a scheduled rule.
+// createJobFunc creates the job function for a scheduled boost.
 func (p *CronTriggerProvider) createJobFunc(boostID, userID string) func() {
 	return func() {
 		ctx := context.Background()
@@ -303,28 +303,28 @@ func (p *CronTriggerProvider) createJobFunc(boostID, userID string) func() {
 	}
 }
 
-// executeRule executes a scheduled rule.
+// executeRule executes a scheduled boost.
 func (p *CronTriggerProvider) executeRule(ctx context.Context, boostID, userID string) {
-	// Fetch the current rule state
+	// Fetch the current boost state
 	rule, err := p.repo.GetByID(ctx, boostID)
 	if err != nil {
 		if errors.Is(err, domain.ErrBoostNotFound) {
-			p.logger.Info("rule not found, skipping execution", "rule_id", boostID)
+			p.logger.Info("boost not found, skipping execution", "boost_id", boostID)
 			return
 		}
-		p.logger.Error("error fetching rule", "rule_id", boostID, "error", err)
+		p.logger.Error("error fetching boost", "boost_id", boostID, "error", err)
 		return
 	}
 
-	// Check if rule is still enabled
+	// Check if boost is still enabled
 	if !rule.Enabled {
-		p.logger.Info("rule is disabled, skipping execution", "rule_id", boostID)
+		p.logger.Info("boost is disabled, skipping execution", "boost_id", boostID)
 		return
 	}
 
-	p.logger.Info("executing rule", "rule_id", boostID, "user_id", userID)
+	p.logger.Info("executing boost", "boost_id", boostID, "user_id", userID)
 
-	// Execute the rule
+	// Execute the boost
 	triggerData := map[string]interface{}{
 		"trigger_type": "schedule",
 		"triggered_at": time.Now().UTC(),
@@ -332,7 +332,7 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, boostID, userID s
 
 	execution, err := p.executor.ExecuteBoost(ctx, rule, triggerData)
 	if err != nil {
-		p.logger.Error("error executing rule", "rule_id", boostID, "error", err)
+		p.logger.Error("error executing boost", "boost_id", boostID, "error", err)
 		// Update execution count even on failure
 		_ = p.repo.IncrementExecutionCount(ctx, boostID)
 		return
@@ -340,16 +340,16 @@ func (p *CronTriggerProvider) executeRule(ctx context.Context, boostID, userID s
 
 	// Update execution statistics
 	if err := p.repo.IncrementExecutionCount(ctx, boostID); err != nil {
-		p.logger.Error("error updating execution count", "rule_id", boostID, "error", err)
+		p.logger.Error("error updating execution count", "boost_id", boostID, "error", err)
 	}
 
 	if execution.Status == domain.ExecutionStatusCompleted {
 		if err := p.repo.UpdateLastSuccessful(ctx, boostID); err != nil {
-			p.logger.Error("error updating last successful", "rule_id", boostID, "error", err)
+			p.logger.Error("error updating last successful", "boost_id", boostID, "error", err)
 		}
 	}
 
-	p.logger.Info("rule execution completed", "rule_id", boostID, "status", execution.Status)
+	p.logger.Info("boost execution completed", "boost_id", boostID, "status", execution.Status)
 }
 
 // refreshLoop periodically refreshes the scheduled rules from the database.
