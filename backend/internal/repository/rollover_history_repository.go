@@ -1,5 +1,5 @@
 // Package repository provides data access for rollover history tracking.
-// Issue #36: Rule Executors - Envelope budgeting rollover tracking.
+// Issue #36: Boost Executors - Envelope budgeting rollover tracking.
 package repository
 
 import (
@@ -69,7 +69,7 @@ func (r *rolloverHistoryRepository) Create(ctx context.Context, rollover *domain
 
 	query := `
 		INSERT INTO rollover_history (
-			id, user_id, budget_id, rule_id, rule_execution_id,
+			id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -99,7 +99,7 @@ func (r *rolloverHistoryRepository) Create(ctx context.Context, rollover *domain
 // GetByID retrieves a rollover history by its ID.
 func (r *rolloverHistoryRepository) GetByID(ctx context.Context, id string) (*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -113,7 +113,7 @@ func (r *rolloverHistoryRepository) GetByID(ctx context.Context, id string) (*do
 // GetByUserID retrieves rollover history for a user with pagination.
 func (r *rolloverHistoryRepository) GetByUserID(ctx context.Context, userID string, limit, offset int) ([]*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -129,7 +129,7 @@ func (r *rolloverHistoryRepository) GetByUserID(ctx context.Context, userID stri
 // GetByBudgetID retrieves rollover history for a budget with pagination.
 func (r *rolloverHistoryRepository) GetByBudgetID(ctx context.Context, budgetID string, limit, offset int) ([]*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -145,7 +145,7 @@ func (r *rolloverHistoryRepository) GetByBudgetID(ctx context.Context, budgetID 
 // GetPendingByUserID retrieves all pending rollovers for a user.
 func (r *rolloverHistoryRepository) GetPendingByUserID(ctx context.Context, userID string) ([]*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -180,7 +180,7 @@ func (r *rolloverHistoryRepository) UpdateStatus(ctx context.Context, id string,
 // GetByBudgetAndPeriod retrieves rollovers for a budget within a specific period.
 func (r *rolloverHistoryRepository) GetByBudgetAndPeriod(ctx context.Context, budgetID string, periodStart, periodEnd time.Time) ([]*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at
@@ -197,7 +197,7 @@ func (r *rolloverHistoryRepository) GetByBudgetAndPeriod(ctx context.Context, bu
 // GetBySourceCategory retrieves rollovers for a source category with pagination.
 func (r *rolloverHistoryRepository) GetBySourceCategory(ctx context.Context, sourceCategoryID string, limit, offset int) ([]*domain.RolloverHistory, error) {
 	query := `
-		SELECT id, user_id, budget_id, rule_id, rule_execution_id,
+		SELECT id, user_id, budget_id, boost_id, boost_execution_id,
 			source_budget_category_id, target_budget_category_id,
 			amount, rollover_type, budget_period_start, budget_period_end,
 			status, applied_at, created_at

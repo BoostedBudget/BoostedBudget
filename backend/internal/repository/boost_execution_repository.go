@@ -1,5 +1,5 @@
 // Package repository provides data access for boost execution tracking.
-// Issue #35: Rules Engine Core - execution history and auditing.
+// Issue #35: Boosts Engine Core - execution history and auditing.
 package repository
 
 import (
@@ -16,7 +16,7 @@ import (
 
 // BoostExecutionRepository defines the interface for boost execution data access.
 type BoostExecutionRepository interface {
-	// Create creates a new rule execution record.
+	// Create creates a new boost execution record.
 	Create(ctx context.Context, execution *domain.BoostExecution) error
 
 	// Update updates an existing execution record.
@@ -25,17 +25,17 @@ type BoostExecutionRepository interface {
 	// GetByID retrieves an execution by its ID.
 	GetByID(ctx context.Context, id string) (*domain.BoostExecution, error)
 
-	// GetByBoostID retrieves executions for a specific rule with pagination.
+	// GetByBoostID retrieves executions for a specific boost with pagination.
 	GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error)
 
-	// GetByBoostIDWithFilter retrieves executions for a rule with optional status filter and total count.
-	// Issue #38: Rules API Endpoints - Execution history with filtering.
+	// GetByBoostIDWithFilter retrieves executions for a boost with optional status filter and total count.
+	// Issue #38: Boosts API Endpoints - Execution history with filtering.
 	GetByBoostIDWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
 	// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
 	GetTodayExecutionCount(ctx context.Context, userID string) (int, error)
 
-	// GetLastExecutionForRule retrieves the most recent execution for a rule.
+	// GetLastExecutionForRule retrieves the most recent execution for a boost.
 	GetLastExecutionForRule(ctx context.Context, boostID string) (*domain.BoostExecution, error)
 
 	// GetPendingExecutions retrieves pending executions for processing queue.
@@ -55,7 +55,7 @@ func NewBoostExecutionRepository(db DB) BoostExecutionRepository {
 	return &boostExecutionRepository{db: db}
 }
 
-// Create creates a new rule execution record.
+// Create creates a new boost execution record.
 func (r *boostExecutionRepository) Create(ctx context.Context, execution *domain.BoostExecution) error {
 	// Generate UUID if not already set
 	if execution.ID == "" {
@@ -149,7 +149,7 @@ func (r *boostExecutionRepository) GetByID(ctx context.Context, id string) (*dom
 	return r.scanExecution(r.db.QueryRow(ctx, query, id))
 }
 
-// GetByBoostID retrieves executions for a specific rule with pagination.
+// GetByBoostID retrieves executions for a specific boost with pagination.
 func (r *boostExecutionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.BoostExecution, error) {
 	query := `
 		SELECT id, boost_id, status, started_at, completed_at,
@@ -164,8 +164,8 @@ func (r *boostExecutionRepository) GetByBoostID(ctx context.Context, boostID str
 	return r.queryExecutions(ctx, query, boostID, limit, offset)
 }
 
-// GetByBoostIDWithFilter retrieves executions for a rule with optional status filter and total count.
-// Issue #38: Rules API Endpoints - Execution history with filtering.
+// GetByBoostIDWithFilter retrieves executions for a boost with optional status filter and total count.
+// Issue #38: Boosts API Endpoints - Execution history with filtering.
 func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error) {
 	// Build count query
 	countQuery := `SELECT COUNT(*) FROM boost_executions WHERE boost_id = $1`
@@ -210,12 +210,12 @@ func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, b
 }
 
 // GetTodayExecutionCount counts executions for a user today (since midnight UTC).
-// Joins with rules table to get user_id.
+// Joins with boosts table to get user_id.
 func (r *boostExecutionRepository) GetTodayExecutionCount(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM boost_executions re
-		JOIN rules r ON re.boost_id = r.id
+		JOIN boosts r ON re.boost_id = r.id
 		WHERE r.user_id = $1
 			AND re.started_at >= $2
 			AND re.status IN ('completed', 'running')

@@ -114,7 +114,7 @@ func TestRolloverHistoryRepository_Create_WithTargetCategory(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
+func TestRolloverHistoryRepository_Create_WithBoostInfo(t *testing.T) {
 	mock, repo := setupRolloverHistoryMockDB(t)
 	defer mock.Close()
 
@@ -124,9 +124,9 @@ func TestRolloverHistoryRepository_Create_WithRuleInfo(t *testing.T) {
 		uuid.New().String(),
 		uuid.New().String(),
 	)
-	ruleID := uuid.New().String()
+	boostID := uuid.New().String()
 	execID := uuid.New().String()
-	rollover.BoostID = &ruleID
+	rollover.BoostID = &boostID
 	rollover.BoostExecutionID = &execID
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO rollover_history`)).WithArgs(
@@ -168,7 +168,7 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 	now := time.Now()
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -180,8 +180,8 @@ func TestRolloverHistoryRepository_GetByID(t *testing.T) {
 			rolloverID,
 			userID,
 			budgetID,
-			nil, // rule_id
-			nil, // rule_execution_id
+			nil, // boost_id
+			nil, // boost_execution_id
 			sourceCategoryID,
 			nil, // target_budget_category_id
 			100.00,
@@ -240,7 +240,7 @@ func TestRolloverHistoryRepository_GetByUserID(t *testing.T) {
 	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -297,7 +297,7 @@ func TestRolloverHistoryRepository_GetByUserID_Empty(t *testing.T) {
 	userID := uuid.New().String()
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -329,7 +329,7 @@ func TestRolloverHistoryRepository_GetByBudgetID(t *testing.T) {
 	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -376,7 +376,7 @@ func TestRolloverHistoryRepository_GetPendingByUserID(t *testing.T) {
 	now := time.Now()
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -485,7 +485,7 @@ func TestRolloverHistoryRepository_GetByBudgetAndPeriod(t *testing.T) {
 	now := time.Now()
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
@@ -535,7 +535,7 @@ func TestRolloverHistoryRepository_GetBySourceCategory(t *testing.T) {
 	pastMonth := now.AddDate(0, -1, 0)
 
 	columns := []string{
-		"id", "user_id", "budget_id", "rule_id", "rule_execution_id",
+		"id", "user_id", "budget_id", "boost_id", "boost_execution_id",
 		"source_budget_category_id", "target_budget_category_id",
 		"amount", "rollover_type", "budget_period_start", "budget_period_end",
 		"status", "applied_at", "created_at",
