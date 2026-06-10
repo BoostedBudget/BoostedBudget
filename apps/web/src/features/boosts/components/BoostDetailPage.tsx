@@ -7,7 +7,7 @@ import { BOOST_TYPE_LABELS } from '../boostConstants'
 import { BoostExecutionHistory } from './BoostExecutionHistory'
 import type { BoostType } from '../types'
 
-export function RuleDetailPage() {
+export function BoostDetailPage() {
   const { id } = useParams<{ id: string }>()
 
   const { data: rule, isLoading } = useGetBoostByID(id ?? '')

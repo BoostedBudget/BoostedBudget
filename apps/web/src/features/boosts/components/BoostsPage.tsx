@@ -18,7 +18,7 @@ import { SavingsSummaryHeader } from './SavingsSummaryHeader'
 import { ActiveRecommendationsTab } from './ActiveRecommendationsTab'
 import { AwaitingMatchTab } from './AwaitingMatchTab'
 import { HistoryTab } from './HistoryTab'
-import { RulesTab } from './RulesTab'
+import { BoostsTab as BoostsTabPanel } from './BoostsTab'
 
 function getInitialTab(): BoostsTab {
   try {
@@ -141,7 +141,7 @@ export function BoostsPage() {
         </TabsContent>
 
         <TabsContent value="boosts">
-          <RulesTab />
+          <BoostsTabPanel />
         </TabsContent>
       </Tabs>
     </div>

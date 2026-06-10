@@ -1,9 +1,9 @@
 /**
- * RulesPage Component Tests
+ * BoostsManagePage Component Tests
  * Issue #39: Rule Builder UI
  * Issue #575: Migrated to bun:test with centralized API mocks
  *
- * Tests for the main rules list page.
+ * Tests for the main boosts list page.
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test'
@@ -101,7 +101,7 @@ function renderWithProviders(ui: React.ReactElement, { initialUrl = '/boosts' } 
   )
 }
 
-describe('RulesPage', () => {
+describe('BoostsManagePage', () => {
   beforeEach(() => {
     // Clear all mock call history
     mockUseGetBoosts.mockClear()
@@ -114,7 +114,7 @@ describe('RulesPage', () => {
     mockTrackEvent.mockClear()
     localStorage.clear()
 
-    // Configure automation rules mock
+    // Configure boosts mock
     mockUseGetBoosts.mockReturnValue({
       data: mockBoosts,
       isLoading: false,
@@ -675,7 +675,7 @@ describe('RulesPage', () => {
       })
     })
 
-    it('fires boosts_rules_filter_changed when segment is changed', async () => {
+    it('fires boosts_filter_changed when segment is changed', async () => {
       renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       await waitFor(() => {
@@ -686,13 +686,13 @@ describe('RulesPage', () => {
 
       await waitFor(() => {
         expect(mockTrackEvent).toHaveBeenCalledWith(
-          'boosts_rules_filter_changed',
+          'boosts_filter_changed',
           expect.objectContaining({ filter: 'all' })
         )
       })
     })
 
-    it('fires boosts_rules_filter_changed with filter:transfer_savings when switching back', async () => {
+    it('fires boosts_filter_changed with filter:transfer_savings when switching back', async () => {
       renderWithProviders(<BoostsManagePage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
 
       // First switch to "All rules"
@@ -705,7 +705,7 @@ describe('RulesPage', () => {
 
       await waitFor(() => {
         expect(mockTrackEvent).toHaveBeenCalledWith(
-          'boosts_rules_filter_changed',
+          'boosts_filter_changed',
           expect.objectContaining({ filter: 'transfer_savings' })
         )
       })
@@ -732,7 +732,7 @@ describe('RulesPage', () => {
       expect(screen.getByRole('button', { name: /all boosts/i })).toBeInTheDocument()
     })
 
-    it('clicking All rules in filtered-empty state fires boosts_rules_filter_changed and clears rule_type', async () => {
+    it('clicking All rules in filtered-empty state fires boosts_filter_changed and clears rule_type', async () => {
       mockUseGetBoosts.mockReturnValue({
         data: [],
         isLoading: false,
@@ -751,7 +751,7 @@ describe('RulesPage', () => {
         const lastCallParams = mockUseGetBoosts.mock.calls.at(-1)?.[0]
         expect(lastCallParams).toBeUndefined()
         expect(mockTrackEvent).toHaveBeenCalledWith(
-          'boosts_rules_filter_changed',
+          'boosts_filter_changed',
           expect.objectContaining({ filter: 'all' })
         )
       })

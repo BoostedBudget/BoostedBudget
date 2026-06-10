@@ -2,7 +2,7 @@
  * BoostBuilder Component
  * Issue #1283: Rename rules → boosts (Phase 5)
  *
- * Main form for creating and editing boosts (automation rules).
+ * Main form for creating and editing boosts.
  */
 
 import { useState, useCallback, useEffect } from 'react'

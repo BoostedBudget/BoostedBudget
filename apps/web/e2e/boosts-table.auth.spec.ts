@@ -1,5 +1,5 @@
 /**
- * Boosts/Rules Page — Table E2E Smoke Tests
+ * Boosts Page — Table E2E Smoke Tests
  * Issue #1110: Verify RuleTable renders correctly after DataTable migration.
  * Issue #1134: Sort wiring — full asc/desc/unsorted cycle verified end-to-end.
  * Issue #1267: /rules rebranded to /boosts; boosts management is the "Boosts" tab.
@@ -106,7 +106,7 @@ async function mockRulesDependencies(page: Page) {
 // Protected Route
 // ---------------------------------------------------------------------------
 
-test.describe('Rules Page — Protected Route', () => {
+test.describe('Boosts Page — Protected Route', () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 
   test('redirects unauthenticated users away from /boosts', async ({ page }) => {
@@ -119,7 +119,7 @@ test.describe('Rules Page — Protected Route', () => {
 // Core Rendering
 // ---------------------------------------------------------------------------
 
-test.describe('Rules Page — Core Rendering', () => {
+test.describe('Boosts Page — Core Rendering', () => {
   test.beforeEach(async ({ page }) => {
     await acceptCookieConsent(page)
   })
@@ -143,7 +143,7 @@ test.describe('Rules Page — Core Rendering', () => {
 // Table View
 // ---------------------------------------------------------------------------
 
-test.describe('Rules Page — Table View', () => {
+test.describe('Boosts Page — Table View', () => {
   test.beforeEach(async ({ page }) => {
     await acceptCookieConsent(page)
   })

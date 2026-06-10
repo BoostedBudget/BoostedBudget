@@ -175,7 +175,7 @@ export function BoostsManagePage({ showTypeSegment = false, ruleTypeFilter }: Bo
   const handleSegmentChange = useCallback(
     (filter: readonly string[] | undefined) => {
       setActiveRuleTypeFilter(filter ? [...filter] : undefined)
-      trackEvent(ANALYTICS_EVENTS.BOOSTS_RULES_FILTER_CHANGED, {
+      trackEvent(ANALYTICS_EVENTS.BOOSTS_FILTER_CHANGED, {
         filter: filter ? 'transfer_savings' : 'all',
       })
     },

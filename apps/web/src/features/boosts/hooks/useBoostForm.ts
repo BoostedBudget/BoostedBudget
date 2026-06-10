@@ -69,14 +69,14 @@ function createInitialState(initialValues?: Partial<BoostFormState>): BoostFormS
 }
 
 /**
- * Hook for managing automation rule form state
+ * Hook for managing boost form state
  *
  * @param options - Optional initial values for the form
  * @returns Form state, errors, and handlers
  *
  * @example
  * ```tsx
- * function RuleBuilder() {
+ * function BoostBuilder() {
  *   const {
  *     formState,
  *     errors,
@@ -84,13 +84,13 @@ function createInitialState(initialValues?: Partial<BoostFormState>): BoostFormS
  *     setRuleType,
  *     validate,
  *     buildApiRequest,
- *   } = useRuleForm()
+ *   } = useBoostForm()
  *
  *   const handleSubmit = async () => {
  *     if (!validate()) return
  *     const request = buildApiRequest()
  *     if (request) {
- *       await createRule(request)
+ *       await createBoost(request)
  *     }
  *   }
  *

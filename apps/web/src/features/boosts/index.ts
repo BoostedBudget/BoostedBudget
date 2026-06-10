@@ -1,7 +1,7 @@
 // Issue #1267: Boosts feature public API
 // Issue #1283: Rename rules → boosts (Phase 5) — all components migrated here
 export { BoostsPage } from './components/BoostsPage'
-export { RuleDetailPage } from './components/RuleDetailPage'
+export { BoostDetailPage } from './components/BoostDetailPage'
 export { BoostBuilder } from './components/BoostBuilder'
 export { BoostsManagePage } from './components/BoostsManagePage'
 export { BoostCard } from './components/BoostCard'

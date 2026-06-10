@@ -1,6 +1,6 @@
 /**
- * RuleDetailPage Tests
- * Issue #1267 Gap W5: /boosts/:id — rule detail + recent execution history
+ * BoostDetailPage Tests
+ * Issue #1267 Gap W5: /boosts/:id — boost detail + recent execution history
  *
  * TDD RED: Tests written before implementation.
  */
@@ -11,7 +11,7 @@ import React from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { Boost } from '@boostedbudget/api-client/models'
 import { mockUseGetBoostByID } from '@/test/mocks/boosts-api'
-import { RuleDetailPage } from './RuleDetailPage'
+import { BoostDetailPage } from './BoostDetailPage'
 
 const mockBoost: Boost = {
   id: 'rule-detail-1',
@@ -35,12 +35,12 @@ const renderDetail = (id = 'rule-detail-1') =>
   render(
     <MemoryRouter initialEntries={[`/boosts/${id}`]}>
       <Routes>
-        <Route path="/boosts/:id" element={<RuleDetailPage />} />
+        <Route path="/boosts/:id" element={<BoostDetailPage />} />
       </Routes>
     </MemoryRouter>
   )
 
-describe('RuleDetailPage', () => {
+describe('BoostDetailPage', () => {
   beforeEach(() => {
     mockUseGetBoostByID.mockReturnValue({
       data: mockBoost,

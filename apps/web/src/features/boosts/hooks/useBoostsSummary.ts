@@ -1,7 +1,7 @@
 // Issue #1267: Boosts page — savings impact + active rules summary
 import { useGetSavingsImpactMe } from '@boostedbudget/api-client/endpoints/savings-impact/savings-impact'
 import { useGetBoosts } from '@boostedbudget/api-client/endpoints/boosts/boosts'
-import { TRANSFER_GENERATING_RULE_TYPES } from '../constants'
+import { TRANSFER_GENERATING_BOOST_TYPES } from '../constants'
 
 export interface UseBoostsSummaryResult {
   totalMoved: number | null
@@ -28,7 +28,7 @@ export function useBoostsSummary(): UseBoostsSummaryResult {
     momChange,
     completedCount: data?.completed_count ?? null,
     activeRulesCount: boosts.filter(
-      (b) => b.enabled && TRANSFER_GENERATING_RULE_TYPES.includes(b.boost_type as (typeof TRANSFER_GENERATING_RULE_TYPES)[number])
+      (b) => b.enabled && TRANSFER_GENERATING_BOOST_TYPES.includes(b.boost_type as (typeof TRANSFER_GENERATING_BOOST_TYPES)[number])
     ).length,
     isLoading: impactQuery.isLoading || boostsQuery.isLoading,
     error: (impactQuery.error ?? boostsQuery.error) as Error | null,

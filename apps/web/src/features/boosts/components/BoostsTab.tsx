@@ -5,14 +5,14 @@
 // transfer-generating boost types (transfer_suggestion, savings_goal) while
 // still letting the user browse "All boosts" without orphaning other types.
 import { BoostsManagePage } from './BoostsManagePage'
-import { TRANSFER_GENERATING_RULE_TYPES } from '../constants'
+import { TRANSFER_GENERATING_BOOST_TYPES } from '../constants'
 
-export function RulesTab() {
+export function BoostsTab() {
   return (
     <div className="[&_h1]:hidden">
       <BoostsManagePage
         showTypeSegment
-        ruleTypeFilter={TRANSFER_GENERATING_RULE_TYPES}
+        ruleTypeFilter={TRANSFER_GENERATING_BOOST_TYPES}
       />
     </div>
   )

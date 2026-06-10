@@ -1,11 +1,11 @@
 /**
- * RulesTab Tests
+ * BoostsTab Tests
  * Issue #1267: Boosts page — thin wrapper rendering BoostsManagePage with hidden h1
  *
  * TDD RED: Tests written before implementation.
  *
  * Note: bun:test mock.module() is process-global (no cleanup between files).
- * BoostsPage.test.tsx mocks './RulesTab' which may affect this test when run in the same
+ * BoostsPage.test.tsx mocks './BoostsTab' which may affect this test when run in the same
  * test run. This test is designed to pass in both scenarios.
  */
 
@@ -14,7 +14,7 @@ import { render } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { RulesTab } from './RulesTab'
+import { BoostsTab } from './BoostsTab'
 
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -27,16 +27,16 @@ function createWrapper() {
   }
 }
 
-describe('RulesTab', () => {
+describe('BoostsTab', () => {
   it('renders the BoostsManagePage component', () => {
-    const { container } = render(<RulesTab />, { wrapper: createWrapper() })
-    // RulesTab renders BoostsManagePage wrapped in [&_h1]:hidden div.
+    const { container } = render(<BoostsTab />, { wrapper: createWrapper() })
+    // BoostsTab renders BoostsManagePage wrapped in [&_h1]:hidden div.
     // The wrapper div must always exist.
     expect(container.firstChild).toBeTruthy()
   })
 
   it('suppresses the h1 to avoid duplicate heading', () => {
-    const { container } = render(<RulesTab />, { wrapper: createWrapper() })
+    const { container } = render(<BoostsTab />, { wrapper: createWrapper() })
     // The h1 from BoostsManagePage should be hidden via CSS ([&_h1]:hidden)
     const h1 = container.querySelector('h1')
     if (h1) {
