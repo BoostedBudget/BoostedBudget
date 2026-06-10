@@ -145,7 +145,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                   <div className="flex flex-col items-center p-4 bg-muted rounded-lg text-center">
                     <Zap className="text-primary mb-2" size={20} />
                     <span className="text-xl font-semibold text-foreground tabular-nums">
-                      {formatNumber(user.automation_rules_count)}
+                      {formatNumber(user.boosts_count)}
                     </span>
                     <span className="text-xs text-muted-foreground mt-1">Automation Rules</span>
                   </div>

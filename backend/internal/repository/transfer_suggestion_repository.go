@@ -1,5 +1,5 @@
 // Package repository provides data access for transfer suggestions.
-// Issue #35: Rules Engine Core - transfer suggestions (NO actual money movement).
+// Issue #35: Boosts Engine Core - transfer suggestions (NO actual money movement).
 package repository
 
 import (
@@ -45,8 +45,8 @@ type TransferSuggestionRepository interface {
 	// CountPendingByUserID counts pending suggestions for a user.
 	CountPendingByUserID(ctx context.Context, userID string) (int, error)
 
-	// GetByRuleID retrieves suggestions created by a specific rule.
-	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error)
+	// GetByBoostID retrieves suggestions created by a specific boost.
+	GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error)
 
 	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
 	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
@@ -145,7 +145,7 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 
 	query := `
 		INSERT INTO transfer_suggestions (
-			id, user_id, rule_id, rule_execution_id,
+			id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id,
 			from_user_account_id, to_user_account_id,
 			amount, currency_code,
@@ -157,8 +157,8 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 	_, err := r.db.Exec(ctx, query,
 		suggestion.ID,
 		suggestion.UserID,
-		suggestion.RuleID,
-		suggestion.RuleExecutionID,
+		suggestion.BoostID,
+		suggestion.BoostExecutionID,
 		suggestion.FromAccountID,
 		suggestion.ToAccountID,
 		suggestion.FromUserAccountID,
@@ -181,7 +181,7 @@ func (r *transferSuggestionRepository) Create(ctx context.Context, suggestion *d
 // GetByID retrieves a suggestion by its ID.
 func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (*domain.TransferSuggestion, error) {
 	query := `
-		SELECT id, user_id, rule_id, rule_execution_id,
+		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
@@ -197,7 +197,7 @@ func (r *transferSuggestionRepository) GetByID(ctx context.Context, id string) (
 // GetByUserID retrieves suggestions for a user with optional status filter and pagination.
 func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID string, status *domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	const selectClause = `
-		SELECT id, user_id, rule_id, rule_execution_id,
+		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
@@ -231,7 +231,7 @@ func (r *transferSuggestionRepository) GetByUserID(ctx context.Context, userID s
 // GetPendingByUserID retrieves all pending suggestions for a user.
 func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
 	query := `
-		SELECT id, user_id, rule_id, rule_execution_id,
+		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
@@ -371,22 +371,22 @@ func (r *transferSuggestionRepository) CountPendingByUserID(ctx context.Context,
 	return count, nil
 }
 
-// GetByRuleID retrieves suggestions created by a specific rule.
-func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
+// GetByBoostID retrieves suggestions created by a specific boost.
+func (r *transferSuggestionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	query := `
-		SELECT id, user_id, rule_id, rule_execution_id,
+		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
 			user_action_at, user_notes, created_at, updated_at,
 			completed_at, matched_transaction_id, actual_amount, completion_source
 		FROM transfer_suggestions
-		WHERE rule_id = $1
+		WHERE boost_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
 	`
 
-	return r.querySuggestions(ctx, query, ruleID, limit, offset)
+	return r.querySuggestions(ctx, query, boostID, limit, offset)
 }
 
 // Complete marks a suggestion as completed. Race-safe: AND status IN ('pending','accepted').
@@ -601,7 +601,7 @@ func (r *transferSuggestionRepository) ClearStaleReservations(ctx context.Contex
 // ordered by creation date ascending.
 func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error) {
 	query := `
-		SELECT id, user_id, rule_id, rule_execution_id,
+		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
 			amount, currency_code,
 			reason, source, status, expires_at,
@@ -622,14 +622,14 @@ func (r *transferSuggestionRepository) GetActiveByUserID(ctx context.Context, us
 // COUNT(*) OVER() so only a single DB round-trip is needed.
 // A nil or empty statuses slice falls back to pending-only (backward compat).
 //
-// Enriched fields (ToAccountName, FromAccountName, RuleName, MatchedTransactionAt) are
-// populated via LEFT JOINs to accounts, user_accounts, rules, and transactions.
+// Enriched fields (ToAccountName, FromAccountName, BoostName, MatchedTransactionAt) are
+// populated via LEFT JOINs to accounts, user_accounts, boosts, and transactions.
 func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error) {
 	// selectClause includes LEFT JOINs for enriched display fields and uses event-time ordering.
 	// resolveDestinationName resolution order: Plaid nickname > Plaid name > UA nickname > UA hint.
 	const selectClause = `
 		SELECT
-			ts.id, ts.user_id, ts.rule_id, ts.rule_execution_id,
+			ts.id, ts.user_id, ts.boost_id, ts.boost_execution_id,
 			ts.from_account_id, ts.to_account_id, ts.from_user_account_id, ts.to_user_account_id,
 			ts.amount, ts.currency_code,
 			ts.reason, ts.source, ts.status, ts.expires_at,
@@ -642,14 +642,14 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 			COALESCE(NULLIF(from_acc.nickname, ''), from_acc.name)  AS from_plaid_name,
 			NULLIF(from_ua.nickname, '')                             AS from_ua_nickname,
 			from_ua.account_name_hint                                AS from_ua_hint_enc,
-			r.name                                                   AS rule_name,
+			r.name                                                   AS boost_name,
 			txn.created_at                                           AS matched_transaction_at
 		FROM transfer_suggestions ts
 		LEFT JOIN accounts     to_acc   ON to_acc.id   = ts.to_account_id       AND to_acc.user_id   = ts.user_id
 		LEFT JOIN user_accounts to_ua   ON to_ua.id    = ts.to_user_account_id  AND to_ua.user_id    = ts.user_id
 		LEFT JOIN accounts     from_acc ON from_acc.id = ts.from_account_id     AND from_acc.user_id = ts.user_id
 		LEFT JOIN user_accounts from_ua ON from_ua.id  = ts.from_user_account_id AND from_ua.user_id = ts.user_id
-		LEFT JOIN rules        r        ON r.id         = ts.rule_id
+		LEFT JOIN boosts       r        ON r.id         = ts.boost_id
 		LEFT JOIN transactions txn      ON txn.id       = ts.matched_transaction_id
 	`
 
@@ -690,14 +690,14 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		s := &domain.TransferSuggestion{}
 		var toPlaidName, toUANickname, toUAHintEnc *string
 		var fromPlaidName, fromUANickname, fromUAHintEnc *string
-		var ruleName *string
+		var boostName *string
 		var matchedTxnAt *time.Time
 
 		if err := rows.Scan(
 			&s.ID,
 			&s.UserID,
-			&s.RuleID,
-			&s.RuleExecutionID,
+			&s.BoostID,
+			&s.BoostExecutionID,
 			&s.FromAccountID,
 			&s.ToAccountID,
 			&s.FromUserAccountID,
@@ -723,7 +723,7 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 			&fromPlaidName,
 			&fromUANickname,
 			&fromUAHintEnc,
-			&ruleName,
+			&boostName,
 			&matchedTxnAt,
 		); err != nil {
 			return nil, 0, err
@@ -732,7 +732,7 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		// Resolve enriched display names using the same resolution order as savings_impact_repository.
 		s.ToAccountName = resolveDestinationName(toPlaidName, toUANickname, toUAHintEnc, r.enc)
 		s.FromAccountName = resolveDestinationName(fromPlaidName, fromUANickname, fromUAHintEnc, r.enc)
-		s.RuleName = ruleName
+		s.BoostName = boostName
 		s.MatchedTransactionAt = matchedTxnAt
 
 		suggestions = append(suggestions, s)
@@ -751,8 +751,8 @@ func (r *transferSuggestionRepository) scanSuggestion(row pgx.Row) (*domain.Tran
 	err := row.Scan(
 		&suggestion.ID,
 		&suggestion.UserID,
-		&suggestion.RuleID,
-		&suggestion.RuleExecutionID,
+		&suggestion.BoostID,
+		&suggestion.BoostExecutionID,
 		&suggestion.FromAccountID,
 		&suggestion.ToAccountID,
 		&suggestion.FromUserAccountID,
@@ -798,8 +798,8 @@ func (r *transferSuggestionRepository) querySuggestions(ctx context.Context, que
 		err := rows.Scan(
 			&suggestion.ID,
 			&suggestion.UserID,
-			&suggestion.RuleID,
-			&suggestion.RuleExecutionID,
+			&suggestion.BoostID,
+			&suggestion.BoostExecutionID,
 			&suggestion.FromAccountID,
 			&suggestion.ToAccountID,
 			&suggestion.FromUserAccountID,

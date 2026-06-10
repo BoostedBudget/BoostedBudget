@@ -130,7 +130,7 @@ const FIXTURE_BUDGETS = [
 
 const FIXTURE_RULES = [
   {
-    id: 'rule-1',
+    id: 'boost-1',
     user_id: 'user-123',
     name: 'Tag Coffee',
     description: 'Tag coffee purchases',
@@ -147,7 +147,7 @@ const FIXTURE_RULES = [
     updated_at: '2026-05-01T10:00:00Z',
   },
   {
-    id: 'rule-2',
+    id: 'boost-2',
     user_id: 'user-123',
     name: 'Categorize Groceries',
     description: 'Set grocery category',
@@ -264,7 +264,7 @@ async function mockBudgetPage(page: Page) {
 
 async function mockRulesPage(page: Page) {
   await mockAuthDependencies(page)
-  await page.route('**/api/v1/rules*', (route) => {
+  await page.route('**/api/v1/boosts*', (route) => {
     if (route.request().method() === 'GET') {
       route.fulfill({
         status: 200,
@@ -508,7 +508,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('navigating with ?sort=priority:asc pre-applies aria-sort after switching to table view', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/boosts?tab=rules&sort=priority%3Aasc')
+    await page.goto('/boosts?tab=boosts&sort=priority%3Aasc')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -517,7 +517,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('clicking a sortable header adds sort to URL', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/boosts?tab=rules')
+    await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -528,7 +528,7 @@ test.describe('URL Sort — Rules', () => {
 
   test('sort persists after reload', async ({ page }) => {
     await mockRulesPage(page)
-    await page.goto('/boosts?tab=rules')
+    await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })
@@ -541,7 +541,7 @@ test.describe('URL Sort — Rules', () => {
   test('sort changes use replace semantics — back-button leaves the page', async ({ page }) => {
     await mockRulesPage(page)
     await page.goto('/')
-    await page.goto('/boosts?tab=rules')
+    await page.goto('/boosts?tab=boosts')
     await page.waitForLoadState('networkidle')
     await switchToTableView(page)
     const priorityHeader = page.getByRole('columnheader', { name: /priority/i })

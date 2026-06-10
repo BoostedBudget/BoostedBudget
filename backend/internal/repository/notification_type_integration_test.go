@@ -45,7 +45,7 @@ func TestTransferSuggestionMatchNotificationType_Integration(t *testing.T) {
 	suggID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'pending', NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'pending', NOW(), NOW())
 	`, suggID, userID)
 	require.NoError(t, err, "seed transfer_suggestion")
 
@@ -109,7 +109,7 @@ func TestGetOpenByTransferSuggestionID_TypeScoping_Integration(t *testing.T) {
 	suggID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'pending', NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'pending', NOW(), NOW())
 	`, suggID, userID)
 	require.NoError(t, err, "seed transfer_suggestion")
 
@@ -199,7 +199,7 @@ func TestMigration000094Down_DeletesMatchRowsAndRestoresConstraint_Integration(t
 	suggID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 75.00, 'rule', 'pending', NOW(), NOW())
+		VALUES ($1, $2, 75.00, 'boost', 'pending', NOW(), NOW())
 	`, suggID, userID)
 	require.NoError(t, err, "seed transfer_suggestion")
 

@@ -141,11 +141,6 @@ export default defineConfig({
               priority: 5,
             },
             {
-              name: 'rules',
-              test: /\/apps\/web\/src\/features\/rules\//,
-              priority: 5,
-            },
-            {
               name: 'dashboard',
               test: /\/apps\/web\/src\/features\/dashboard\//,
               priority: 5,

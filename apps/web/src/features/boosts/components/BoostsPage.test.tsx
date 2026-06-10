@@ -12,10 +12,7 @@ import { screen, fireEvent, act } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
-// Mock API client boundary
-import '@/test/mocks/transfer-suggestions-api'
-import '@/test/mocks/savings-impact-api'
-import '@/test/mocks/automation-rules-api'
+// Mock API client boundary (all preloaded via bunfig.toml)
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import {
   mockUseGetTransferSuggestions,
@@ -25,10 +22,10 @@ import {
   mockUseDeclineTransferSuggestionMatch,
 } from '@/test/mocks/transfer-suggestions-api'
 import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
-import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
+import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 
-mock.module('@/features/rules/components/RulesPage', () => ({
-  RulesPage: () => <div data-testid="rules-page-mock">Rules Page</div>,
+mock.module('./BoostsTab', () => ({
+  BoostsTab: () => <div data-testid="boosts-page-mock">Boosts Page</div>,
 }))
 
 mock.module('@/shared/hooks/useTrackEvent', () => ({
@@ -63,8 +60,8 @@ describe('BoostsPage', () => {
     mockUseGetSavingsImpactMe.mockClear()
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
 
-    mockUseGetAutomationRules.mockClear()
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetBoosts.mockClear()
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
   })
 
   it('renders the "Boosts" heading', () => {
@@ -77,7 +74,7 @@ describe('BoostsPage', () => {
     expect(screen.getByRole('tab', { name: /active recommendations/i })).toBeTruthy()
     expect(screen.getByRole('tab', { name: /awaiting match/i })).toBeTruthy()
     expect(screen.getByRole('tab', { name: /history/i })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: /rules/i })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /boosts/i })).toBeTruthy()
   })
 
   it('defaults to Active Recommendations tab', () => {
@@ -127,13 +124,13 @@ describe('BoostsPage', () => {
     expect(historyTab.getAttribute('data-state')).toBe('active')
   })
 
-  it('switches to Rules tab when focused', async () => {
+  it('switches to Boosts tab when focused', async () => {
     renderBoostsPage()
     await act(async () => {
-      fireEvent.focus(screen.getByRole('tab', { name: /rules/i }))
+      fireEvent.focus(screen.getByRole('tab', { name: /boosts/i }))
     })
-    const rulesTab = screen.getByRole('tab', { name: /rules/i })
-    expect(rulesTab.getAttribute('data-state')).toBe('active')
+    const boostsTab = screen.getByRole('tab', { name: /boosts/i })
+    expect(boostsTab.getAttribute('data-state')).toBe('active')
   })
 
   it('renders SavingsSummaryHeader when not loading', () => {

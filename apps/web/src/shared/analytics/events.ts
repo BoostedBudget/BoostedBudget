@@ -36,10 +36,10 @@ export const ANALYTICS_EVENTS = {
   BUDGET_CATEGORY_UPDATED: 'budget_category_updated',
   BUDGET_CATEGORY_DELETED: 'budget_category_deleted',
 
-  // Rules
-  RULE_CREATED: 'rule_created',
-  RULE_EDITED: 'rule_edited',
-  RULE_DELETED: 'rule_deleted',
+  // Boosts (formerly Rules)
+  BOOST_CREATED: 'boost_created',
+  BOOST_EDITED: 'boost_edited',
+  BOOST_DELETED: 'boost_deleted',
 
   // Auto-categorization
   AUTO_CATEGORIZATION_VIEWED: 'auto_categorization_viewed',
@@ -135,7 +135,7 @@ export const ANALYTICS_EVENTS = {
   // Boosts (#1267)
   BOOSTS_PAGE_VIEWED: 'boosts_page_viewed',
   BOOSTS_TAB_CHANGED: 'boosts_tab_changed',
-  BOOSTS_RULES_FILTER_CHANGED: 'boosts_rules_filter_changed',
+  BOOSTS_FILTER_CHANGED: 'boosts_filter_changed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',

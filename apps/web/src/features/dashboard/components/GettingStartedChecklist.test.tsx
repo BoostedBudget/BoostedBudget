@@ -33,8 +33,8 @@ const MOCK_STEPS: GettingStartedStep[] = [
     href: '/budgets',
   },
   {
-    id: 'create-automation-rule',
-    label: 'Create an automation rule',
+    id: 'create-boost',
+    label: 'Create a boost',
     description: 'Automate budget alerts',
     complete: false,
     href: '/boosts',
@@ -86,7 +86,7 @@ describe('GettingStartedChecklist', () => {
       expect(screen.getByText('Connect your first bank')).toBeInTheDocument()
       expect(screen.getByText('Set up a budget')).toBeInTheDocument()
       expect(screen.getByText('Create a savings goal')).toBeInTheDocument()
-      expect(screen.getByText('Create an automation rule')).toBeInTheDocument()
+      expect(screen.getByText('Create a boost')).toBeInTheDocument()
       expect(screen.getByText('Set up auto-categorization')).toBeInTheDocument()
     })
 
@@ -132,7 +132,7 @@ describe('GettingStartedChecklist', () => {
 
     it('renders incomplete steps with different routes correctly', () => {
       renderComponent()
-      const rulesLink = screen.getByRole('link', { name: /create an automation rule/i })
+      const rulesLink = screen.getByRole('link', { name: /create a boost/i })
       expect(rulesLink).toHaveAttribute('href', '/boosts')
 
       const autoCatLink = screen.getByRole('link', { name: /set up auto-categorization/i })
