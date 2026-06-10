@@ -4,8 +4,8 @@ export const HISTORY_PAGE_SIZE = 20
 
 // Boost types that generate transfer suggestions — scopes AC5 summary count and Boosts-tab default.
 // Mirrors domain.BoostTypeTransferSuggestion + domain.BoostTypeSavingsGoal on the backend.
-export const TRANSFER_GENERATING_RULE_TYPES = ['transfer_suggestion', 'savings_goal'] as const
-export type TransferGeneratingRuleType = (typeof TRANSFER_GENERATING_RULE_TYPES)[number]
+export const TRANSFER_GENERATING_BOOST_TYPES = ['transfer_suggestion', 'savings_goal'] as const
+export type TransferGeneratingBoostType = (typeof TRANSFER_GENERATING_BOOST_TYPES)[number]
 
 export const BOOSTS_TABS = ['active', 'awaiting', 'history', 'boosts'] as const
 export type BoostsTab = (typeof BOOSTS_TABS)[number]

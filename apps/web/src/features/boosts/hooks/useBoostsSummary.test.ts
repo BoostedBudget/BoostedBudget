@@ -142,7 +142,7 @@ describe('useBoostsSummary', () => {
     expect(result.current.error).toBe(err)
   })
 
-  it('surfaces error from the automation rules query when savings impact is fine', () => {
+  it('surfaces error from the boosts query when savings impact is fine', () => {
     const err = new Error('rules failed')
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
     mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: err, refetch: mock(() => {}) })

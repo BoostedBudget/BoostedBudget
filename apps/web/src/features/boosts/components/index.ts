@@ -37,5 +37,5 @@ export type { BoostExecutionHistoryProps } from './BoostExecutionHistory'
 
 // Existing boosts page components
 export { BoostsPage } from './BoostsPage'
-export { RulesTab } from './RulesTab'
-export { RuleDetailPage } from './RuleDetailPage'
+export { BoostsTab } from './BoostsTab'
+export { BoostDetailPage } from './BoostDetailPage'

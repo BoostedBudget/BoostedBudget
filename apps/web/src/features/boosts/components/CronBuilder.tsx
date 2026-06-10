@@ -98,7 +98,7 @@ function getCronDescription(cron: string): string {
 }
 
 /**
- * CronBuilder component for scheduling automation rules.
+ * CronBuilder component for scheduling boosts.
  *
  * @example
  * ```tsx
