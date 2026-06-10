@@ -1715,6 +1715,76 @@ func TestGetTransferSuggestions_CanConfirmMatch_SetBeforeMasking(t *testing.T) {
 	assert.NotNil(t, row2.MatchedTransactionID, "completed row must expose matched_transaction_id")
 }
 
+// TestGetTransferSuggestions_MatchState_SetBeforeMasking proves match_state is computed
+// before maskReservation clears matched_transaction_id, and that can_confirm_match is
+// unaffected (backwards compat). Cases:
+//   - accepted + reservation        → match_state "confirmable", matched_transaction_id masked
+//   - accepted + no reservation     → match_state "unmatched"
+//   - completed + reservation       → match_state "completed", matched_transaction_id exposed
+//   - pending                       → match_state absent (nil)
+func TestGetTransferSuggestions_MatchState_SetBeforeMasking(t *testing.T) {
+	userID := "user-ms"
+	txnID := "txn-ms-1"
+
+	acceptedWithReservation := newTestSuggestionItem("s-ms-acc-res", userID)
+	acceptedWithReservation.Status = domain.SuggestionStatusAccepted
+	acceptedWithReservation.MatchedTransactionID = &txnID
+
+	acceptedNoReservation := newTestSuggestionItem("s-ms-acc-nores", userID)
+	acceptedNoReservation.Status = domain.SuggestionStatusAccepted
+	acceptedNoReservation.MatchedTransactionID = nil
+
+	completed := newTestSuggestionItem("s-ms-completed", userID)
+	completed.Status = domain.SuggestionStatusCompleted
+	completed.MatchedTransactionID = &txnID
+
+	pending := newTestSuggestionItem("s-ms-pending", userID)
+	pending.Status = domain.SuggestionStatusPending
+
+	svc := &mockTransferSuggestionService{
+		getSuggestionsByStatResult: []*domain.TransferSuggestion{
+			acceptedWithReservation, acceptedNoReservation, completed, pending,
+		},
+		getSuggestionsByStatTotal: 4,
+	}
+	handler := NewTransferSuggestionHandler(svc)
+
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		Status:             "accepted,completed,pending",
+		Limit:              20,
+	}
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, output.Body.Items, 4)
+
+	// Row 0: accepted + reservation → confirmable, and matched_transaction_id is masked
+	row0 := output.Body.Items[0]
+	require.NotNil(t, row0.MatchState, "accepted+reservation must have match_state set")
+	assert.Equal(t, "confirmable", *row0.MatchState, "accepted+reservation → match_state 'confirmable'")
+	assert.Nil(t, row0.MatchedTransactionID, "matched_transaction_id must be masked after match_state is set")
+	// backwards compat: can_confirm_match unchanged
+	require.NotNil(t, row0.CanConfirmMatch)
+	assert.True(t, *row0.CanConfirmMatch, "backwards-compat: accepted+reservation → can_confirm_match true")
+
+	// Row 1: accepted + no reservation → unmatched
+	row1 := output.Body.Items[1]
+	require.NotNil(t, row1.MatchState, "accepted+no-reservation must have match_state set")
+	assert.Equal(t, "unmatched", *row1.MatchState, "accepted+no-reservation → match_state 'unmatched'")
+	require.NotNil(t, row1.CanConfirmMatch)
+	assert.False(t, *row1.CanConfirmMatch, "backwards-compat: accepted+no-reservation → can_confirm_match false")
+
+	// Row 2: completed → "completed", matched_transaction_id exposed
+	row2 := output.Body.Items[2]
+	require.NotNil(t, row2.MatchState, "completed must have match_state set")
+	assert.Equal(t, "completed", *row2.MatchState, "completed → match_state 'completed'")
+	assert.NotNil(t, row2.MatchedTransactionID, "completed row must expose matched_transaction_id")
+
+	// Row 3: pending → match_state absent
+	row3 := output.Body.Items[3]
+	assert.Nil(t, row3.MatchState, "pending → match_state must be absent (nil)")
+}
+
 // TestCancelSuggestion_Success proves the handler delegates to service and returns 200.
 func TestCancelSuggestion_Success(t *testing.T) {
 	userID := "user-cancel"
