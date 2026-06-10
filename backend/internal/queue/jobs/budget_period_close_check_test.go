@@ -170,9 +170,9 @@ func TestBudgetPeriodCloseCheck_FiresEventOnPeriodClose(t *testing.T) {
 		Return(map[string][]domain.BudgetCategory{"budget-1": budget.Categories}, nil)
 
 	// Capture the enqueued job to inspect EventData keys.
-	var capturedArgs RuleEvaluationArgs
+	var capturedArgs BoostEvaluationArgs
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		ea, ok := job.(RuleEvaluationArgs)
+		ea, ok := job.(BoostEvaluationArgs)
 		if ok {
 			capturedArgs = ea
 		}
@@ -776,7 +776,7 @@ func TestBudgetPeriodCloseCheckWorker_NoDuplicateEnqueueOnMarkerRace(t *testing.
 
 	// Enqueue must be called exactly once (only the winner enqueues).
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		evalArgs, ok := job.(RuleEvaluationArgs)
+		evalArgs, ok := job.(BoostEvaluationArgs)
 		return ok && evalArgs.UserID == "user-race" && evalArgs.EventType == domain.EventBudgetPeriodEnd
 	}), mock.Anything).Return(&queue.JobResult{ID: 42}, nil).Once()
 
@@ -935,7 +935,7 @@ func TestWorkAt_EmptyCategories_StillEmits(t *testing.T) {
 	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-empty"}).
 		Return(map[string][]domain.BudgetCategory{}, nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		ea, ok := job.(RuleEvaluationArgs)
+		ea, ok := job.(BoostEvaluationArgs)
 		return ok && ea.UserID == "user-empty" && ea.EventType == domain.EventBudgetPeriodEnd
 	}), mock.Anything).Return(&queue.JobResult{ID: 1}, nil).Once()
 	expirer.On("ExpirePending", ctx).Return(int64(0), nil)
@@ -1098,7 +1098,7 @@ func TestWorkAt_MarkerStableAfterTimezoneChange(t *testing.T) {
 	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-tz-stable"}).
 		Return(map[string][]domain.BudgetCategory{}, nil).Once()
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		ea, ok := job.(RuleEvaluationArgs)
+		ea, ok := job.(BoostEvaluationArgs)
 		return ok && ea.UserID == "user-tz-stable"
 	}), mock.Anything).Return(&queue.JobResult{ID: 10}, nil).Once()
 
@@ -1163,7 +1163,7 @@ func TestWorkAt_FallsBackToUTCWhenTimezoneNil(t *testing.T) {
 	budgetRepo.On("GetCategoriesByBudgetIDs", ctx, []string{"budget-utcfb"}).
 		Return(map[string][]domain.BudgetCategory{}, nil)
 	mockQueue.On("Enqueue", ctx, mock.MatchedBy(func(job queue.Job) bool {
-		evalArgs, ok := job.(RuleEvaluationArgs)
+		evalArgs, ok := job.(BoostEvaluationArgs)
 		return ok && evalArgs.UserID == "user-utcfb" && evalArgs.EventType == domain.EventBudgetPeriodEnd
 	}), mock.Anything).Return(&queue.JobResult{ID: 99}, nil)
 

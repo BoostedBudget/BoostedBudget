@@ -730,8 +730,8 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 
 	now := time.Now()
 
-	// Step 1: Delete all budget rules
-	_, err = tx.Exec(ctx, `DELETE FROM rules WHERE user_id = $1`, userID)
+	// Step 1: Delete all boosts
+	_, err = tx.Exec(ctx, `DELETE FROM boosts WHERE user_id = $1`, userID)
 	if err != nil {
 		return err
 	}

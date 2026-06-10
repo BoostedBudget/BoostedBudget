@@ -1,5 +1,5 @@
-// Package workers provides background job processing for automation rules.
-// Issue #37: Rule Scheduler - CronTriggerProvider implementation.
+// Package workers provides background job processing for automation boosts.
+// Issue #37: Boost Scheduler - CronTriggerProvider implementation.
 package workers
 
 import (
@@ -14,42 +14,42 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// ErrManualTriggerNotSupported is returned when TriggerRule is called on a provider
+// ErrManualTriggerNotSupported is returned when TriggerBoost is called on a provider
 // that doesn't support manual triggering.
 var ErrManualTriggerNotSupported = errors.New("manual triggering is not supported by this provider")
 
-// RuleExecutorInterface defines the interface for executing automation rules.
+// BoostExecutorInterface defines the interface for executing boosts.
 // This abstraction allows the CronTriggerProvider to work with any executor implementation.
-type RuleExecutorInterface interface {
-	ExecuteRule(ctx context.Context, rule *domain.AutomationRule, triggerData map[string]interface{}) (*domain.RuleExecution, error)
+type BoostExecutorInterface interface {
+	ExecuteBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostExecution, error)
 }
 
-// RuleRepositoryInterface defines the subset of repository methods needed by CronTriggerProvider.
-type RuleRepositoryInterface interface {
-	GetRulesByScheduleTrigger(ctx context.Context) ([]*domain.AutomationRule, error)
-	GetByID(ctx context.Context, id string) (*domain.AutomationRule, error)
-	IncrementExecutionCount(ctx context.Context, ruleID string) error
-	UpdateLastSuccessful(ctx context.Context, ruleID string) error
+// BoostRepositoryInterface defines the subset of repository methods needed by CronTriggerProvider.
+type BoostRepositoryInterface interface {
+	GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error)
+	GetByID(ctx context.Context, id string) (*domain.Boost, error)
+	IncrementExecutionCount(ctx context.Context, boostID string) error
+	UpdateLastSuccessful(ctx context.Context, boostID string) error
 }
 
-// scheduledRule tracks a scheduled rule and its cron entry.
-type scheduledRule struct {
-	ruleID  string
+// scheduledBoost tracks a scheduled boost and its cron entry.
+type scheduledBoost struct {
+	boostID  string
 	userID  string
 	cron    string
 	entryID cron.EntryID
 }
 
-// CronTriggerProvider implements RuleTriggerProvider using robfig/cron/v3.
-// It schedules automation rules to run at specified cron intervals.
+// CronTriggerProvider implements BoostTriggerProvider using robfig/cron/v3.
+// It schedules automation boosts to run at specified cron intervals.
 type CronTriggerProvider struct {
 	logger          *slog.Logger
-	repo            RuleRepositoryInterface
-	executor        RuleExecutorInterface
+	repo            BoostRepositoryInterface
+	executor        BoostExecutorInterface
 	refreshInterval time.Duration
 
 	cron           *cron.Cron
-	scheduledRules map[string]*scheduledRule // ruleID -> scheduledRule
+	scheduledBoosts map[string]*scheduledBoost // boostID -> scheduledBoost
 	mu             sync.RWMutex
 	started        bool
 	stopCh         chan struct{}
@@ -58,8 +58,8 @@ type CronTriggerProvider struct {
 
 // NewCronTriggerProvider creates a new CronTriggerProvider.
 func NewCronTriggerProvider(
-	repo RuleRepositoryInterface,
-	executor RuleExecutorInterface,
+	repo BoostRepositoryInterface,
+	executor BoostExecutorInterface,
 	refreshInterval time.Duration,
 	logger *slog.Logger,
 ) *CronTriggerProvider {
@@ -71,7 +71,7 @@ func NewCronTriggerProvider(
 		repo:            repo,
 		executor:        executor,
 		refreshInterval: refreshInterval,
-		scheduledRules:  make(map[string]*scheduledRule),
+		scheduledBoosts:  make(map[string]*scheduledBoost),
 		stopCh:          make(chan struct{}),
 		useSeconds:      false,
 	}
@@ -80,8 +80,8 @@ func NewCronTriggerProvider(
 // NewCronTriggerProviderWithSeconds creates a CronTriggerProvider that supports
 // second-level cron expressions. This is primarily for testing purposes.
 func NewCronTriggerProviderWithSeconds(
-	repo RuleRepositoryInterface,
-	executor RuleExecutorInterface,
+	repo BoostRepositoryInterface,
+	executor BoostExecutorInterface,
 	refreshInterval time.Duration,
 	logger *slog.Logger,
 ) *CronTriggerProvider {
@@ -100,8 +100,8 @@ func (p *CronTriggerProvider) SupportsManualTrigger() bool {
 	return false
 }
 
-// TriggerRule returns an error as cron provider doesn't support manual triggering.
-func (p *CronTriggerProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.RuleExecution, error) {
+// TriggerBoost returns an error as cron provider doesn't support manual triggering.
+func (p *CronTriggerProvider) TriggerBoost(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	return nil, ErrManualTriggerNotSupported
 }
 
@@ -128,9 +128,9 @@ func (p *CronTriggerProvider) Start(ctx context.Context) error {
 
 	p.cron = cron.New(opts...)
 
-	// Load initial rules
-	if err := p.loadRulesLocked(ctx); err != nil {
-		return fmt.Errorf("failed to load scheduled rules: %w", err)
+	// Load initial boosts
+	if err := p.loadBoostsLocked(ctx); err != nil {
+		return fmt.Errorf("failed to load scheduled boosts: %w", err)
 	}
 
 	// Start the cron scheduler
@@ -141,7 +141,7 @@ func (p *CronTriggerProvider) Start(ctx context.Context) error {
 	// Start refresh goroutine
 	go p.refreshLoop(ctx)
 
-	p.logger.Info("cron trigger provider started", "scheduled_rules", len(p.scheduledRules))
+	p.logger.Info("cron trigger provider started", "scheduled_boost_count", len(p.scheduledBoosts))
 	return nil
 }
 
@@ -173,14 +173,14 @@ func (p *CronTriggerProvider) Stop(ctx context.Context) error {
 	}
 
 	p.started = false
-	p.scheduledRules = make(map[string]*scheduledRule)
+	p.scheduledBoosts = make(map[string]*scheduledBoost)
 
 	p.logger.Info("cron trigger provider stopped")
 	return nil
 }
 
-// Refresh reloads all scheduled rules from the database.
-// This allows picking up new rules, removing deleted rules, and updating modified cron expressions.
+// Refresh reloads all scheduled boosts from the database.
+// This allows picking up new boosts, removing deleted boosts, and updating modified cron expressions.
 func (p *CronTriggerProvider) Refresh(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -189,22 +189,22 @@ func (p *CronTriggerProvider) Refresh(ctx context.Context) error {
 		return nil
 	}
 
-	return p.loadRulesLocked(ctx)
+	return p.loadBoostsLocked(ctx)
 }
 
-// ScheduledRuleCount returns the number of currently scheduled rules.
-func (p *CronTriggerProvider) ScheduledRuleCount() int {
+// ScheduledBoostCount returns the number of currently scheduled boosts.
+func (p *CronTriggerProvider) ScheduledBoostCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return len(p.scheduledRules)
+	return len(p.scheduledBoosts)
 }
 
-// GetRuleCronExpression returns the cron expression for a scheduled rule.
-func (p *CronTriggerProvider) GetRuleCronExpression(ruleID string) string {
+// GetBoostCronExpression returns the cron expression for a scheduled boost.
+func (p *CronTriggerProvider) GetBoostCronExpression(boostID string) string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if sr, ok := p.scheduledRules[ruleID]; ok {
+	if sr, ok := p.scheduledBoosts[boostID]; ok {
 		return sr.cron
 	}
 	return ""
@@ -226,41 +226,41 @@ func (p *CronTriggerProvider) validateCronExpression(expr string) error {
 	return nil
 }
 
-// loadRulesLocked loads rules from the database and schedules them.
+// loadBoostsLocked loads boosts from the database and schedules them.
 // Must be called with p.mu held.
-func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
-	rules, err := p.repo.GetRulesByScheduleTrigger(ctx)
+func (p *CronTriggerProvider) loadBoostsLocked(ctx context.Context) error {
+	boosts, err := p.repo.GetBoostsByScheduleTrigger(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Track which rules are in the new set
-	newRuleIDs := make(map[string]bool)
-	for _, rule := range rules {
-		newRuleIDs[rule.ID] = true
+	// Track which boosts are in the new set
+	newBoostIDs := make(map[string]bool)
+	for _, boost := range boosts {
+		newBoostIDs[boost.ID] = true
 	}
 
-	// Remove rules that no longer exist
-	for ruleID, sr := range p.scheduledRules {
-		if !newRuleIDs[ruleID] {
+	// Remove boosts that no longer exist
+	for boostID, sr := range p.scheduledBoosts {
+		if !newBoostIDs[boostID] {
 			p.cron.Remove(sr.entryID)
-			delete(p.scheduledRules, ruleID)
-			p.logger.Info("removed rule from schedule", "rule_id", ruleID)
+			delete(p.scheduledBoosts, boostID)
+			p.logger.Info("removed boost from schedule", "boost_id", boostID)
 		}
 	}
 
-	// Add or update rules
-	for _, rule := range rules {
-		cronExpr := rule.TriggerConfig.Cron
+	// Add or update boosts
+	for _, boost := range boosts {
+		cronExpr := boost.TriggerConfig.Cron
 
 		// Validate cron expression (use appropriate parser based on mode)
 		if err := p.validateCronExpression(cronExpr); err != nil {
-			p.logger.Warn("skipping rule with invalid cron expression", "rule_id", rule.ID, "error", err)
+			p.logger.Warn("skipping boost with invalid cron expression", "boost_id", boost.ID, "error", err)
 			continue
 		}
 
-		// Check if rule already exists with same cron
-		if existing, ok := p.scheduledRules[rule.ID]; ok {
+		// Check if boost already exists with same cron
+		if existing, ok := p.scheduledBoosts[boost.ID]; ok {
 			if existing.cron == cronExpr {
 				// No change needed
 				continue
@@ -271,88 +271,88 @@ func (p *CronTriggerProvider) loadRulesLocked(ctx context.Context) error {
 
 		// Build cron expression with timezone if specified
 		fullCronExpr := cronExpr
-		if rule.TriggerConfig.Timezone != "" {
-			fullCronExpr = fmt.Sprintf("CRON_TZ=%s %s", rule.TriggerConfig.Timezone, cronExpr)
+		if boost.TriggerConfig.Timezone != "" {
+			fullCronExpr = fmt.Sprintf("CRON_TZ=%s %s", boost.TriggerConfig.Timezone, cronExpr)
 		}
 
-		// Schedule the rule
-		entryID, err := p.cron.AddFunc(fullCronExpr, p.createJobFunc(rule.ID, rule.UserID))
+		// Schedule the boost
+		entryID, err := p.cron.AddFunc(fullCronExpr, p.createJobFunc(boost.ID, boost.UserID))
 		if err != nil {
-			p.logger.Error("failed to schedule rule", "rule_id", rule.ID, "error", err)
+			p.logger.Error("failed to schedule boost", "boost_id", boost.ID, "error", err)
 			continue
 		}
 
-		p.scheduledRules[rule.ID] = &scheduledRule{
-			ruleID:  rule.ID,
-			userID:  rule.UserID,
+		p.scheduledBoosts[boost.ID] = &scheduledBoost{
+			boostID:  boost.ID,
+			userID:  boost.UserID,
 			cron:    cronExpr,
 			entryID: entryID,
 		}
 
-		p.logger.Info("scheduled rule", "rule_id", rule.ID, "cron", fullCronExpr)
+		p.logger.Info("scheduled boost", "boost_id", boost.ID, "cron", fullCronExpr)
 	}
 
 	return nil
 }
 
-// createJobFunc creates the job function for a scheduled rule.
-func (p *CronTriggerProvider) createJobFunc(ruleID, userID string) func() {
+// createJobFunc creates the job function for a scheduled boost.
+func (p *CronTriggerProvider) createJobFunc(boostID, userID string) func() {
 	return func() {
 		ctx := context.Background()
-		p.executeRule(ctx, ruleID, userID)
+		p.executeBoost(ctx, boostID, userID)
 	}
 }
 
-// executeRule executes a scheduled rule.
-func (p *CronTriggerProvider) executeRule(ctx context.Context, ruleID, userID string) {
-	// Fetch the current rule state
-	rule, err := p.repo.GetByID(ctx, ruleID)
+// executeBoost executes a scheduled boost.
+func (p *CronTriggerProvider) executeBoost(ctx context.Context, boostID, userID string) {
+	// Fetch the current boost state
+	boost, err := p.repo.GetByID(ctx, boostID)
 	if err != nil {
-		if errors.Is(err, domain.ErrAutomationRuleNotFound) {
-			p.logger.Info("rule not found, skipping execution", "rule_id", ruleID)
+		if errors.Is(err, domain.ErrBoostNotFound) {
+			p.logger.Info("boost not found, skipping execution", "boost_id", boostID)
 			return
 		}
-		p.logger.Error("error fetching rule", "rule_id", ruleID, "error", err)
+		p.logger.Error("error fetching boost", "boost_id", boostID, "error", err)
 		return
 	}
 
-	// Check if rule is still enabled
-	if !rule.Enabled {
-		p.logger.Info("rule is disabled, skipping execution", "rule_id", ruleID)
+	// Check if boost is still enabled
+	if !boost.Enabled {
+		p.logger.Info("boost is disabled, skipping execution", "boost_id", boostID)
 		return
 	}
 
-	p.logger.Info("executing rule", "rule_id", ruleID, "user_id", userID)
+	p.logger.Info("executing boost", "boost_id", boostID, "user_id", userID)
 
-	// Execute the rule
+	// Execute the boost
 	triggerData := map[string]interface{}{
 		"trigger_type": "schedule",
 		"triggered_at": time.Now().UTC(),
 	}
 
-	execution, err := p.executor.ExecuteRule(ctx, rule, triggerData)
+	execution, err := p.executor.ExecuteBoost(ctx, boost, triggerData)
 	if err != nil {
-		p.logger.Error("error executing rule", "rule_id", ruleID, "error", err)
+		p.logger.Error("error executing boost", "boost_id", boostID, "error", err)
 		// Update execution count even on failure
-		_ = p.repo.IncrementExecutionCount(ctx, ruleID)
+		_ = p.repo.IncrementExecutionCount(ctx, boostID)
 		return
 	}
 
 	// Update execution statistics
-	if err := p.repo.IncrementExecutionCount(ctx, ruleID); err != nil {
-		p.logger.Error("error updating execution count", "rule_id", ruleID, "error", err)
+	if err := p.repo.IncrementExecutionCount(ctx, boostID); err != nil {
+		p.logger.Error("error updating execution count", "boost_id", boostID, "error", err)
 	}
 
 	if execution.Status == domain.ExecutionStatusCompleted {
-		if err := p.repo.UpdateLastSuccessful(ctx, ruleID); err != nil {
-			p.logger.Error("error updating last successful", "rule_id", ruleID, "error", err)
+		if err := p.repo.UpdateLastSuccessful(ctx, boostID); err != nil {
+			p.logger.Error("error updating last successful", "boost_id", boostID, "error", err)
 		}
 	}
 
-	p.logger.Info("rule execution completed", "rule_id", ruleID, "status", execution.Status)
+	p.logger.Info("boost execution completed", "boost_id", boostID, "status", execution.Status)
 }
 
-// refreshLoop periodically refreshes the scheduled rules from the database.
+// refreshLoop periodically refreshes the scheduled boosts from the database.
 func (p *CronTriggerProvider) refreshLoop(ctx context.Context) {
 	ticker := time.NewTicker(p.refreshInterval)
 	defer ticker.Stop()
@@ -361,7 +361,7 @@ func (p *CronTriggerProvider) refreshLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := p.Refresh(ctx); err != nil {
-				p.logger.Error("error refreshing rules", "error", err)
+				p.logger.Error("error refreshing boosts", "error", err)
 			}
 		case <-p.stopCh:
 			return

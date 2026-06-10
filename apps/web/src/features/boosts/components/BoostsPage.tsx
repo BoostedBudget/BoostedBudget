@@ -18,7 +18,7 @@ import { SavingsSummaryHeader } from './SavingsSummaryHeader'
 import { ActiveRecommendationsTab } from './ActiveRecommendationsTab'
 import { AwaitingMatchTab } from './AwaitingMatchTab'
 import { HistoryTab } from './HistoryTab'
-import { RulesTab } from './RulesTab'
+import { BoostsTab as BoostsTabPanel } from './BoostsTab'
 
 function getInitialTab(): BoostsTab {
   try {
@@ -88,7 +88,7 @@ export function BoostsPage() {
         totalMoved={summary.totalMoved}
         momChange={summary.momChange}
         completedCount={summary.completedCount}
-        activeRulesCount={summary.activeRulesCount}
+        activeBoostsCount={summary.activeBoostsCount}
         isLoading={summary.isLoading}
         isError={summary.error !== null}
         onRetry={summary.refetch}
@@ -140,8 +140,8 @@ export function BoostsPage() {
           />
         </TabsContent>
 
-        <TabsContent value="rules">
-          <RulesTab />
+        <TabsContent value="boosts">
+          <BoostsTabPanel />
         </TabsContent>
       </Tabs>
     </div>

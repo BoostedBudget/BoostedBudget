@@ -304,7 +304,7 @@ func (w *BudgetPeriodCloseCheckWorker) workAt(ctx context.Context, job *river.Jo
 			// Assign batch-loaded categories for per-category condition evaluation.
 			budget.Categories = catsByID[budget.ID]
 
-			evalArgs := RuleEvaluationArgs{
+			evalArgs := BoostEvaluationArgs{
 				UserID:    budget.UserID,
 				EventType: domain.EventBudgetPeriodEnd,
 				// EventData keys must match domain.EventDataKey* constants so that

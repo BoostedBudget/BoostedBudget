@@ -42,7 +42,7 @@ EXCLUDE_PATTERNS=(
     # Isolated tests polluted by other tests (run via test-isolated.sh)
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
-    "src/features/rules/components/RulesPage.test.tsx"
+    "src/features/boosts/components/BoostsManagePage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
     # ToggleGroup component test needs real implementation but TimeframeSelector/DateRangePicker
@@ -64,6 +64,8 @@ EXCLUDE_PATTERNS=(
     "src/features/categories/hooks/useCustomCategories.test.tsx"
     "src/features/categories/hooks/useCategoryMutations.test.tsx"
     "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    "src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
+    "src/features/budgets/hooks/usePreviewCategories.test.tsx"
     "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 

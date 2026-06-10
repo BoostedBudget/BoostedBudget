@@ -32,38 +32,38 @@ func TestIssue972ProductionWiringNoDrift(t *testing.T) {
 		expr string
 		desc string
 	}{
-		// ruleExecutionService setters — the canonical dead-setter class.
-		// Unit tests in rule_execution_service_test.go inject each dep manually;
+		// boostExecutionService setters — the canonical dead-setter class.
+		// Unit tests in boost_execution_service_test.go inject each dep manually;
 		// these assertions verify the production composition also wires them.
 		{
-			"ruleExecutionService.SetSavingsGoalRepo(",
-			"ruleExecutionService.SetSavingsGoalRepo must be called so executeSavingsGoal doesn't return 'not configured' (GAP H)",
+			"boostExecutionService.SetSavingsGoalRepo(",
+			"boostExecutionService.SetSavingsGoalRepo must be called so executeSavingsGoal doesn't return 'not configured' (GAP H)",
 		},
 		{
-			"ruleExecutionService.SetAccountRepo(",
-			"ruleExecutionService.SetAccountRepo must be called for account ownership checks at execution time (GAP AE)",
+			"boostExecutionService.SetAccountRepo(",
+			"boostExecutionService.SetAccountRepo must be called for account ownership checks at execution time (GAP AE)",
 		},
 		{
-			"ruleExecutionService.SetChainResolver(",
-			"ruleExecutionService.SetChainResolver must be called with a real AccountChainResolver (GAP H)",
+			"boostExecutionService.SetChainResolver(",
+			"boostExecutionService.SetChainResolver must be called with a real AccountChainResolver (GAP H)",
 		},
 		{
-			"ruleExecutionService.SetNotificationRepo(",
-			"ruleExecutionService.SetNotificationRepo must be called so suggestion notifications are created",
+			"boostExecutionService.SetNotificationRepo(",
+			"boostExecutionService.SetNotificationRepo must be called so suggestion notifications are created",
 		},
 		{
-			"ruleExecutionService.SetAnalytics(",
-			"ruleExecutionService.SetAnalytics must be called so rule execution fires analytics events",
+			"boostExecutionService.SetAnalytics(",
+			"boostExecutionService.SetAnalytics must be called so rule execution fires analytics events",
 		},
 
-		// automationRuleService setters — IDOR ownership validation at create/update time (GAP AE).
+		// boostService setters — IDOR ownership validation at create/update time (GAP AE).
 		{
-			"automationRuleService.SetSavingsGoalRepo(",
-			"automationRuleService.SetSavingsGoalRepo must be called to prevent savings_goal_id IDOR at rule creation",
+			"boostService.SetSavingsGoalRepo(",
+			"boostService.SetSavingsGoalRepo must be called to prevent savings_goal_id IDOR at rule creation",
 		},
 		{
-			"automationRuleService.SetAccountRepo(",
-			"automationRuleService.SetAccountRepo must be called to prevent account IDOR at rule creation",
+			"boostService.SetAccountRepo(",
+			"boostService.SetAccountRepo must be called to prevent account IDOR at rule creation",
 		},
 
 		// Transfer correlation service — wires fuzzy-match detection to transaction sync.
@@ -72,11 +72,11 @@ func TestIssue972ProductionWiringNoDrift(t *testing.T) {
 			"SetTransferCorrelationService must be called so fuzzy-match detection runs on every Plaid sync (GAP B4)",
 		},
 
-		// budgetSyncService event processor — wires budget_period_end events to ruleExecutionService.
+		// budgetSyncService event processor — wires budget_period_end events to boostExecutionService.
 		// Without this call budget_updated and budget_period_end events are silently dropped.
 		{
 			"budgetSyncService.SetEventProcessor(",
-			"budgetSyncService.SetEventProcessor(ruleExecutionService) must be called so budget events reach the rule engine (Issue #972 B1, Plan §B1 Bugfix wiring)",
+			"budgetSyncService.SetEventProcessor(boostExecutionService) must be called so budget events reach the boost engine (Issue #972 B1, Plan §B1 Bugfix wiring)",
 		},
 
 		// Budget period close check worker — expirer and timezone must be wired.

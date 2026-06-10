@@ -34,7 +34,7 @@ func TestAllExpectedJobKinds(t *testing.T) {
 		{"SubscriptionWebhookArgs", SubscriptionWebhookArgs{}, "subscription_webhook"},
 		// Notification / rule workers
 		{"NotificationEmailArgs", NotificationEmailArgs{}, "notification_email"},
-		{"RuleEvaluationArgs", RuleEvaluationArgs{}, "rule_evaluation"},
+		{"BoostEvaluationArgs", BoostEvaluationArgs{}, "boost_evaluation"},
 		// Issue #972: Budget period-close scanner
 		{"BudgetPeriodCloseCheckArgs", BudgetPeriodCloseCheckArgs{}, "budget_period_close_check"},
 		// Issue #972: Daily savings stats snapshot

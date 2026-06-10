@@ -14,7 +14,7 @@ export interface SavingsSummaryHeaderProps {
   /** Month-over-month change in dollars; null means prev month was $0 (suppress display) */
   momChange: number | null
   completedCount: number | null
-  activeRulesCount: number
+  activeBoostsCount: number
   isLoading: boolean
   /** True when a fetch error prevents the summary from loading */
   isError?: boolean
@@ -26,7 +26,7 @@ export function SavingsSummaryHeader({
   totalMoved,
   momChange,
   completedCount,
-  activeRulesCount,
+  activeBoostsCount,
   isLoading,
   isError,
   onRetry,
@@ -101,8 +101,8 @@ export function SavingsSummaryHeader({
       />
 
       <StatCard
-        label="Active Rules"
-        value={activeRulesCount}
+        label="Active Boosts"
+        value={activeBoostsCount}
       />
     </div>
   )

@@ -53,12 +53,12 @@ const CONSUMERS: Array<{ file: string; columnIds: string[] }> = [
     columnIds: ['name', 'period', 'amount', 'income', 'progress', 'remaining', 'categories'],
   },
   {
-    file: 'src/features/rules/components/RuleTable.tsx',
+    file: 'src/features/boosts/components/BoostTable.tsx',
     // 'select' is intentionally fixed-width (48/48/48) — still must have defaultSize
     columnIds: ['select', 'name', 'type', 'status', 'trigger', 'lastRun', 'priority'],
   },
   {
-    file: 'src/features/rules/components/RuleExecutionHistory.tsx',
+    file: 'src/features/boosts/components/BoostExecutionHistory.tsx',
     columnIds: ['time', 'status', 'duration', 'trigger', 'details'],
   },
 ]

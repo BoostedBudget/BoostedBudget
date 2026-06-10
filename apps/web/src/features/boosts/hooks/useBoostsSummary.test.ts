@@ -8,16 +8,16 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { mockUseGetSavingsImpactMe } from '@/test/mocks/savings-impact-api'
-import { mockUseGetAutomationRules } from '@/test/mocks/automation-rules-api'
+import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { createQueryWrapper } from '@/test/utils/queryTestUtils'
 import { useBoostsSummary } from './useBoostsSummary'
 
 describe('useBoostsSummary', () => {
   beforeEach(() => {
     mockUseGetSavingsImpactMe.mockClear()
-    mockUseGetAutomationRules.mockClear()
+    mockUseGetBoosts.mockClear()
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
   })
 
   it('returns totalMoved from savings impact total_amount', () => {
@@ -78,14 +78,14 @@ describe('useBoostsSummary', () => {
     expect(result.current.completedCount).toBe(15)
   })
 
-  it('counts only enabled transfer-generating rules for activeRulesCount (AC1: type ∈ {transfer_suggestion, savings_goal})', () => {
-    mockUseGetAutomationRules.mockReturnValue({
+  it('counts only enabled transfer-generating boosts for activeBoostsCount (AC1: type ∈ {transfer_suggestion, savings_goal})', () => {
+    mockUseGetBoosts.mockReturnValue({
       data: [
-        { id: 'r1', enabled: true, name: 'Rule 1', rule_type: 'transfer_suggestion', priority: 1, created_at: '', updated_at: '' },
-        { id: 'r2', enabled: true, name: 'Rule 2', rule_type: 'savings_goal', priority: 2, created_at: '', updated_at: '' },
-        { id: 'r3', enabled: true, name: 'Rule 3', rule_type: 'budget_alert', priority: 3, created_at: '', updated_at: '' },
-        { id: 'r4', enabled: true, name: 'Rule 4', rule_type: 'category_rollover', priority: 4, created_at: '', updated_at: '' },
-        { id: 'r5', enabled: false, name: 'Rule 5', rule_type: 'transfer_suggestion', priority: 5, created_at: '', updated_at: '' },
+        { id: 'r1', enabled: true, name: 'Rule 1', boost_type: 'transfer_suggestion', priority: 1, created_at: '', updated_at: '' },
+        { id: 'r2', enabled: true, name: 'Rule 2', boost_type: 'savings_goal', priority: 2, created_at: '', updated_at: '' },
+        { id: 'r3', enabled: true, name: 'Rule 3', boost_type: 'budget_alert', priority: 3, created_at: '', updated_at: '' },
+        { id: 'r4', enabled: true, name: 'Rule 4', boost_type: 'category_rollover', priority: 4, created_at: '', updated_at: '' },
+        { id: 'r5', enabled: false, name: 'Rule 5', boost_type: 'transfer_suggestion', priority: 5, created_at: '', updated_at: '' },
       ],
       isLoading: false,
       error: null,
@@ -95,28 +95,28 @@ describe('useBoostsSummary', () => {
 
     // Only r1 (transfer_suggestion, enabled) + r2 (savings_goal, enabled) count.
     // r3 (budget_alert), r4 (category_rollover), r5 (disabled transfer_suggestion) do not.
-    expect(result.current.activeRulesCount).toBe(2)
+    expect(result.current.activeBoostsCount).toBe(2)
   })
 
-  it('returns activeRulesCount of 0 when rules list is empty', () => {
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+  it('returns activeBoostsCount of 0 when boosts list is empty', () => {
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
-    expect(result.current.activeRulesCount).toBe(0)
+    expect(result.current.activeBoostsCount).toBe(0)
   })
 
-  it('returns activeRulesCount of 0 when rules data is null/undefined', () => {
-    mockUseGetAutomationRules.mockReturnValue({ data: undefined, isLoading: false, error: null })
+  it('returns activeBoostsCount of 0 when boosts data is null/undefined', () => {
+    mockUseGetBoosts.mockReturnValue({ data: undefined, isLoading: false, error: null })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
-    expect(result.current.activeRulesCount).toBe(0)
+    expect(result.current.activeBoostsCount).toBe(0)
   })
 
   it('propagates isLoading as true when either query is loading', () => {
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: true, error: null })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
@@ -125,7 +125,7 @@ describe('useBoostsSummary', () => {
 
   it('propagates isLoading as false when both queries are settled', () => {
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => {}) })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
@@ -142,10 +142,10 @@ describe('useBoostsSummary', () => {
     expect(result.current.error).toBe(err)
   })
 
-  it('surfaces error from the automation rules query when savings impact is fine', () => {
+  it('surfaces error from the boosts query when savings impact is fine', () => {
     const err = new Error('rules failed')
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: mock(() => {}) })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: err, refetch: mock(() => {}) })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: err, refetch: mock(() => {}) })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
@@ -162,7 +162,7 @@ describe('useBoostsSummary', () => {
     const impactErr = new Error('impact failed')
     const rulesErr = new Error('rules failed')
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: impactErr, refetch: mock(() => {}) })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: rulesErr, refetch: mock(() => {}) })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: rulesErr, refetch: mock(() => {}) })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
 
@@ -174,7 +174,7 @@ describe('useBoostsSummary', () => {
     const impactRefetch = mock(() => Promise.resolve({ data: null }))
     const rulesRefetch = mock(() => Promise.resolve({ data: [] }))
     mockUseGetSavingsImpactMe.mockReturnValue({ data: null, isLoading: false, error: null, refetch: impactRefetch })
-    mockUseGetAutomationRules.mockReturnValue({ data: [], isLoading: false, error: null, refetch: rulesRefetch })
+    mockUseGetBoosts.mockReturnValue({ data: [], isLoading: false, error: null, refetch: rulesRefetch })
 
     const { result } = renderHook(() => useBoostsSummary(), { wrapper: createQueryWrapper() })
     result.current.refetch()

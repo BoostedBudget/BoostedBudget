@@ -73,9 +73,9 @@ export function ActiveRecommendationsTab({
       minSize: 140,
       render: (item) => (
         <div className="flex flex-col gap-0.5">
-          {item.rule_name && <span className="text-sm text-muted-foreground">{item.rule_name}</span>}
+          {item.boost_name && <span className="text-sm text-muted-foreground">{item.boost_name}</span>}
           {item.reason && <span className="text-xs text-muted-foreground">{item.reason}</span>}
-          {!item.rule_name && !item.reason && <span className="text-sm text-muted-foreground">—</span>}
+          {!item.boost_name && !item.reason && <span className="text-sm text-muted-foreground">—</span>}
         </div>
       ),
     },

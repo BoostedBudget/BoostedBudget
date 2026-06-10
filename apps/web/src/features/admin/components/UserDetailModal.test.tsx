@@ -21,7 +21,7 @@ const mockUser = {
   last_login_at: '2024-03-15T14:30:00Z',
   is_active: true,
   linked_accounts_count: 5,
-  automation_rules_count: 10,
+  boosts_count: 10,
   transactions_count: 1500,
   budgets_count: 4,
 }

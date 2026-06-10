@@ -23,6 +23,8 @@
 # - useSavingsGoals.test.tsx - Savings goals hook (features/savings/hooks/)
 # - useBudgetDetail.test.tsx - Budget detail hook
 # - useAvailableCategories.test.tsx - Available categories hook
+# - useInfiniteTransactions.test.tsx - Hangs in full suite (lingering QueryClient spy)
+# - usePreviewCategories.test.tsx - Hangs in full suite (unmounted React root update)
 
 set -e
 
@@ -54,6 +56,9 @@ TEST_FILES=(
     "$FRONTEND_DIR/src/features/savings/hooks/useSavingsGoals.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/useAvailableCategories.test.tsx"
+    # Hangs in the full parallel suite; --timeout kills the lingering event loop
+    "$FRONTEND_DIR/src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
+    "$FRONTEND_DIR/src/features/budgets/hooks/usePreviewCategories.test.tsx"
 )
 
 # Preload files for real implementation tests (absolute paths)

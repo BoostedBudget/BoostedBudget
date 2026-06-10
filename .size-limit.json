@@ -110,13 +110,7 @@
   {
     "name": "boosts",
     "path": "apps/web/dist/assets/boosts-*.js",
-    "limit": "8 KB",
-    "gzip": true
-  },
-  {
-    "name": "rules",
-    "path": "apps/web/dist/assets/rules-*.js",
-    "limit": "16 KB",
+    "limit": "22 KB",
     "gzip": true
   },
   {

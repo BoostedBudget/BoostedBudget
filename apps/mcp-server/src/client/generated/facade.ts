@@ -110,18 +110,18 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: `/api/v1/auto-categorization/${id}`, method: 'GET', signal })
       },
     } as const,
-    automationRules: {
-      /** GET /api/v1/rules */
-      getAutomationRules(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: '/api/v1/rules', method: 'GET', params, signal })
+    boosts: {
+      /** GET /api/v1/boosts */
+      getBoosts(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/boosts', method: 'GET', params, signal })
       },
-      /** GET /api/v1/rules/{id} */
-      getAutomationRuleByID(id: string, signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: `/api/v1/rules/${id}`, method: 'GET', signal })
+      /** GET /api/v1/boosts/{id} */
+      getBoostByID(id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/boosts/${id}`, method: 'GET', signal })
       },
-      /** GET /api/v1/rules/{id}/executions */
-      getRuleExecutions(id: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: `/api/v1/rules/${id}/executions`, method: 'GET', params, signal })
+      /** GET /api/v1/boosts/{id}/executions */
+      getBoostExecutions(id: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/boosts/${id}/executions`, method: 'GET', params, signal })
       },
     } as const,
     budget: {

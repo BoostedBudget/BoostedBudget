@@ -79,7 +79,7 @@ func TestCompletePartialUniqueMatchedTxn_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 500.00, 'rule', 'pending', NOW(), NOW())
+			VALUES ($1, $2, 500.00, 'boost', 'pending', NOW(), NOW())
 		`, suggIDs[i], userID)
 		require.NoError(t, err, "seed transfer_suggestion")
 	}
@@ -179,7 +179,7 @@ func TestReserveMatchedTransaction_CrossSyncDoubleCountGuard_Integration(t *test
 	for _, id := range []string{suggA, suggB} {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 200.00, 'rule', 'pending', NOW(), NOW())
+			VALUES ($1, $2, 200.00, 'boost', 'pending', NOW(), NOW())
 		`, id, userID)
 		require.NoError(t, err, "seed suggestion")
 	}
@@ -312,7 +312,7 @@ func TestClearStaleReservations_Integration(t *testing.T) {
 	stale1 := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'pending', $3, $4, NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'pending', $3, $4, NOW(), NOW())
 	`, stale1, userID, txnIDs[0], pastExpiry)
 	require.NoError(t, err, "seed stale1 (pending, past expiry, reserved)")
 
@@ -320,7 +320,7 @@ func TestClearStaleReservations_Integration(t *testing.T) {
 	stale2 := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'accepted', $3, $4, NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'accepted', $3, $4, NOW(), NOW())
 	`, stale2, userID, txnIDs[1], pastExpiry)
 	require.NoError(t, err, "seed stale2 (accepted, past expiry, reserved)")
 
@@ -328,7 +328,7 @@ func TestClearStaleReservations_Integration(t *testing.T) {
 	fresh := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'pending', $3, $4, NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'pending', $3, $4, NOW(), NOW())
 	`, fresh, userID, txnIDs[2], futureExpiry)
 	require.NoError(t, err, "seed fresh (pending, future expiry, reserved)")
 
@@ -336,7 +336,7 @@ func TestClearStaleReservations_Integration(t *testing.T) {
 	completedWithTxn := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, completed_at, actual_amount, completion_source, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'completed', $3, $4, NOW(), 100.00, 'exact_match', NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'completed', $3, $4, NOW(), 100.00, 'exact_match', NOW(), NOW())
 	`, completedWithTxn, userID, txnIDs[3], pastExpiry)
 	require.NoError(t, err, "seed completedWithTxn (completed, past expiry, matched)")
 
@@ -417,12 +417,12 @@ func TestUpdateStatusAndComplete_StatusGuards_Integration(t *testing.T) {
 		if expiresAt != nil {
 			_, err = tx.Exec(ctx, `
 				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, expires_at, created_at, updated_at)
-				VALUES ($1, $2, 100.00, 'rule', $3, $4, NOW(), NOW())
+				VALUES ($1, $2, 100.00, 'boost', $3, $4, NOW(), NOW())
 			`, id, userID, status, expiresAt)
 		} else {
 			_, err = tx.Exec(ctx, `
 				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-				VALUES ($1, $2, 100.00, 'rule', $3, NOW(), NOW())
+				VALUES ($1, $2, 100.00, 'boost', $3, NOW(), NOW())
 			`, id, userID, status)
 		}
 		require.NoError(t, err)
@@ -561,7 +561,7 @@ func TestCompleteRetainingReservation_TOCTOUGuard_Integration(t *testing.T) {
 		id := uuid.New().String()
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 100.00, 'rule', 'pending', NOW(), NOW())
+			VALUES ($1, $2, 100.00, 'boost', 'pending', NOW(), NOW())
 		`, id, userID)
 		require.NoError(t, err, "seed suggestion")
 		return id
@@ -632,7 +632,7 @@ func TestClearMatchedTransactionID_ZeroRowAlreadyActioned_Integration(t *testing
 		id := uuid.New().String()
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 100.00, 'rule', $3, NOW(), NOW())
+			VALUES ($1, $2, 100.00, 'boost', $3, NOW(), NOW())
 		`, id, userID, status)
 		require.NoError(t, err, "seed suggestion")
 		return id
@@ -725,7 +725,7 @@ func TestClearMatchedTransactionID_WrongExpected_DoesNotRelease(t *testing.T) {
 	suggA := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'pending', NOW(), NOW())
+		VALUES ($1, $2, 100.00, 'boost', 'pending', NOW(), NOW())
 	`, suggA, userID)
 	require.NoError(t, err, "seed suggestion A")
 
@@ -814,7 +814,7 @@ func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 300.00, 'rule', 'pending', NOW(), NOW())
+			VALUES ($1, $2, 300.00, 'boost', 'pending', NOW(), NOW())
 		`, id, userID)
 		require.NoError(t, err, "seed suggestion "+id)
 	}
@@ -909,7 +909,7 @@ func TestClearStaleReservations_ClosesMatchNotifications_Integration(t *testing.
 	staleID := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
-		VALUES ($1, $2, 200.00, 'rule', 'accepted', $3, $4, NOW(), NOW())
+		VALUES ($1, $2, 200.00, 'boost', 'accepted', $3, $4, NOW(), NOW())
 	`, staleID, userID, staleTxnID.String(), pastExpiry)
 	require.NoError(t, err)
 
@@ -917,7 +917,7 @@ func TestClearStaleReservations_ClosesMatchNotifications_Integration(t *testing.
 	freshID := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, expires_at, created_at, updated_at)
-		VALUES ($1, $2, 200.00, 'rule', 'pending', $3, $4, NOW(), NOW())
+		VALUES ($1, $2, 200.00, 'boost', 'pending', $3, $4, NOW(), NOW())
 	`, freshID, userID, freshTxnID.String(), futureExpiry)
 	require.NoError(t, err)
 
@@ -1003,7 +1003,7 @@ func TestGetByUserIDStatuses_ReturnsFilteredByStatus_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 100.00, 'rule', $3, $4, $4)
+			VALUES ($1, $2, 100.00, 'boost', $3, $4, $4)
 		`, entry.id, userID, string(entry.status), createdAt)
 		require.NoError(t, err, "seed suggestion status=%s", entry.status)
 	}
@@ -1059,8 +1059,8 @@ func TestGetByUserIDStatuses_EmptySlice_ReturnsPendingOnly_Integration(t *testin
 	completedID := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 200.00, 'rule', 'pending', NOW(), NOW()),
-		       ($3, $2, 200.00, 'rule', 'completed', NOW() - interval '1 minute', NOW())
+		VALUES ($1, $2, 200.00, 'boost', 'pending', NOW(), NOW()),
+		       ($3, $2, 200.00, 'boost', 'completed', NOW() - interval '1 minute', NOW())
 	`, pendingID, userID, completedID)
 	require.NoError(t, err)
 
@@ -1102,7 +1102,7 @@ func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, created_at, updated_at)
-			VALUES ($1, $2, 50.00, 'rule', 'completed', $3, $3)
+			VALUES ($1, $2, 50.00, 'boost', 'completed', $3, $3)
 		`, suggIDs[i], userID, createdAt)
 		require.NoError(t, err)
 	}
@@ -1138,7 +1138,7 @@ func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
 }
 
 // TestGetByUserIDStatuses_Enrichment_Integration proves that GetByUserIDStatuses
-// populates the derived enrichment fields (ToAccountName, FromAccountName, RuleName,
+// populates the derived enrichment fields (ToAccountName, FromAccountName, BoostName,
 // MatchedTransactionAt) when the underlying rows have those relationships.
 // These fields come from JOINs and cannot be tested with pgxmock.
 func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
@@ -1178,15 +1178,15 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	`, toAccID, linkedItemID, userID)
 	require.NoError(t, err, "seed to-account with nickname")
 
-	// Seed a rule so we have a rule_name to join.
+	// Seed a boost so we have a boost name to join.
 	ruleID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO rules (id, user_id, name, enabled, priority, rule_type, trigger_config, conditions, condition_logic, actions, created_at, updated_at)
-		VALUES ($1, $2, 'Save Extra Cash', true, 0, 'budget_rollover',
+		INSERT INTO boosts (id, user_id, name, enabled, priority, boost_type, trigger_config, conditions, condition_logic, actions, created_at, updated_at)
+		VALUES ($1, $2, 'Save Extra Cash', true, 0, 'category_rollover',
 		        '{"type":"scheduled","cron":"0 0 1 * *"}'::jsonb,
 		        '[]'::jsonb, 'AND', '[]'::jsonb, NOW(), NOW())
 	`, ruleID, userID)
-	require.NoError(t, err, "seed rule")
+	require.NoError(t, err, "seed boost")
 
 	// Seed a transaction (for the matched_transaction_at enrichment).
 	txnID := uuid.New()
@@ -1197,15 +1197,15 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	`, txnID, userID, toAccID, linkedItemID, txnCreatedAt)
 	require.NoError(t, err, "seed transaction")
 
-	// Seed a completed suggestion linked to the rule, from-account, to-account, and matched transaction.
+	// Seed a completed suggestion linked to the boost, from-account, to-account, and matched transaction.
 	suggID := uuid.New().String()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
-			(id, user_id, rule_id, from_account_id, to_account_id,
+			(id, user_id, boost_id, from_account_id, to_account_id,
 			 amount, source, status, matched_transaction_id, actual_amount, completion_source,
 			 completed_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5,
-		        300.00, 'rule', 'completed', $6, 300.00, 'exact_match',
+		        300.00, 'boost', 'completed', $6, 300.00, 'exact_match',
 		        NOW(), NOW(), NOW())
 	`, suggID, userID, ruleID, fromAccID, toAccID, txnID)
 	require.NoError(t, err, "seed completed suggestion")
@@ -1229,9 +1229,9 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	require.NotNil(t, got.FromAccountName, "FromAccountName must be populated from from-account JOIN")
 	assert.Equal(t, "Checking Account", *got.FromAccountName)
 
-	// rule_name from rules JOIN.
-	require.NotNil(t, got.RuleName, "RuleName must be populated from rules JOIN")
-	assert.Equal(t, "Save Extra Cash", *got.RuleName)
+	// boost name from boosts JOIN.
+	require.NotNil(t, got.BoostName, "BoostName must be populated from boosts JOIN")
+	assert.Equal(t, "Save Extra Cash", *got.BoostName)
 
 	// matched_transaction_at from transactions JOIN.
 	require.NotNil(t, got.MatchedTransactionAt, "MatchedTransactionAt must be populated from transactions JOIN")
@@ -1264,7 +1264,7 @@ func TestGetByUserIDStatuses_EventTimeOrdering_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, completed_at, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'completed', $3, $4, $3)
+		VALUES ($1, $2, 100.00, 'boost', 'completed', $3, $4, $3)
 	`, oldCompletedID, userID, recentCompleted, oldCreated)
 	require.NoError(t, err, "seed old-created/recent-completed suggestion")
 
@@ -1275,7 +1275,7 @@ func TestGetByUserIDStatuses_EventTimeOrdering_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, user_action_at, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'rejected', $3, $4, $3)
+		VALUES ($1, $2, 100.00, 'boost', 'rejected', $3, $4, $3)
 	`, newRejectedID, userID, olderRejected, newCreated)
 	require.NoError(t, err, "seed newer-created/older-event suggestion")
 
@@ -1321,12 +1321,12 @@ func TestCancelAcceptedSuggestion_Integration(t *testing.T) {
 		if matchedTxnID != nil {
 			_, err = tx.Exec(ctx, `
 				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, matched_transaction_id, created_at, updated_at)
-				VALUES ($1, $2, 100.00, 'rule', $3, $4, NOW(), NOW())
+				VALUES ($1, $2, 100.00, 'boost', $3, $4, NOW(), NOW())
 			`, id, userID, status, *matchedTxnID)
 		} else {
 			_, err = tx.Exec(ctx, `
 				INSERT INTO transfer_suggestions (id, user_id, amount, source, status, created_at, updated_at)
-				VALUES ($1, $2, 100.00, 'rule', $3, NOW(), NOW())
+				VALUES ($1, $2, 100.00, 'boost', $3, NOW(), NOW())
 			`, id, userID, status)
 		}
 		require.NoError(t, err)
