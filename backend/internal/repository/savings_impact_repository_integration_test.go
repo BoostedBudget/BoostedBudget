@@ -137,7 +137,7 @@ func TestGetAggregateSavingsStats_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source, created_at, updated_at)
-			VALUES ($1, $2, $3, 'rule', 'completed', $4, $3, 'exact_match', $4, $4)
+			VALUES ($1, $2, $3, 'boost', 'completed', $4, $3, 'exact_match', $4, $4)
 		`, uuid.New(), userConsentedID, amount, now)
 		require.NoError(t, err, "seed completed suggestion for consented user")
 	}
@@ -146,7 +146,7 @@ func TestGetAggregateSavingsStats_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 50.00, 'rule', 'pending', $3, $3)
+		VALUES ($1, $2, 50.00, 'boost', 'pending', $3, $3)
 	`, uuid.New(), userConsentedID, now)
 	require.NoError(t, err, "seed pending suggestion for consented user")
 
@@ -154,7 +154,7 @@ func TestGetAggregateSavingsStats_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, completed_at, actual_amount, completion_source, created_at, updated_at)
-		VALUES ($1, $2, 50.00, 'rule', 'completed', $3, 50.00, 'exact_match', $3, $3)
+		VALUES ($1, $2, 50.00, 'boost', 'completed', $3, 50.00, 'exact_match', $3, $3)
 	`, uuid.New(), userNoConsentID, now)
 	require.NoError(t, err, "seed completed suggestion for non-consented user")
 
@@ -210,7 +210,7 @@ func TestGetUserImpact_Integration(t *testing.T) {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source, created_at, updated_at)
-			VALUES ($1, $2, $3, 'rule', 'completed', $4, $3, 'exact_match', $4, $4)
+			VALUES ($1, $2, $3, 'boost', 'completed', $4, $3, 'exact_match', $4, $4)
 		`, id, userID, amount, completedAt)
 		require.NoError(t, err)
 		return id
@@ -230,7 +230,7 @@ func TestGetUserImpact_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, created_at, updated_at)
-		VALUES ($1, $2, 75.00, 'rule', 'pending', $3, $3)
+		VALUES ($1, $2, 75.00, 'boost', 'pending', $3, $3)
 	`, uuid.New(), userID, now)
 	require.NoError(t, err)
 
@@ -348,7 +348,7 @@ func TestGetUserImpact_DestinationAccountName_Integration(t *testing.T) {
 			INSERT INTO transfer_suggestions
 				(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
 				 to_account_id, to_user_account_id, created_at, updated_at)
-			VALUES ($1, $2, $3, 'rule', 'completed', $4, $3, 'exact_match', $5, $6, $4, $4)
+			VALUES ($1, $2, $3, 'boost', 'completed', $4, $3, 'exact_match', $5, $6, $4, $4)
 		`, uuid.New(), userID, amount, now, toAccountID, toUserAccountID)
 		require.NoError(t, err, "seed completed suggestion")
 	}
@@ -471,7 +471,7 @@ func TestGetUserImpact_CrossUserAccountName_Integration(t *testing.T) {
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
 			 to_account_id, created_at, updated_at)
-		VALUES ($1, $2, 100.00, 'rule', 'completed', $3, 100.00, 'exact_match', $4, $3, $3)
+		VALUES ($1, $2, 100.00, 'boost', 'completed', $3, 100.00, 'exact_match', $4, $3, $3)
 	`, uuid.New(), requesterID, now, &otherAccountIDStr)
 	require.NoError(t, err, "seed suggestion with cross-user to_account_id")
 
@@ -480,7 +480,7 @@ func TestGetUserImpact_CrossUserAccountName_Integration(t *testing.T) {
 		INSERT INTO transfer_suggestions
 			(id, user_id, amount, source, status, completed_at, actual_amount, completion_source,
 			 to_user_account_id, created_at, updated_at)
-		VALUES ($1, $2, 200.00, 'rule', 'completed', $3, 200.00, 'exact_match', $4, $3, $3)
+		VALUES ($1, $2, 200.00, 'boost', 'completed', $3, 200.00, 'exact_match', $4, $3, $3)
 	`, uuid.New(), requesterID, now, &otherUAIDStr)
 	require.NoError(t, err, "seed suggestion with cross-user to_user_account_id")
 
