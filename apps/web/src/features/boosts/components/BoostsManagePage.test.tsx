@@ -781,8 +781,8 @@ describe('BoostsManagePage', () => {
   // a future edit might use the base (unfiltered) key instead.
   describe('Optimistic toggle cache-key (R9-c)', () => {
     it('onMutate writes to the filtered cache key and onError rolls it back', async () => {
-      type OnMutateCallback = (vars: { id: string; data: { enabled: boolean } }) => Promise<{ previousRules: unknown }>
-      type OnErrorCallback = (err: unknown, vars: unknown, ctx: { previousRules: unknown } | undefined) => void
+      type OnMutateCallback = (vars: { id: string; data: { enabled: boolean } }) => Promise<{ previousBoosts: unknown }>
+      type OnErrorCallback = (err: unknown, vars: unknown, ctx: { previousBoosts: unknown } | undefined) => void
 
       let capturedOnMutate: OnMutateCallback | undefined
       let capturedOnError: OnErrorCallback | undefined
