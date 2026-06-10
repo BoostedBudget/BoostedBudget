@@ -129,11 +129,9 @@ BEGIN
     END IF;
 END $$;
 
--- Restore source data values BEFORE altering the constraint (non-empty table safety).
--- Must run UPDATE first so existing 'boost' rows don't violate the restored CHECK.
-UPDATE transfer_suggestions SET source = 'rule' WHERE source = 'boost';
-
--- Restore valid_suggestion_source to accept 'rule' instead of 'boost'
+-- Restore valid_suggestion_source: must DROP constraint first (it currently allows 'boost'
+-- but not 'rule'), then UPDATE data, then ADD the restored constraint (allows 'rule').
+-- Order matters on non-empty tables: updating 'boost'→'rule' while CHECK(boost) is active fails.
 DO $$
 BEGIN
     IF EXISTS (
@@ -142,7 +140,14 @@ BEGIN
     ) THEN
         ALTER TABLE transfer_suggestions DROP CONSTRAINT valid_suggestion_source;
     END IF;
+END $$;
 
+-- Now safe to rewrite data (no constraint active)
+UPDATE transfer_suggestions SET source = 'rule' WHERE source = 'boost';
+
+-- Re-add constraint accepting 'rule' instead of 'boost'
+DO $$
+BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
         WHERE c.conname = 'valid_suggestion_source' AND t.relname = 'transfer_suggestions'
