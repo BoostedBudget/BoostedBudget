@@ -1138,7 +1138,7 @@ func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
 }
 
 // TestGetByUserIDStatuses_Enrichment_Integration proves that GetByUserIDStatuses
-// populates the derived enrichment fields (ToAccountName, FromAccountName, RuleName,
+// populates the derived enrichment fields (ToAccountName, FromAccountName, BoostName,
 // MatchedTransactionAt) when the underlying rows have those relationships.
 // These fields come from JOINs and cannot be tested with pgxmock.
 func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
@@ -1230,8 +1230,8 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	assert.Equal(t, "Checking Account", *got.FromAccountName)
 
 	// boost name from boosts JOIN.
-	require.NotNil(t, got.RuleName, "RuleName must be populated from boosts JOIN")
-	assert.Equal(t, "Save Extra Cash", *got.RuleName)
+	require.NotNil(t, got.BoostName, "BoostName must be populated from boosts JOIN")
+	assert.Equal(t, "Save Extra Cash", *got.BoostName)
 
 	// matched_transaction_at from transactions JOIN.
 	require.NotNil(t, got.MatchedTransactionAt, "MatchedTransactionAt must be populated from transactions JOIN")

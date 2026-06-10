@@ -78,11 +78,11 @@ func TestUpdateStatus_QueryContainsPendingGuard(t *testing.T) {
 func newTestSuggestion(id, userID string) *domain.TransferSuggestion {
 	now := time.Now()
 	reason := "test reason"
-	ruleID := "rule-1"
+	boostID := "boost-1"
 	return &domain.TransferSuggestion{
 		ID:           id,
 		UserID:       userID,
-		BoostID:       &ruleID,
+		BoostID:       &boostID,
 		Amount:       50.00,
 		CurrencyCode: "USD",
 		Reason:       &reason,
@@ -185,10 +185,10 @@ func (r *inMemTransferSuggestionRepo) CountPendingByUserID(ctx context.Context, 
 	return count, nil
 }
 
-func (r *inMemTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
+func (r *inMemTransferSuggestionRepo) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	var out []*domain.TransferSuggestion
 	for _, s := range r.suggestions {
-		if s.BoostID != nil && *s.BoostID == ruleID {
+		if s.BoostID != nil && *s.BoostID == boostID {
 			out = append(out, s)
 		}
 	}

@@ -71,8 +71,8 @@ func (m *mockTransferSuggestionRepo) CountPendingByUserID(ctx context.Context, u
 	return args.Int(0), args.Error(1)
 }
 
-func (m *mockTransferSuggestionRepo) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
-	args := m.Called(ctx, ruleID, limit, offset)
+func (m *mockTransferSuggestionRepo) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
+	args := m.Called(ctx, boostID, limit, offset)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

@@ -48,7 +48,7 @@ type BoostExecutionService interface {
 type boostExecutionService struct {
 	executionRepo       repository.BoostExecutionRepository
 	suggestionRepo      repository.TransferSuggestionRepository
-	ruleRepo            repository.BoostsRepository
+	boostRepo            repository.BoostsRepository
 	savingsGoalRepo     repository.SavingsGoalRepository
 	accountRepo         repository.AccountRepository  // optional; for execution-time ownership checks (GAP AE)
 	notificationService NotificationService
@@ -66,13 +66,13 @@ type NotificationService interface {
 func NewBoostExecutionService(
 	executionRepo repository.BoostExecutionRepository,
 	suggestionRepo repository.TransferSuggestionRepository,
-	ruleRepo repository.BoostsRepository,
+	boostRepo repository.BoostsRepository,
 	notificationService NotificationService,
 ) *boostExecutionService {
 	return &boostExecutionService{
 		executionRepo:       executionRepo,
 		suggestionRepo:      suggestionRepo,
-		ruleRepo:            ruleRepo,
+		boostRepo:            boostRepo,
 		notificationService: notificationService,
 	}
 }
@@ -182,8 +182,8 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 	_ = s.executionRepo.Update(ctx, execution)
 
 	// Update rule execution stats
-	_ = s.ruleRepo.IncrementExecutionCount(ctx, boost.ID)
-	_ = s.ruleRepo.UpdateLastSuccessful(ctx, boost.ID)
+	_ = s.boostRepo.IncrementExecutionCount(ctx, boost.ID)
+	_ = s.boostRepo.UpdateLastSuccessful(ctx, boost.ID)
 
 	if s.analytics != nil {
 		s.analytics.Capture(boost.UserID, phclient.EventBoostTriggered, map[string]interface{}{
@@ -199,7 +199,7 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 // Simplified: No tier restrictions on event-based triggers.
 func (s *boostExecutionService) ProcessEventTrigger(ctx context.Context, userID, eventType string, eventData map[string]interface{}) error {
 	// Get matching rules for this event
-	rules, err := s.ruleRepo.GetBoostsByEventTrigger(ctx, userID, eventType)
+	rules, err := s.boostRepo.GetBoostsByEventTrigger(ctx, userID, eventType)
 	if err != nil {
 		return err
 	}
