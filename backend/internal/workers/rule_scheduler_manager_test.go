@@ -60,8 +60,8 @@ func (m *MockTriggerProvider) Stop(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *MockTriggerProvider) TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
-	args := m.Called(ctx, ruleID, triggerData)
+func (m *MockTriggerProvider) TriggerBoost(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
+	args := m.Called(ctx, boostID, triggerData)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -233,7 +233,7 @@ func TestManager_Stop_WithoutStart(t *testing.T) {
 	cronProvider.AssertNotCalled(t, "Stop")
 }
 
-func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
+func TestManager_TriggerBoost_RoutesToManualProvider(t *testing.T) {
 	manager := NewBoostSchedulerManager(nil)
 
 	cronProvider := NewMockTriggerProvider("cron", false)
@@ -245,7 +245,7 @@ func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
 		Status: domain.ExecutionStatusCompleted,
 	}
 
-	manualProvider.On("TriggerRule", mock.Anything, "rule-1", mock.Anything).Return(execution, nil)
+	manualProvider.On("TriggerBoost", mock.Anything, "rule-1", mock.Anything).Return(execution, nil)
 
 	cronProvider.On("Start", mock.Anything).Return(nil)
 	manualProvider.On("Start", mock.Anything).Return(nil)
@@ -256,17 +256,17 @@ func TestManager_TriggerRule_RoutesToManualProvider(t *testing.T) {
 	ctx := context.Background()
 	_ = manager.Start(ctx)
 
-	result, err := manager.TriggerRule(ctx, "rule-1", nil)
+	result, err := manager.TriggerBoost(ctx, "rule-1", nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, "exec-1", result.ID)
 	assert.Equal(t, domain.ExecutionStatusCompleted, result.Status)
 
-	manualProvider.AssertCalled(t, "TriggerRule", mock.Anything, "rule-1", mock.Anything)
-	cronProvider.AssertNotCalled(t, "TriggerRule")
+	manualProvider.AssertCalled(t, "TriggerBoost", mock.Anything, "rule-1", mock.Anything)
+	cronProvider.AssertNotCalled(t, "TriggerBoost")
 }
 
-func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
+func TestManager_TriggerBoost_NoManualProvider(t *testing.T) {
 	manager := NewBoostSchedulerManager(nil)
 
 	// Only cron provider, which doesn't support manual triggers
@@ -278,14 +278,14 @@ func TestManager_TriggerRule_NoManualProvider(t *testing.T) {
 	ctx := context.Background()
 	_ = manager.Start(ctx)
 
-	result, err := manager.TriggerRule(ctx, "rule-1", nil)
+	result, err := manager.TriggerBoost(ctx, "rule-1", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, ErrNoManualTriggerProvider, err)
 }
 
-func TestManager_TriggerRule_NotStarted(t *testing.T) {
+func TestManager_TriggerBoost_NotStarted(t *testing.T) {
 	manager := NewBoostSchedulerManager(nil)
 
 	manualProvider := NewMockTriggerProvider("manual", true)
@@ -293,8 +293,8 @@ func TestManager_TriggerRule_NotStarted(t *testing.T) {
 
 	ctx := context.Background()
 
-	// TriggerRule without starting manager
-	result, err := manager.TriggerRule(ctx, "rule-1", nil)
+	// TriggerBoost without starting the manager
+	result, err := manager.TriggerBoost(ctx, "rule-1", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)

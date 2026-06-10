@@ -16,10 +16,10 @@ import (
 
 // BoostsRepository defines the interface for boost data access.
 type BoostsRepository interface {
-	// Create creates a new automation rule in the database.
-	Create(ctx context.Context, rule *domain.Boost) error
+	// Create creates a new automation boost in the database.
+	Create(ctx context.Context, boost *domain.Boost) error
 
-	// GetByID retrieves a rule by its ID.
+	// GetByID retrieves a boost by its ID.
 	GetByID(ctx context.Context, id string) (*domain.Boost, error)
 
 	// GetByUserID retrieves all boosts for a specific user, ordered by priority (desc).
@@ -32,16 +32,16 @@ type BoostsRepository interface {
 	// GetEnabledByUserID retrieves all enabled boosts for a user, ordered by priority (desc).
 	GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error)
 
-	// GetByName retrieves a rule by user ID and name.
+	// GetByName retrieves a boost by user ID and name.
 	GetByName(ctx context.Context, userID, name string) (*domain.Boost, error)
 
-	// Update updates an existing rule.
-	Update(ctx context.Context, rule *domain.Boost) error
+	// Update updates an existing boost.
+	Update(ctx context.Context, boost *domain.Boost) error
 
-	// Delete removes a rule from the database.
+	// Delete removes a boost from the database.
 	Delete(ctx context.Context, id string) error
 
-	// CountByUserID counts the total number of automation rules for a user.
+	// CountByUserID counts the total number of automation boosts for a user.
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
 	// IncrementExecutionCount increments the execution count and updates last_executed_at.
@@ -50,15 +50,15 @@ type BoostsRepository interface {
 	// UpdateLastSuccessful updates the last_successful_at timestamp.
 	UpdateLastSuccessful(ctx context.Context, boostID string) error
 
-	// GetBoostsByEventTrigger retrieves enabled rules that trigger on a specific event type.
+	// GetBoostsByEventTrigger retrieves enabled boosts that trigger on a specific event type.
 	GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error)
 
-	// GetBoostsByType retrieves enabled rules of a specific type.
+	// GetBoostsByType retrieves enabled boosts of a specific type.
 	GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error)
 
-	// GetBoostsByScheduleTrigger retrieves all enabled rules with schedule triggers.
-	// Used by CronTriggerProvider to load all scheduled rules on startup and refresh.
-	// Issue #37: Rule Scheduler
+	// GetBoostsByScheduleTrigger retrieves all enabled boosts with schedule triggers.
+	// Used by CronTriggerProvider to load all scheduled boosts on startup and refresh.
+	// Issue #37: Boost Scheduler
 	GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error)
 }
 
@@ -72,30 +72,30 @@ func NewBoostsRepository(db DB) BoostsRepository {
 	return &boostsRepository{db: db}
 }
 
-// Create creates a new automation rule in the database.
-func (r *boostsRepository) Create(ctx context.Context, rule *domain.Boost) error {
+// Create creates a new automation boost in the database.
+func (r *boostsRepository) Create(ctx context.Context, boost *domain.Boost) error {
 	// Generate UUID if not already set
-	if rule.ID == "" {
-		rule.ID = uuid.New().String()
+	if boost.ID == "" {
+		boost.ID = uuid.New().String()
 	}
 
 	// Set timestamps
 	now := time.Now()
-	rule.CreatedAt = now
-	rule.UpdatedAt = now
+	boost.CreatedAt = now
+	boost.UpdatedAt = now
 
 	// Set defaults
-	if rule.ConditionLogic == "" {
-		rule.ConditionLogic = "AND"
+	if boost.ConditionLogic == "" {
+		boost.ConditionLogic = "AND"
 	}
 
 	// Marshal JSON fields
-	triggerJSON, err := json.Marshal(rule.TriggerConfig)
+	triggerJSON, err := json.Marshal(boost.TriggerConfig)
 	if err != nil {
 		return err
 	}
 
-	conditionsJSON, err := json.Marshal(rule.Conditions)
+	conditionsJSON, err := json.Marshal(boost.Conditions)
 	if err != nil {
 		return err
 	}
@@ -110,22 +110,22 @@ func (r *boostsRepository) Create(ctx context.Context, rule *domain.Boost) error
 	`
 
 	_, err = r.db.Exec(ctx, query,
-		rule.ID,
-		rule.UserID,
-		rule.Name,
-		rule.Description,
-		rule.Enabled,
-		rule.Priority,
-		rule.BoostType,
+		boost.ID,
+		boost.UserID,
+		boost.Name,
+		boost.Description,
+		boost.Enabled,
+		boost.Priority,
+		boost.BoostType,
 		triggerJSON,
 		conditionsJSON,
-		rule.ConditionLogic,
-		rule.Actions,
-		rule.ExecutionCount,
-		rule.LastExecutedAt,
-		rule.LastSuccessfulAt,
-		rule.CreatedAt,
-		rule.UpdatedAt,
+		boost.ConditionLogic,
+		boost.Actions,
+		boost.ExecutionCount,
+		boost.LastExecutedAt,
+		boost.LastSuccessfulAt,
+		boost.CreatedAt,
+		boost.UpdatedAt,
 	)
 
 	if err != nil {
@@ -140,7 +140,7 @@ func (r *boostsRepository) Create(ctx context.Context, rule *domain.Boost) error
 	return nil
 }
 
-// GetByID retrieves a rule by its ID.
+// GetByID retrieves a boost by its ID.
 func (r *boostsRepository) GetByID(ctx context.Context, id string) (*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -151,10 +151,10 @@ func (r *boostsRepository) GetByID(ctx context.Context, id string) (*domain.Boos
 		WHERE id = $1
 	`
 
-	return r.scanRule(r.db.QueryRow(ctx, query, id))
+	return r.scanBoost(r.db.QueryRow(ctx, query, id))
 }
 
-// GetByUserID retrieves all rules for a specific user, ordered by priority (desc).
+// GetByUserID retrieves all boosts for a specific user, ordered by priority (desc).
 func (r *boostsRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -166,7 +166,7 @@ func (r *boostsRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID)
+	return r.queryBoosts(ctx, query, userID)
 }
 
 // GetByUserIDFiltered retrieves boosts for a user with an optional boost-type filter.
@@ -193,7 +193,7 @@ func (r *boostsRepository) GetByUserIDFiltered(ctx context.Context, userID strin
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID, typeStrs)
+	return r.queryBoosts(ctx, query, userID, typeStrs)
 }
 
 // GetEnabledByUserID retrieves all enabled boosts for a user, ordered by priority (desc).
@@ -208,10 +208,10 @@ func (r *boostsRepository) GetEnabledByUserID(ctx context.Context, userID string
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID)
+	return r.queryBoosts(ctx, query, userID)
 }
 
-// GetByName retrieves a rule by user ID and name.
+// GetByName retrieves a boost by user ID and name.
 func (r *boostsRepository) GetByName(ctx context.Context, userID, name string) (*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -222,20 +222,20 @@ func (r *boostsRepository) GetByName(ctx context.Context, userID, name string) (
 		WHERE user_id = $1 AND name = $2
 	`
 
-	return r.scanRule(r.db.QueryRow(ctx, query, userID, name))
+	return r.scanBoost(r.db.QueryRow(ctx, query, userID, name))
 }
 
-// Update updates an existing rule.
-func (r *boostsRepository) Update(ctx context.Context, rule *domain.Boost) error {
-	rule.UpdatedAt = time.Now()
+// Update updates an existing boost.
+func (r *boostsRepository) Update(ctx context.Context, boost *domain.Boost) error {
+	boost.UpdatedAt = time.Now()
 
 	// Marshal JSON fields
-	triggerJSON, err := json.Marshal(rule.TriggerConfig)
+	triggerJSON, err := json.Marshal(boost.TriggerConfig)
 	if err != nil {
 		return err
 	}
 
-	conditionsJSON, err := json.Marshal(rule.Conditions)
+	conditionsJSON, err := json.Marshal(boost.Conditions)
 	if err != nil {
 		return err
 	}
@@ -249,16 +249,16 @@ func (r *boostsRepository) Update(ctx context.Context, rule *domain.Boost) error
 	`
 
 	ct, err := r.db.Exec(ctx, query,
-		rule.Name,
-		rule.Description,
-		rule.Enabled,
-		rule.Priority,
+		boost.Name,
+		boost.Description,
+		boost.Enabled,
+		boost.Priority,
 		triggerJSON,
 		conditionsJSON,
-		rule.ConditionLogic,
-		rule.Actions,
-		rule.UpdatedAt,
-		rule.ID,
+		boost.ConditionLogic,
+		boost.Actions,
+		boost.UpdatedAt,
+		boost.ID,
 	)
 	if err != nil {
 		// Check for unique constraint violations
@@ -276,7 +276,7 @@ func (r *boostsRepository) Update(ctx context.Context, rule *domain.Boost) error
 	return nil
 }
 
-// Delete removes a rule from the database.
+// Delete removes a boost from the database.
 func (r *boostsRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM boosts WHERE id = $1`
 
@@ -292,7 +292,7 @@ func (r *boostsRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// CountByUserID counts the total number of automation rules for a user.
+// CountByUserID counts the total number of automation boosts for a user.
 func (r *boostsRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	query := `SELECT COUNT(*) FROM boosts WHERE user_id = $1`
 
@@ -345,7 +345,7 @@ func (r *boostsRepository) UpdateLastSuccessful(ctx context.Context, boostID str
 	return nil
 }
 
-// GetBoostsByEventTrigger retrieves enabled rules that trigger on a specific event type.
+// GetBoostsByEventTrigger retrieves enabled boosts that trigger on a specific event type.
 // Uses JSONB containment to match trigger_config.event field.
 func (r *boostsRepository) GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error) {
 	query := `
@@ -361,10 +361,10 @@ func (r *boostsRepository) GetBoostsByEventTrigger(ctx context.Context, userID, 
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID, eventType)
+	return r.queryBoosts(ctx, query, userID, eventType)
 }
 
-// GetBoostsByType retrieves enabled rules of a specific type.
+// GetBoostsByType retrieves enabled boosts of a specific type.
 func (r *boostsRepository) GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -376,11 +376,11 @@ func (r *boostsRepository) GetBoostsByType(ctx context.Context, userID string, b
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query, userID, boostType)
+	return r.queryBoosts(ctx, query, userID, boostType)
 }
 
-// GetBoostsByScheduleTrigger retrieves all enabled rules with schedule triggers.
-// Issue #37: Rule Scheduler - used by CronTriggerProvider.
+// GetBoostsByScheduleTrigger retrieves all enabled boosts with schedule triggers.
+// Issue #37: Boost Scheduler - used by CronTriggerProvider.
 func (r *boostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error) {
 	query := `
 		SELECT id, user_id, name, description, enabled, priority,
@@ -394,31 +394,31 @@ func (r *boostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*d
 		ORDER BY priority DESC, created_at ASC
 	`
 
-	return r.queryRules(ctx, query)
+	return r.queryBoosts(ctx, query)
 }
 
-// scanRule scans a single rule from a row.
-func (r *boostsRepository) scanRule(row pgx.Row) (*domain.Boost, error) {
-	rule := &domain.Boost{}
+// scanBoost scans a single boost from a row.
+func (r *boostsRepository) scanBoost(row pgx.Row) (*domain.Boost, error) {
+	boost := &domain.Boost{}
 	var triggerJSON, conditionsJSON []byte
 
 	err := row.Scan(
-		&rule.ID,
-		&rule.UserID,
-		&rule.Name,
-		&rule.Description,
-		&rule.Enabled,
-		&rule.Priority,
-		&rule.BoostType,
+		&boost.ID,
+		&boost.UserID,
+		&boost.Name,
+		&boost.Description,
+		&boost.Enabled,
+		&boost.Priority,
+		&boost.BoostType,
 		&triggerJSON,
 		&conditionsJSON,
-		&rule.ConditionLogic,
-		&rule.Actions,
-		&rule.ExecutionCount,
-		&rule.LastExecutedAt,
-		&rule.LastSuccessfulAt,
-		&rule.CreatedAt,
-		&rule.UpdatedAt,
+		&boost.ConditionLogic,
+		&boost.Actions,
+		&boost.ExecutionCount,
+		&boost.LastExecutedAt,
+		&boost.LastSuccessfulAt,
+		&boost.CreatedAt,
+		&boost.UpdatedAt,
 	)
 
 	if err != nil {
@@ -429,65 +429,65 @@ func (r *boostsRepository) scanRule(row pgx.Row) (*domain.Boost, error) {
 	}
 
 	// Unmarshal JSON fields
-	if err := json.Unmarshal(triggerJSON, &rule.TriggerConfig); err != nil {
+	if err := json.Unmarshal(triggerJSON, &boost.TriggerConfig); err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
+	if err := json.Unmarshal(conditionsJSON, &boost.Conditions); err != nil {
 		return nil, err
 	}
 
-	return rule, nil
+	return boost, nil
 }
 
-// queryRules is a helper to query and scan multiple rules.
-func (r *boostsRepository) queryRules(ctx context.Context, query string, args ...interface{}) ([]*domain.Boost, error) {
+// queryBoosts is a helper to query and scan multiple boosts.
+func (r *boostsRepository) queryBoosts(ctx context.Context, query string, args ...interface{}) ([]*domain.Boost, error) {
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var rules []*domain.Boost
+	var boosts []*domain.Boost
 	for rows.Next() {
-		rule := &domain.Boost{}
+		boost := &domain.Boost{}
 		var triggerJSON, conditionsJSON []byte
 
 		err := rows.Scan(
-			&rule.ID,
-			&rule.UserID,
-			&rule.Name,
-			&rule.Description,
-			&rule.Enabled,
-			&rule.Priority,
-			&rule.BoostType,
+			&boost.ID,
+			&boost.UserID,
+			&boost.Name,
+			&boost.Description,
+			&boost.Enabled,
+			&boost.Priority,
+			&boost.BoostType,
 			&triggerJSON,
 			&conditionsJSON,
-			&rule.ConditionLogic,
-			&rule.Actions,
-			&rule.ExecutionCount,
-			&rule.LastExecutedAt,
-			&rule.LastSuccessfulAt,
-			&rule.CreatedAt,
-			&rule.UpdatedAt,
+			&boost.ConditionLogic,
+			&boost.Actions,
+			&boost.ExecutionCount,
+			&boost.LastExecutedAt,
+			&boost.LastSuccessfulAt,
+			&boost.CreatedAt,
+			&boost.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
 
 		// Unmarshal JSON fields
-		if err := json.Unmarshal(triggerJSON, &rule.TriggerConfig); err != nil {
+		if err := json.Unmarshal(triggerJSON, &boost.TriggerConfig); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(conditionsJSON, &rule.Conditions); err != nil {
+		if err := json.Unmarshal(conditionsJSON, &boost.Conditions); err != nil {
 			return nil, err
 		}
 
-		rules = append(rules, rule)
+		boosts = append(boosts, boost)
 	}
 
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	return rules, nil
+	return boosts, nil
 }

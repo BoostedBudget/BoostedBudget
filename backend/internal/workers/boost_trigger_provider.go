@@ -1,5 +1,5 @@
-// Package workers provides background job processing for automation rules.
-// Issue #37: Rule Scheduler - modular trigger provider architecture.
+// Package workers provides background job processing for automation boosts.
+// Issue #37: Boost Scheduler - modular trigger provider architecture.
 package workers
 
 import (
@@ -35,16 +35,16 @@ type BoostTriggerProvider interface {
 	// Should respect the context for timeout.
 	Stop(ctx context.Context) error
 
-	// TriggerRule manually triggers a specific rule with optional trigger data.
+	// TriggerBoost manually triggers a specific boost with optional trigger data.
 	// Only applicable to providers that support on-demand triggering.
 	// Returns the execution result or an error.
 	//
-	// For manual provider: executes the rule immediately with provided data.
+	// For manual provider: executes the boost immediately with provided data.
 	// For cron provider: not supported (returns ErrManualTriggerNotSupported).
-	TriggerRule(ctx context.Context, ruleID string, triggerData map[string]interface{}) (*domain.BoostExecution, error)
+	TriggerBoost(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error)
 
-	// SupportsManualTrigger indicates if this provider supports TriggerRule().
-	// Cron: false (rules run on schedule, not on-demand)
+	// SupportsManualTrigger indicates if this provider supports TriggerBoost().
+	// Cron: false (boosts run on schedule, not on-demand)
 	// Manual: true (entire purpose is on-demand triggering)
 	SupportsManualTrigger() bool
 }

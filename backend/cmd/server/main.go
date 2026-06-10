@@ -419,7 +419,7 @@ func main() {
 			budgetLogger,
 		)
 
-		// Issue #37: Automation Rule Service and Rule Scheduler
+		// Issue #37: Boost Service and Boost Scheduler
 		boostService := services.NewBoostService(boostRepo)
 		// Issue #972 GAP AE: inject repos for create/update IDOR ownership validation.
 		boostService.SetSavingsGoalRepo(savingsGoalRepo)
@@ -437,7 +437,7 @@ func main() {
 		// SetEventProcessor must be called after boostExecutionService is fully initialized.
 		budgetSyncService.SetEventProcessor(boostExecutionService)
 
-		// Issue #37: Rule Scheduler Manager with providers
+		// Issue #37: Boost Scheduler Manager with providers
 		boostSchedulerManager = workers.NewBoostSchedulerManager(appLogger)
 
 		// Create and register CronTriggerProvider
@@ -1385,7 +1385,7 @@ func main() {
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		appLogger.Info("Huma savings goal routes registered")
 
-		// Register Huma automation rule routes (Issue #37: Rule Scheduler)
+		// Register Huma boost routes (Issue #37: Boost Scheduler)
 		humaBoostHandler := operations.NewBoostHandler(boostService, boostSchedulerManager)
 		humaBoostHandler.SetExecutionService(boostExecutionService) // Issue #579: Wire execution service for test endpoint
 		operations.RegisterBoostRoutes(humaAPI, humaBoostHandler)

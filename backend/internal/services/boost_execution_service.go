@@ -1,5 +1,5 @@
 // Package services provides business logic for boost execution.
-// Issue #35: Rules Engine Core - condition evaluation and action execution.
+// Issue #35: Boosts Engine Core - condition evaluation and action execution.
 package services
 
 import (
@@ -417,7 +417,7 @@ func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, b
 	}
 
 	// Create reason string
-	reason := fmt.Sprintf("Rule '%s' triggered", boost.Name)
+	reason := fmt.Sprintf("Boost '%s' triggered", boost.Name)
 
 	// Create suggestion
 	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour) // 30 days
@@ -488,7 +488,7 @@ func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context,
 	// Verify the resolved account belongs to this user before using it.
 	// If accountRepo is not configured, apply the resolved ID without an ownership check
 	// and log a warning — this is safe because (a) production always wires accountRepo
-	// (main.go:~1324) and (b) the service-layer validateRuleReferenceOwnership already
+	// (main.go:~1324) and (b) the service-layer validateBoostReferenceOwnership already
 	// validates from_user_account_id ownership at create/update time. Issue #972 GAP AE.
 	if s.accountRepo != nil {
 		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
@@ -679,7 +679,7 @@ func (s *boostExecutionService) calculateRolloverAmount(action *domain.RolloverA
 }
 
 // executeSavingsGoal creates a transfer suggestion to contribute to a savings goal.
-// Issue #36: Rule Executors - Savings Goal Executor.
+// Issue #36: Boost Executors - Savings Goal Executor.
 func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *domain.Boost, executionID string, triggerData map[string]interface{}) error {
 	savingsGoalAction, err := boost.ParseSavingsGoalAction()
 	if err != nil {
@@ -698,7 +698,7 @@ func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *d
 
 	goal, err := s.savingsGoalRepo.GetByIDForUser(ctx, savingsGoalAction.SavingsGoalID, boost.UserID)
 	if err != nil {
-		// Log but don't fail the batch — this rule is silently skipped.
+		// Log but don't fail the batch — this boost is silently skipped.
 		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping boost",
 			"boost_id", boost.ID, "user_id", boost.UserID,
 			"savings_goal_id", savingsGoalAction.SavingsGoalID, "error", err)

@@ -1,5 +1,5 @@
 // Package services provides business logic for boosts.
-// Issue #35: Rules Engine Core - CRUD operations.
+// Issue #35: Boosts Engine Core - CRUD operations.
 package services
 
 import (
@@ -14,33 +14,33 @@ import (
 
 // BoostService defines the interface for boost business logic.
 type BoostService interface {
-	// CreateRule creates a new automation rule (unlimited rules for all tiers).
-	CreateRule(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error)
+	// CreateBoost creates a new automation boost (unlimited boosts for all tiers).
+	CreateBoost(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error)
 
-	// GetUserRules retrieves all boosts for a user, ordered by priority.
-	GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error)
+	// GetUserBoosts retrieves all boosts for a user, ordered by priority.
+	GetUserBoosts(ctx context.Context, userID string) ([]*domain.Boost, error)
 
-	// GetUserRulesFiltered retrieves boosts optionally filtered by boost types.
-	// When boostTypes is empty, all boosts are returned (same as GetUserRules).
-	GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error)
+	// GetUserBoostsFiltered retrieves boosts optionally filtered by boost types.
+	// When boostTypes is empty, all boosts are returned (same as GetUserBoosts).
+	GetUserBoostsFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error)
 
-	// GetRuleByID retrieves a specific boost by ID.
-	GetRuleByID(ctx context.Context, userID, boostID string) (*domain.Boost, error)
+	// GetBoostByID retrieves a specific boost by ID.
+	GetBoostByID(ctx context.Context, userID, boostID string) (*domain.Boost, error)
 
-	// UpdateRule updates a rule's configuration.
-	UpdateRule(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error)
+	// UpdateBoost updates a boost's configuration.
+	UpdateBoost(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error)
 
-	// DeleteRule removes a rule.
-	DeleteRule(ctx context.Context, userID, boostID string) error
+	// DeleteBoost removes a boost.
+	DeleteBoost(ctx context.Context, userID, boostID string) error
 
-	// ToggleRule enables or disables a rule.
-	ToggleRule(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error)
+	// ToggleBoost enables or disables a boost.
+	ToggleBoost(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error)
 
-	// GetEnabledRules retrieves all enabled rules for a user.
-	GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error)
+	// GetEnabledBoosts retrieves all enabled boosts for a user.
+	GetEnabledBoosts(ctx context.Context, userID string) ([]*domain.Boost, error)
 
-	// GetRulesByType retrieves enabled rules of a specific type.
-	GetRulesByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error)
+	// GetBoostsByType retrieves enabled boosts of a specific type.
+	GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error)
 }
 
 // boostService implements BoostService.
@@ -54,7 +54,7 @@ type boostService struct {
 // NewBoostService creates a new BoostService instance.
 // Returns the concrete type so callers in main.go can call optional setter methods
 // (SetSavingsGoalRepo, SetAccountRepo) without adding them to the interface — consistent
-// with NewRuleExecutionService's pattern.
+// with NewBoostExecutionService's pattern.
 func NewBoostService(
 	boostRepo repository.BoostsRepository,
 ) *boostService {
@@ -84,33 +84,33 @@ func (s *boostService) SetBudgetRepo(repo repository.BudgetRepository) {
 	s.budgetRepo = repo
 }
 
-// validateRuleReferenceOwnership checks that IDs referenced in the rule's actions (savings_goal_id,
-// from_account_id, to_account_id, from_user_account_id, to_user_account_id) belong to rule.UserID.
+// validateBoostReferenceOwnership checks that IDs referenced in the boost's actions (savings_goal_id,
+// from_account_id, to_account_id, from_user_account_id, to_user_account_id) belong to boost.UserID.
 // Returns an error if any referenced ID belongs to a different user. Silently skips if the required
 // repo is not injected.
-// Issue #972: GAP AE — prevents IDOR via crafted automation rules, including the chain-resolver
+// Issue #972: GAP AE — prevents IDOR via crafted automation boosts, including the chain-resolver
 // attack vector where an attacker supplies their own from_account_id (passes the ID check) plus a
 // victim's from_user_account_id (used by the chain resolver to overwrite the destination).
-func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule *domain.Boost) error {
-	switch rule.BoostType {
+func (s *boostService) validateBoostReferenceOwnership(ctx context.Context, boost *domain.Boost) error {
+	switch boost.BoostType {
 	case domain.BoostTypeSavingsGoal:
-		action, err := rule.ParseSavingsGoalAction()
+		action, err := boost.ParseSavingsGoalAction()
 		if err != nil {
 			return err
 		}
 		if s.savingsGoalRepo != nil && action.SavingsGoalID != "" {
-			if _, err := s.savingsGoalRepo.GetByIDForUser(ctx, action.SavingsGoalID, rule.UserID); err != nil {
+			if _, err := s.savingsGoalRepo.GetByIDForUser(ctx, action.SavingsGoalID, boost.UserID); err != nil {
 				return fmt.Errorf("savings_goal_id does not belong to this user")
 			}
 		}
 		if s.accountRepo != nil && action.FromAccountID != "" {
-			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, rule.UserID); err != nil {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, boost.UserID); err != nil {
 				return fmt.Errorf("from_account_id does not belong to this user")
 			}
 		}
 
 	case domain.BoostTypeTransferSuggestion:
-		action, err := rule.ParseTransferAction()
+		action, err := boost.ParseTransferAction()
 		if err != nil {
 			return err
 		}
@@ -119,12 +119,12 @@ func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule 
 		}
 		// Verify direct account IDs belong to the user
 		if action.FromAccountID != "" {
-			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, rule.UserID); err != nil {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.FromAccountID, boost.UserID); err != nil {
 				return fmt.Errorf("from_account_id does not belong to this user")
 			}
 		}
 		if action.ToAccountID != "" {
-			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.ToAccountID, rule.UserID); err != nil {
+			if _, err := s.accountRepo.GetByIDAndUser(ctx, action.ToAccountID, boost.UserID); err != nil {
 				return fmt.Errorf("to_account_id does not belong to this user")
 			}
 		}
@@ -133,20 +133,20 @@ func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule 
 		// (passes the check above) plus a victim's from_user_account_id, and the unscoped
 		// ResolveActiveID would overwrite the suggestion's destination at execution time.
 		if action.FromUserAccountID != "" {
-			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.FromUserAccountID, rule.UserID); err != nil {
+			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.FromUserAccountID, boost.UserID); err != nil {
 				return fmt.Errorf("from_user_account_id does not belong to this user")
 			}
 		}
 		if action.ToUserAccountID != "" {
-			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.ToUserAccountID, rule.UserID); err != nil {
+			if _, err := s.accountRepo.GetByUserAccountIDAndUser(ctx, action.ToUserAccountID, boost.UserID); err != nil {
 				return fmt.Errorf("to_user_account_id does not belong to this user")
 			}
 		}
 	}
 
-	// Issue #1270: verify any condition CategoryID belongs to the rule's user.
+	// Issue #1270: verify any condition CategoryID belongs to the boost's user.
 	if s.budgetRepo != nil {
-		for _, condition := range rule.Conditions {
+		for _, condition := range boost.Conditions {
 			if condition.CategoryID == "" {
 				continue
 			}
@@ -154,7 +154,7 @@ func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule 
 			if !strings.HasPrefix(condition.Field, "budget_category.") {
 				continue
 			}
-			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, rule.UserID)
+			cat, err := s.budgetRepo.GetCategoryByIDAndUser(ctx, condition.CategoryID, boost.UserID)
 			if err != nil {
 				if errors.Is(err, domain.ErrBudgetCategoryNotFound) {
 					return fmt.Errorf("%w: condition category_id does not belong to this user", domain.ErrBoostConditionForbidden)
@@ -173,10 +173,10 @@ func (s *boostService) validateRuleReferenceOwnership(ctx context.Context, rule 
 	return nil
 }
 
-// CreateRule creates a new automation rule (unlimited rules for all tiers).
-func (s *boostService) CreateRule(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error) {
-	// Create the rule
-	rule := &domain.Boost{
+// CreateBoost creates a new automation boost (unlimited boosts for all tiers).
+func (s *boostService) CreateBoost(ctx context.Context, userID string, req *domain.CreateBoostRequest) (*domain.Boost, error) {
+	// Create the boost
+	boost := &domain.Boost{
 		UserID:         userID,
 		Name:           req.Name,
 		Description:    req.Description,
@@ -190,160 +190,160 @@ func (s *boostService) CreateRule(ctx context.Context, userID string, req *domai
 	}
 
 	// Set defaults
-	if rule.ConditionLogic == "" {
-		rule.ConditionLogic = "AND"
+	if boost.ConditionLogic == "" {
+		boost.ConditionLogic = "AND"
 	}
 
 	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
-	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// category-scoped conditions. It already wraps errors with ErrInvalidBoost so the HTTP
 	// layer returns 400 (not 500).
-	if err := rule.ValidateForPersistence(); err != nil {
+	if err := boost.ValidateForPersistence(); err != nil {
 		return nil, err
 	}
 
-	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
-	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
+	// Verify referenced IDs (savings_goal_id, account IDs) belong to the boost owner (GAP AE).
+	if err := s.validateBoostReferenceOwnership(ctx, boost); err != nil {
 		return nil, err
 	}
 
 	// Save to database
-	if err := s.boostRepo.Create(ctx, rule); err != nil {
+	if err := s.boostRepo.Create(ctx, boost); err != nil {
 		return nil, err
 	}
 
-	return rule, nil
+	return boost, nil
 }
 
-// GetUserRules retrieves all automation rules for a user, ordered by priority.
-func (s *boostService) GetUserRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
+// GetUserBoosts retrieves all automation boosts for a user, ordered by priority.
+func (s *boostService) GetUserBoosts(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	return s.boostRepo.GetByUserID(ctx, userID)
 }
 
-// GetUserRulesFiltered retrieves boosts optionally filtered by boost types.
-// When boostTypes is empty, all boosts are returned (delegates to GetUserRules).
-func (s *boostService) GetUserRulesFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+// GetUserBoostsFiltered retrieves boosts optionally filtered by boost types.
+// When boostTypes is empty, all boosts are returned (delegates to GetUserBoosts).
+func (s *boostService) GetUserBoostsFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
 	return s.boostRepo.GetByUserIDFiltered(ctx, userID, boostTypes)
 }
 
-// GetRuleByID retrieves a specific boost by ID.
-func (s *boostService) GetRuleByID(ctx context.Context, userID, boostID string) (*domain.Boost, error) {
-	rule, err := s.boostRepo.GetByID(ctx, boostID)
+// GetBoostByID retrieves a specific boost by ID.
+func (s *boostService) GetBoostByID(ctx context.Context, userID, boostID string) (*domain.Boost, error) {
+	boost, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
-	if rule.UserID != userID {
+	if boost.UserID != userID {
 		return nil, domain.ErrBoostNotFound
 	}
 
-	return rule, nil
+	return boost, nil
 }
 
-// UpdateRule updates a rule's configuration.
-func (s *boostService) UpdateRule(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
-	// Get existing rule
-	rule, err := s.boostRepo.GetByID(ctx, boostID)
+// UpdateBoost updates a boost's configuration.
+func (s *boostService) UpdateBoost(ctx context.Context, userID, boostID string, req *domain.UpdateBoostRequest) (*domain.Boost, error) {
+	// Get existing boost
+	boost, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
-	if rule.UserID != userID {
+	if boost.UserID != userID {
 		return nil, domain.ErrBoostNotFound
 	}
 
 	// Apply updates
 	if req.Name != nil {
-		rule.Name = *req.Name
+		boost.Name = *req.Name
 	}
 	if req.Description != nil {
-		rule.Description = req.Description
+		boost.Description = req.Description
 	}
 	if req.Enabled != nil {
-		rule.Enabled = *req.Enabled
+		boost.Enabled = *req.Enabled
 	}
 	if req.Priority != nil {
-		rule.Priority = *req.Priority
+		boost.Priority = *req.Priority
 	}
 	if req.TriggerConfig != nil {
-		rule.TriggerConfig = *req.TriggerConfig
+		boost.TriggerConfig = *req.TriggerConfig
 	}
 	if req.Conditions != nil {
-		rule.Conditions = *req.Conditions
+		boost.Conditions = *req.Conditions
 	}
 	if req.ConditionLogic != nil {
-		rule.ConditionLogic = *req.ConditionLogic
+		boost.ConditionLogic = *req.ConditionLogic
 	}
 	if req.Actions != nil {
-		rule.Actions = *req.Actions
+		boost.Actions = *req.Actions
 	}
 
 	// ValidateForPersistence checks static rules (via Validate) AND requires scope IDs for
-	// category-scoped conditions. It already wraps errors with ErrInvalidRule so the HTTP
+	// category-scoped conditions. It already wraps errors with ErrInvalidBoost so the HTTP
 	// layer returns 400 (not 500).
-	if err := rule.ValidateForPersistence(); err != nil {
+	if err := boost.ValidateForPersistence(); err != nil {
 		return nil, err
 	}
 
-	// Verify referenced IDs (savings_goal_id, account IDs) belong to the rule owner (GAP AE).
-	if err := s.validateRuleReferenceOwnership(ctx, rule); err != nil {
+	// Verify referenced IDs (savings_goal_id, account IDs) belong to the boost owner (GAP AE).
+	if err := s.validateBoostReferenceOwnership(ctx, boost); err != nil {
 		return nil, err
 	}
 
 	// Save updates
-	if err := s.boostRepo.Update(ctx, rule); err != nil {
+	if err := s.boostRepo.Update(ctx, boost); err != nil {
 		return nil, err
 	}
 
-	return rule, nil
+	return boost, nil
 }
 
-// DeleteRule removes a rule.
-func (s *boostService) DeleteRule(ctx context.Context, userID, boostID string) error {
+// DeleteBoost removes a boost.
+func (s *boostService) DeleteBoost(ctx context.Context, userID, boostID string) error {
 	// Verify ownership first
-	rule, err := s.boostRepo.GetByID(ctx, boostID)
+	boost, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return err
 	}
 
-	if rule.UserID != userID {
+	if boost.UserID != userID {
 		return domain.ErrBoostNotFound
 	}
 
 	return s.boostRepo.Delete(ctx, boostID)
 }
 
-// ToggleRule enables or disables a rule.
-func (s *boostService) ToggleRule(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error) {
-	// Get existing rule
-	rule, err := s.boostRepo.GetByID(ctx, boostID)
+// ToggleBoost enables or disables a boost.
+func (s *boostService) ToggleBoost(ctx context.Context, userID, boostID string, enabled bool) (*domain.Boost, error) {
+	// Get existing boost
+	boost, err := s.boostRepo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify ownership
-	if rule.UserID != userID {
+	if boost.UserID != userID {
 		return nil, domain.ErrBoostNotFound
 	}
 
 	// Update enabled status
-	rule.Enabled = enabled
+	boost.Enabled = enabled
 
 	// Save update
-	if err := s.boostRepo.Update(ctx, rule); err != nil {
+	if err := s.boostRepo.Update(ctx, boost); err != nil {
 		return nil, err
 	}
 
-	return rule, nil
+	return boost, nil
 }
 
-// GetEnabledRules retrieves all enabled rules for a user.
-func (s *boostService) GetEnabledRules(ctx context.Context, userID string) ([]*domain.Boost, error) {
+// GetEnabledBoosts retrieves all enabled boosts for a user.
+func (s *boostService) GetEnabledBoosts(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	return s.boostRepo.GetEnabledByUserID(ctx, userID)
 }
 
-// GetRulesByType retrieves enabled rules of a specific type.
-func (s *boostService) GetRulesByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
+// GetBoostsByType retrieves enabled boosts of a specific type.
+func (s *boostService) GetBoostsByType(ctx context.Context, userID string, boostType domain.BoostType) ([]*domain.Boost, error) {
 	return s.boostRepo.GetBoostsByType(ctx, userID, boostType)
 }

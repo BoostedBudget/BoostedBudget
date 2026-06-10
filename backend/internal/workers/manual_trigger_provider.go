@@ -1,5 +1,5 @@
-// Package workers provides background job processing for automation rules.
-// Issue #37: Rule Scheduler - ManualTriggerProvider for on-demand rule execution.
+// Package workers provides background job processing for automation boosts.
+// Issue #37: Boost Scheduler - ManualTriggerProvider for on-demand boost execution.
 package workers
 
 import (
@@ -12,10 +12,10 @@ import (
 )
 
 // Errors for ManualTriggerProvider.
-var ErrRuleDisabled = errors.New("rule is disabled")
+var ErrBoostDisabled = errors.New("boost is disabled")
 
-// ManualTriggerProvider implements BoostTriggerProvider for on-demand rule execution.
-// It allows rules to be triggered manually via API with optional user-provided data.
+// ManualTriggerProvider implements BoostTriggerProvider for on-demand boost execution.
+// It allows boosts to be triggered manually via API with optional user-provided data.
 type ManualTriggerProvider struct {
 	logger   *slog.Logger
 	repo     BoostRepositoryInterface
@@ -60,9 +60,9 @@ func (p *ManualTriggerProvider) Stop(ctx context.Context) error {
 	return nil
 }
 
-// TriggerRule executes a rule on-demand with optional user-provided data.
+// TriggerBoost executes a boost on-demand with optional user-provided data.
 // The triggerData is merged with system-generated metadata before execution.
-func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
+func (p *ManualTriggerProvider) TriggerBoost(ctx context.Context, boostID string, triggerData map[string]interface{}) (*domain.BoostExecution, error) {
 	// Check context first
 	select {
 	case <-ctx.Done():
@@ -70,26 +70,26 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, boostID string,
 	default:
 	}
 
-	// Fetch the rule
-	rule, err := p.repo.GetByID(ctx, boostID)
+	// Fetch the boost
+	boost, err := p.repo.GetByID(ctx, boostID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify rule is enabled
-	if !rule.Enabled {
-		return nil, ErrRuleDisabled
+	// Verify boost is enabled
+	if !boost.Enabled {
+		return nil, ErrBoostDisabled
 	}
 
-	p.logger.Info("triggering rule", "boost_id", boostID, "user_id", rule.UserID)
+	p.logger.Info("triggering boost", "boost_id", boostID, "user_id", boost.UserID)
 
 	// Build trigger data by merging user data with system metadata
-	mergedTriggerData := p.buildTriggerData(boostID, rule.UserID, triggerData)
+	mergedTriggerData := p.buildTriggerData(boostID, boost.UserID, triggerData)
 
-	// Execute the rule
-	execution, err := p.executor.ExecuteBoost(ctx, rule, mergedTriggerData)
+	// Execute the boost
+	execution, err := p.executor.ExecuteBoost(ctx, boost, mergedTriggerData)
 	if err != nil {
-		p.logger.Error("error executing rule", "boost_id", boostID, "error", err)
+		p.logger.Error("error executing boost", "boost_id", boostID, "error", err)
 		// Update execution count even on failure
 		_ = p.repo.IncrementExecutionCount(ctx, boostID)
 		return nil, err
@@ -106,7 +106,7 @@ func (p *ManualTriggerProvider) TriggerRule(ctx context.Context, boostID string,
 		}
 	}
 
-	p.logger.Info("rule execution completed", "boost_id", boostID, "status", execution.Status)
+	p.logger.Info("boost execution completed", "boost_id", boostID, "status", execution.Status)
 	return execution, nil
 }
 
