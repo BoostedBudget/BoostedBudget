@@ -48,19 +48,19 @@ describe('buildSpecIndex param extraction (R8-2b regression)', () => {
   })
 
   it('keeps array-type params with description even when they have no items.enum', () => {
-    // getBoosts.rule_type: type:array, has description, items have no enum.
+    // getBoosts.boost_type: type:array, has description, items have no enum.
     // The valid values are enforced handler-side (422); the OpenAPI schema uses plain items:{type:string}.
     // Guards that description-bearing array params are included but WITHOUT an enum field.
-    // (#1283: operationId renamed from getAutomationRules; query param name rule_type unchanged)
+    // (#1283: operationId renamed from getAutomationRules; #1287: query param renamed rule_type→boost_type)
     const entry = entries.find((e) => e.operationId === 'getBoosts')
     expect(entry).toBeDefined()
 
-    const ruleTypeParam = entry?.parameters?.find((p) => p.name === 'rule_type')
-    expect(ruleTypeParam).toBeDefined()
-    expect(ruleTypeParam?.in).toBe('query')
-    expect(ruleTypeParam?.description).toBeTruthy()
+    const boostTypeParam = entry?.parameters?.find((p) => p.name === 'boost_type')
+    expect(boostTypeParam).toBeDefined()
+    expect(boostTypeParam?.in).toBe('query')
+    expect(boostTypeParam?.description).toBeTruthy()
     // No enum — handler-side validation means the spec doesn't enumerate values on items
-    expect(ruleTypeParam?.enum).toBeUndefined()
+    expect(boostTypeParam?.enum).toBeUndefined()
   })
 
   it('every included parameter carries at least a description or an enum (no silent passthrough)', () => {

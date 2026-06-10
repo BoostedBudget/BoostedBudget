@@ -403,7 +403,7 @@ type Boost struct {
 	TriggerConfig    TriggerConfig             `json:"trigger_config" db:"-"` // Stored as JSONB
 	Conditions       []BoostCondition `json:"conditions" db:"-"`     // Stored as JSONB
 	ConditionLogic   string                    `json:"condition_logic" db:"condition_logic"`
-	Actions          json.RawMessage           `json:"actions" db:"-"` // Stored as JSONB, structure depends on rule_type
+	Actions          json.RawMessage           `json:"actions" db:"-"` // Stored as JSONB, structure depends on boost_type
 	ExecutionCount   int64                     `json:"execution_count" db:"execution_count"`
 	LastExecutedAt   *time.Time                `json:"last_executed_at,omitempty" db:"last_executed_at"`
 	LastSuccessfulAt *time.Time                `json:"last_successful_at,omitempty" db:"last_successful_at"`

@@ -43,10 +43,10 @@ func (h *BoostHandler) SetExecutionService(executionService services.BoostExecut
 // GetBoostsInput represents the input for getting user automation rules.
 type GetBoostsInput struct {
 	inputs.AuthenticatedInput
-	// RuleType is an optional list of rule types to filter by.
+	// BoostType is an optional list of boost types to filter by.
 	// Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal.
-	// When omitted, all rule types are returned.
-	RuleType []string `query:"rule_type" doc:"Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal." required:"false"`
+	// When omitted, all boost types are returned.
+	BoostType []string `query:"boost_type" doc:"Filter by boost type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal." required:"false"`
 }
 
 // GetBoostsOutput represents the response for getting user automation rules.
@@ -165,7 +165,7 @@ type GetBoostExecutionsOutput struct {
 
 // --- Handler Methods ---
 
-// validBoostTypeValues lists the allowed rule_type query values for the list endpoint.
+// validBoostTypeValues lists the allowed boost_type query values for the list endpoint.
 var validBoostTypeValues = map[string]domain.BoostType{
 	string(domain.BoostTypeTransferSuggestion): domain.BoostTypeTransferSuggestion,
 	string(domain.BoostTypeBudgetAlert):        domain.BoostTypeBudgetAlert,
@@ -177,10 +177,10 @@ var validBoostTypeValues = map[string]domain.BoostType{
 // Retrieves automation rules for the authenticated user, optionally filtered by rule type.
 func (h *BoostHandler) GetBoosts(ctx context.Context, input *GetBoostsInput) (*GetBoostsOutput, error) {
 	var boostTypes []domain.BoostType
-	for _, rt := range input.RuleType {
+	for _, rt := range input.BoostType {
 		canonical, ok := validBoostTypeValues[rt]
 		if !ok {
-			return nil, huma.Error422UnprocessableEntity("invalid rule_type: " + rt + "; valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal")
+			return nil, huma.Error422UnprocessableEntity("invalid boost_type: " + rt + "; valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal")
 		}
 		boostTypes = append(boostTypes, canonical)
 	}
@@ -386,9 +386,9 @@ func RegisterBoostRoutes(api huma.API, handler *BoostHandler) {
 		OperationID: "getBoosts",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/boosts",
-		Summary:     "List boosts (filter by rule_type)",
+		Summary:     "List boosts (filter by boost_type)",
 		Description: "Retrieves boosts for the authenticated user, ordered by priority. " +
-			"Use the repeatable `rule_type` query parameter to filter by type. " +
+			"Use the repeatable `boost_type` query parameter to filter by type. " +
 			"Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. " +
 			"Transfer-generating types are transfer_suggestion and savings_goal. " +
 			"When omitted, all boost types are returned.",

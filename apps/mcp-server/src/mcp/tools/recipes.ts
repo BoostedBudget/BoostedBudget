@@ -89,7 +89,7 @@ export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
     name: 'Transfer Boosts Audit',
     description: 'List transfer-generating boosts (transfer_suggestion and savings_goal types) and recent execution history for a specific boost.',
     calls: [
-      { operationId: 'getBoosts', params: { rule_type: ['transfer_suggestion', 'savings_goal'] } },
+      { operationId: 'getBoosts', params: { boost_type: ['transfer_suggestion', 'savings_goal'] } },
       { operationId: 'getBoostExecutions', pathParams: { id: '{{BOOST_ID}}' } },
     ],
   },

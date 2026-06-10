@@ -8058,15 +8058,15 @@ paths:
         - Auto-Categorization
   /api/v1/boosts:
     get:
-      description: "Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `rule_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned."
+      description: "Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `boost_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned."
       operationId: getBoosts
       parameters:
-        - description: "Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
+        - description: "Filter by boost type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
           explode: false
           in: query
-          name: rule_type
+          name: boost_type
           schema:
-            description: "Filter by rule type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
+            description: "Filter by boost type (repeatable). Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal."
             items:
               type: string
             type:
@@ -8091,7 +8091,7 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: List boosts (filter by rule_type)
+      summary: List boosts (filter by boost_type)
       tags:
         - Boosts
     post:

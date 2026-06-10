@@ -97,8 +97,8 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
- * Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `rule_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned.
- * @summary List boosts (filter by rule_type)
+ * Retrieves boosts for the authenticated user, ordered by priority. Use the repeatable `boost_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all boost types are returned.
+ * @summary List boosts (filter by boost_type)
  */
 export const getBoosts = (
     params?: GetBoostsParams,
@@ -170,7 +170,7 @@ export function useGetBoosts<TData = Awaited<ReturnType<typeof getBoosts>>, TErr
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
- * @summary List boosts (filter by rule_type)
+ * @summary List boosts (filter by boost_type)
  */
 
 export function useGetBoosts<TData = Awaited<ReturnType<typeof getBoosts>>, TError = ErrorType<ErrorModel>>(
