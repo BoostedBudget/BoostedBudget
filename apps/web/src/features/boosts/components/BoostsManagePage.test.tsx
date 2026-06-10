@@ -769,7 +769,7 @@ describe('RulesPage', () => {
 
       await waitFor(() => {
         // The genuine empty state (no rules at all, no segment) renders
-        expect(screen.getByText(/no automation rules yet/i)).toBeInTheDocument()
+        expect(screen.getByText(/no automation boosts yet/i)).toBeInTheDocument()
       })
       expect(screen.queryByRole('group', { name: /boost type filter/i })).not.toBeInTheDocument()
     })
