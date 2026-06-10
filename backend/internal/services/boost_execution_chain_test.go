@@ -23,9 +23,9 @@ import (
 func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -77,9 +77,9 @@ func TestRuleExecution_TransferAction_WritesUserAccountIDs(t *testing.T) {
 func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -128,7 +128,7 @@ func TestRuleExecution_TransferAction_LegacyActionNoUserAccountIDs(t *testing.T)
 func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
 	mockResolver := &mockAccountChainResolver{
 		resolveActiveIDFunc: func(ctx context.Context, userAccountID string) (string, error) {
@@ -142,7 +142,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 		},
 	}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()
@@ -197,9 +197,9 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID(t *testing.
 func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	// No SetChainResolver call — chainResolver stays nil.
 
 	ctx := context.Background()
@@ -249,7 +249,7 @@ func TestRuleExecution_TransferAction_ChainResolver_NilFallback(t *testing.T) {
 func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
 	mockResolver := &mockAccountChainResolver{
 		resolveActiveIDFunc: func(_ context.Context, _ string) (string, error) {
@@ -257,7 +257,7 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 		},
 	}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()
@@ -304,9 +304,9 @@ func TestRuleExecution_TransferAction_ChainResolver_EmptyUserAccountID(t *testin
 func TestRuleExecution_SimulateAction_IncludesFromUserAccountID(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -372,7 +372,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 	// the current-generation account ID even after two re-links.
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
 	acctFromCurrent := "active-from-account-gen3"
 	acctToCurrent := "active-to-account-gen3"
@@ -389,7 +389,7 @@ func TestRuleExecution_TransferAction_ChainResolver_ResolvesActiveID_Depth2(t *t
 		},
 	}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetChainResolver(mockResolver)
 
 	ctx := context.Background()

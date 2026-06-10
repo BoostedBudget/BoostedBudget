@@ -769,7 +769,7 @@ type TransferSuggestion struct {
 	// or when the related row does not exist.
 	ToAccountName        *string    `json:"to_account_name,omitempty"        db:"-"`
 	FromAccountName      *string    `json:"from_account_name,omitempty"      db:"-"`
-	RuleName             *string    `json:"rule_name,omitempty"              db:"-"`
+	BoostName            *string    `json:"boost_name,omitempty"             db:"-"`
 	MatchedTransactionAt *time.Time `json:"matched_transaction_at,omitempty" db:"-"`
 
 	// CanConfirmMatch is a server-derived flag set by the API handler before masking.

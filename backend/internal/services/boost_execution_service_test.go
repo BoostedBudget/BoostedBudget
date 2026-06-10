@@ -69,7 +69,7 @@ func (m *mockRuleExecutionRepository) GetTodayExecutionCount(ctx context.Context
 	return m.todayExecutionCount, nil
 }
 
-func (m *mockRuleExecutionRepository) GetLastExecutionForRule(ctx context.Context, ruleID string) (*domain.BoostExecution, error) {
+func (m *mockRuleExecutionRepository) GetLastExecutionForBoost(ctx context.Context, ruleID string) (*domain.BoostExecution, error) {
 	var latest *domain.BoostExecution
 	for _, e := range m.executions {
 		if e.BoostID == ruleID {
@@ -215,10 +215,10 @@ func (m *mockTransferSuggestionRepository) CountPendingByUserID(ctx context.Cont
 	return count, nil
 }
 
-func (m *mockTransferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
+func (m *mockTransferSuggestionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	var result []*domain.TransferSuggestion
 	for _, s := range m.suggestions {
-		if s.BoostID != nil && *s.BoostID == ruleID {
+		if s.BoostID != nil && *s.BoostID == boostID {
 			result = append(result, s)
 		}
 	}
@@ -559,12 +559,12 @@ func TestRuleExecutionService(t *testing.T) {
 	t.Run("executes transfer suggestion rule successfully", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil, // notification service (not needed for transfer)
 		)
 
@@ -593,12 +593,12 @@ func TestRuleExecutionService(t *testing.T) {
 	t.Run("skips execution when conditions don't match", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -619,12 +619,12 @@ func TestRuleExecutionService(t *testing.T) {
 	t.Run("handles disabled rule", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -647,12 +647,12 @@ func TestRuleExecutionService(t *testing.T) {
 		suggestionRepo := &mockTransferSuggestionRepository{
 			createError: errors.New("database error"),
 		}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -685,8 +685,8 @@ func TestProcessEventTrigger(t *testing.T) {
 			Amount:        100.0,
 		})
 
-		ruleRepo := &mockAutomationRulesRepository{
-			rules: []*domain.Boost{
+		boostRepo := &mockBoostsRepository{
+			boosts: []*domain.Boost{
 				{
 					ID:       "rule-1",
 					UserID:   userID,
@@ -708,7 +708,7 @@ func TestProcessEventTrigger(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -725,15 +725,15 @@ func TestProcessEventTrigger(t *testing.T) {
 	t.Run("processes event with no matching rules", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{
+		boostRepo := &mockBoostsRepository{
 			// No rules configured
-			rules: []*domain.Boost{},
+			boosts: []*domain.Boost{},
 		}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -762,8 +762,8 @@ func TestProcessEventTrigger(t *testing.T) {
 			Amount:        100.0,
 		})
 
-		ruleRepo := &mockAutomationRulesRepository{
-			rules: []*domain.Boost{
+		boostRepo := &mockBoostsRepository{
+			boosts: []*domain.Boost{
 				{
 					ID:       "rule-1",
 					UserID:   userID,
@@ -784,7 +784,7 @@ func TestProcessEventTrigger(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -837,24 +837,24 @@ func TestGetExecutionHistory(t *testing.T) {
 }
 
 // Mock automation rules repository for testing.
-type mockAutomationRulesRepository struct {
-	rules               []*domain.Boost
+type mockBoostsRepository struct {
+	boosts        []*domain.Boost
 	createError         error
 	eventTriggerRules   []*domain.Boost
 	incrementExecCalled bool
 	updateSuccessCalled bool
 }
 
-func (m *mockAutomationRulesRepository) Create(ctx context.Context, rule *domain.Boost) error {
+func (m *mockBoostsRepository) Create(ctx context.Context, rule *domain.Boost) error {
 	if m.createError != nil {
 		return m.createError
 	}
-	m.rules = append(m.rules, rule)
+	m.boosts = append(m.boosts, rule)
 	return nil
 }
 
-func (m *mockAutomationRulesRepository) GetByID(ctx context.Context, id string) (*domain.Boost, error) {
-	for _, r := range m.rules {
+func (m *mockBoostsRepository) GetByID(ctx context.Context, id string) (*domain.Boost, error) {
+	for _, r := range m.boosts {
 		if r.ID == id {
 			return r, nil
 		}
@@ -862,9 +862,9 @@ func (m *mockAutomationRulesRepository) GetByID(ctx context.Context, id string) 
 	return nil, domain.ErrBoostNotFound
 }
 
-func (m *mockAutomationRulesRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID {
 			result = append(result, r)
 		}
@@ -872,7 +872,7 @@ func (m *mockAutomationRulesRepository) GetByUserID(ctx context.Context, userID 
 	return result, nil
 }
 
-func (m *mockAutomationRulesRepository) GetByUserIDFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetByUserIDFiltered(ctx context.Context, userID string, boostTypes []domain.BoostType) ([]*domain.Boost, error) {
 	if len(boostTypes) == 0 {
 		return m.GetByUserID(ctx, userID)
 	}
@@ -881,7 +881,7 @@ func (m *mockAutomationRulesRepository) GetByUserIDFiltered(ctx context.Context,
 		typeSet[t] = true
 	}
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID && typeSet[r.BoostType] {
 			result = append(result, r)
 		}
@@ -889,9 +889,9 @@ func (m *mockAutomationRulesRepository) GetByUserIDFiltered(ctx context.Context,
 	return result, nil
 }
 
-func (m *mockAutomationRulesRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.Boost, error) {
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID && r.Enabled {
 			result = append(result, r)
 		}
@@ -899,8 +899,8 @@ func (m *mockAutomationRulesRepository) GetEnabledByUserID(ctx context.Context, 
 	return result, nil
 }
 
-func (m *mockAutomationRulesRepository) GetByName(ctx context.Context, userID, name string) (*domain.Boost, error) {
-	for _, r := range m.rules {
+func (m *mockBoostsRepository) GetByName(ctx context.Context, userID, name string) (*domain.Boost, error) {
+	for _, r := range m.boosts {
 		if r.UserID == userID && r.Name == name {
 			return r, nil
 		}
@@ -908,29 +908,29 @@ func (m *mockAutomationRulesRepository) GetByName(ctx context.Context, userID, n
 	return nil, domain.ErrBoostNotFound
 }
 
-func (m *mockAutomationRulesRepository) Update(ctx context.Context, rule *domain.Boost) error {
-	for i, r := range m.rules {
+func (m *mockBoostsRepository) Update(ctx context.Context, rule *domain.Boost) error {
+	for i, r := range m.boosts {
 		if r.ID == rule.ID {
-			m.rules[i] = rule
+			m.boosts[i] = rule
 			return nil
 		}
 	}
 	return domain.ErrBoostNotFound
 }
 
-func (m *mockAutomationRulesRepository) Delete(ctx context.Context, id string) error {
-	for i, r := range m.rules {
+func (m *mockBoostsRepository) Delete(ctx context.Context, id string) error {
+	for i, r := range m.boosts {
 		if r.ID == id {
-			m.rules = append(m.rules[:i], m.rules[i+1:]...)
+			m.boosts = append(m.boosts[:i], m.boosts[i+1:]...)
 			return nil
 		}
 	}
 	return domain.ErrBoostNotFound
 }
 
-func (m *mockAutomationRulesRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
+func (m *mockBoostsRepository) CountByUserID(ctx context.Context, userID string) (int, error) {
 	count := 0
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID {
 			count++
 		}
@@ -938,22 +938,22 @@ func (m *mockAutomationRulesRepository) CountByUserID(ctx context.Context, userI
 	return count, nil
 }
 
-func (m *mockAutomationRulesRepository) IncrementExecutionCount(ctx context.Context, ruleID string) error {
+func (m *mockBoostsRepository) IncrementExecutionCount(ctx context.Context, ruleID string) error {
 	m.incrementExecCalled = true
 	return nil
 }
 
-func (m *mockAutomationRulesRepository) UpdateLastSuccessful(ctx context.Context, ruleID string) error {
+func (m *mockBoostsRepository) UpdateLastSuccessful(ctx context.Context, ruleID string) error {
 	m.updateSuccessCalled = true
 	return nil
 }
 
-func (m *mockAutomationRulesRepository) GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetBoostsByEventTrigger(ctx context.Context, userID, eventType string) ([]*domain.Boost, error) {
 	if m.eventTriggerRules != nil {
 		return m.eventTriggerRules, nil
 	}
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID && r.Enabled && r.TriggerConfig.Type == domain.TriggerTypeEvent && r.TriggerConfig.Event == eventType {
 			result = append(result, r)
 		}
@@ -961,9 +961,9 @@ func (m *mockAutomationRulesRepository) GetBoostsByEventTrigger(ctx context.Cont
 	return result, nil
 }
 
-func (m *mockAutomationRulesRepository) GetBoostsByType(ctx context.Context, userID string, ruleType domain.BoostType) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetBoostsByType(ctx context.Context, userID string, ruleType domain.BoostType) ([]*domain.Boost, error) {
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.UserID == userID && r.Enabled && r.BoostType == ruleType {
 			result = append(result, r)
 		}
@@ -971,9 +971,9 @@ func (m *mockAutomationRulesRepository) GetBoostsByType(ctx context.Context, use
 	return result, nil
 }
 
-func (m *mockAutomationRulesRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error) {
+func (m *mockBoostsRepository) GetBoostsByScheduleTrigger(ctx context.Context) ([]*domain.Boost, error) {
 	var result []*domain.Boost
-	for _, r := range m.rules {
+	for _, r := range m.boosts {
 		if r.Enabled && r.TriggerConfig.Type == domain.TriggerTypeSchedule && r.TriggerConfig.Cron != "" {
 			result = append(result, r)
 		}
@@ -1141,7 +1141,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	t.Run("executes savings goal rule with fixed amount", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 		goalRepo := &mockSavingsGoalRepository{
 			goals: []*domain.SavingsGoal{
 				{
@@ -1158,7 +1158,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 		service.SetSavingsGoalRepo(goalRepo)
@@ -1193,7 +1193,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	t.Run("executes savings goal rule with percentage amount", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 		goalRepo := &mockSavingsGoalRepository{
 			goals: []*domain.SavingsGoal{
 				{
@@ -1210,7 +1210,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 		service.SetSavingsGoalRepo(goalRepo)
@@ -1240,7 +1240,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	t.Run("executes savings goal rule with remaining amount", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 		goalRepo := &mockSavingsGoalRepository{
 			goals: []*domain.SavingsGoal{
 				{
@@ -1257,7 +1257,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 		service.SetSavingsGoalRepo(goalRepo)
@@ -1286,12 +1286,12 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	t.Run("fails when savings goal action is missing", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1326,7 +1326,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		// return the same no-op result so an attacker can't distinguish them via error messages.
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 		goalRepo := &mockSavingsGoalRepository{
 			goals: []*domain.SavingsGoal{}, // Empty - goal not found
 		}
@@ -1334,7 +1334,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 		service.SetSavingsGoalRepo(goalRepo)
@@ -1359,7 +1359,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 	t.Run("skips when calculated amount is zero or negative", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 		goalRepo := &mockSavingsGoalRepository{
 			goals: []*domain.SavingsGoal{
 				{
@@ -1374,7 +1374,7 @@ func TestSavingsGoalExecutor(t *testing.T) {
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 		service.SetSavingsGoalRepo(goalRepo)
@@ -1433,10 +1433,10 @@ func TestRuleExecutionService_SavingsGoal_NilRepo_ReturnsError(t *testing.T) {
 		Conditions:     []domain.BoostCondition{},
 		Actions:        actionsJSON,
 	}
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{rule}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{rule}}
 
 	// Create service WITHOUT calling SetSavingsGoalRepo — simulates production misconfiguration.
-	svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	eventData := map[string]interface{}{
 		"budget_id": "budget-1",
@@ -1508,10 +1508,10 @@ func TestProcessEventTrigger_BatchContinuesAfterRuleFailure(t *testing.T) {
 		Actions:        actionsSucceedJSON,
 	}
 
-	ruleRepo := &mockAutomationRulesRepository{rules: []*domain.Boost{ruleA, ruleB}}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{ruleA, ruleB}}
 
 	// Service WITHOUT savingsGoalRepo (rule A will fail) but with suggestion support (rule B succeeds).
-	svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	eventData := map[string]interface{}{
 		domain.EventDataKeyBudgetID:    "budget-1",
@@ -1640,12 +1640,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("returns test result with condition evaluations when conditions met", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1671,12 +1671,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("returns test result with conditions not met", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1697,12 +1697,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("does not persist execution record", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1721,12 +1721,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("does not create transfer suggestions", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1745,12 +1745,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("works on disabled rules for preview", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1772,12 +1772,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("simulates budget alert action", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1800,12 +1800,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("uses provided trigger data", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1824,12 +1824,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("evaluates multiple conditions with AND logic", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1857,12 +1857,12 @@ func TestTestRule(t *testing.T) {
 	t.Run("evaluates multiple conditions with OR logic", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		service := NewBoostExecutionService(
 			execRepo,
 			suggestionRepo,
-			ruleRepo,
+			boostRepo,
 			nil,
 		)
 
@@ -1893,9 +1893,9 @@ func TestTestRule_PFCConditionPopulatesDisplay(t *testing.T) {
 
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	actions := json.RawMessage(`{}`)
 	rule := &domain.Boost{
@@ -1925,8 +1925,8 @@ func TestTestRule_CategoryScopedActualPopulated(t *testing.T) {
 
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	boostRepo := &mockBoostsRepository{}
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	rule := &domain.Boost{
 		ID:   "rule-cat-actual",
@@ -1978,8 +1978,8 @@ func TestTestRule_CategoryActualNilForMissingCategory(t *testing.T) {
 
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	boostRepo := &mockBoostsRepository{}
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	rule := &domain.Boost{
 		ID:   "rule-cat-nil",
@@ -2029,9 +2029,9 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 	t.Run("transfer suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
-		service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 		actionsJSON, _ := json.Marshal(domain.TransferAction{
 			FromAccountID: "account-from",
@@ -2077,7 +2077,7 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 	t.Run("savings goal suggestion has ExpiresAt ~30 days in future", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
+		boostRepo := &mockBoostsRepository{}
 
 		// Build a mock savings goal repo that returns a goal.
 		mockGoalRepo := &mockSavingsGoalRepository{}
@@ -2092,7 +2092,7 @@ func TestRuleExecutionService_ExpiresAt(t *testing.T) {
 			},
 		}
 
-		service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 		service.SetSavingsGoalRepo(mockGoalRepo)
 
 		actionsJSON, _ := json.Marshal(domain.SavingsGoalAction{
@@ -2410,8 +2410,8 @@ func TestTestRule_DottedFieldPreviewShowsActual(t *testing.T) {
 	ctx := context.Background()
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	boostRepo := &mockBoostsRepository{}
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	actions, _ := json.Marshal(domain.TransferAction{
 		FromAccountID: "account-a", ToAccountID: "account-b",
@@ -2566,8 +2566,8 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 			// Execution must also succeed with the same flat JSON.
 			execRepo := &mockRuleExecutionRepository{}
 			suggestionRepo := &mockTransferSuggestionRepository{}
-			ruleRepo := &mockAutomationRulesRepository{}
-			svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+			boostRepo := &mockBoostsRepository{}
+			svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 			if tc.setupSvc != nil {
 				tc.setupSvc(svc)
 			}
@@ -2656,8 +2656,8 @@ func TestExecuteRule_PartialFieldAction_ReturnsError(t *testing.T) {
 
 			execRepo := &mockRuleExecutionRepository{}
 			suggestionRepo := &mockTransferSuggestionRepository{}
-			ruleRepo := &mockAutomationRulesRepository{}
-			svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+			boostRepo := &mockBoostsRepository{}
+			svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 			_, err := svc.ExecuteBoost(ctx, rule, map[string]interface{}{})
 			require.Error(t, err, "partial action must be rejected by ExecuteBoost")
@@ -2710,8 +2710,8 @@ func TestTransferExcess_ValidateAndExecute(t *testing.T) {
 	t.Run("excess creates suggestion for remaining - threshold when remaining > threshold", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
-		svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		boostRepo := &mockBoostsRepository{}
+		svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 		triggerData := map[string]interface{}{
 			domain.EventDataKeyRemaining: 200.0, // remaining=200, threshold=50 → expect 150
@@ -2726,8 +2726,8 @@ func TestTransferExcess_ValidateAndExecute(t *testing.T) {
 	t.Run("excess creates no suggestion when remaining <= threshold", func(t *testing.T) {
 		execRepo := &mockRuleExecutionRepository{}
 		suggestionRepo := &mockTransferSuggestionRepository{}
-		ruleRepo := &mockAutomationRulesRepository{}
-		svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+		boostRepo := &mockBoostsRepository{}
+		svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 		triggerData := map[string]interface{}{
 			domain.EventDataKeyRemaining: 30.0, // remaining=30, threshold=50 → no surplus
@@ -2769,9 +2769,9 @@ func TestExecuteSavingsGoal_RejectsMismatchedOwner(t *testing.T) {
 	}
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 
-	svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 
 	actionsJSON, _ := json.Marshal(map[string]interface{}{
@@ -2898,7 +2898,7 @@ func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
 
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	acctRepo := &MockAccountRepository{}
 
 	// The standard from_account_id and to_account_id both belong to the attacker.
@@ -2910,7 +2910,7 @@ func TestExecuteTransferSuggestion_ChainResolverIDOR(t *testing.T) {
 	acctRepo.On("GetByIDAndUser", mock.Anything, victimAccountID, attackerUserID).
 		Return((*domain.Account)(nil), repository.ErrAccountNotFound)
 
-	svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 	svc.SetAccountRepo(acctRepo)
 	// Chain resolver returns the victim's account ID when asked to resolve the from_user_account_id.
 	svc.SetChainResolver(&stubChainResolver{resolvedID: victimAccountID})
@@ -3081,8 +3081,8 @@ func TestExecuteRule_PartialScopedConditionDoesNotBrick(t *testing.T) {
 
 	execRepo := &mockRuleExecutionRepository{}
 	suggestionRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
-	svc := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	// Budget alert rule with a budget_category.percent_used condition that has empty
 	// CategoryID and BudgetID — simulating a legacy/partial rule from before #1270.
@@ -3210,8 +3210,8 @@ func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
 		Amount:        100.0,
 	})
 
-	ruleRepo := &mockAutomationRulesRepository{
-		rules: []*domain.Boost{
+	boostRepo := &mockBoostsRepository{
+		boosts: []*domain.Boost{
 			{
 				ID:       "rule-budget-scope",
 				UserID:   userID,
@@ -3232,7 +3232,7 @@ func TestProcessEventTrigger_SkipsRuleBoundToOtherBudget(t *testing.T) {
 		},
 	}
 
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	// Event is for budget-Y, not budget-X
 	eventData := map[string]interface{}{
@@ -3262,8 +3262,8 @@ func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
 		Amount:        100.0,
 	})
 
-	ruleRepo := &mockAutomationRulesRepository{
-		rules: []*domain.Boost{
+	boostRepo := &mockBoostsRepository{
+		boosts: []*domain.Boost{
 			{
 				ID:       "rule-budget-match",
 				UserID:   userID,
@@ -3284,7 +3284,7 @@ func TestProcessEventTrigger_FiresRuleBoundToMatchingBudget(t *testing.T) {
 		},
 	}
 
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	// Event is for the matching budget-X; populate categories so condition evaluates
 	eventData := map[string]interface{}{
@@ -3318,8 +3318,8 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 		Amount:        100.0,
 	})
 
-	ruleRepo := &mockAutomationRulesRepository{
-		rules: []*domain.Boost{
+	boostRepo := &mockBoostsRepository{
+		boosts: []*domain.Boost{
 			{
 				ID:       "rule-unscoped",
 				UserID:   userID,
@@ -3341,7 +3341,7 @@ func TestProcessEventTrigger_UnscopedRuleFiresForAnyBudget(t *testing.T) {
 		},
 	}
 
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	eventData := map[string]interface{}{
 		domain.EventDataKeyBudgetID: "budget-any",
@@ -3370,8 +3370,8 @@ func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
 		Amount:        100.0,
 	})
 
-	ruleRepo := &mockAutomationRulesRepository{
-		rules: []*domain.Boost{
+	boostRepo := &mockBoostsRepository{
+		boosts: []*domain.Boost{
 			{
 				ID:       "rule-or-escape",
 				UserID:   userID,
@@ -3396,7 +3396,7 @@ func TestProcessEventTrigger_ORLogicDoesNotEscapeBudgetScope(t *testing.T) {
 		},
 	}
 
-	service := NewBoostExecutionService(execRepo, suggestionRepo, ruleRepo, nil)
+	service := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
 
 	// Event is for budget-Y; percent_used satisfies the second condition but budget scope blocks
 	eventData := map[string]interface{}{

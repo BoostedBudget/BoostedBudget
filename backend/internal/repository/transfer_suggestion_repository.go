@@ -45,8 +45,8 @@ type TransferSuggestionRepository interface {
 	// CountPendingByUserID counts pending suggestions for a user.
 	CountPendingByUserID(ctx context.Context, userID string) (int, error)
 
-	// GetByRuleID retrieves suggestions created by a specific boost.
-	GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error)
+	// GetByBoostID retrieves suggestions created by a specific boost.
+	GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error)
 
 	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
 	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
@@ -371,8 +371,8 @@ func (r *transferSuggestionRepository) CountPendingByUserID(ctx context.Context,
 	return count, nil
 }
 
-// GetByRuleID retrieves suggestions created by a specific boost.
-func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
+// GetByBoostID retrieves suggestions created by a specific boost.
+func (r *transferSuggestionRepository) GetByBoostID(ctx context.Context, boostID string, limit, offset int) ([]*domain.TransferSuggestion, error) {
 	query := `
 		SELECT id, user_id, boost_id, boost_execution_id,
 			from_account_id, to_account_id, from_user_account_id, to_user_account_id,
@@ -386,7 +386,7 @@ func (r *transferSuggestionRepository) GetByRuleID(ctx context.Context, ruleID s
 		LIMIT $2 OFFSET $3
 	`
 
-	return r.querySuggestions(ctx, query, ruleID, limit, offset)
+	return r.querySuggestions(ctx, query, boostID, limit, offset)
 }
 
 // Complete marks a suggestion as completed. Race-safe: AND status IN ('pending','accepted').
@@ -732,7 +732,7 @@ func (r *transferSuggestionRepository) GetByUserIDStatuses(ctx context.Context, 
 		// Resolve enriched display names using the same resolution order as savings_impact_repository.
 		s.ToAccountName = resolveDestinationName(toPlaidName, toUANickname, toUAHintEnc, r.enc)
 		s.FromAccountName = resolveDestinationName(fromPlaidName, fromUANickname, fromUAHintEnc, r.enc)
-		s.RuleName = boostName
+		s.BoostName = boostName
 		s.MatchedTransactionAt = matchedTxnAt
 
 		suggestions = append(suggestions, s)

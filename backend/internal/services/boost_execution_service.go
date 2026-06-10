@@ -187,7 +187,7 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 
 	if s.analytics != nil {
 		s.analytics.Capture(boost.UserID, phclient.EventBoostTriggered, map[string]interface{}{
-			"rule_id":    boost.ID,
+			"boost_id":    boost.ID,
 			"boost_type": string(boost.BoostType),
 		})
 	}
@@ -219,7 +219,7 @@ func (s *boostExecutionService) ProcessEventTrigger(ctx context.Context, userID,
 		_, execErr := s.ExecuteBoost(ctx, boost, eventData)
 		if execErr != nil {
 			slog.Error("boost execution failed; continuing with remaining rules",
-				"rule_id", boost.ID,
+				"boost_id", boost.ID,
 				"user_id", boost.UserID,
 				"event_type", eventType,
 				"error", execErr,
@@ -398,13 +398,13 @@ func (s *boostExecutionService) executeTransferSuggestion(ctx context.Context, b
 	if s.accountRepo != nil {
 		if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.FromAccountID, boost.UserID); err != nil {
 			slog.Warn("transfer executor: from_account_id ownership mismatch; skipping boost",
-				"rule_id", boost.ID, "user_id", boost.UserID, "from_account_id", transfer.FromAccountID)
+				"boost_id", boost.ID, "user_id", boost.UserID, "from_account_id", transfer.FromAccountID)
 			return nil
 		}
 		if transfer.ToAccountID != "" {
 			if _, err := s.accountRepo.GetByIDAndUser(ctx, transfer.ToAccountID, boost.UserID); err != nil {
 				slog.Warn("transfer executor: to_account_id ownership mismatch; skipping boost",
-					"rule_id", boost.ID, "user_id", boost.UserID, "to_account_id", transfer.ToAccountID)
+					"boost_id", boost.ID, "user_id", boost.UserID, "to_account_id", transfer.ToAccountID)
 				return nil
 			}
 		}
@@ -493,12 +493,12 @@ func (s *boostExecutionService) resolveAndVerifyUserAccount(ctx context.Context,
 	if s.accountRepo != nil {
 		if _, ownerErr := s.accountRepo.GetByIDAndUser(ctx, activeID, userID); ownerErr != nil {
 			slog.Warn("chain resolve: resolved account belongs to different user; skipping boost",
-				"rule_id", boostID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
+				"boost_id", boostID, "user_id", userID, "resolved_account_id", activeID, "field", fieldName)
 			return true, nil
 		}
 	} else {
 		slog.Warn("chain resolve: accountRepo not configured; applying resolved ID without ownership check (configure SetAccountRepo in production)",
-			"rule_id", boostID, "user_id", userID, "field", fieldName)
+			"boost_id", boostID, "user_id", userID, "field", fieldName)
 	}
 	onResolve(activeID)
 	return false, nil
@@ -700,7 +700,7 @@ func (s *boostExecutionService) executeSavingsGoal(ctx context.Context, boost *d
 	if err != nil {
 		// Log but don't fail the batch — this rule is silently skipped.
 		slog.Warn("savings goal executor: goal not found or ownership mismatch; skipping boost",
-			"rule_id", boost.ID, "user_id", boost.UserID,
+			"boost_id", boost.ID, "user_id", boost.UserID,
 			"savings_goal_id", savingsGoalAction.SavingsGoalID, "error", err)
 		return nil
 	}

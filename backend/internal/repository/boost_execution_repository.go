@@ -35,8 +35,8 @@ type BoostExecutionRepository interface {
 	// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
 	GetTodayExecutionCount(ctx context.Context, userID string) (int, error)
 
-	// GetLastExecutionForRule retrieves the most recent execution for a boost.
-	GetLastExecutionForRule(ctx context.Context, boostID string) (*domain.BoostExecution, error)
+	// GetLastExecutionForBoost retrieves the most recent execution for a boost.
+	GetLastExecutionForBoost(ctx context.Context, boostID string) (*domain.BoostExecution, error)
 
 	// GetPendingExecutions retrieves pending executions for processing queue.
 	GetPendingExecutions(ctx context.Context, limit int) ([]*domain.BoostExecution, error)
@@ -234,8 +234,8 @@ func (r *boostExecutionRepository) GetTodayExecutionCount(ctx context.Context, u
 	return count, nil
 }
 
-// GetLastExecutionForRule retrieves the most recent execution for a rule.
-func (r *boostExecutionRepository) GetLastExecutionForRule(ctx context.Context, boostID string) (*domain.BoostExecution, error) {
+// GetLastExecutionForBoost retrieves the most recent execution for a rule.
+func (r *boostExecutionRepository) GetLastExecutionForBoost(ctx context.Context, boostID string) (*domain.BoostExecution, error) {
 	query := `
 		SELECT id, boost_id, status, started_at, completed_at,
 			execution_duration_ms, trigger_context, input_data, output_data,

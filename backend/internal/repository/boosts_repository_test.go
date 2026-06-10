@@ -19,8 +19,8 @@ import (
 // RED Phase: These tests verify the boosts schema works correctly
 // =============================================================================
 
-// setupRulesMockDB creates a mock database for automation boosts repository testing
-func setupRulesMockDB(t *testing.T) pgxmock.PgxPoolIface {
+// setupBoostsMockDB creates a mock database for automation boosts repository testing
+func setupBoostsMockDB(t *testing.T) pgxmock.PgxPoolIface {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	return mock
@@ -30,9 +30,9 @@ func setupRulesMockDB(t *testing.T) pgxmock.PgxPoolIface {
 // Part 1: Boosts Table Tests
 // =============================================================================
 
-// TestRulesTable_CanInsertWithJSONB tests that JSONB columns can store complex data
-func TestRulesTable_CanInsertWithJSONB(t *testing.T) {
-	mock := setupRulesMockDB(t)
+// TestBoostsTable_CanInsertWithJSONB tests that JSONB columns can store complex data
+func TestBoostsTable_CanInsertWithJSONB(t *testing.T) {
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
@@ -78,18 +78,18 @@ func TestRulesTable_CanInsertWithJSONB(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestRulesTable_RuleTypeConstraint verifies that the pgxmock layer accepts all valid boost_type
+// TestBoostsTable_RuleTypeConstraint verifies that the pgxmock layer accepts all valid boost_type
 // values. Note: pgxmock cannot validate DB CHECK constraints — real-Postgres acceptance is
 // covered by TestRuleType_AllValidTypesAccepted_Integration (rules_boost_type_integration_test.go).
 // This test ensures service-layer code does not accidentally pass an unexpected literal.
-func TestRulesTable_RuleTypeConstraint(t *testing.T) {
+func TestBoostsTable_RuleTypeConstraint(t *testing.T) {
 	// Keep in sync with migration 000088 and domain.BoostType* constants.
 	// 'savings_goal' was added by migration 000088 (#972, GAP CI).
 	validTypes := []string{"transfer_suggestion", "budget_alert", "category_rollover", "savings_goal"}
 
 	for _, ruleType := range validTypes {
 		t.Run("valid_type_"+ruleType, func(t *testing.T) {
-			mock := setupRulesMockDB(t)
+			mock := setupBoostsMockDB(t)
 			defer mock.Close()
 			ctx := context.Background()
 
@@ -115,9 +115,9 @@ func TestRulesTable_RuleTypeConstraint(t *testing.T) {
 	}
 }
 
-// TestRulesTable_UniqueNamePerUser tests the unique constraint on (user_id, name)
-func TestRulesTable_UniqueNamePerUser(t *testing.T) {
-	mock := setupRulesMockDB(t)
+// TestBoostsTable_UniqueNamePerUser tests the unique constraint on (user_id, name)
+func TestBoostsTable_UniqueNamePerUser(t *testing.T) {
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -157,7 +157,7 @@ func TestRulesTable_UniqueNamePerUser(t *testing.T) {
 
 // TestRuleExecutionsTable_CascadeDeleteWithRule tests that executions are deleted when boost is deleted
 func TestRuleExecutionsTable_CascadeDeleteWithRule(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -211,7 +211,7 @@ func TestRuleExecutionsTable_StatusConstraint(t *testing.T) {
 
 	for _, status := range validStatuses {
 		t.Run("valid_status_"+status, func(t *testing.T) {
-			mock := setupRulesMockDB(t)
+			mock := setupBoostsMockDB(t)
 			defer mock.Close()
 			ctx := context.Background()
 
@@ -229,7 +229,7 @@ func TestRuleExecutionsTable_StatusConstraint(t *testing.T) {
 
 // TestRuleExecutionsTable_CanStoreJSONBContext tests JSONB storage for context data
 func TestRuleExecutionsTable_CanStoreJSONBContext(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -277,7 +277,7 @@ func TestRuleExecutionsTable_CanStoreJSONBContext(t *testing.T) {
 
 // TestTransferSuggestionsTable_CanInsert tests basic insert functionality
 func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -297,7 +297,7 @@ func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
 		500.00,
 		"USD",
 		"Move excess funds to savings",
-		"rule",
+		"boost",
 		"pending",
 		pgxmock.AnyArg(), // expires_at
 		pgxmock.AnyArg(), // user_action_at
@@ -313,7 +313,7 @@ func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
 			expires_at, user_action_at, user_notes, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		suggestionID, userID, ruleID, nil, fromAccountID, toAccountID,
-		500.00, "USD", "Move excess funds to savings", "rule", "pending",
+		500.00, "USD", "Move excess funds to savings", "boost", "pending",
 		nil, nil, nil, time.Now(), time.Now(),
 	)
 
@@ -323,7 +323,7 @@ func TestTransferSuggestionsTable_CanInsert(t *testing.T) {
 
 // TestTransferSuggestionsTable_PositiveAmountConstraint tests the CHECK constraint for amount > 0
 func TestTransferSuggestionsTable_PositiveAmountConstraint(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -336,7 +336,7 @@ func TestTransferSuggestionsTable_PositiveAmountConstraint(t *testing.T) {
 		WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	_, err := mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6)`,
-		uuid.New().String(), uuid.New().String(), -100.00, "USD", "rule", "pending")
+		uuid.New().String(), uuid.New().String(), -100.00, "USD", "boost", "pending")
 
 	assert.Error(t, err) // Should fail due to positive amount constraint
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -349,7 +349,7 @@ func TestTransferSuggestionsTable_StatusConstraint(t *testing.T) {
 
 	for _, status := range validStatuses {
 		t.Run("valid_status_"+status, func(t *testing.T) {
-			mock := setupRulesMockDB(t)
+			mock := setupBoostsMockDB(t)
 			defer mock.Close()
 			ctx := context.Background()
 
@@ -361,7 +361,7 @@ func TestTransferSuggestionsTable_StatusConstraint(t *testing.T) {
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 			_, err := mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6)`,
-				uuid.New().String(), uuid.New().String(), 100.00, "USD", "rule", status)
+				uuid.New().String(), uuid.New().String(), 100.00, "USD", "boost", status)
 
 			assert.NoError(t, err)
 		})
@@ -375,7 +375,7 @@ func TestTransferSuggestionsTable_SourceConstraint(t *testing.T) {
 
 	for _, source := range validSources {
 		t.Run("valid_source_"+source, func(t *testing.T) {
-			mock := setupRulesMockDB(t)
+			mock := setupBoostsMockDB(t)
 			defer mock.Close()
 			ctx := context.Background()
 
@@ -396,7 +396,7 @@ func TestTransferSuggestionsTable_SourceConstraint(t *testing.T) {
 
 // TestTransferSuggestionsTable_SetNullOnBoostDelete tests ON DELETE SET NULL for boost_id FK
 func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -448,7 +448,7 @@ func TestTransferSuggestionsTable_SetNullOnBoostDelete(t *testing.T) {
 
 // TestTransferSuggestionsTable_SetNullOnAccountDelete tests ON DELETE SET NULL for account FKs
 func TestTransferSuggestionsTable_SetNullOnAccountDelete(t *testing.T) {
-	mock := setupRulesMockDB(t)
+	mock := setupBoostsMockDB(t)
 	defer mock.Close()
 	ctx := context.Background()
 
@@ -483,7 +483,7 @@ func TestTransferSuggestionsTable_SetNullOnAccountDelete(t *testing.T) {
 		fromAccountID, uuid.New().String(), "Checking")
 
 	_, _ = mock.Exec(ctx, `INSERT INTO transfer_suggestions (id, user_id, from_account_id, amount, currency_code, source, status) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		suggestionID, uuid.New().String(), fromAccountID, 100.00, "USD", "rule", "pending")
+		suggestionID, uuid.New().String(), fromAccountID, 100.00, "USD", "boost", "pending")
 
 	_, _ = mock.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, fromAccountID)
 

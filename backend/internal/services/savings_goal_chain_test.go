@@ -152,7 +152,7 @@ func TestSavingsGoalService_ValidateOwnership_MatchesByUserAccountID(t *testing.
 func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
 
 	replacedAccountID := "account-savings-replaced"
@@ -185,7 +185,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 		},
 	}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetChainResolver(mockResolver)
 
@@ -234,7 +234,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID(t *testing.T) {
 func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
 
 	replacedAccountID := "account-savings-replaced-legacy"
@@ -254,7 +254,7 @@ func TestSavingsGoalExecutor_ChainResolver_NilFallback(t *testing.T) {
 	}
 	goalRepo.goals = append(goalRepo.goals, existingGoal)
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	// No SetChainResolver — chainResolver stays nil.
 
@@ -303,7 +303,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 	// The chain resolver returns acct_current (the current active ID) after two re-links.
 	execRepo := &mockRuleExecutionRepository{}
 	suggRepo := &mockTransferSuggestionRepository{}
-	ruleRepo := &mockAutomationRulesRepository{}
+	boostRepo := &mockBoostsRepository{}
 	goalRepo := &mockSavingsGoalRepository{}
 
 	acctOld := "account-savings-old"
@@ -333,7 +333,7 @@ func TestSavingsGoalExecutor_ChainResolver_ResolvesToActiveID_Depth2(t *testing.
 		},
 	}
 
-	svc := NewBoostExecutionService(execRepo, suggRepo, ruleRepo, nil)
+	svc := NewBoostExecutionService(execRepo, suggRepo, boostRepo, nil)
 	svc.SetSavingsGoalRepo(goalRepo)
 	svc.SetChainResolver(mockResolver)
 
