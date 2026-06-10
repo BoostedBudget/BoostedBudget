@@ -50,6 +50,7 @@ import type {
   AutomationRule,
   CreateAutomationRuleRequest,
   ErrorModel,
+  GetAutomationRulesParams,
   GetRuleExecutionsParams,
   RuleExecution,
   RuleExecutionsResponse,
@@ -96,17 +97,18 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 
 /**
- * Retrieves all automation rules for the authenticated user, ordered by priority.
- * @summary Get user automation rules
+ * Retrieves automation rules for the authenticated user, ordered by priority. Use the repeatable `rule_type` query parameter to filter by type. Valid values: transfer_suggestion, budget_alert, category_rollover, savings_goal. Transfer-generating types are transfer_suggestion and savings_goal. When omitted, all rule types are returned.
+ * @summary List automation rules (filter by rule_type)
  */
 export const getAutomationRules = (
-
+    params?: GetAutomationRulesParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<AutomationRule[] | null>(
-      {url: `/api/v1/rules`, method: 'GET', signal
+      {url: `/api/v1/rules`, method: 'GET',
+        params, signal
     },
       options);
     }
@@ -114,23 +116,23 @@ export const getAutomationRules = (
 
 
 
-export const getGetAutomationRulesQueryKey = () => {
+export const getGetAutomationRulesQueryKey = (params?: GetAutomationRulesParams,) => {
     return [
-    `/api/v1/rules`
+    `/api/v1/rules`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetAutomationRulesQueryOptions = <TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetAutomationRulesQueryOptions = <TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>(params?: GetAutomationRulesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetAutomationRulesQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetAutomationRulesQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAutomationRules>>> = ({ signal }) => getAutomationRules(requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAutomationRules>>> = ({ signal }) => getAutomationRules(params, requestOptions, signal);
 
 
 
@@ -144,7 +146,7 @@ export type GetAutomationRulesQueryError = ErrorType<ErrorModel>
 
 
 export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>> & Pick<
+ params: undefined |  GetAutomationRulesParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getAutomationRules>>,
           TError,
@@ -154,7 +156,7 @@ export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutom
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>> & Pick<
+ params?: GetAutomationRulesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getAutomationRules>>,
           TError,
@@ -164,19 +166,19 @@ export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutom
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetAutomationRulesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
- * @summary Get user automation rules
+ * @summary List automation rules (filter by rule_type)
  */
 
 export function useGetAutomationRules<TData = Awaited<ReturnType<typeof getAutomationRules>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetAutomationRulesParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutomationRules>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetAutomationRulesQueryOptions(options)
+  const queryOptions = getGetAutomationRulesQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

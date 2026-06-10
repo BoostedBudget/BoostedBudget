@@ -15,6 +15,9 @@ type TransferSuggestionRepository interface {
 	GetByID(ctx context.Context, id string) (*domain.TransferSuggestion, error)
 	GetPendingByUserID(ctx context.Context, userID string) ([]*domain.TransferSuggestion, error)
 	UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error
+	// CancelAcceptedSuggestion atomically transitions a pending or accepted suggestion to
+	// rejected, clearing matched_transaction_id. UpdateStatus cannot handle accepted rows.
+	CancelAcceptedSuggestion(ctx context.Context, id string, userNotes *string) error
 	// Complete marks a suggestion as completed after a transfer was detected or confirmed.
 	// matchedTransactionID is nil for user-confirmed completions (no specific transaction ID).
 	// Race-safe: only operates on pending or accepted suggestions.
@@ -33,6 +36,10 @@ type TransferSuggestionRepository interface {
 	// GAP AV: expectedTxnID is the matched_transaction_id the caller observed at read time.
 	// If the reservation was reclaimed between read and write, returns ErrTransferSuggestionAlreadyActioned.
 	ClearMatchedTransactionID(ctx context.Context, id string, expectedTxnID *string) error
+
+	// GetByUserIDStatuses retrieves suggestions filtered by status slice with pagination.
+	// A nil/empty slice falls back to pending-only semantics.
+	GetByUserIDStatuses(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error)
 }
 
 // TransferSuggestionService handles transfer suggestion operations.
@@ -60,6 +67,19 @@ type TransferSuggestionService interface {
 	// Returns ErrTransferSuggestionNotFound if suggestion doesn't exist or belongs to a different user.
 	// Returns ErrTransferSuggestionAlreadyActioned if status is completed, rejected, or expired.
 	DeclineTransferSuggestionMatch(ctx context.Context, userID, suggestionID string) (*domain.TransferSuggestion, error)
+
+	// GetSuggestionsByStatus returns suggestions for a user filtered by status, with pagination.
+	// Returns (items, totalCount, error). A nil statuses slice defaults to pending-only semantics.
+	// Used by the /boosts review page for the Active Recommendations, Awaiting Match, and History tabs.
+	GetSuggestionsByStatus(ctx context.Context, userID string, statuses []domain.SuggestionStatus, limit, offset int) ([]*domain.TransferSuggestion, int, error)
+
+	// CancelAcceptedSuggestion cancels a pending or accepted suggestion, transitioning it to
+	// rejected. Used by the Boosts "Cancel" button in the Awaiting Match tab (distinct from
+	// DeclineTransferSuggestionMatch, which only clears the fuzzy-match reservation without
+	// transitioning the status). The cancelled suggestion leaves the accepted tab on next poll.
+	// Returns ErrTransferSuggestionNotFound if suggestion doesn't exist or belongs to a different user.
+	// Returns ErrTransferSuggestionAlreadyActioned if status is completed, rejected, or expired.
+	CancelAcceptedSuggestion(ctx context.Context, userID, suggestionID string, notes *string) (*domain.TransferSuggestion, error)
 }
 
 // transferSuggestionService implements TransferSuggestionService.
@@ -218,6 +238,18 @@ func (s *transferSuggestionService) ConfirmTransferSuggestionMatch(
 	return suggestion, nil
 }
 
+// GetSuggestionsByStatus returns suggestions for a user filtered by status, with pagination.
+// Delegates directly to the repository; no business logic is applied beyond ownership
+// (the repo already filters by userID). A nil statuses slice uses pending-only semantics.
+func (s *transferSuggestionService) GetSuggestionsByStatus(
+	ctx context.Context,
+	userID string,
+	statuses []domain.SuggestionStatus,
+	limit, offset int,
+) ([]*domain.TransferSuggestion, int, error) {
+	return s.suggestionRepo.GetByUserIDStatuses(ctx, userID, statuses, limit, offset)
+}
+
 // DeclineTransferSuggestionMatch releases the fuzzy-match reservation on a pending/accepted
 // suggestion (user chose "No, that wasn't my transfer"). Clears matched_transaction_id so the
 // inflow can be matched by a different suggestion.
@@ -248,5 +280,51 @@ func (s *transferSuggestionService) DeclineTransferSuggestionMatch(
 	}
 
 	suggestion.MatchedTransactionID = nil
+	return suggestion, nil
+}
+
+// CancelAcceptedSuggestion transitions a pending or accepted suggestion to rejected.
+// This is the Boosts "Cancel" action in the Awaiting Match tab — distinct from
+// DeclineTransferSuggestionMatch (which only clears the fuzzy-match reservation without
+// changing status). After cancellation the row leaves the Awaiting tab on the next poll.
+func (s *transferSuggestionService) CancelAcceptedSuggestion(
+	ctx context.Context,
+	userID string,
+	suggestionID string,
+	notes *string,
+) (*domain.TransferSuggestion, error) {
+	suggestion, err := s.suggestionRepo.GetByID(ctx, suggestionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if suggestion.UserID != userID {
+		return nil, domain.ErrTransferSuggestionNotFound
+	}
+
+	if suggestion.Status == domain.SuggestionStatusCompleted ||
+		suggestion.Status == domain.SuggestionStatusRejected ||
+		suggestion.Status == domain.SuggestionStatusExpired {
+		return nil, domain.ErrTransferSuggestionAlreadyActioned
+	}
+
+	if err := s.suggestionRepo.CancelAcceptedSuggestion(ctx, suggestionID, notes); err != nil {
+		return nil, err
+	}
+
+	suggestion.Status = domain.SuggestionStatusRejected
+	if notes != nil {
+		suggestion.UserNotes = notes
+	}
+
+	if s.gdprAnalytics != nil {
+		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.TransferSuggestionCanceled, map[string]interface{}{
+			"amount":        suggestion.Amount,
+			"currency_code": suggestion.CurrencyCode,
+			"source":        string(suggestion.Source),
+			"rule_id":       suggestion.RuleID,
+		})
+	}
+
 	return suggestion, nil
 }

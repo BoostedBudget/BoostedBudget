@@ -79,7 +79,9 @@ export const ANALYTICS_EVENTS = {
   NOTIFICATION_ACTION_CLICKED: 'notification_action_clicked',
   TRANSFER_SUGGESTION_ACCEPTED: 'transfer_suggestion_accepted',
   TRANSFER_SUGGESTION_REJECTED: 'transfer_suggestion_rejected',
+  TRANSFER_SUGGESTION_CANCELED: 'transfer_suggestion_canceled',
   TRANSFER_SUGGESTION_MATCH_CONFIRMED: 'transfer_suggestion_match_confirmed',
+  TRANSFER_SUGGESTION_MATCH_DECLINED: 'transfer_suggestion_match_declined',
 
   // Savings transfer automation (#972)
   SAVINGS_IMPACT_VIEWED: 'savings_impact_viewed',
@@ -129,6 +131,11 @@ export const ANALYTICS_EVENTS = {
   REVIEW_BULK_RECATEGORIZED: 'review_bulk_recategorized',
   REVIEW_UNDO: 'review_undo',
   REVIEW_ALL_CAUGHT_UP: 'review_all_caught_up',
+
+  // Boosts (#1267)
+  BOOSTS_PAGE_VIEWED: 'boosts_page_viewed',
+  BOOSTS_TAB_CHANGED: 'boosts_tab_changed',
+  BOOSTS_RULES_FILTER_CHANGED: 'boosts_rules_filter_changed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',

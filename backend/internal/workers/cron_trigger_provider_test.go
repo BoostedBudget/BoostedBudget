@@ -46,6 +46,14 @@ func (m *MockRuleRepository) GetByUserID(ctx context.Context, userID string) ([]
 	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
 }
 
+func (m *MockRuleRepository) GetByUserIDFiltered(ctx context.Context, userID string, ruleTypes []domain.RuleType) ([]*domain.AutomationRule, error) {
+	args := m.Called(ctx, userID, ruleTypes)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.AutomationRule), args.Error(1)
+}
+
 func (m *MockRuleRepository) GetEnabledByUserID(ctx context.Context, userID string) ([]*domain.AutomationRule, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {

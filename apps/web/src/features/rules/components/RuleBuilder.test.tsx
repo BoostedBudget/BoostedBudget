@@ -6,10 +6,11 @@
  * Tests for the main rule builder form.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { RuleBuilder } from './RuleBuilder'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 
@@ -27,6 +28,12 @@ import { mockUseGetSavingsGoals } from '@/test/mocks/budgets-api'
 import { mockNavigate } from '@/test/mocks/react-router'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+
+// Re-register to ensure mock is current for this test file's execution order
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
 
 const mockRule: AutomationRule = {
   id: 'rule-1',
@@ -69,7 +76,7 @@ const mockUser = {
 
 function renderWithProviders(
   ui: React.ReactElement,
-  { route = '/rules/new' } = {}
+  { route = '/boosts/new' } = {}
 ) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -81,8 +88,8 @@ function renderWithProviders(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[route]}>
         <Routes>
-          <Route path="/rules/new" element={ui} />
-          <Route path="/rules/:id/edit" element={ui} />
+          <Route path="/boosts/new" element={ui} />
+          <Route path="/boosts/:id/edit" element={ui} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
@@ -93,6 +100,7 @@ describe('RuleBuilder', () => {
   beforeEach(() => {
     // Clear all mocks
     mockNavigate.mockClear()
+    mockTrackEvent.mockClear()
     mockCreateAutomationRuleMutateAsync.mockClear()
     mockUpdateAutomationRuleMutateAsync.mockClear()
     mockUseGetAutomationRules.mockClear()
@@ -344,7 +352,58 @@ describe('RuleBuilder', () => {
       fireEvent.click(saveButton)
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/rules')
+        expect(mockNavigate).toHaveBeenCalledWith('/boosts')
+      })
+    })
+
+    it('fires RULE_CREATED analytics after successful create', async () => {
+      renderWithProviders(<RuleBuilder />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
+      const nameInput = screen.getByLabelText(/rule name/i)
+      fireEvent.change(nameInput, { target: { value: 'Analytics Test Rule' } })
+
+      const typeSelect = screen.getByLabelText(/rule type/i)
+      fireEvent.change(typeSelect, { target: { value: 'budget_alert' } })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith('rule_created')
+      })
+    })
+  })
+
+  describe('Form Submission - Edit', () => {
+    function renderEditMode() {
+      mockUseGetAutomationRuleByID.mockReturnValue({
+        data: mockRule,
+        isLoading: false,
+        error: null,
+      })
+      return renderWithProviders(<RuleBuilder />, { route: '/boosts/rule-1/edit' })
+    }
+
+    it('fires RULE_EDITED analytics after successful edit save', async () => {
+      renderEditMode()
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/rule name/i)).toBeInTheDocument()
+      })
+
+      // Touch the name so the save is valid (field is pre-populated from mockRule)
+      const nameInput = screen.getByLabelText(/rule name/i)
+      fireEvent.change(nameInput, { target: { value: 'Updated Rule Name' } })
+
+      const saveButton = screen.getByRole('button', { name: /save/i })
+      fireEvent.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith('rule_edited')
       })
     })
   })
@@ -360,7 +419,7 @@ describe('RuleBuilder', () => {
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       fireEvent.click(cancelButton)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/rules')
+      expect(mockNavigate).toHaveBeenCalledWith('/boosts')
     })
   })
 
@@ -447,6 +506,45 @@ describe('RuleBuilder', () => {
       expect(screen.getByLabelText(/description/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/rule type/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/priority/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Read-only guarding (R2-D)', () => {
+    function renderReadOnly() {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+      return render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={['/boosts/new']}>
+              <Routes>
+                <Route path="/boosts/new" element={<RuleBuilder />} />
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ReadOnlyProvider>
+      )
+    }
+
+    it('wraps save/submit controls in ReadOnlyGuard in read-only mode', async () => {
+      const { container } = renderReadOnly()
+      // ReadOnlyGuard applies .pointer-events-none to its wrapper in read-only mode
+      await waitFor(() => {
+        expect(container.querySelector('.pointer-events-none')).toBeTruthy()
+      })
+    })
+
+    it('does not render Save button as interactive when read-only', async () => {
+      renderReadOnly()
+      await waitFor(() => {
+        // The save button should still be in the DOM (defense-in-depth) but guarded
+        const saveBtn = screen.queryByLabelText(/save rule/i)
+        if (saveBtn) {
+          // If it's present, it should be inside a read-only guard container
+          expect(saveBtn.closest('.pointer-events-none')).toBeTruthy()
+        }
+      })
     })
   })
 })

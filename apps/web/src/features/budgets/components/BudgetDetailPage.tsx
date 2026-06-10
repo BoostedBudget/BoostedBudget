@@ -224,7 +224,7 @@ export function BudgetDetailPage() {
         {/* Issue #39: Quick-create automation rules */}
         <div className="flex flex-wrap gap-3 mt-4">
           <Link
-            to={`/rules/new?type=budget_alert&budget_id=${budgetId}`}
+            to={`/boosts/new?type=budget_alert&budget_id=${budgetId}`}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
             aria-label="Create budget alert rule"
           >
@@ -232,7 +232,7 @@ export function BudgetDetailPage() {
             Create Alert Rule
           </Link>
           <Link
-            to={`/rules/new?type=category_rollover&budget_id=${budgetId}`}
+            to={`/boosts/new?type=category_rollover&budget_id=${budgetId}`}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
             aria-label="Create category rollover rule"
           >

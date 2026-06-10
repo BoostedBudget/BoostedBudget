@@ -264,6 +264,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('rejectTransferSuggestion', { idempotent: true }),
   write('confirmTransferSuggestionMatch', { idempotent: true }), // #972: carries idempotency key
   write('declineTransferSuggestionMatch', { idempotent: true }), // #972: user-driven reservation release
+  write('cancelTransferSuggestion', { idempotent: true }),       // #1267: Boosts cancel accepted suggestion
 
   // ── Savings Impact ────────────────────────────────────────────────────────
   read('getSavingsImpactAggregate'), // #972: public aggregate, read-only

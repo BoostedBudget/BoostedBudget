@@ -1,5 +1,6 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { RuleTable } from './RuleTable'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 
@@ -345,6 +346,20 @@ describe('RuleTable', () => {
       expect(onSelectionChange).toHaveBeenCalledWith(['rule-1', 'rule-2', 'rule-3'])
     })
 
+    it('row checkboxes do not embed rule name in aria-label (attribute-path PII leak)', () => {
+      // R4-2: session replay records attributes verbatim; data-ph-mask cannot cover them.
+      // The per-row checkbox aria-label must NOT contain the rule name.
+      render(<RuleTable rules={mockRules} selectable />)
+      const checkboxes = screen.getAllByRole('checkbox')
+      // Skip index 0 (Select all) — verify row checkboxes (1..n)
+      for (let i = 1; i < checkboxes.length; i++) {
+        const label = checkboxes[i].getAttribute('aria-label') ?? ''
+        expect(label).not.toContain('Daily Budget Check')
+        expect(label).not.toContain('Monthly Savings')
+        expect(label).not.toContain('Event Transfer')
+      }
+    })
+
     it('should show selected rows', () => {
       render(
         <RuleTable
@@ -388,6 +403,73 @@ describe('RuleTable', () => {
           mockRules[i].enabled ? 'true' : 'false'
         )
       })
+    })
+  })
+
+  describe('Details column — condition + action summary (R2-C)', () => {
+    const ruleWithConditions: AutomationRule = {
+      ...(mockRules[0] as AutomationRule),
+      conditions: [{ field: 'budget.percent_used', operator: 'gte', value: 80 }],
+    }
+
+    const transferRuleWithAmount: AutomationRule = {
+      ...(mockRules[2] as AutomationRule),
+      rule_type: 'transfer_suggestion',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      actions: { amount: 200 } as any,
+      conditions: [],
+    }
+
+    it('renders condition summary in details column', () => {
+      render(<RuleTable rules={[ruleWithConditions]} />)
+      const bodyText = document.body.textContent ?? ''
+      // condition: "When Budget % Used ≥ 80"
+      expect(/Budget % Used/i.test(bodyText)).toBe(true)
+    })
+
+    it('renders action summary for transfer_suggestion rule', () => {
+      render(<RuleTable rules={[transferRuleWithAmount]} />)
+      const bodyText = document.body.textContent ?? ''
+      expect(bodyText).toContain('Suggest transfer $200')
+    })
+
+    it('renders "Details" column header', () => {
+      render(<RuleTable rules={mockRules} />)
+      expect(screen.getByText('Details')).toBeInTheDocument()
+    })
+
+    it('applies data-ph-mask to details column cells (PII — financial amounts in action summary)', () => {
+      const { container } = render(<RuleTable rules={[transferRuleWithAmount]} />)
+      expect(container.querySelectorAll('[data-ph-mask]').length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  describe('Read-only guarding on row actions (R2-C)', () => {
+    it('wraps row toggle/edit/delete/backtest in ReadOnlyGuard (pointer-events-none in read-only mode)', () => {
+      const { container } = render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <RuleTable
+            rules={mockRules}
+            onEdit={mock(() => {})}
+            onDelete={mock(() => {})}
+            onToggle={mock(() => {})}
+            onTest={mock(() => {})}
+          />
+        </ReadOnlyProvider>
+      )
+      expect(container.querySelector('.pointer-events-none')).toBeTruthy()
+    })
+
+    it('does NOT disable onRowClick navigation in read-only mode', () => {
+      const onRowClick = mock(() => {})
+      render(
+        <ReadOnlyProvider isReadOnly={true}>
+          <RuleTable rules={mockRules} onRowClick={onRowClick} />
+        </ReadOnlyProvider>
+      )
+      const rows = screen.getAllByRole('row')
+      fireEvent.click(rows[1])
+      expect(onRowClick).toHaveBeenCalledWith(mockRules[0])
     })
   })
 

@@ -16,14 +16,18 @@ import { RulesPage } from './RulesPage'
 // Import centralized mocks for configuration
 import {
   mockUseGetAutomationRules,
+  mockUseToggleAutomationRule,
   mockToggleAutomationRuleMutate,
+  mockToggleAutomationRuleMutateAsync,
   mockDeleteAutomationRuleMutate,
   mockTestAutomationRuleMutate,
   mockRefetchAutomationRules,
 } from '@/test/mocks/automation-rules-api'
+import { getGetAutomationRulesQueryKey } from '@boostedbudget/api-client/endpoints/automation-rules/automation-rules'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 const mockRules: AutomationRule[] = [
   {
@@ -47,8 +51,7 @@ const mockRules: AutomationRule[] = [
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-15T00:00:00Z',
     last_executed_at: '2024-01-15T09:00:00Z',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any,
+  } as AutomationRule,
   {
     id: 'rule-2',
     user_id: 'user-1',
@@ -68,8 +71,7 @@ const mockRules: AutomationRule[] = [
     actions: {} as any,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-10T00:00:00Z',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any,
+  } as AutomationRule,
 ]
 
 // Mock user data with premium tier
@@ -85,7 +87,7 @@ const mockUser = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
-function renderWithProviders(ui: React.ReactElement, { initialUrl = '/rules' } = {}) {
+function renderWithProviders(ui: React.ReactElement, { initialUrl = '/boosts' } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -109,6 +111,7 @@ describe('RulesPage', () => {
     mockRefetchAutomationRules.mockClear()
     mockUseGetUserProfile.mockClear()
     mockUseGetSubscriptionTiers.mockClear()
+    mockTrackEvent.mockClear()
     localStorage.clear()
 
     // Configure automation rules mock
@@ -322,6 +325,31 @@ describe('RulesPage', () => {
     })
   })
 
+  it('masks rule name with data-ph-mask in delete-confirmation dialog (PII — session replay)', async () => {
+    // R4-3: the rule name is interpolated into the dialog description. Session replay records
+    // unmasked DOM text; the name must be wrapped in a data-ph-mask span.
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    // The rule name ("Daily Budget Check") must appear inside a data-ph-mask element
+    const dialog = screen.getByRole('alertdialog')
+    const maskedEls = dialog.querySelectorAll('[data-ph-mask]')
+    const nameIsMasked = Array.from(maskedEls).some((el) =>
+      el.textContent?.includes('Daily Budget Check')
+    )
+    expect(nameIsMasked).toBe(true)
+  })
+
   it('should call delete mutation when confirmed', async () => {
     renderWithProviders(<RulesPage />)
 
@@ -340,6 +368,32 @@ describe('RulesPage', () => {
     fireEvent.click(confirmButton)
     await waitFor(() => {
       expect(mockDeleteAutomationRuleMutate).toHaveBeenCalled()
+    })
+  })
+
+  it('fires RULE_DELETED analytics after delete is confirmed', async () => {
+    mockDeleteAutomationRuleMutate.mockImplementationOnce(
+      (_args: unknown, opts?: { onSuccess?: () => void }) => { opts?.onSuccess?.() }
+    )
+
+    renderWithProviders(<RulesPage />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /delete/i }).length).toBeGreaterThan(0)
+    })
+
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i })
+    fireEvent.click(deleteButtons[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    })
+
+    const confirmButton = within(screen.getByRole('alertdialog')).getByRole('button', { name: /delete/i })
+    fireEvent.click(confirmButton)
+
+    await waitFor(() => {
+      expect(mockTrackEvent).toHaveBeenCalledWith('rule_deleted')
     })
   })
 
@@ -473,7 +527,7 @@ describe('RulesPage', () => {
         error: null,
         refetch: mockRefetchAutomationRules,
       })
-      renderWithProviders(<RulesPage />, { initialUrl: '/rules?sort=name:asc' })
+      renderWithProviders(<RulesPage />, { initialUrl: '/boosts?sort=name:asc' })
 
       fireEvent.click(screen.getByTitle('Table view'))
 
@@ -530,7 +584,7 @@ describe('RulesPage', () => {
         error: null,
         refetch: mockRefetchAutomationRules,
       })
-      renderWithProviders(<RulesPage />, { initialUrl: '/rules?sort=lastRun:desc' })
+      renderWithProviders(<RulesPage />, { initialUrl: '/boosts?sort=lastRun:desc' })
 
       fireEvent.click(screen.getByTitle('Table view'))
 
@@ -572,5 +626,241 @@ describe('RulesPage', () => {
     const testButtons = screen.getAllByRole('button', { name: /test/i })
     fireEvent.click(testButtons[0])
     expect(mockTestAutomationRuleMutate).toHaveBeenCalled()
+  })
+
+  // R8-1c: Rule type segment for Boosts Rules tab (#1267)
+  describe('Rule type segment (R8-1c)', () => {
+    it('renders segment control when showTypeSegment is true', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /transfer & savings/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+    })
+
+    it('does not render segment when showTypeSegment is omitted (default)', async () => {
+      renderWithProviders(<RulesPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/automation rules/i)).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('group', { name: /rule type filter/i })).not.toBeInTheDocument()
+    })
+
+    it('calls useGetAutomationRules with rule_type when default is Transfer & Savings', async () => {
+      mockUseGetAutomationRules.mockClear()
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+      expect(lastCallParams).toEqual({ rule_type: ['transfer_suggestion', 'savings_goal'] })
+    })
+
+    it('calls useGetAutomationRules without rule_type when All rules is selected', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+      })
+      mockUseGetAutomationRules.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+        expect(lastCallParams).toBeUndefined()
+      })
+    })
+
+    it('fires boosts_rules_filter_changed when segment is changed', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+      })
+      mockTrackEvent.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'all' })
+        )
+      })
+    })
+
+    it('fires boosts_rules_filter_changed with filter:transfer_savings when switching back', async () => {
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      // First switch to "All rules"
+      await waitFor(() => expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      mockTrackEvent.mockClear()
+      // Then switch back to "Transfer & Savings"
+      fireEvent.click(screen.getByRole('button', { name: /transfer & savings/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'transfer_savings' })
+        )
+      })
+    })
+
+    // R10-a (#1267): segment must remain reachable in the filtered-empty state.
+    // Previously, the rules.length===0 early-return fired BEFORE the segment JSX
+    // was rendered, so users with only budget_alert/category_rollover rules could
+    // not click "All rules" to reach them from the Boosts tab.
+    it('renders segment when showTypeSegment is true and the filtered query returns no rules', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: /rule type filter/i })).toBeInTheDocument()
+      })
+      expect(screen.getByRole('button', { name: /transfer & savings/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument()
+    })
+
+    it('clicking All rules in filtered-empty state fires boosts_rules_filter_changed and clears rule_type', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />)
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /all rules/i })).toBeInTheDocument())
+      mockUseGetAutomationRules.mockClear()
+      mockTrackEvent.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /all rules/i }))
+
+      await waitFor(() => {
+        const lastCallParams = mockUseGetAutomationRules.mock.calls.at(-1)?.[0]
+        expect(lastCallParams).toBeUndefined()
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'boosts_rules_filter_changed',
+          expect.objectContaining({ filter: 'all' })
+        )
+      })
+    })
+
+    it('does NOT render segment in filtered-empty state when showTypeSegment is false', async () => {
+      mockUseGetAutomationRules.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      renderWithProviders(<RulesPage />)
+
+      await waitFor(() => {
+        // The genuine empty state (no rules at all, no segment) renders
+        expect(screen.getByText(/no automation rules yet/i)).toBeInTheDocument()
+      })
+      expect(screen.queryByRole('group', { name: /rule type filter/i })).not.toBeInTheDocument()
+    })
+  })
+
+  // R9-c (#1267): Optimistic toggle cache-key regression test.
+  // Verifies that onMutate writes to the FILTERED cache key when the segment is active,
+  // and that onError rolls back exactly that same key. Prevents silent regressions where
+  // a future edit might use the base (unfiltered) key instead.
+  describe('Optimistic toggle cache-key (R9-c)', () => {
+    it('onMutate writes to the filtered cache key and onError rolls it back', async () => {
+      type OnMutateCallback = (vars: { id: string; data: { enabled: boolean } }) => Promise<{ previousRules: unknown }>
+      type OnErrorCallback = (err: unknown, vars: unknown, ctx: { previousRules: unknown } | undefined) => void
+
+      let capturedOnMutate: OnMutateCallback | undefined
+      let capturedOnError: OnErrorCallback | undefined
+
+      mockUseToggleAutomationRule.mockImplementationOnce(
+        (opts: { mutation?: { onMutate?: unknown; onError?: unknown } } | undefined) => {
+          capturedOnMutate = opts?.mutation?.onMutate as OnMutateCallback
+          capturedOnError = opts?.mutation?.onError as OnErrorCallback
+          return {
+            mutate: mockToggleAutomationRuleMutate,
+            mutateAsync: mockToggleAutomationRuleMutateAsync,
+            isPending: false,
+            isError: false,
+            isSuccess: false,
+            error: null,
+            data: null,
+            reset: () => {},
+          }
+        }
+      )
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      })
+
+      const seedRule: AutomationRule = {
+        ...mockRules[0],
+        id: 'seed-rule',
+        rule_type: 'transfer_suggestion',
+        enabled: false,
+      }
+
+      // Pre-seed the FILTERED cache key — this is the key the segment view reads.
+      const filteredParams = { rule_type: ['transfer_suggestion', 'savings_goal'] }
+      queryClient.setQueryData(getGetAutomationRulesQueryKey(filteredParams), [seedRule])
+
+      mockUseGetAutomationRules.mockReturnValueOnce({
+        data: [seedRule],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAutomationRules,
+      })
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <RulesPage showTypeSegment ruleTypeFilter={['transfer_suggestion', 'savings_goal']} />
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+
+      await waitFor(() => {
+        expect(capturedOnMutate).toBeDefined()
+        expect(capturedOnError).toBeDefined()
+      })
+
+      // (1) onMutate should optimistically flip `enabled` on the FILTERED key.
+      const rollbackContext = await capturedOnMutate!({ id: 'seed-rule', data: { enabled: true } })
+
+      const filteredAfterOptimistic = queryClient.getQueryData(
+        getGetAutomationRulesQueryKey(filteredParams)
+      ) as AutomationRule[]
+      expect(filteredAfterOptimistic[0]?.enabled).toBe(true)
+
+      // The unfiltered (base) key is untouched — onMutate must NOT write to the wrong key.
+      expect(queryClient.getQueryData(getGetAutomationRulesQueryKey())).toBeUndefined()
+
+      // (2) onError should roll back the filtered key to its previous value.
+      capturedOnError!(
+        new Error('network error'),
+        { id: 'seed-rule', data: { enabled: true } },
+        rollbackContext
+      )
+
+      const filteredAfterRollback = queryClient.getQueryData(
+        getGetAutomationRulesQueryKey(filteredParams)
+      ) as AutomationRule[]
+      expect(filteredAfterRollback[0]?.enabled).toBe(false)
+    })
   })
 })

@@ -674,7 +674,7 @@ describe('BudgetDetailPage', () => {
       renderWithRouter('test-budget-123')
 
       const alertLink = screen.getByRole('link', { name: /create.*alert.*rule/i })
-      expect(alertLink).toHaveAttribute('href', '/rules/new?type=budget_alert&budget_id=test-budget-123')
+      expect(alertLink).toHaveAttribute('href', '/boosts/new?type=budget_alert&budget_id=test-budget-123')
     })
 
     it('should have correct href for rollover rule button with budget_id', () => {
@@ -688,7 +688,7 @@ describe('BudgetDetailPage', () => {
       renderWithRouter('test-budget-456')
 
       const rolloverLink = screen.getByRole('link', { name: /create.*rollover.*rule/i })
-      expect(rolloverLink).toHaveAttribute('href', '/rules/new?type=category_rollover&budget_id=test-budget-456')
+      expect(rolloverLink).toHaveAttribute('href', '/boosts/new?type=category_rollover&budget_id=test-budget-456')
     })
   })
 

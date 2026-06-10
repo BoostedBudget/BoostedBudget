@@ -9,11 +9,17 @@ import {
   Edit,
   Trash2,
   Play,
+  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AutomationRule } from '@boostedbudget/api-client/models'
 import { formatRelativeTime } from '@/shared/dates'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { RULE_TYPE_LABELS } from '../constants'
+import { formatRuleConditionsSummary, formatRuleActionSummary } from '../utils'
 import type { RuleType } from '../types'
 
 export interface RuleCardProps {
@@ -27,6 +33,8 @@ export interface RuleCardProps {
   onToggle?: (rule: AutomationRule, enabled: boolean) => void
   /** Called when test button is clicked */
   onTest?: (rule: AutomationRule) => void
+  /** Called when "View recent executions" is clicked; pass to enable the link */
+  onViewExecutions?: (rule: AutomationRule) => void
   /** Show loading state on actions */
   loading?: boolean
   /** Compact display mode (hide description) */
@@ -46,6 +54,7 @@ const RULE_TYPE_ICONS: Record<RuleType, typeof Bell> = {
 
 /**
  * RuleCard component displays a single automation rule in card format.
+ * Design system: Badge + Button + Switch; semantic tokens only (no raw palette).
  */
 export function RuleCard({
   rule,
@@ -53,6 +62,7 @@ export function RuleCard({
   onDelete,
   onToggle,
   onTest,
+  onViewExecutions,
   loading = false,
   compact = false,
   showPriority = false,
@@ -77,11 +87,15 @@ export function RuleCard({
     return `Last run ${formatRelativeTime(rule.last_executed_at)}`
   }, [rule.last_executed_at])
 
-  const handleToggle = () => {
-    if (onToggle && !loading) {
-      onToggle(rule, !rule.enabled)
-    }
-  }
+  const conditionSummary = useMemo(
+    () => formatRuleConditionsSummary(rule.conditions, rule.condition_logic),
+    [rule.conditions, rule.condition_logic],
+  )
+
+  const actionSummary = useMemo(
+    () => formatRuleActionSummary(rule.rule_type, rule.actions),
+    [rule.rule_type, rule.actions],
+  )
 
   return (
     <article
@@ -92,67 +106,47 @@ export function RuleCard({
       )}
     >
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900">
-          <Icon className="h-5 w-5 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <Icon className="h-5 w-5 text-primary" aria-hidden="true" />
         </div>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-base font-semibold text-foreground"><span data-ph-mask>{rule.name}</span></h3>
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
         {onToggle && (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={rule.enabled}
-            onClick={handleToggle}
-            disabled={loading}
-            className={cn(
-              'relative h-6 w-11 shrink-0 cursor-pointer rounded-full border-none transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-              rule.enabled
-                ? 'bg-green-500 dark:bg-green-600'
-                : 'bg-muted-foreground/30 dark:bg-muted-foreground/20'
-            )}
-            aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform',
-                rule.enabled && 'translate-x-5'
-              )}
+          <ReadOnlyGuard>
+            <Switch
+              checked={rule.enabled}
+              onCheckedChange={(v) => !loading && onToggle(rule, v)}
+              disabled={loading}
+              aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
             />
-          </button>
+          </ReadOnlyGuard>
         )}
       </div>
 
       {!compact && rule.description && (
-        <p className="text-sm leading-relaxed text-muted-foreground">{rule.description}</p>
+        <p className="text-sm leading-relaxed text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
       )}
 
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap gap-2">
-          <span
-            className={cn(
-              'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
-              rule.enabled
-                ? 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300'
-                : 'bg-muted text-muted-foreground'
-            )}
-          >
+          <Badge variant={rule.enabled ? 'success' : 'secondary'}>
             {rule.enabled ? 'Enabled' : 'Disabled'}
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+          </Badge>
+          <Badge variant="info">
             {triggerType === 'schedule' ? (
               <>
-                <Calendar className="h-3 w-3" aria-hidden="true" />
+                <Calendar className="h-3 w-3 mr-1" aria-hidden="true" />
                 Scheduled
               </>
             ) : (
               <>
-                <Zap className="h-3 w-3" aria-hidden="true" />
+                <Zap className="h-3 w-3 mr-1" aria-hidden="true" />
                 Event
               </>
             )}
-          </span>
+          </Badge>
         </div>
 
         <div className="flex gap-4 text-xs text-muted-foreground">
@@ -160,49 +154,76 @@ export function RuleCard({
           <span className="inline-flex items-center">{lastRunText}</span>
         </div>
 
+        {conditionSummary && (
+          <p className="text-xs text-muted-foreground italic" data-ph-mask>{conditionSummary}</p>
+        )}
+
+        {actionSummary && (
+          <p className="text-xs text-muted-foreground italic" data-ph-mask>{actionSummary}</p>
+        )}
+
         {showPriority && (
           <span className="text-xs text-muted-foreground">Priority: {rule.priority}</span>
         )}
       </div>
 
-      {(onEdit || onDelete || onTest) && (
+      {(onEdit || onDelete || onTest || onViewExecutions) && (
         <div className="flex gap-2 border-t border-border pt-3">
-          {onTest && (
-            <button
+          <ReadOnlyGuard>
+            {onTest && (
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={() => onTest(rule)}
+                disabled={loading}
+                aria-label="Backtest rule"
+                title="See what this rule would have done with your recent data"
+              >
+                <Play className="h-4 w-4" aria-hidden="true" />
+                Backtest
+              </Button>
+            )}
+            {onEdit && (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => onEdit(rule)}
+                disabled={loading}
+                aria-label="Edit rule"
+              >
+                <Edit className="h-4 w-4" aria-hidden="true" />
+                Edit
+              </Button>
+            )}
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => onDelete(rule)}
+                disabled={loading}
+                aria-label="Delete rule"
+                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                Delete
+              </Button>
+            )}
+          </ReadOnlyGuard>
+          {onViewExecutions && (
+            <Button
+              variant="ghost"
+              size="sm"
               type="button"
-              onClick={() => onTest(rule)}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
-              aria-label="Backtest rule"
-              title="See what this rule would have done with your recent data"
+              onClick={() => onViewExecutions(rule)}
+              className="ml-auto"
+              aria-label="View recent executions"
             >
-              <Play className="h-4 w-4" aria-hidden="true" />
-              Backtest
-            </button>
-          )}
-          {onEdit && (
-            <button
-              type="button"
-              onClick={() => onEdit(rule)}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Edit rule"
-            >
-              <Edit className="h-4 w-4" aria-hidden="true" />
-              Edit
-            </button>
-          )}
-          {onDelete && (
-            <button
-              type="button"
-              onClick={() => onDelete(rule)}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-md bg-muted px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900"
-              aria-label="Delete rule"
-            >
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
-              Delete
-            </button>
+              <History className="h-4 w-4" aria-hidden="true" />
+              View recent executions
+            </Button>
           )}
         </div>
       )}
