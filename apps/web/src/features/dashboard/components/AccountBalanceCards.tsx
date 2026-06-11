@@ -41,9 +41,9 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
       text: 'text-destructive',
     },
     investment: {
-      bg: 'bg-purple-50 dark:bg-purple-950',
-      border: 'border-purple-200 dark:border-purple-800',
-      text: 'text-purple-900 dark:text-purple-100',
+      bg: 'bg-muted/30',
+      border: 'border-border',
+      text: 'text-foreground',
     },
     loan: {
       bg: 'bg-warning/10',
