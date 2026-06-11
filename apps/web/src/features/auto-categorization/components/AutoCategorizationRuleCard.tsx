@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -68,7 +69,7 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
   }
 
   return (
-    <div className={cn('bg-card border border-border rounded-lg p-4 mb-4 transition-shadow hover:shadow-md', !rule.enabled && 'opacity-70 bg-muted')}>
+    <Card className={cn('mb-4 transition-shadow hover:shadow-md', !rule.enabled && 'opacity-70 bg-muted')}>
       <div className="mb-4">
         <div className="flex items-center justify-between gap-2 mb-1">
           <h3 className="m-0 text-lg font-semibold text-foreground">
@@ -201,6 +202,6 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
         variant="destructive"
         loading={deleting}
       />
-    </div>
+    </Card>
   )
 }
