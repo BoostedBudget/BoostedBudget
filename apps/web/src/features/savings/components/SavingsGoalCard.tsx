@@ -1,3 +1,4 @@
+import { Card } from '@/components/ui/card'
 import { computeSavingsProgress, computeSavingsRemaining } from '../types'
 import type { SavingsGoal } from '../types'
 
@@ -36,10 +37,10 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
   const visualWidth = Math.min(progress, 100)
 
   return (
-    <div className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md">
+    <Card className="flex flex-col gap-4 transition-shadow hover:shadow-md">
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <h3 className="m-0 text-lg font-semibold text-foreground">
+          <h3 id={`savings-goal-name-${goal.id}`} className="m-0 text-lg font-semibold text-foreground">
             <span data-ph-mask>{goal.name}</span>
           </h3>
           {goal.is_completed && (
@@ -65,6 +66,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
         <div
           className="flex-1 h-3 bg-muted rounded-full overflow-hidden"
           role="progressbar"
+          aria-labelledby={`savings-goal-name-${goal.id}`}
           aria-valuenow={progress}
           aria-valuemin={0}
           aria-valuemax={100}
@@ -115,6 +117,6 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
