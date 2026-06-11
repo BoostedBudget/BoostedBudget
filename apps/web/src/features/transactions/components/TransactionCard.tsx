@@ -8,6 +8,7 @@ import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/catego
 import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { ReviewBadge } from '@/shared/components/ReviewBadge'
 import { reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge/reviewBadgeUtils'
 
@@ -214,13 +215,14 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
             {amountFormatted}
           </div>
           {pending && (
-            <div
-              className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-warning-foreground bg-warning/20 px-2 py-0.5 rounded-full uppercase tracking-wide"
+            <Badge
+              variant="warning"
+              className="transaction-card__pending-badge uppercase tracking-wide"
               title="This transaction is still pending and may be updated by your bank"
             >
               <Clock className="w-3 h-3" data-testid="pending-icon" />
               Pending
-            </div>
+            </Badge>
           )}
         </div>
         {(onEdit || onCategorize) && (

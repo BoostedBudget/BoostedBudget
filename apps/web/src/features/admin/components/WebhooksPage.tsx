@@ -15,6 +15,7 @@ import {
   useReplayAdminPaddleWebhook,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { SummaryCard } from '@/features/admin'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useWebhookFilters } from '../hooks/useWebhookFilters'
 import { WebhookDetailModal } from './WebhookDetailModal'
@@ -35,10 +36,10 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'transaction.payment_failed', label: 'transaction.payment_failed' },
 ]
 
-const statusBadgeClass = (processed: boolean, hasError: boolean): string => {
-  if (processed) return 'bg-success/10 text-success'
-  if (hasError) return 'bg-destructive/10 text-destructive'
-  return 'bg-warning/10 text-warning'
+const webhookStatusVariant = (processed: boolean, hasError: boolean): 'success' | 'destructive' | 'warning' => {
+  if (processed) return 'success'
+  if (hasError) return 'destructive'
+  return 'warning'
 }
 
 const selectInputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] cursor-pointer transition-colors focus:outline-none focus:border-primary'
@@ -116,18 +117,13 @@ export function WebhooksPage() {
       minSize: 90,
       maxSize: 140,
       render: (event) => (
-        <span
-          className={cn(
-            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-            statusBadgeClass(!!event.processed, !!event.processing_error)
-          )}
-        >
+        <Badge variant={webhookStatusVariant(!!event.processed, !!event.processing_error)}>
           {event.processed
             ? 'Processed'
             : event.processing_error
               ? 'Failed'
               : 'Pending'}
-        </span>
+        </Badge>
       ),
     },
     {
