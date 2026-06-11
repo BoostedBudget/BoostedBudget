@@ -8,6 +8,7 @@
 
 import { useCallback, useMemo } from 'react';
 import { DollarSign } from 'lucide-react';
+import { formatCurrencyFull } from '@/shared/charts/formatters';
 import { EmptyState } from '@/components/ui/empty-state';
 import type { IncomeSource } from '../../types';
 import type { UserTag } from '@/features/tags/types';
@@ -28,16 +29,6 @@ export interface IncomeSourceConfigProps {
   disabled?: boolean;
   /** Whether to show the expected total display */
   showTotal?: boolean;
-}
-
-/**
- * Formats a currency amount for display
- */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
 }
 
 export function IncomeSourceConfig({
@@ -119,7 +110,7 @@ export function IncomeSourceConfig({
             Expected Income:
           </span>
           <span className="text-base font-semibold text-success" role="status" data-ph-mask>
-            {formatCurrency(expectedTotal)}
+            {formatCurrencyFull(expectedTotal)}
           </span>
         </div>
       )}

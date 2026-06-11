@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useMemo } from 'react'
+import { formatCurrencyFull } from '@/shared/charts/formatters'
 import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useGetSavingsGoals } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalAction } from '../../types'
@@ -41,13 +42,6 @@ const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] 
     description: 'Transfer all funds above the minimum balance to the savings goal',
   },
 ]
-
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount)
-}
 
 /**
  * SavingsGoalActionForm component for configuring savings goal actions.
@@ -171,8 +165,8 @@ export function SavingsGoalActionForm({
         </select>
         {selectedGoal && (
           <p className="mt-1 text-xs font-medium text-success" data-ph-mask>
-            {formatCurrency(selectedGoal.current_amount)} of{' '}
-            {formatCurrency(selectedGoal.target_amount)} saved (
+            {formatCurrencyFull(selectedGoal.current_amount)} of{' '}
+            {formatCurrencyFull(selectedGoal.target_amount)} saved (
             {Math.round((selectedGoal.current_amount / selectedGoal.target_amount) * 100)}%)
           </p>
         )}

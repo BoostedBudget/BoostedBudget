@@ -6,6 +6,7 @@
  */
 
 import { Receipt } from 'lucide-react';
+import { formatCurrencyFull } from '@/shared/charts/formatters';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -31,14 +32,6 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
     loadMore,
     refetch,
   } = useBudgetTransactions(budgetId, categoryId);
-
-  // Format currency
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(amount);
-  };
 
   // Loading state
   if (loading) {
@@ -86,7 +79,7 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
           Transactions ({totalCount})
         </h3>
         <span className="text-sm font-medium text-muted-foreground" data-ph-mask>
-          Total: {formatCurrency(totalAmount)}
+          Total: {formatCurrencyFull(totalAmount)}
         </span>
       </div>
 
