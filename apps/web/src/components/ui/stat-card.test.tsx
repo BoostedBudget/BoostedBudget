@@ -95,4 +95,40 @@ describe('StatCard', () => {
       expect(labelEl?.className).toContain('text-muted-foreground')
     })
   })
+
+  describe('Accent border', () => {
+    it('applies border-l-4 and border-l-warning for accent="warning"', () => {
+      const { container } = render(<StatCard label="L" value="V" accent="warning" />)
+      const el = container.firstChild as HTMLElement
+      expect(el.className).toContain('border-l-4')
+      expect(el.className).toContain('border-l-warning')
+    })
+
+    it('applies border-l-4 and border-l-success for accent="success"', () => {
+      const { container } = render(<StatCard label="L" value="V" accent="success" />)
+      const el = container.firstChild as HTMLElement
+      expect(el.className).toContain('border-l-4')
+      expect(el.className).toContain('border-l-success')
+    })
+
+    it('applies border-l-4 and border-l-destructive for accent="destructive"', () => {
+      const { container } = render(<StatCard label="L" value="V" accent="destructive" />)
+      const el = container.firstChild as HTMLElement
+      expect(el.className).toContain('border-l-4')
+      expect(el.className).toContain('border-l-destructive')
+    })
+
+    it('applies border-l-4 and border-l-info for accent="info"', () => {
+      const { container } = render(<StatCard label="L" value="V" accent="info" />)
+      const el = container.firstChild as HTMLElement
+      expect(el.className).toContain('border-l-4')
+      expect(el.className).toContain('border-l-info')
+    })
+
+    it('does not apply border-l-4 when accent is omitted', () => {
+      const { container } = render(<StatCard label="L" value="V" />)
+      const el = container.firstChild as HTMLElement
+      expect(el.className).not.toContain('border-l-4')
+    })
+  })
 })
