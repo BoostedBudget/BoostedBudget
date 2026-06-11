@@ -160,7 +160,7 @@ export function SavingsGoalActionForm({
           value={action.savings_goal_id}
           onChange={handleGoalChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select a savings goal...</option>
           {goalsList.map((goal) => (
@@ -170,7 +170,7 @@ export function SavingsGoalActionForm({
           ))}
         </select>
         {selectedGoal && (
-          <p className="mt-1 text-xs font-medium text-green-600 dark:text-green-400">
+          <p className="mt-1 text-xs font-medium text-success">
             {formatCurrency(selectedGoal.current_amount)} of{' '}
             {formatCurrency(selectedGoal.target_amount)} saved (
             {Math.round((selectedGoal.current_amount / selectedGoal.target_amount) * 100)}%)
@@ -188,7 +188,7 @@ export function SavingsGoalActionForm({
           value={action.from_account_id}
           onChange={handleFromAccountChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select an account...</option>
           {(accountsList ?? []).map((account: { id: string; name: string }) => (
@@ -209,7 +209,7 @@ export function SavingsGoalActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -228,7 +228,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="amount"
@@ -249,7 +249,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="percentage" className="text-sm font-medium text-foreground">
             Percentage
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <input
               id="percentage"
               type="number"
@@ -271,7 +271,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="minimum-balance" className="text-sm font-medium text-foreground">
             Minimum Balance
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="minimum-balance"
