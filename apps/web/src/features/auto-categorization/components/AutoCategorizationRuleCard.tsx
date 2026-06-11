@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import type { CategorizationRule, ConditionType } from '../types'
 import { CONDITION_TYPE_LABELS } from '../types'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -73,14 +74,9 @@ export function AutoCategorizationRuleCard({ rule, onToggle, onEdit, onDelete }:
           <h3 className="m-0 text-lg font-semibold text-foreground">
             <span data-ph-mask>{rule.name}</span>
           </h3>
-          <span
-            className={cn(
-              'text-xs font-medium px-2 py-1 rounded uppercase tracking-wide',
-              rule.enabled ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
-            )}
-          >
+          <Badge variant={rule.enabled ? 'success' : 'secondary'} className="uppercase">
             {rule.enabled ? 'Active' : 'Disabled'}
-          </span>
+          </Badge>
         </div>
         {rule.description && (
           <p className="mt-2 text-sm text-muted-foreground"><span data-ph-mask>{rule.description}</span></p>
