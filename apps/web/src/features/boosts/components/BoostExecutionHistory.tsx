@@ -6,7 +6,8 @@
  * Shows execution time, status, duration, and trigger type.
  */
 
-import { Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle, History } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useGetBoostExecutions } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import type { BoostExecution } from '@boostedbudget/api-client/models'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
@@ -115,9 +116,12 @@ export function BoostExecutionHistory({
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
         <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
-        <div className="p-8 text-center text-muted-foreground">
-          <p>No executions yet</p>
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<History />}
+          title="No executions yet"
+          className="py-8"
+        />
       </div>
     )
   }
