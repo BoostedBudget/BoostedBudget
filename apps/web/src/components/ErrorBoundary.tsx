@@ -65,7 +65,7 @@ export class ErrorBoundary extends Component<Props, State> {
       const isDev = (window.ENV?.ENVIRONMENT || import.meta.env.VITE_ENVIRONMENT) !== 'production'
       return (
         <div className="p-10 max-w-3xl mx-auto font-sans">
-          <h1 className="text-red-600 mb-4 text-2xl font-semibold">
+          <h1 className="text-destructive mb-4 text-2xl font-semibold">
             Something went wrong
           </h1>
           <p className="text-lg text-muted-foreground mb-6">
@@ -79,7 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex gap-3 mb-8">
             <button
               onClick={this.handleReload}
-              className="px-6 py-3 bg-blue-600 text-white border-none rounded-lg text-base cursor-pointer font-medium hover:bg-blue-700 transition-colors"
+              className="px-6 py-3 bg-primary text-primary-foreground border-none rounded-lg text-base cursor-pointer font-medium hover:bg-primary/90 transition-colors"
             >
               Reload Page
             </button>
@@ -92,8 +92,8 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
 
           {isDev && this.state.error && (
-            <details className="p-4 bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg">
-              <summary className="cursor-pointer font-bold text-red-600 dark:text-red-400 mb-3">
+            <details className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <summary className="cursor-pointer font-bold text-destructive mb-3">
                 Error Details (Development/QA Only)
               </summary>
               <pre className="p-3 bg-background border border-border rounded overflow-auto text-xs leading-relaxed">

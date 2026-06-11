@@ -324,7 +324,7 @@ export function ColumnFilterDropdown({
               <button
                 type="button"
                 onClick={handleApplyRange}
-                className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-white cursor-pointer transition-colors duration-150 hover:bg-primary/90"
+                className="flex-1 px-2 py-1 text-xs font-medium border-none rounded bg-primary text-primary-foreground cursor-pointer transition-colors duration-150 hover:bg-primary/90"
                 aria-label="Apply"
               >
                 <Check className="w-3 h-3 mr-1 align-middle inline" aria-hidden="true" />
