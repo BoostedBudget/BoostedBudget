@@ -354,10 +354,11 @@ export function UsersPage() {
           <span>Failed to load users. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <Users className="opacity-30 w-9 h-9" aria-hidden="true" />
-          <span>No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</span>
-        </div>
+        <EmptyState
+          icon={<Users />}
+          title="No users found"
+          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+        />
       ) : (
         <>
           <DataTable
