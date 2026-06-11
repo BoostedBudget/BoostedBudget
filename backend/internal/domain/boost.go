@@ -777,7 +777,17 @@ type TransferSuggestion struct {
 	// non-nil), allowing the Boosts UI to enable the "Mark Done" button accurately.
 	// Computed before maskReservation clears matched_transaction_id, so the UI always
 	// receives the correct value regardless of the masking applied.
+	// Deprecated: use MatchState == "confirmable" instead.
 	CanConfirmMatch *bool `json:"can_confirm_match,omitempty" db:"-"`
+
+	// MatchState is a server-derived enum describing the match lifecycle for the UI.
+	// Set by the list handler BEFORE maskReservation clears MatchedTransactionID.
+	// Values: "completed", "confirmable", "unmatched", "reserved".
+	// ("reserved" is defined for forward-compat but not currently emitted — today every
+	// held reservation is actionable, so reserved ≡ confirmable.)
+	// Omitted (empty/nil) for pending, rejected, and expired suggestions.
+	// Supersedes CanConfirmMatch (CanConfirmMatch == true ⟺ MatchState == "confirmable").
+	MatchState *string `json:"match_state,omitempty" db:"-" enum:"completed,confirmable,unmatched,reserved"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.
@@ -830,6 +840,28 @@ func (s *TransferSuggestion) Complete(matchedTransactionID string, actualAmount 
 	s.ActualAmount = &actualAmount
 	s.CompletionSource = &completionSource
 	return nil
+}
+
+// ComputeMatchState returns the server-derived match lifecycle state string for this
+// suggestion. The handler MUST call this BEFORE maskReservation clears MatchedTransactionID.
+//
+// Returned values:
+//   - "completed"   — Status is completed
+//   - "confirmable" — Status is accepted and a fuzzy-match reservation is held
+//   - "unmatched"   — Status is accepted with no reservation yet
+//   - ""            — All other statuses (pending/rejected/expired) → field omitted
+func (s *TransferSuggestion) ComputeMatchState() string {
+	switch s.Status {
+	case SuggestionStatusCompleted:
+		return "completed"
+	case SuggestionStatusAccepted:
+		if s.MatchedTransactionID != nil {
+			return "confirmable"
+		}
+		return "unmatched"
+	default:
+		return "" // pending/rejected/expired → omitted
+	}
 }
 
 // =============================================================================

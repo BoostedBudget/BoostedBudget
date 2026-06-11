@@ -86,8 +86,8 @@ export function AwaitingMatchTab({
             <Button
               size="sm"
               variant="default"
-              disabled={isPending || !item.can_confirm_match}
-              title={!item.can_confirm_match ? 'Waiting for an automatic match before confirming' : undefined}
+              disabled={isPending || item.match_state !== 'confirmable'}
+              title={item.match_state !== 'confirmable' ? 'Waiting for an automatic match before confirming' : undefined}
               onClick={() => onConfirmMatch(item.id, item.actual_amount ?? item.amount)}
               aria-label="Mark Done"
             >
