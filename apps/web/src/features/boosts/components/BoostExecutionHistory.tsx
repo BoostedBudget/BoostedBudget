@@ -7,6 +7,8 @@
  */
 
 import { Loader2, AlertCircle, History } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useGetBoostExecutions } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import type { BoostExecution } from '@boostedbudget/api-client/models'
@@ -72,14 +74,10 @@ export function BoostExecutionHistory({
   const totalPages = limit ? Math.ceil(total / limit) : 1
   const showPagination = limit && total > limit
 
-  const statusBadgeClass = (status: string) => {
-    const base = 'inline-block px-2 py-0.5 text-xs font-medium rounded-full'
-    switch (status) {
-      case 'completed': return `${base} status-completed bg-success/10 text-success`
-      case 'failed': return `${base} status-failed bg-destructive/10 text-destructive`
-      case 'running': return `${base} status-running bg-info/10 text-info`
-      default: return `${base} status-pending bg-muted text-muted-foreground`
-    }
+  const STATUS_BADGE: Record<string, BadgeProps['variant']> = {
+    completed: 'success',
+    failed: 'destructive',
+    running: 'info',
   }
 
   if (isLoading) {
@@ -143,9 +141,12 @@ export function BoostExecutionHistory({
       minSize: 90,
       maxSize: 140,
       render: (execution) => (
-        <span className={statusBadgeClass(execution.status)}>
+        <Badge
+          variant={STATUS_BADGE[execution.status] ?? 'secondary'}
+          className={`status-${execution.status}`}
+        >
           {execution.status}
-        </span>
+        </Badge>
       ),
     },
     {

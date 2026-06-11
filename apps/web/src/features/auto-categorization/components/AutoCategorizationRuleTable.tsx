@@ -14,6 +14,7 @@
 import { useCallback, useMemo } from 'react'
 import { Edit, Filter, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import type { CategorizationRule } from '../types'
@@ -229,14 +230,9 @@ export function AutoCategorizationRuleTable({
         ? { type: 'select', options: statusOptions, multiSelect: true }
         : undefined,
       render: (r) => (
-        <span className={cn(
-          'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
-          r.enabled
-            ? 'bg-success/10 text-success'
-            : 'bg-muted text-muted-foreground'
-        )}>
+        <Badge variant={r.enabled ? 'success' : 'secondary'}>
           {r.enabled ? 'Enabled' : 'Disabled'}
-        </span>
+        </Badge>
       ),
     },
     {
