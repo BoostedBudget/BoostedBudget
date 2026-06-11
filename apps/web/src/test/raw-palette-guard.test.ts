@@ -10,13 +10,16 @@ const ALLOWLIST_PATHS = [
   'features/net-worth/components/NetWorthHistoryChart.tsx',
   'features/dashboard/components/NetWorthSparkline.tsx',
   'features/tags/components/TagEditor.tsx',
-  'features/accounts/components/AccountIconDisplay.tsx',
+  // AccountIconDisplay uses text-blue-500 as a brand icon color (out of scope per #1285 plan)
+  // Both the component and its test are allowlisted so the test can assert the brand color is preserved
+  'features/accounts/components/AccountIconDisplay',
   'features/budgets/components/category-management/AllocationBreakdown.tsx',
+  // CategoryIcon (icon picker) uses brand blue colors; test asserts the color className
+  'shared/components/IconPicker/CategoryIcon',
 ]
 
-// TODO: add blue once CTAs/focus-rings/brand colors are triaged (#follow-up)
-const CLASS_PATTERN = /\b(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc)-[0-9]/
-const DARK_PATTERN = /dark:(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc)-/
+const CLASS_PATTERN = /\b(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc|blue)-[0-9]/
+const DARK_PATTERN = /dark:(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc|blue)-/
 
 function isAllowlisted(relPath: string): boolean {
   return ALLOWLIST_PATHS.some(p => relPath.includes(p))
