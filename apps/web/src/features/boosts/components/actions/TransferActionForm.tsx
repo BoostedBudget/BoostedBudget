@@ -131,7 +131,7 @@ export function TransferActionForm({
             value={action.from_account_id}
             onChange={handleFromAccountChange}
             disabled={disabled || isLoading}
-            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Select an account...</option>
             {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
@@ -152,7 +152,7 @@ export function TransferActionForm({
             value={action.to_account_id}
             onChange={handleToAccountChange}
             disabled={disabled || isLoading}
-            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Select an account...</option>
             {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
@@ -175,7 +175,7 @@ export function TransferActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -194,7 +194,7 @@ export function TransferActionForm({
           <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             {action.amount_type === 'fixed' && (
               <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             )}
@@ -221,7 +221,7 @@ export function TransferActionForm({
           <label htmlFor="threshold" className="text-sm font-medium text-foreground">
             Threshold
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="threshold"

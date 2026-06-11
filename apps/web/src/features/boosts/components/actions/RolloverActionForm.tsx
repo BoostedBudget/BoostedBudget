@@ -166,7 +166,7 @@ export function RolloverActionForm({
               value={sourceBudget?.id ?? ''}
               onChange={handleSourceBudgetChange}
               disabled={disabled || loading}
-              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a budget...</option>
               {budgets.map((budget) => (
@@ -186,7 +186,7 @@ export function RolloverActionForm({
               value={action.source_budget_category_id}
               onChange={handleSourceCategoryChange}
               disabled={disabled || !sourceBudget}
-              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a category...</option>
               {sourceBudget?.categories?.map((category) => (
@@ -213,7 +213,7 @@ export function RolloverActionForm({
               value={targetBudget?.id ?? ''}
               onChange={handleTargetBudgetChange}
               disabled={disabled || loading}
-              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Select a budget...</option>
               {budgets.map((budget) => (
@@ -233,7 +233,7 @@ export function RolloverActionForm({
               value={action.target_budget_category_id ?? ''}
               onChange={handleTargetCategoryChange}
               disabled={disabled}
-              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">Unallocated Funds</option>
               {targetBudget?.categories?.map((category) => (
@@ -259,7 +259,7 @@ export function RolloverActionForm({
             value={action.rollover_type}
             onChange={handleRolloverTypeChange}
             disabled={disabled}
-            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >
             {ROLLOVER_TYPES.map((type) => (
               <option key={type.value} value={type.value}>
@@ -278,7 +278,7 @@ export function RolloverActionForm({
             <label htmlFor="cap-amount" className="text-sm font-medium text-foreground">
               Cap Amount
             </label>
-            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
               <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
               <input
                 id="cap-amount"
@@ -299,7 +299,7 @@ export function RolloverActionForm({
             <label htmlFor="percentage" className="text-sm font-medium text-foreground">
               Percentage
             </label>
-            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+            <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
               <input
                 id="percentage"
                 type="number"
