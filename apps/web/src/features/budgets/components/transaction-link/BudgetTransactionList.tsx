@@ -85,7 +85,7 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
         <h3 className="m-0 text-sm font-semibold text-foreground">
           Transactions ({totalCount})
         </h3>
-        <span className="text-sm font-medium text-muted-foreground">
+        <span className="text-sm font-medium text-muted-foreground" data-ph-mask>
           Total: {formatCurrency(totalAmount)}
         </span>
       </div>

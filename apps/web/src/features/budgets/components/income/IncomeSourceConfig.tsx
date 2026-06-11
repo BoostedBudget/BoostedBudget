@@ -113,7 +113,7 @@ export function IncomeSourceConfig({
           <span className="text-sm font-medium text-success">
             Expected Income:
           </span>
-          <span className="text-base font-semibold text-success" role="status">
+          <span className="text-base font-semibold text-success" role="status" data-ph-mask>
             {formatCurrency(expectedTotal)}
           </span>
         </div>

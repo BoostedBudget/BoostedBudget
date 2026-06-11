@@ -42,10 +42,15 @@ import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
+  mockUseGetCashFlowSummary,
 } from '@/test/mocks/analytics-api'
 import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
-import { mockUseGetBudgets } from '@/test/mocks/budgets-api'
+import {
+  mockUseGetBudgets,
+  mockUseGetCurrentBudget,
+  mockUseGetCategoryTransactions,
+} from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
@@ -71,6 +76,16 @@ const { SpendingReportsPage } = await import('@/features/reports/SpendingReports
 const { SavingsImpactWidget } = await import(
   '@/features/dashboard/widgets/SavingsImpactWidget'
 )
+
+// --- Phase A component imports ---
+const { CashFlowSummaryWidget } = await import('@/features/dashboard/widgets/CashFlowSummaryWidget')
+const { BudgetOverviewWidget } = await import('@/features/dashboard/widgets/BudgetOverviewWidget')
+const { AccountBalanceCards } = await import('@/features/dashboard/components/AccountBalanceCards')
+const { BudgetTransactionList } = await import('@/features/budgets/components/transaction-link/BudgetTransactionList')
+const { SavingsGoalActionForm } = await import('@/features/boosts/components/actions/SavingsGoalActionForm')
+const { IncomeSourceItem } = await import('@/features/budgets/components/income/IncomeSourceItem')
+const { IncomeSourceConfig } = await import('@/features/budgets/components/income/IncomeSourceConfig')
+const { DashboardContext } = await import('@/features/dashboard/context/DashboardContext')
 
 // ---------------------------------------------------------------
 // Sentinel constants
@@ -646,5 +661,205 @@ describe('PII coverage — SavingsImpactWidget destination name', () => {
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 12. Currency surface PII coverage (Phase A — Round 2 gap remediation #1285)
+// ---------------------------------------------------------------
+describe('PII coverage — currency surfaces (widgets + sub-components)', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('AccountBalanceCards masks account type balance and individual balances', async () => {
+    const summary = {
+      total_assets: 99999.99,
+      total_liabilities: 0,
+      net_worth: 99999.99,
+      by_type: {
+        depository: {
+          balance: 99999.99,
+          account_count: 1,
+          accounts: [{ id: 'acc-1', name: 'Checking', balance: 99999.99 }],
+        },
+      },
+    }
+    render(<AccountBalanceCards summary={summary as any} />, { wrapper: createWrapper() })
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('CashFlowSummaryWidget masks income, expenses, and net cash flow', async () => {
+    // Mock at the API layer (analytics-api.ts preload) so useCashFlowSummary picks it up.
+    // The API hook returns queryData; useCashFlowSummary casts it to CashFlowSummary.
+    // formatCurrency uses maximumFractionDigits: 0, so 12345.67 → '$12,346'
+    mockUseGetCashFlowSummary.mockReturnValue({
+      data: {
+        income: 12345.67,
+        expenses: 8888.88,
+        net_cash_flow: 3456.79,
+        income_count: 2,
+        expense_count: 3,
+        period_comparison: null,
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    })
+    // CashFlowSummaryWidget reads DashboardContext directly via useContext — wrap in provider
+    const dashCtxValue = {
+      filters: { startDate: '2024-01-01', endDate: '2024-01-31', accountTypes: undefined },
+      setFilters: mock(() => {}),
+      timeframe: 'this_month' as const,
+      setTimeframe: mock(() => {}),
+      isEditing: false,
+      setIsEditing: mock(() => {}),
+      hasAccounts: true,
+      accountsLoading: false,
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    function CashFlowWrapper({ children }: { children: ReactNode }) {
+      return (
+        <ThemeProvider>
+          <QueryClientProvider client={qc}>
+            <MemoryRouter>
+              <DashboardContext.Provider value={dashCtxValue}>
+                {children}
+              </DashboardContext.Provider>
+            </MemoryRouter>
+          </QueryClientProvider>
+        </ThemeProvider>
+      )
+    }
+    render(<CashFlowSummaryWidget widgetId="pii-cf-test" onRemove={() => {}} />, { wrapper: CashFlowWrapper })
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$12,346'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('BudgetOverviewWidget masks total budget and remaining amounts', async () => {
+    // Mock at the API layer (budgets-api.ts preload) so useCurrentBudget picks it up.
+    // useCurrentBudget calls useGetCurrentBudget, casts data to Budget, and calls computeBudgetMetrics.
+    // With empty categories, computeBudgetMetrics gives remaining_amount = budget.amount - 0 = amount.
+    const mockBudgetData = {
+      id: 'budget-1', user_id: 'user-1', name: 'Test Budget', description: '',
+      currency_code: 'USD', period: 'monthly', start_date: '2024-01-01', end_date: '2024-01-31',
+      amount: 99999.99, expected_income: null, is_active: true, income_amount: 0,
+      income_sources: [], categories: [],
+      created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
+    }
+    mockUseGetCurrentBudget.mockReturnValue({
+      data: mockBudgetData,
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    })
+    render(<BudgetOverviewWidget widgetId="pii-budget-test" onRemove={() => {}} />, { wrapper: createWrapper() })
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('BudgetTransactionList masks transaction total', async () => {
+    // Mock at API layer (budgets-api.ts preload): useBudgetTransactions calls useGetCategoryTransactions.
+    // The hook's useEffect syncs queryData.total_amount → totalAmount state.
+    mockUseGetCategoryTransactions.mockReturnValue({
+      data: {
+        transactions: [
+          {
+            id: 'txn-1', user_id: 'user-1', account_id: 'acc-1', linked_item_id: 'item-1',
+            source: 'plaid', amount: 99999.99, date: '2024-01-15',
+            name: 'Test Transaction', merchant_name: 'Test',
+            tags: [], pending: false,
+            created_at: '2024-01-15T00:00:00Z', updated_at: '2024-01-15T00:00:00Z',
+          }
+        ],
+        total_count: 1,
+        total_amount: 99999.99,
+        has_more: false,
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve({})),
+    })
+    render(<BudgetTransactionList budgetId="budget-1" categoryId="cat-1" />, { wrapper: createWrapper() })
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('SavingsGoalActionForm masks goal current and target amounts', async () => {
+    // SavingsGoalActionForm uses useGetSavingsGoals (savings-goals-api.ts preload)
+    // and useActiveAccounts which calls useGetAccounts (accounts-api.ts preload).
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: [
+        { id: 'goal-1', name: 'Emergency Fund', target_amount: 99999.99, current_amount: 12345.67 }
+      ],
+      isLoading: false,
+    })
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [{ id: 'acc-1', name: 'Checking', status: 'active', user_account_id: 'ua-1' }] },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => {}),
+    })
+    const action = {
+      type: 'savings_goal' as const,
+      savings_goal_id: 'goal-1',
+      from_account_id: '',
+      amount_type: 'fixed' as const,
+      amount: 100,
+    }
+    render(
+      <SavingsGoalActionForm action={action} onChange={mock(() => {})} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('IncomeSourceItem masks manual income source amount', async () => {
+    const source = { type: 'manual' as const, value: '99999.99', description: 'Salary' }
+    render(
+      <IncomeSourceItem source={source} onRemove={mock(() => {})} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('IncomeSourceConfig masks expected total when showTotal=true', async () => {
+    const sources = [{ type: 'manual' as const, value: '99999.99', description: 'Salary' }]
+    render(
+      <IncomeSourceConfig
+        sources={sources}
+        onChange={mock(() => {})}
+        availableCategories={[]}
+        availableTags={[]}
+        showTotal={true}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

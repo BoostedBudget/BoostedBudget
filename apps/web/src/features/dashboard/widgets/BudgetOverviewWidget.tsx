@@ -80,7 +80,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
         <span className="text-xs capitalize text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{budget.period}</span>
       </div>
 
-      <div className="text-2xl font-bold text-foreground">
+      <div className="text-2xl font-bold text-foreground" data-ph-mask>
         {formatCurrency(totalBasis, budget.currency_code)}
       </div>
 
@@ -94,7 +94,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
       <div className="flex justify-between mt-auto">
         <div className="flex flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">Remaining</span>
-          <span className="text-sm font-semibold text-foreground">
+          <span className="text-sm font-semibold text-foreground" data-ph-mask>
             {formatCurrency(remaining, budget.currency_code)}
           </span>
         </div>

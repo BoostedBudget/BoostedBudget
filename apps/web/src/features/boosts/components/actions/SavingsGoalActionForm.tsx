@@ -170,7 +170,7 @@ export function SavingsGoalActionForm({
           ))}
         </select>
         {selectedGoal && (
-          <p className="mt-1 text-xs font-medium text-success">
+          <p className="mt-1 text-xs font-medium text-success" data-ph-mask>
             {formatCurrency(selectedGoal.current_amount)} of{' '}
             {formatCurrency(selectedGoal.target_amount)} saved (
             {Math.round((selectedGoal.current_amount / selectedGoal.target_amount) * 100)}%)

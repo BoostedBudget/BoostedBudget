@@ -68,7 +68,7 @@ function SummaryCard({
 
       <div className="flex-1 flex flex-col justify-center">
         <div className="text-2xl font-bold text-foreground">
-          {formatCurrency(value)}
+          <span data-ph-mask>{formatCurrency(value)}</span>
         </div>
 
         {count !== undefined && (
