@@ -24,8 +24,10 @@
  */
 
 import { useCallback, useEffect } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Filter } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   CONDITION_FIELD_OPTIONS,
   CONDITION_FIELDS_BY_EVENT,
@@ -170,7 +172,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
   )
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+    <Card className="flex flex-col gap-3">
       <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 max-md:grid-cols-[1fr_1fr] [&_.condition-value]:max-md:col-span-2">
         {/* Field selector */}
         <div className="flex flex-col gap-1">
@@ -294,7 +296,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
           </select>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -400,9 +402,11 @@ export function ConditionBuilder({
 
       {/* Conditions list */}
       {conditions.length === 0 ? (
-        <div className="rounded-lg border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm text-muted-foreground">No conditions added yet. This boost will run unconditionally.</p>
-        </div>
+        <EmptyState
+          icon={<Filter />}
+          title="No conditions added yet."
+          description="This boost will run unconditionally."
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {conditions.map((condition, index) => (

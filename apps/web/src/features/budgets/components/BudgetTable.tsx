@@ -286,9 +286,12 @@ export function BudgetTable({
       className={cn(loading && 'budget-table--loading', className)}
       maskedColumnIds={['amount', 'income', 'remaining']}
       emptyState={
-        <p className="py-12 px-4 text-center text-muted-foreground italic">
-          No budgets match your filters. Try adjusting your criteria.
-        </p>
+        <EmptyState
+          size="compact"
+          icon={<LayoutList />}
+          title="No budgets match your filters."
+          description="Try adjusting your criteria."
+        />
       }
       rowActions={
         hasActions

@@ -18,6 +18,7 @@
 import { useState, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, X, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { ReadOnlyGuard } from '@/auth'
 import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge'
 import { CategoryEditor } from '../../../categories/components/CategoryEditor'
@@ -125,7 +126,7 @@ export function TriageDetailView({
 
   return (
     <>
-      <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm">
+      <Card className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
             <Button
@@ -269,7 +270,7 @@ export function TriageDetailView({
             </span>
           </Button>
         </div>
-      </div>
+      </Card>
 
       <KeyboardShortcutsHelp open={showHelp} onOpenChange={setShowHelp} />
     </>
