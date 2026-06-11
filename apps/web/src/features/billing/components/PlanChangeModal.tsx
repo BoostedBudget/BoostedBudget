@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { usePreviewPaddleSubscriptionUpdate } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { SubscriptionTier } from '@boostedbudget/api-client/models'
 
@@ -161,7 +162,7 @@ export function PlanChangeModal({
                 <div
                   key={key}
                   className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                    isSelected ? 'border-2 border-blue-500 bg-info/10' : 'border border-border'
+                    isSelected ? 'border-2 border-primary bg-primary/10' : 'border border-border'
                   }`}
                   onClick={handleSelectTier}
                   role="button"
@@ -174,15 +175,9 @@ export function PlanChangeModal({
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-lg font-semibold">{tier.display_name}</h3>
-                    <span
-                      className={`text-xs px-2 py-1 rounded ${
-                        isUpgradeTier
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
+                    <Badge variant={isUpgradeTier ? 'success' : 'warning'}>
                       {isUpgradeTier ? 'Upgrade' : 'Downgrade'}
-                    </span>
+                    </Badge>
                   </div>
                   <div className="mb-3">
                     <div className="text-2xl font-bold">{formatPrice(tierPrice)}</div>

@@ -4,6 +4,8 @@
  */
 
 import type { SavingsGoal } from '../types'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PiggyBank } from 'lucide-react'
 
 export interface SavingsAggregateHeaderProps {
   goals: SavingsGoal[]
@@ -60,7 +62,7 @@ export function SavingsAggregateHeader({ goals }: SavingsAggregateHeaderProps) {
         aria-label="Savings overview"
         className="bg-card border border-border rounded-xl p-6 mb-6"
       >
-        <p className="text-sm text-muted-foreground">No savings goals yet.</p>
+        <EmptyState size="compact" icon={<PiggyBank />} title="No savings goals yet." />
       </section>
     )
   }

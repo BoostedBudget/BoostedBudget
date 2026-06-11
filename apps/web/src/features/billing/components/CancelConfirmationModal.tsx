@@ -75,10 +75,10 @@ export function CancelConfirmationModal({
             <div className="space-y-4">
               <div
                 role="note"
-                className="bg-blue-50 border border-blue-200 rounded-lg p-4"
+                className="bg-info/10 border border-info/30 rounded-lg p-4"
                 aria-label="Access retention information"
               >
-                <p className="text-sm text-blue-900">
+                <p className="text-sm text-info">
                   <strong>Access Retained:</strong> You'll continue to have full access to all
                   features until your current billing period ends on{' '}
                   <strong>{subscription.next_billing_date}</strong>.
@@ -94,7 +94,7 @@ export function CancelConfirmationModal({
                 <ul className="space-y-2" aria-label="List of features">
                   {subscription.features.map((feature, index) => (
                     <li key={index} className="flex items-start gap-2 text-sm">
-                      <span className="text-red-500" aria-hidden="true">
+                      <span className="text-destructive" aria-hidden="true">
                         ✗
                       </span>
                       <span>{feature}</span>
@@ -105,10 +105,10 @@ export function CancelConfirmationModal({
 
               <div
                 role="note"
-                className="bg-amber-50 border border-amber-200 rounded-lg p-4"
+                className="bg-warning/10 border border-warning/30 rounded-lg p-4"
                 aria-label="Resubscription notice"
               >
-                <p className="text-sm text-amber-900">
+                <p className="text-sm text-warning">
                   <strong>Note:</strong> After cancellation, you'll need to resubscribe to regain
                   access to these features.
                 </p>
@@ -136,10 +136,10 @@ export function CancelConfirmationModal({
             <div className="space-y-4">
               <div
                 role="alert"
-                className="bg-red-50 border border-red-200 rounded-lg p-4"
+                className="bg-destructive/10 border border-destructive/30 rounded-lg p-4"
                 aria-label="Final warning"
               >
-                <p className="text-sm text-red-900">
+                <p className="text-sm text-destructive">
                   <strong>Warning:</strong> You are about to permanently cancel your{' '}
                   {subscription.tier} subscription. After {subscription.next_billing_date}, you will
                   lose access to all premium features.
