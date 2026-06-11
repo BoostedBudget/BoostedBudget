@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { computeSavingsProgress, computeSavingsRemaining } from '../types'
 import type { SavingsGoal } from '../types'
 
@@ -44,9 +45,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
             <span data-ph-mask>{goal.name}</span>
           </h3>
           {goal.is_completed && (
-            <span className="bg-success/10 text-success text-xs font-medium px-2 py-0.5 rounded-full">
-              Completed
-            </span>
+            <Badge variant="success">Completed</Badge>
           )}
         </div>
         {goal.description && <p className="m-0 text-sm text-muted-foreground"><span data-ph-mask>{goal.description}</span></p>}

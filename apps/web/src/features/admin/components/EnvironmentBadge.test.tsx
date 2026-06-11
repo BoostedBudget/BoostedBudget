@@ -36,13 +36,13 @@ describe('EnvironmentBadge', () => {
     render(<EnvironmentBadge environment="development" />)
 
     const badge = screen.getByText('DEVELOPMENT')
-    expect(badge).toHaveClass('text-info')
+    expect(badge).toHaveClass('bg-info')
   })
 
   it('should apply correct styling for production', () => {
     render(<EnvironmentBadge environment="production" />)
 
     const badge = screen.getByText('PRODUCTION')
-    expect(badge).toHaveClass('text-success')
+    expect(badge).toHaveClass('bg-success')
   })
 })
