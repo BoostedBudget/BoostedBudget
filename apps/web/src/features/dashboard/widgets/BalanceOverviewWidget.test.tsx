@@ -115,13 +115,13 @@ describe('BalanceOverviewWidget', () => {
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
 
-    it('should show error text in red', () => {
+    it('should show error text with destructive styling', () => {
       setMockDataState({ error: new Error('API Error') })
 
       render(<BalanceOverviewWidget {...defaultProps} />)
 
       const errorText = screen.getByText('API Error')
-      expect(errorText).toHaveClass('text-red-500')
+      expect(errorText).toHaveClass('text-destructive')
     })
   })
 

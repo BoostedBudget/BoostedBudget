@@ -64,13 +64,13 @@ function WidgetCard({ definition, onAdd, isAdded }: WidgetCardProps) {
         ${
           isAdded
             ? 'border-border bg-muted opacity-60'
-            : 'border-border hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-md cursor-pointer bg-card'
+            : 'border-border hover:border-primary/50 hover:shadow-md cursor-pointer bg-card'
         }
       `}
       onClick={isAdded ? undefined : onAdd}
     >
       <div className="flex items-start gap-3">
-        <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+        <div className="p-2 rounded-lg bg-info/10 text-info">
           <WidgetIcon iconName={definition.icon} className="h-5 w-5" />
         </div>
         <div className="flex-1 min-w-0">

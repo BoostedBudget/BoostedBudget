@@ -42,10 +42,10 @@ function SummaryCard({
   icon: Icon,
 }: SummaryCardProps) {
   const colorClasses = {
-    blue: 'text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-900/30',
-    orange: 'text-orange-600 bg-orange-100 dark:text-orange-400 dark:bg-orange-900/30',
-    green: 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30',
-    red: 'text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30',
+    blue: 'text-info bg-info/10',
+    orange: 'text-warning bg-warning/10',
+    green: 'text-success bg-success/10',
+    red: 'text-destructive bg-destructive/10',
   };
 
   const formatPercent = (percent: number) => {
@@ -82,8 +82,8 @@ function SummaryCard({
             <span
               className={`inline-flex items-center text-xs font-medium ${
                 isPositiveChange
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-red-600 dark:text-red-400'
+                  ? 'text-success'
+                  : 'text-destructive'
               }`}
             >
               {isPositiveChange ? (
@@ -131,14 +131,14 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full text-red-500">
+      <div className="flex items-center justify-center h-full text-destructive">
         {error}
       </div>
     );
