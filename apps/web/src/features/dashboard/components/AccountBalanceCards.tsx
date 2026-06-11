@@ -1,4 +1,5 @@
 import { CreditCard } from 'lucide-react'
+import { formatCurrencyFull } from '@/shared/charts/formatters'
 import { EmptyState } from '@/components/ui/empty-state'
 import type { BalanceSummary } from '../types'
 
@@ -20,13 +21,6 @@ interface AccountBalanceCardsProps {
  */
 export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
   const { by_type } = summary
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(value)
-  }
 
   // Color scheme for account types
   const typeColors: Record<string, { bg: string; border: string; text: string }> = {
@@ -97,7 +91,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
               </h3>
               <div className="text-right">
                 <p className={`text-xl font-bold ${colors.text}`} data-ph-mask>
-                  {formatCurrency(typeData.balance)}
+                  {formatCurrencyFull(typeData.balance)}
                 </p>
                 <p className="text-sm text-muted-foreground">
                   {typeData.account_count} account{typeData.account_count !== 1 ? 's' : ''}
@@ -116,7 +110,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                     {account.name}
                   </span>
                   <span className="text-sm font-semibold text-foreground" data-ph-mask>
-                    {formatCurrency(account.balance)}
+                    {formatCurrencyFull(account.balance)}
                   </span>
                 </div>
               ))}

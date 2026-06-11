@@ -13,14 +13,12 @@ import {
   ArrowsRightLeftIcon,
 } from '@heroicons/react/24/solid';
 import { BarChart3 } from 'lucide-react';
+import { formatCurrency } from '@/shared/charts/formatters';
 import { useCashFlowSummary } from '../hooks/useCashFlowData';
 import { DashboardContext } from '../context/DashboardContext';
 import { registerWidget } from './registry';
 import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
-
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
 
 interface SummaryCardProps {
   title: string;

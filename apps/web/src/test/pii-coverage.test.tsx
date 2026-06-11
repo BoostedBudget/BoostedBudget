@@ -77,7 +77,7 @@ const { SavingsImpactWidget } = await import(
   '@/features/dashboard/widgets/SavingsImpactWidget'
 )
 
-// --- Phase A component imports ---
+// --- Phase A component imports (currency surface PII coverage) ---
 const { CashFlowSummaryWidget } = await import('@/features/dashboard/widgets/CashFlowSummaryWidget')
 const { BudgetOverviewWidget } = await import('@/features/dashboard/widgets/BudgetOverviewWidget')
 const { AccountBalanceCards } = await import('@/features/dashboard/components/AccountBalanceCards')
