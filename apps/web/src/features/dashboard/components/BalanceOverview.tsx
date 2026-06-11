@@ -40,6 +40,9 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
       </div>
 
       <div className="mb-4 flex-1 flex items-center">
+        {/* StatCard exception (#1285): text-4xl headline in an <h2>; StatCard forces text-2xl + <p> label
+            (heading-semantics loss + 33% shrink). Would break BalanceOverview.test.tsx:430 (text-foreground
+            assertion) if trend were used. Stays as-is. */}
         <p className="text-4xl font-bold text-foreground">{formattedBalance}</p>
       </div>
 
