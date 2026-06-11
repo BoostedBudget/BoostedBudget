@@ -12,8 +12,9 @@
  */
 
 import { useCallback, useMemo } from 'react'
-import { Edit, Trash2 } from 'lucide-react'
+import { Edit, Filter, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import type { CategorizationRule } from '../types'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
@@ -312,12 +313,12 @@ export function AutoCategorizationRuleTable({
   // Pre-filters empty state: no data and no active filters → return external div
   if (rules.length === 0 && !hasActiveFilters) {
     return (
-      <div className={cn(
-        'text-center rounded-lg border border-dashed border-border bg-card px-6 py-12 text-muted-foreground',
-        className
-      )}>
-        <p>No rules found. Create your first auto-categorization rule to get started.</p>
-      </div>
+      <EmptyState
+        icon={<Filter />}
+        title="No rules found"
+        description="Create your first auto-categorization rule to get started."
+        className={className}
+      />
     )
   }
 
@@ -341,9 +342,12 @@ export function AutoCategorizationRuleTable({
       onColumnVisibilityChange={onColumnVisibilityChange}
       rowClassName={onRowClick ? () => 'autocat-table__row--clickable' : undefined}
       emptyState={
-        <span className="px-4 py-12 text-center italic text-muted-foreground">
-          No rules match your filters. Try adjusting your criteria.
-        </span>
+        <EmptyState
+          size="compact"
+          icon={<Filter />}
+          title="No rules match your filters"
+          description="Try adjusting your criteria."
+        />
       }
       rowActions={hasActions ? (rule) => (
         <div className="flex items-center justify-end gap-2">

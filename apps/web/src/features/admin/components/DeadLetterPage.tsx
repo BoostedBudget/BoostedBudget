@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useDeadLetterFilters } from '../hooks/useDeadLetterFilters'
 import { DeadLetterDetailModal } from './DeadLetterDetailModal'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
@@ -370,13 +371,13 @@ export function DeadLetterPage() {
           <span>Failed to load dead letter jobs. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <AlertTriangle aria-hidden="true" />
-          <span>
-            No dead letter jobs found
-            {hasActiveFilters ? '. Try adjusting your filters.' : '.'}
-          </span>
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<AlertTriangle />}
+          title={hasActiveFilters ? 'No dead letter jobs match your filters' : 'No dead letter jobs found'}
+          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+          className="py-16"
+        />
       ) : (
         <>
           <DataTable

@@ -7,6 +7,8 @@
  */
 
 import { useCallback, useMemo } from 'react';
+import { DollarSign } from 'lucide-react';
+import { EmptyState } from '@/components/ui/empty-state';
 import type { IncomeSource } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import type { Primary } from '@boostedbudget/api-client/models/primary';
@@ -77,9 +79,12 @@ export function IncomeSourceConfig({
     <div className="flex flex-col gap-4">
       {/* Source List */}
       {sources.length === 0 ? (
-        <div className="p-6 text-center text-sm text-muted-foreground bg-muted border border-dashed border-border rounded-lg">
-          No income sources configured. Add sources below to track your income.
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<DollarSign />}
+          title="No income sources configured"
+          description="Add sources below to track your income."
+        />
       ) : (
         <ul
           className="flex flex-col gap-2 list-none m-0 p-0"

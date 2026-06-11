@@ -18,6 +18,7 @@ import { SummaryCard } from '@/features/admin'
 import { cn } from '@/lib/utils'
 import { useWebhookFilters } from '../hooks/useWebhookFilters'
 import { WebhookDetailModal } from './WebhookDetailModal'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
@@ -298,13 +299,13 @@ export function WebhooksPage() {
           <span>Failed to load webhooks. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <Webhook aria-hidden="true" />
-          <span>
-            No webhook events found
-            {hasActiveFilters ? '. Try adjusting your filters.' : '.'}
-          </span>
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<Webhook />}
+          title={hasActiveFilters ? 'No webhook events match your filters' : 'No webhook events found'}
+          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+          className="py-16"
+        />
       ) : (
         <>
           <DataTable

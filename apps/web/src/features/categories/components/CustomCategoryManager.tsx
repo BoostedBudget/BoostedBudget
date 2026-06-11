@@ -2,7 +2,8 @@
 // Rendered inline in the Settings "Categories" tab and (via a Dialog) from budgets.
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import { Plus } from 'lucide-react'
+import { FolderOpen, Plus } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { getPrimaryLabel } from '@/shared/categories/pfcOptions'
 import { useCustomCategories } from '../hooks/useCustomCategories'
@@ -108,9 +109,12 @@ export function CustomCategoryManager() {
       {isLoading && <p className="text-sm text-muted-foreground">Loading categories…</p>}
 
       {isEmpty && (
-        <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No custom categories yet. Create one to group your spending your way.
-        </p>
+        <EmptyState
+          size="compact"
+          icon={<FolderOpen />}
+          title="No custom categories yet"
+          description="Create one to group your spending your way."
+        />
       )}
 
       {/* Top-level custom categories and their sub-categories */}
