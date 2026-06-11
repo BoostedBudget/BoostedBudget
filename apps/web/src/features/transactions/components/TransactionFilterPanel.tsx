@@ -15,6 +15,7 @@ import {
   SheetFooter,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { Card } from '@/components/ui/card'
 import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
 import { PRESETS } from '@/shared/dates'
 import {
@@ -216,7 +217,7 @@ export function TransactionFilterPanel({
 
   // Desktop: Collapsible panel
   return (
-    <div className="bg-card border border-border rounded-lg shadow-sm mb-4">
+    <Card className="mb-4">
       {/* Header with toggle */}
       <button
         type="button"
@@ -295,6 +296,6 @@ export function TransactionFilterPanel({
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }

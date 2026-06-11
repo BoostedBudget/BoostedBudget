@@ -13,6 +13,7 @@
 
 import { useState } from 'react'
 import { useDeletion } from '../hooks/useDeletion'
+import { Card } from '@/components/ui/card'
 
 export function DeleteAccountSection() {
   const { requestAccountDeletion, isRequesting, requestError } = useDeletion()
@@ -119,7 +120,7 @@ export function DeleteAccountSection() {
           Delete My Account
         </button>
       ) : (
-        <div className="bg-card border-2 border-destructive rounded-lg p-6 mt-4">
+        <Card className="border-2 border-destructive mt-4">
           <h3 className="mt-0 text-destructive/80">Are you absolutely sure?</h3>
           <p className="text-foreground">
             This action <strong>cannot be undone</strong>. Your account will be scheduled for
@@ -158,7 +159,7 @@ export function DeleteAccountSection() {
               {isRequesting ? 'Processing...' : 'Yes, Delete My Account'}
             </button>
           </div>
-        </div>
+        </Card>
       )}
     </div>
   )
