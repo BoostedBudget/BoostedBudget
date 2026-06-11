@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { CheckCircle2, Circle, X, PartyPopper, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import type { GettingStartedStep } from '../hooks/useGettingStarted'
 
 interface GettingStartedChecklistProps {
@@ -23,7 +24,7 @@ export function GettingStartedChecklist({
   const progressPercent = Math.round((completedCount / totalSteps) * 100)
 
   return (
-    <div className="rounded-xl border border-border bg-card shadow-sm">
+    <Card className="p-0 shadow-sm">
       <div className="flex items-start justify-between px-5 pt-4 pb-2">
         <div className="flex-1 min-w-0">
           <h2 className="text-base font-semibold text-foreground">
@@ -113,6 +114,6 @@ export function GettingStartedChecklist({
           </ul>
         )}
       </div>
-    </div>
+    </Card>
   )
 }

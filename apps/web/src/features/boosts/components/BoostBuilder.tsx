@@ -12,6 +12,7 @@ import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeft, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { useReadOnly } from '@/auth/ReadOnlyContext'
 import {
@@ -386,7 +387,7 @@ export function BoostBuilder() {
         }}
       >
         {/* Basic Info Section */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <Card>
           <h2 className="mb-4 text-base font-semibold text-foreground">Basic Information</h2>
 
           <div className="mb-4">
@@ -467,19 +468,19 @@ export function BoostBuilder() {
               Lower numbers run first. Default is 10.
             </p>
           </div>
-        </section>
+        </Card>
 
         {/* Trigger Section */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <Card>
           <h2 className="mb-4 text-base font-semibold text-foreground">Trigger</h2>
           <TriggerSelector
             config={triggerConfig}
             onChange={setTriggerConfig}
           />
-        </section>
+        </Card>
 
         {/* Conditions Section */}
-        <section className="rounded-xl border border-border bg-card p-5">
+        <Card>
           <h2 className="mb-4 text-base font-semibold text-foreground">Conditions (Optional)</h2>
           <ConditionBuilder
             conditions={conditions}
@@ -489,11 +490,11 @@ export function BoostBuilder() {
             triggerEvent={triggerConfig.type === 'event' ? triggerConfig.event : undefined}
             budgets={budgets}
           />
-        </section>
+        </Card>
 
         {/* Action Section */}
         {boostType && (
-          <section className="rounded-xl border border-border bg-card p-5">
+          <Card>
             <h2 className="mb-4 text-base font-semibold text-foreground">Action Configuration</h2>
             {boostType === 'budget_alert' && (
               <BudgetAlertActionForm
@@ -519,7 +520,7 @@ export function BoostBuilder() {
                 onChange={setSavingsAction}
               />
             )}
-          </section>
+          </Card>
         )}
 
         {/* Form Actions — wrapped in ReadOnlyGuard: backend 403s anyway, but guard
