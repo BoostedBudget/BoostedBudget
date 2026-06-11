@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { Edit, Tag, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'
@@ -162,12 +163,9 @@ export function TransactionTable({
           {row.tags && row.tags.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {row.tags.map((tag) => (
-                <span
-                  key={`${row.id}-${tag}`}
-                  className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300"
-                >
+                <Badge key={`${row.id}-${tag}`} variant="info" size="sm">
                   {tag}
-                </span>
+                </Badge>
               ))}
             </div>
           )}
@@ -187,7 +185,7 @@ export function TransactionTable({
         const account = accountsMap[row.account_id]
         const accentColor = account?.custom_color
         return (
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-foreground">
+          <Badge variant="outline" className="gap-1.5">
             {accentColor && (
               <span
                 className="h-1.5 w-1.5 shrink-0 rounded-full"
@@ -197,7 +195,7 @@ export function TransactionTable({
             )}
             {account?.custom_emoji && <span>{account.custom_emoji}</span>}
             {account ? account.nickname || account.name : 'Unknown'}
-          </span>
+          </Badge>
         )
       },
       filter:
@@ -304,19 +302,19 @@ export function TransactionTable({
             className={cn(
               'font-semibold tabular-nums',
               isOutflow(row.amount)
-                ? 'transaction-table__amount--debit text-red-600 dark:text-red-400'
+                ? 'transaction-table__amount--debit text-destructive'
                 : row.amount < 0
-                  ? 'transaction-table__amount--credit text-green-600 dark:text-green-400'
+                  ? 'transaction-table__amount--credit text-success'
                   : 'text-foreground'
             )}
           >
             {formatTransactionAmount(row.amount).text}
           </span>
           {row.pending && (
-            <span className="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-yellow-800 dark:bg-yellow-800 dark:text-yellow-200">
+            <Badge variant="warning" size="sm">
               <Clock className="h-2.5 w-2.5" aria-hidden="true" />
               Pending
-            </span>
+            </Badge>
           )}
         </div>
       ),
@@ -346,7 +344,7 @@ export function TransactionTable({
         cn(
           onRowClick && 'transaction-table__row--clickable',
           row.pending &&
-            'bg-yellow-50 hover:bg-yellow-100 dark:bg-yellow-900 dark:hover:bg-yellow-800'
+            'bg-warning/10 hover:bg-warning/20'
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}

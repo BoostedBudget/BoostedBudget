@@ -1,5 +1,8 @@
 import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { AccountIconDisplay } from './components/AccountIconDisplay'
 import type { Account, AccountIcon } from './types'
 
@@ -88,12 +91,12 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   const handleEdit = () => onEdit?.(account)
 
   return (
-    <div
+    <Card
       className={cn(
-        'bg-card rounded-lg shadow-sm p-6 transition-shadow hover:shadow-md',
+        'shadow-sm p-6 transition-shadow hover:shadow-md',
         isDragging && 'shadow-xl scale-[1.02] opacity-90 cursor-grabbing',
         is_hidden && 'opacity-60',
-        isDisconnected && 'opacity-80 border border-dashed border-warning'
+        isDisconnected && 'opacity-80 border-dashed border-warning'
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
@@ -110,16 +113,16 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
 
         <div className="flex items-center gap-3">
           {isDisconnected && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-warning/20 text-warning" title="Account disconnected - resubscribe to reconnect">
+            <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
               <Unplug className="h-3 w-3" />
               <span>Disconnected</span>
-            </span>
+            </Badge>
           )}
           {is_hidden && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-muted text-muted-foreground" title="Hidden account">
+            <Badge variant="secondary" title="Hidden account">
               <EyeOff className="h-3 w-3" />
               <span>Hidden</span>
-            </span>
+            </Badge>
           )}
           {mask && (
             <div className="font-mono text-sm text-muted-foreground" data-ph-mask>
@@ -173,27 +176,27 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
 
         <div className="flex gap-3 mt-4 pt-4 border-t border-border">
           {onEdit && (
-            <button
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-muted text-foreground border border-border rounded-md text-sm font-medium cursor-pointer hover:bg-accent transition-colors focus:outline-none focus:ring-2 focus:ring-primary/50"
+            <Button
+              variant="secondary"
               onClick={handleEdit}
               title="Customize this account"
               aria-label="Edit account"
             >
               <Pencil className="h-4 w-4" />
               <span>Edit</span>
-            </button>
+            </Button>
           )}
           {onDelete && (
-            <button
-              className="px-4 py-2 bg-destructive/10 text-destructive border border-destructive/30 rounded-md text-sm font-medium cursor-pointer hover:bg-destructive/20 transition-colors focus:outline-none focus:ring-2 focus:ring-destructive/50"
+            <Button
+              variant="destructive"
               onClick={handleDelete}
               title="Delete this account"
             >
               Delete Account
-            </button>
+            </Button>
           )}
         </div>
       </div>
-    </div>
+    </Card>
   )
 }
