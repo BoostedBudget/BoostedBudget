@@ -233,7 +233,7 @@ function AccountSection({
       emptyState={
         <EmptyState
           size="compact"
-          icon={<Building2 className="w-5 h-5" />}
+          icon={<Building2 />}
           title={`No ${emptyLabel} accounts match the current filters.`}
         />
       }

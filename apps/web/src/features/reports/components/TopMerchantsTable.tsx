@@ -122,7 +122,7 @@ export function TopMerchantsTable({
         emptyState={
           <EmptyState
             size="compact"
-            icon={<Store className="w-5 h-5" />}
+            icon={<Store />}
             title="No merchant data for this period."
           />
         }
