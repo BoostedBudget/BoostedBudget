@@ -21,10 +21,10 @@ const TREND_CLASS: Record<NonNullable<StatCardProps['trend']>, string> = {
 }
 
 const ACCENT_CLASS: Record<NonNullable<StatCardProps['accent']>, string> = {
-  success: 'border-l-4 border-l-success',
-  warning: 'border-l-4 border-l-warning',
-  destructive: 'border-l-4 border-l-destructive',
-  info: 'border-l-4 border-l-info',
+  success: 'border-l-success',
+  warning: 'border-l-warning',
+  destructive: 'border-l-destructive',
+  info: 'border-l-info',
 }
 
 /**
@@ -33,7 +33,7 @@ const ACCENT_CLASS: Record<NonNullable<StatCardProps['accent']>, string> = {
  */
 function StatCard({ label, value, icon, trend, accent, maskValue, className, ...props }: StatCardProps) {
   return (
-    <Card className={cn("flex flex-col gap-1", accent && ACCENT_CLASS[accent], className)} {...props}>
+    <Card className={cn("flex flex-col gap-1", accent && `border-l-4 ${ACCENT_CLASS[accent]}`, className)} {...props}>
       <div className="flex items-center justify-between">
         <p
           data-slot="stat-label"
