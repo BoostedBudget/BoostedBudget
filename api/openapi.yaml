@@ -4872,6 +4872,13 @@ components:
           type: string
         id:
           type: string
+        match_state:
+          enum:
+            - completed
+            - confirmable
+            - unmatched
+            - reserved
+          type: string
         matched_transaction_at:
           format: date-time
           type: string
