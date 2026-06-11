@@ -31,7 +31,7 @@ export function AdminSidebar() {
                     'flex items-center gap-3 px-6 py-3 text-muted-foreground font-medium no-underline transition-all duration-200',
                     'hover:bg-accent hover:text-foreground',
                     isActive &&
-                      'bg-amber-50 text-amber-900 border-r-4 border-amber-500 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-500 hover:bg-amber-50 hover:text-amber-900 dark:hover:bg-amber-950 dark:hover:text-amber-200'
+                      'bg-warning/10 text-warning border-r-4 border-warning hover:bg-warning/10 hover:text-warning'
                   )
                 }
               >
