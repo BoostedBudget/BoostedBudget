@@ -5,8 +5,10 @@
  * Displays a paginated list of transactions matching a budget category.
  */
 
+import { Receipt } from 'lucide-react';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface BudgetTransactionListProps {
   budgetId: string;
@@ -71,9 +73,11 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
   // Empty state
   if (transactions.length === 0) {
     return (
-      <div className="p-8 text-center text-muted-foreground">
-        <p>No transactions found for this category.</p>
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<Receipt />}
+        title="No transactions found for this category."
+      />
     );
   }
 

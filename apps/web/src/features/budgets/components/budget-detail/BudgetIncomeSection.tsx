@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import type { IncomeSource } from '../../types';
 import { getPFCIncomeSourceLabel } from '../../utils/incomeSourceLabel';
+import { Card } from '@/components/ui/card';
 
 export interface BudgetIncomeSectionProps {
   /** Expected total income for the budget period */
@@ -75,8 +76,7 @@ export function BudgetIncomeSection({
   };
 
   return (
-    <section
-      className="bg-card border border-border rounded-xl p-6"
+    <Card
       role="region"
       aria-labelledby="income-section-title"
     >
@@ -230,6 +230,6 @@ export function BudgetIncomeSection({
           </div>
         </>
       )}
-    </section>
+    </Card>
   );
 }
