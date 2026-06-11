@@ -9,6 +9,7 @@ import { Receipt } from 'lucide-react';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Button } from '@/components/ui/button';
 
 interface BudgetTransactionListProps {
   budgetId: string;
@@ -59,13 +60,9 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
         <p className="m-0 mb-4 text-destructive">
           {error.message || 'Failed to load transactions'}
         </p>
-        <button
-          className="px-4 py-2 text-sm font-medium text-destructive bg-transparent border border-destructive rounded-md cursor-pointer transition-colors duration-150 hover:bg-destructive hover:text-background"
-          onClick={refetch}
-          type="button"
-        >
+        <Button variant="destructive" onClick={refetch}>
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -105,14 +102,9 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
       {/* Load more button */}
       {hasMore && (
         <div className="flex justify-center py-4">
-          <button
-            className="px-6 py-2 text-sm font-medium text-primary bg-transparent border border-primary rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary hover:text-primary-foreground disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={loadMore}
-            disabled={loadingMore}
-            type="button"
-          >
+          <Button variant="outline" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading...' : 'Load More'}
-          </button>
+          </Button>
         </div>
       )}
     </div>

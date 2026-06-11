@@ -146,7 +146,7 @@ export function BudgetIncomeSection({
         <>
           <button
             type="button"
-            className="flex items-center gap-2 py-2 w-full bg-none border-none border-t border-border cursor-pointer text-muted-foreground text-sm font-medium text-left transition-colors duration-200 hover:text-primary focus:outline-2 focus:outline-primary focus:outline-offset-2"
+            className="flex items-center gap-2 py-2 w-full bg-transparent border-0 border-t border-border cursor-pointer text-muted-foreground text-sm font-medium text-left transition-colors duration-200 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             onClick={toggleExpanded}
             aria-expanded={isExpanded}
             aria-controls="income-sources-list"
