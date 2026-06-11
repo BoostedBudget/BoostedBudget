@@ -1,6 +1,6 @@
 ---
 name: requirements-gap-analysis
-description: Audits whether the last unit of work fully satisfies its GitHub issue, spec, and implementation plan. Use when asked to "analyze requirements", "check if requirements were met", "gap analysis", "were all requirements implemented", "audit against issue", "verify against plan", "identify gaps", or after finishing a feature to confirm nothing was missed. Runs Codex as co-reviewer for independent validation and plans remaining work if gaps exist.
+description: Audits whether the last unit of work fully satisfies its GitHub issue, spec, and implementation plan. Use when asked to "analyze requirements", "check if requirements were met", "gap analysis", "were all requirements implemented", "audit against issue", "verify against plan", "identify gaps", or after finishing a feature to confirm nothing was missed. Runs Codex as co-reviewer for independent validation (or a fresh-context Claude adversarial subagent if Codex is capped) and plans remaining work if gaps exist.
 allowed-tools: Read, Bash, Grep, Glob, Agent
 ---
 
@@ -58,6 +58,14 @@ Launch Codex in **background** while proceeding with Step 4. Give Codex:
 
 Ask Codex to mark each requirement MET / PARTIAL / NOT MET and flag missing test coverage.
 
+**If `codex:codex-rescue` is unavailable** (workspace spend cap, not installed, or it produces an
+error or hangs without delivering output): retry Codex once immediately (same parameters); if it
+still fails, fall back to a fresh-context `feature-dev:code-reviewer` subagent dispatched with a
+fresh session — do NOT reuse this session's context, as same-context review shares blind spots.
+(If Codex returns any output, even partial, use it rather than triggering the fallback.) Note the
+fallback in the gap report so it's auditable. See **Secondary-review fallback** in CLAUDE.md for
+the full policy.
+
 ### 4. Verify Each Requirement
 
 For each requirement, check implementation AND test coverage:
@@ -83,7 +91,7 @@ For requirements that are ambiguous or where implementation vs. test disagrees, 
 
 ### 6. Synthesize with Codex Findings
 
-Wait for Codex result. Compare:
+Wait for the Codex result **(or the fallback reviewer's result)**. Compare:
 - Both agree gap exists → high confidence gap
 - Codex finds gap you marked MET → re-read the specific code, revise if needed
 - You found gap Codex missed → include it
@@ -133,4 +141,4 @@ Always plan gap fixes with TDD:
 - `superpowers:brainstorming` — Explore requirements before planning
 - `superpowers:writing-plans` — Write a detailed implementation plan
 - `superpowers:verification-before-completion` — Verify tests pass before claiming complete
-- `codex:codex-rescue` — Adversarial second-pass review
+- `codex:codex-rescue` — Adversarial second-pass review (fall back to a fresh-context Claude subagent if Codex is capped — see Step 3)
