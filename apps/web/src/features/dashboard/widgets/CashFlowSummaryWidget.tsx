@@ -39,6 +39,10 @@ function SummaryCard({
   color,
   icon: Icon,
 }: SummaryCardProps) {
+  // StatCard exception (#1285): each tile has a "N transactions" subline + a two-part "±% · vs prior period"
+  // caption + colored icon chip. StatCard has no subline slot and its `trend` prop colors the value itself
+  // (TREND_CLASS → text-success/text-destructive), which would tint the currency. Stays as-is.
+
   const colorClasses = {
     blue: 'text-info bg-info/10',
     orange: 'text-warning bg-warning/10',
