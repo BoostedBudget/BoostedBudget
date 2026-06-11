@@ -68,6 +68,8 @@ export function IncomeSourceItem({
         <div className="flex flex-col gap-0.5 min-w-0">
           <span
             className="text-sm font-medium text-foreground truncate"
+            // data-ph-mask: || undefined prevents data-ph-mask="false" in the DOM.
+            // Only 'manual' sources display a currency amount; pfc/tag labels aren't financial PII.
             data-ph-mask={source.type === 'manual' || undefined}
           >
             {displayValue}
