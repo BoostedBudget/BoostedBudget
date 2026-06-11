@@ -78,6 +78,7 @@ export function BoostExecutionHistory({
     completed: 'success',
     failed: 'destructive',
     running: 'info',
+    pending: 'secondary',
   }
 
   if (isLoading) {
