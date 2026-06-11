@@ -19,8 +19,8 @@ import {
   Clock,
   Edit2,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useUserFilters } from '../hooks/useUserFilters'
 import { useRegions } from '../../../shared/hooks/useRegions'
@@ -62,11 +62,11 @@ const tierBadgeVariant = (tier: string): 'default' | 'info' | 'success' | 'secon
   return 'secondary'
 }
 
-const statusBadgeClass = (status: string): string => {
-  if (status === 'active') return 'bg-success/10 text-success'
-  if (status === 'trial' || status === 'trialing') return 'bg-info/10 text-info'
-  if (status === 'past_due') return 'bg-destructive/10 text-destructive'
-  return 'bg-muted text-muted-foreground'
+const statusBadgeVariant = (status: string): BadgeProps['variant'] => {
+  if (status === 'active') return 'success'
+  if (status === 'trial' || status === 'trialing') return 'info'
+  if (status === 'past_due') return 'destructive'
+  return 'secondary'
 }
 
 interface OverrideStatus {
@@ -90,11 +90,11 @@ function getOverrideStatus(
   return { label: `Expires in ${daysLeft}d`, variant: 'expiring' }
 }
 
-const overrideStatusClass = (variant: string): string => {
-  if (variant === 'permanent') return 'bg-success/10 text-success'
-  if (variant === 'expiring') return 'bg-info/10 text-info'
-  if (variant === 'expired') return 'bg-warning/10 text-warning'
-  return 'text-muted-foreground'
+const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
+  if (variant === 'permanent') return 'success'
+  if (variant === 'expiring') return 'info'
+  if (variant === 'expired') return 'warning'
+  return 'secondary'
 }
 
 const formatDate = (dateString: string | undefined | null): string => {
@@ -190,10 +190,10 @@ export function UsersPage() {
       minSize: 90,
       maxSize: 140,
       render: (user) => (
-        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
+        <Badge variant={statusBadgeVariant(user.subscription_status)} className="capitalize">
           {STATUS_ICON[user.subscription_status]}
           {user.subscription_status}
-        </span>
+        </Badge>
       ),
     },
     {
@@ -206,9 +206,9 @@ export function UsersPage() {
       render: (user) => {
         const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
         return overrideStatus ? (
-          <span className={cn('inline-block px-2 py-0.5 rounded text-xs font-medium', overrideStatusClass(overrideStatus.variant))}>
+          <Badge variant={overrideStatusVariant(overrideStatus.variant)}>
             {overrideStatus.label}
-          </span>
+          </Badge>
         ) : (
           <span className="text-muted-foreground text-sm">—</span>
         )

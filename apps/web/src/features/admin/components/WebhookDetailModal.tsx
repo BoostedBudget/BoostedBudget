@@ -7,8 +7,8 @@
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Loader2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import {
   useGetAdminPaddleWebhookDetail,
   useReplayAdminPaddleWebhook,
@@ -60,16 +60,9 @@ export function WebhookDetailModal({ webhookId, onClose }: WebhookDetailModalPro
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Status:</span>
-                <span
-                  className={cn(
-                    'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-                    event.processed
-                      ? 'bg-success/10 text-success'
-                      : 'bg-warning/10 text-warning'
-                  )}
-                >
+                <Badge variant={event.processed ? 'success' : 'warning'}>
                   {event.processed ? 'Processed' : 'Pending'}
-                </span>
+                </Badge>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-[0.8125rem] font-semibold text-muted-foreground min-w-[110px] shrink-0">Attempts:</span>

@@ -1,7 +1,16 @@
 import { Link } from 'react-router-dom'
 import { Award, Check } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTier } from '../../subscription/types'
+
+const SUBSCRIPTION_STATUS_BADGE: Record<string, BadgeProps['variant']> = {
+  active: 'success',
+  inactive: 'destructive',
+  cancelled: 'secondary',
+  trial: 'info',
+}
 
 interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
@@ -94,17 +103,11 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
             <span className="text-sm text-muted-foreground font-normal">/month</span>
           )}
         </div>
-        <span className={`px-3.5 py-1.5 rounded-full text-xs font-semibold capitalize tracking-wide ${
-          status === 'active' ? 'bg-success/10 text-success' :
-          status === 'inactive' ? 'bg-destructive/10 text-destructive' :
-          status === 'cancelled' ? 'bg-muted text-muted-foreground' :
-          status === 'trial' ? 'bg-info/10 text-info' :
-          'bg-muted text-muted-foreground'
-        }`}>
+        <Badge variant={SUBSCRIPTION_STATUS_BADGE[status] ?? 'secondary'} className="capitalize tracking-wide">
           {status === 'trial' && trialDaysRemaining !== undefined
             ? `Trial — ${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} remaining`
             : status}
-        </span>
+        </Badge>
       </div>
 
       <div className="mb-6">

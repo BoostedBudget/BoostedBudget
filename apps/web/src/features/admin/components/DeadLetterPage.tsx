@@ -10,6 +10,7 @@ import {
   useBulkDeleteAdminDeadLetterJobs,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { SummaryCard } from '@/features/admin'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useDeadLetterFilters } from '../hooks/useDeadLetterFilters'
@@ -135,16 +136,9 @@ export function DeadLetterPage() {
       minSize: 90,
       maxSize: 160,
       render: (job) => (
-        <span
-          className={cn(
-            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-            job.retried_at
-              ? 'bg-success/10 text-success'
-              : 'bg-destructive/10 text-destructive'
-          )}
-        >
+        <Badge variant={job.retried_at ? 'success' : 'destructive'}>
           {job.retried_at ? 'Retried' : 'Pending'}
-        </span>
+        </Badge>
       ),
     },
     {
