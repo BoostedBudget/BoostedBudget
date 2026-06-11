@@ -146,7 +146,7 @@ export function TransactionFilterPanel({
                 <FunnelIcon className="w-5 h-5 text-muted-foreground" />
                 <span className="font-medium text-foreground">Date & Status</span>
                 {dateStatusActiveCount > 0 && (
-                  <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                  <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded-full">
                     {dateStatusActiveCount}
                   </span>
                 )}
@@ -196,7 +196,7 @@ export function TransactionFilterPanel({
               <button
                 type="button"
                 onClick={() => setIsSheetOpen(false)}
-                className="flex-1 px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                className="flex-1 px-4 py-2 text-sm text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors"
               >
                 Apply
               </button>
@@ -227,7 +227,7 @@ export function TransactionFilterPanel({
           <FunnelIcon className="w-5 h-5 text-muted-foreground" />
           <span className="font-medium text-foreground">Date & Status</span>
           {dateStatusActiveCount > 0 && (
-            <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+            <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded-full">
               {dateStatusActiveCount}
             </span>
           )}
