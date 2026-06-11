@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { ColorPicker } from './ColorPicker'
@@ -206,29 +207,16 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
               Hidden accounts won't appear in the default view.
             </p>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isHidden}
-            onClick={() => {
-              if (!isHidden) {
+          <Switch
+            checked={isHidden}
+            onCheckedChange={(checked) => {
+              if (checked) {
                 setShowHideConfirm(true)
               } else {
                 setIsHidden(false)
               }
             }}
-            className={cn(
-              'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
-              isHidden ? 'bg-primary' : 'bg-input'
-            )}
-          >
-            <span
-              className={cn(
-                'pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform',
-                isHidden ? 'translate-x-5' : 'translate-x-0'
-              )}
-            />
-          </button>
+          />
         </div>
       </div>
 
