@@ -265,7 +265,7 @@ export function CreateSavingsGoalDialog({
             ))}
           </SelectField>
           {accounts.length === 0 && !accountsLoading && (
-            <p className="mt-1 text-sm text-amber-600 dark:text-amber-400">
+            <p className="mt-1 text-sm text-warning">
               No savings accounts found. Link an account first.
             </p>
           )}
@@ -279,7 +279,7 @@ export function CreateSavingsGoalDialog({
           />
 
           {apiError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
               {apiError}
             </div>
           )}
@@ -295,7 +295,7 @@ export function CreateSavingsGoalDialog({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isSubmitting ? 'Creating...' : 'Create Goal'}
             </button>

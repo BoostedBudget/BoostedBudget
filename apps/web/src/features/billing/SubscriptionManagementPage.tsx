@@ -174,9 +174,9 @@ export function SubscriptionManagementPage() {
   if (subscription.status === 'trial') {
     return (
       <div className="max-w-[800px] mx-auto p-8 space-y-8">
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-center">
-          <h2 className="font-semibold text-amber-900 dark:text-amber-200">Free Trial Active</h2>
-          <p className="text-sm text-amber-800 dark:text-amber-300">
+        <div className="rounded-lg bg-warning/10 border border-warning/30 px-4 py-3 text-center">
+          <h2 className="font-semibold text-warning">Free Trial Active</h2>
+          <p className="text-sm text-warning">
             You have {subscription.trial_days_remaining} days remaining in your trial.
             Subscribe to continue using BoostedBudget after your trial ends.
           </p>
@@ -214,9 +214,9 @@ export function SubscriptionManagementPage() {
 
     return (
       <div className="max-w-[800px] mx-auto p-8 space-y-8">
-        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-center">
-          <h2 className="font-semibold text-emerald-900 dark:text-emerald-200">You're Subscribed!</h2>
-          <p className="text-sm text-emerald-800 dark:text-emerald-300">
+        <div className="rounded-lg bg-success/10 border border-success/30 px-4 py-3 text-center">
+          <h2 className="font-semibold text-success">You're Subscribed!</h2>
+          <p className="text-sm text-success">
             Your {currentTierData?.display_name || subscription.tier} subscription will start when your trial ends.
             You have {subscription.trial_days_remaining} days remaining in your trial.
           </p>
@@ -300,9 +300,9 @@ export function SubscriptionManagementPage() {
   if (subscription.status === 'cancelled') {
     return (
       <div className="max-w-[800px] mx-auto p-8 space-y-8">
-        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-center">
-          <h2 className="font-semibold text-red-900 dark:text-red-200">Subscription Cancelled</h2>
-          <p className="text-sm text-red-800 dark:text-red-300">
+        <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3 text-center">
+          <h2 className="font-semibold text-destructive">Subscription Cancelled</h2>
+          <p className="text-sm text-destructive">
             Your subscription has been cancelled.
             {subscription.current_period_end && (
               <> You retain access until <strong>{subscription.current_period_end}</strong>.</>
@@ -320,9 +320,9 @@ export function SubscriptionManagementPage() {
   if (subscription.status === 'past_due') {
     return (
       <div className="max-w-[800px] mx-auto p-8 space-y-8">
-        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-center">
-          <h2 className="font-semibold text-red-900 dark:text-red-200">Payment Past Due</h2>
-          <p className="text-sm text-red-800 dark:text-red-300">Your payment is past due. Please update your payment method to continue using BoostedBudget.</p>
+        <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3 text-center">
+          <h2 className="font-semibold text-destructive">Payment Past Due</h2>
+          <p className="text-sm text-destructive">Your payment is past due. Please update your payment method to continue using BoostedBudget.</p>
         </div>
 
         {billingPortalUrl && (

@@ -200,7 +200,7 @@ export function UpdateSavingsGoalDialog({
           />
 
           {apiError && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
               {apiError}
             </div>
           )}
@@ -216,7 +216,7 @@ export function UpdateSavingsGoalDialog({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isSubmitting ? 'Saving...' : 'Save Changes'}
             </button>
