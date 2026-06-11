@@ -4,7 +4,7 @@ import type { AdminSettingsSectionProps } from '../types'
 
 export function AdminSettingsSection({ adminModeEnabled, onToggle }: AdminSettingsSectionProps) {
   return (
-    <Card className="border-l-4 border-l-warning rounded-lg p-6 mt-6">
+    <Card className="border-l-4 border-l-warning mt-6">
       <h3 className="flex items-center gap-2 text-xl mt-0 mb-2 text-foreground">
         <Shield className="text-warning" size={20} />
         Admin Settings
