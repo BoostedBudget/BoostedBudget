@@ -12,6 +12,7 @@ import { HierarchicalCategoryTreeSelect } from '@/shared/components/Hierarchical
 import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
 import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
@@ -361,9 +362,11 @@ export function TransactionTable({
         prefetchRows: 5,
       } : undefined}
       emptyState={
-        <p className="py-12 px-6 text-center text-muted-foreground">
-          No transactions found.
-        </p>
+        <EmptyState
+          icon={<Tag />}
+          title="No transactions found"
+          description="Transactions will appear here once your accounts sync."
+        />
       }
       rowActions={
         hasActions

@@ -29,7 +29,7 @@ export function SummaryCard({ title, value, icon, trend, status = 'neutral' }: S
         trend.direction === 'neutral' && 'text-muted-foreground'
       )}
     >
-      {TrendIcon && <TrendIcon size={16} />}
+      {TrendIcon && <TrendIcon size={16} aria-hidden={true} />}
       <span>{prefix}{trend.value}</span>
     </span>
   ) : null
