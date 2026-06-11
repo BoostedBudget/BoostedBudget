@@ -124,13 +124,13 @@ describe('AccountCardsWidget', () => {
       expect(screen.getByText('Failed to load accounts')).toBeInTheDocument()
     })
 
-    it('should show error in red', () => {
+    it('should show error with destructive styling', () => {
       setMockDataState({ error: new Error('API Error') })
 
       render(<AccountCardsWidget {...defaultProps} />)
 
       const errorText = screen.getByText('API Error')
-      expect(errorText).toHaveClass('text-red-500')
+      expect(errorText).toHaveClass('text-destructive')
     })
   })
 

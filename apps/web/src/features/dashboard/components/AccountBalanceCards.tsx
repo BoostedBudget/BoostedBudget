@@ -1,3 +1,5 @@
+import { CreditCard } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { BalanceSummary } from '../types'
 
 interface AccountBalanceCardsProps {
@@ -29,14 +31,14 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
   // Color scheme for account types
   const typeColors: Record<string, { bg: string; border: string; text: string }> = {
     depository: {
-      bg: 'bg-green-50 dark:bg-green-950',
-      border: 'border-green-200 dark:border-green-800',
-      text: 'text-green-900 dark:text-green-100',
+      bg: 'bg-success/10',
+      border: 'border-success/30',
+      text: 'text-success',
     },
     credit: {
-      bg: 'bg-red-50 dark:bg-red-950',
-      border: 'border-red-200 dark:border-red-800',
-      text: 'text-red-900 dark:text-red-100',
+      bg: 'bg-destructive/10',
+      border: 'border-destructive/30',
+      text: 'text-destructive',
     },
     investment: {
       bg: 'bg-purple-50 dark:bg-purple-950',
@@ -44,9 +46,9 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
       text: 'text-purple-900 dark:text-purple-100',
     },
     loan: {
-      bg: 'bg-amber-50 dark:bg-amber-950',
-      border: 'border-amber-200 dark:border-amber-800',
-      text: 'text-amber-900 dark:text-amber-100',
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      text: 'text-warning',
     },
     other: {
       bg: 'bg-muted',
@@ -68,9 +70,11 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
 
   if (accountTypes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-center text-muted-foreground">No accounts found</p>
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<CreditCard />}
+        title="No accounts found"
+      />
     )
   }
 

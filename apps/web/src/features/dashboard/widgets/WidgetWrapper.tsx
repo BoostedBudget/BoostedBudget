@@ -39,7 +39,7 @@ export function WidgetWrapper({
   return (
     <div
       className={`h-full bg-card rounded-lg shadow border border-border overflow-hidden flex flex-col ${
-        isEditing ? 'outline outline-2 outline-blue-400 -outline-offset-2' : ''
+        isEditing ? 'outline outline-2 outline-ring -outline-offset-2' : ''
       }`}
     >
       {/* Header with title and actions */}
@@ -54,7 +54,7 @@ export function WidgetWrapper({
                 e.stopPropagation()
                 setShowRemoveDialog(true)
               }}
-              className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20"
+              className="text-muted-foreground hover:text-destructive transition-colors p-1 rounded hover:bg-destructive/10"
               aria-label="Remove widget"
               title="Remove widget"
             >

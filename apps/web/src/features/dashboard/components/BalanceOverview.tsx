@@ -45,7 +45,7 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
 
       {hasComparison && (
         <div className="flex items-center space-x-2">
-          <span className={`text-sm font-semibold ${isPositiveChange ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+          <span className={`text-sm font-semibold ${isPositiveChange ? 'text-success' : 'text-destructive'}`}>
             {isPositiveChange ? '↑' : '↓'}{' '}
             {new Intl.NumberFormat('en-US', {
               style: 'currency',
