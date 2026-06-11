@@ -44,7 +44,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
   if (error && !hasNoBudget) {
     return (
       <div className="flex items-center justify-center h-full gap-2 text-destructive text-sm">
-        <span className="flex items-center justify-center w-6 h-6 bg-destructive text-white rounded-full text-xs font-bold">!</span>
+        <span className="flex items-center justify-center w-6 h-6 bg-destructive text-destructive-foreground rounded-full text-xs font-bold">!</span>
         <span>Error loading budget</span>
       </div>
     );
