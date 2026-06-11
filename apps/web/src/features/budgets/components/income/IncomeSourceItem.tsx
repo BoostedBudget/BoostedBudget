@@ -68,7 +68,12 @@ export function IncomeSourceItem({
           {getIcon(source.type)}
         </span>
         <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-sm font-medium text-foreground truncate">{displayValue}</span>
+          <span
+            className="text-sm font-medium text-foreground truncate"
+            data-ph-mask={source.type === 'manual' || undefined}
+          >
+            {displayValue}
+          </span>
           {hasDescription && (
             <span
               className="text-xs text-muted-foreground truncate"

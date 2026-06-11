@@ -96,7 +96,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                 {label}
               </h3>
               <div className="text-right">
-                <p className={`text-xl font-bold ${colors.text}`}>
+                <p className={`text-xl font-bold ${colors.text}`} data-ph-mask>
                   {formatCurrency(typeData.balance)}
                 </p>
                 <p className="text-sm text-muted-foreground">
@@ -115,7 +115,7 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                   <span className="text-sm font-medium text-foreground">
                     {account.name}
                   </span>
-                  <span className="text-sm font-semibold text-foreground">
+                  <span className="text-sm font-semibold text-foreground" data-ph-mask>
                     {formatCurrency(account.balance)}
                   </span>
                 </div>
