@@ -20,6 +20,8 @@ import {
   Edit2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useUserFilters } from '../hooks/useUserFilters'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { UserDetailModal } from './UserDetailModal'
@@ -53,11 +55,11 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   past_due: <AlertCircle size={13} className="text-destructive" />,
 }
 
-const tierBadgeClass = (tier: string): string => {
-  if (tier === 'premium') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
-  if (tier === 'trial') return 'bg-info/10 text-info'
-  if (tier.startsWith('household_')) return 'bg-success/10 text-success'
-  return 'bg-muted text-muted-foreground'
+const tierBadgeVariant = (tier: string): 'default' | 'info' | 'success' | 'secondary' => {
+  if (tier === 'premium') return 'default'
+  if (tier === 'trial') return 'info'
+  if (tier.startsWith('household_')) return 'success'
+  return 'secondary'
 }
 
 const statusBadgeClass = (status: string): string => {
@@ -159,7 +161,7 @@ export function UsersPage() {
         <div className="flex items-center gap-1.5 font-medium">
           {user.email}
           {user.is_admin && (
-            <Shield className="text-amber-500 shrink-0" size={14} aria-label="Administrator" />
+            <Shield className="text-warning shrink-0" size={14} aria-label="Administrator" />
           )}
         </div>
       ),
@@ -174,9 +176,9 @@ export function UsersPage() {
       render: (user) => {
         const effectiveTier = user.manual_tier_override ?? user.subscription_tier
         return (
-          <span className={cn('inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize', tierBadgeClass(effectiveTier))}>
+          <Badge variant={tierBadgeVariant(effectiveTier)}>
             {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
-          </span>
+          </Badge>
         )
       },
     },
@@ -369,7 +371,7 @@ export function UsersPage() {
             loading={isLoading}
             onRowClick={(user) => setSelectedUserId(user.id)}
             maskedColumnIds={['email']}
-            emptyState={<p className="py-12 px-4 text-center text-muted-foreground">No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</p>}
+            emptyState={<EmptyState size="compact" icon={<Users />} title={`No users found${hasActiveFilters ? '. Try adjusting your filters.' : '.'}`} />}
             columnSizing={sizing}
             onColumnSizingChange={onSizingChange}
             columnVisibility={columnVisibility}

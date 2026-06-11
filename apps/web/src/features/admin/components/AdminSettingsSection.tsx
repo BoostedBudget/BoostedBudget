@@ -1,11 +1,12 @@
 import { Shield } from 'lucide-react'
+import { Card } from '@/components/ui/card'
 import type { AdminSettingsSectionProps } from '../types'
 
 export function AdminSettingsSection({ adminModeEnabled, onToggle }: AdminSettingsSectionProps) {
   return (
-    <section className="bg-card border border-border border-l-4 border-l-amber-500 rounded-lg p-6 mt-6">
+    <Card className="border-l-4 border-l-warning rounded-lg p-6 mt-6">
       <h3 className="flex items-center gap-2 text-xl mt-0 mb-2 text-foreground">
-        <Shield className="text-amber-500" size={20} />
+        <Shield className="text-warning" size={20} />
         Admin Settings
       </h3>
       <p className="text-muted-foreground mb-6 leading-relaxed">
@@ -18,7 +19,7 @@ export function AdminSettingsSection({ adminModeEnabled, onToggle }: AdminSettin
             type="checkbox"
             checked={adminModeEnabled}
             onChange={onToggle}
-            className="w-5 h-5 mr-3 cursor-pointer accent-amber-500"
+            className="w-5 h-5 mr-3 cursor-pointer accent-warning"
             aria-label="Enable Admin Mode"
           />
           <span className="text-base font-semibold">
@@ -29,6 +30,6 @@ export function AdminSettingsSection({ adminModeEnabled, onToggle }: AdminSettin
           When enabled, admin navigation will appear in the header.
         </p>
       </div>
-    </section>
+    </Card>
   )
 }
