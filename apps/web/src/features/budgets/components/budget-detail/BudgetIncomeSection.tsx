@@ -104,13 +104,16 @@ export function BudgetIncomeSection({
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Difference</span>
           <div className="flex items-center gap-1">
-            <span className={`text-xl font-semibold ${
-              differenceType === 'surplus'
-                ? 'income-section__difference--surplus text-success'
-                : differenceType === 'shortfall'
-                  ? 'income-section__difference--shortfall text-destructive'
-                  : 'income-section__difference--neutral text-muted-foreground'
-            }`}>
+            <span
+              className={`text-xl font-semibold ${
+                differenceType === 'surplus'
+                  ? 'income-section__difference--surplus text-success'
+                  : differenceType === 'shortfall'
+                    ? 'income-section__difference--shortfall text-destructive'
+                    : 'income-section__difference--neutral text-muted-foreground'
+              }`}
+              data-ph-mask
+            >
               {formatDifference(difference, currencyCode)}
             </span>
             <span className="sr-only">
@@ -199,12 +202,12 @@ export function BudgetIncomeSection({
                     </div>
                     <div className="flex items-center gap-2">
                       {source.type === 'manual' && expectedAmount > 0 && (
-                        <span className="text-sm text-muted-foreground">
+                        <span className="text-sm text-muted-foreground" data-ph-mask>
                           {formatCurrency(expectedAmount, currencyCode)} expected
                         </span>
                       )}
                       {status === 'partial' && actualAmount !== undefined && (
-                        <span className="text-sm font-medium text-foreground">
+                        <span className="text-sm font-medium text-foreground" data-ph-mask>
                           {formatCurrency(actualAmount, currencyCode)}
                         </span>
                       )}

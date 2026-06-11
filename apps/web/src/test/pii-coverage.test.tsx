@@ -87,6 +87,11 @@ const { IncomeSourceItem } = await import('@/features/budgets/components/income/
 const { IncomeSourceConfig } = await import('@/features/budgets/components/income/IncomeSourceConfig')
 const { DashboardContext } = await import('@/features/dashboard/context/DashboardContext')
 
+// --- Phase P1 Round-4 component imports (unconverted currency surfaces) ---
+const { AccountTypeFilter } = await import('@/features/dashboard/components/AccountTypeFilter')
+const { BudgetIncomeSection } = await import('@/features/budgets/components/budget-detail/BudgetIncomeSection')
+const { BudgetCategoryForm } = await import('@/features/budgets/components/category-management/BudgetCategoryForm')
+
 // ---------------------------------------------------------------
 // Sentinel constants
 // ---------------------------------------------------------------
@@ -721,8 +726,8 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
       hasAccounts: true,
       accountsLoading: false,
     }
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
     function CashFlowWrapper({ children }: { children: ReactNode }) {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
       return (
         <ThemeProvider>
           <QueryClientProvider client={qc}>
@@ -861,5 +866,96 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
       { timeout: 3000 }
     )
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 13. Round 4 — unconverted currency surfaces (P1 gap remediation #1285)
+// ---------------------------------------------------------------
+describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / BudgetCategoryForm', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('AccountTypeFilter masks per-type account balance in open dropdown', async () => {
+    const user = userEvent.setup()
+    // Use a whole-dollar amount — AccountTypeFilter uses the 0dp formatCurrency from lib/utils
+    const accountTypes = {
+      types: [{ key: 'depository', label: 'Checking & Savings', count: 2, total_balance: 12345 }],
+    }
+    render(
+      <AccountTypeFilter accountTypes={accountTypes} selectedTypes={[]} onChange={mock(() => {})} />,
+      { wrapper: createWrapper() }
+    )
+    // Balance renders inside DropdownMenuContent portal — open the menu first
+    await user.click(screen.getByRole('button', { name: /all account types/i }))
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$12,345'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('BudgetIncomeSection masks Difference and per-source expected/partial amounts', async () => {
+    // expectedIncome/actualIncome headline spans ARE masked; the Difference span and
+    // per-source expected/actual spans (lines 107-115, 202-209) are currently unmasked.
+    const incomeSources = [{ type: 'manual' as const, value: '99999.99', description: 'Main Salary' }]
+    render(
+      <BudgetIncomeSection
+        expectedIncome={99999.99}
+        actualIncome={50000}
+        incomeSources={incomeSources}
+        currencyCode="USD"
+        sourceStatuses={{ 'Main Salary': 'partial' }}
+        sourceActuals={{ 'Main Salary': 50000 }}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('$99,999'),
+      { timeout: 3000 }
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('BudgetCategoryForm masks over-allocation amount in warning Alert', async () => {
+    // Edit mode: allocated_amount=175, totalAllocatedExcludingCurrent=0, expectedIncome=100
+    // → overage = (0+175)-100 = 75 → Alert renders "…by $75.00."
+    // JSX splits "$" and "75.00" into separate text nodes, so we use a sentinel for "75.00"
+    // (the numeric text node) to verify it gains a data-ph-mask ancestor.
+    // No budgetStartDate/End → previewEnabled=false → no preview API calls fired.
+    mockUseGetUserCategories.mockReturnValue({ data: undefined, isLoading: false, error: null })
+    const initialData = {
+      id: 'cat-1',
+      budget_id: 'budget-1',
+      category_kind: 'pfc',
+      pfc_primary: 'FOOD_AND_DRINK',
+      allocated_amount: 175,
+      spent_amount: 0,
+      tags: [],
+      match_logic: 'category_only',
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+    render(
+      <BudgetCategoryForm
+        isOpen={true}
+        onClose={mock(() => {})}
+        onSubmit={mock(async () => {})}
+        mode="edit"
+        initialData={initialData as any}
+        availableTags={[]}
+        expectedIncome={100}
+        totalAllocatedExcludingCurrent={0}
+      />,
+      { wrapper: createWrapper() }
+    )
+    // "75.00" is the allocationOverage.toFixed(2) text node; wait for it to appear
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain('75.00'),
+      { timeout: 3000 }
+    )
+    const sentinels = [{ value: '75.00', fieldDescription: 'over-allocation currency amount in BudgetCategoryForm Alert' }]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
