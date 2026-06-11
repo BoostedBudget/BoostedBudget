@@ -139,7 +139,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
     <article
       className={cn(
         'relative bg-card border border-border rounded-lg p-4 mb-3 transition-shadow',
-        pending && 'bg-yellow-50 dark:bg-yellow-950 border-yellow-300 dark:border-yellow-700',
+        pending && 'bg-warning/10 border-warning/40',
         onEdit && 'cursor-pointer hover:shadow-md focus:outline-2 focus:outline-ring focus:outline-offset-2 active:scale-[0.99]'
       )}
       data-transaction-id={id}
@@ -215,7 +215,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           </div>
           {pending && (
             <div
-              className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-800 px-2 py-0.5 rounded-full uppercase tracking-wide"
+              className="transaction-card__pending-badge inline-flex items-center gap-1 text-xs font-semibold text-warning-foreground bg-warning/20 px-2 py-0.5 rounded-full uppercase tracking-wide"
               title="This transaction is still pending and may be updated by your bank"
             >
               <Clock className="w-3 h-3" data-testid="pending-icon" />

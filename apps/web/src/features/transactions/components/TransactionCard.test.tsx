@@ -378,10 +378,7 @@ describe('TransactionCard', () => {
       }
       render(<TransactionCard transaction={inflowTransaction} />)
       const amountElement = screen.getByText('+$25.50')
-      expect(
-        amountElement.classList.contains('text-success') ||
-        amountElement.classList.contains('text-green-600')
-      ).toBe(true)
+      expect(amountElement.classList.contains('text-success')).toBe(true)
     })
 
     it('should apply outflow/destructive styling to positive amount (PFCv2: positive = outflow)', () => {
@@ -391,10 +388,7 @@ describe('TransactionCard', () => {
       }
       render(<TransactionCard transaction={outflowTransaction} />)
       const amountElement = screen.getByText('-$100.00')
-      expect(
-        amountElement.classList.contains('text-destructive') ||
-        amountElement.classList.contains('text-red-600')
-      ).toBe(true)
+      expect(amountElement.classList.contains('text-destructive')).toBe(true)
     })
   })
 
