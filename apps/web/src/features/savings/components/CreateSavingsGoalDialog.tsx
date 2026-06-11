@@ -228,7 +228,7 @@ export function CreateSavingsGoalDialog({
               value={formData.description}
               onChange={handleInputChange}
               rows={2}
-              className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-muted-foreground"
+              className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
               placeholder="What are you saving for?"
             />
           </div>

@@ -74,7 +74,7 @@ function FrozenAccountBanner() {
       <AlertTriangle className="shrink-0 w-6 h-6 text-warning mt-0.5" aria-hidden="true" />
       <div className="flex-1">
         <h2 className="text-base font-semibold text-warning m-0 mb-1.5">Your subscription has expired</h2>
-        <p className="text-[0.9375rem] text-warning/90 m-0 leading-relaxed">
+        <p className="text-[0.9375rem] text-warning m-0 leading-relaxed">
           Subscribe to continue using BoostedBudget. Your data is safe and will be
           available once you resubscribe.
         </p>
