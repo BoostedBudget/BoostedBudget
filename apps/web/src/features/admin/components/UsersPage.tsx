@@ -55,7 +55,7 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   past_due: <AlertCircle size={13} className="text-destructive" />,
 }
 
-const tierBadgeVariant = (tier: string): 'default' | 'info' | 'success' | 'secondary' => {
+const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   if (tier === 'premium') return 'default'
   if (tier === 'trial') return 'info'
   if (tier.startsWith('household_')) return 'success'
