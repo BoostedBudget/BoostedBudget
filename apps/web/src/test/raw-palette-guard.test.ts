@@ -14,8 +14,9 @@ const ALLOWLIST_PATHS = [
   'features/budgets/components/category-management/AllocationBreakdown.tsx',
 ]
 
-const CLASS_PATTERN = /\b(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose)-[0-9]/
-const DARK_PATTERN = /dark:(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose)-/
+// TODO: add blue once CTAs/focus-rings/brand colors are triaged (#follow-up)
+const CLASS_PATTERN = /\b(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc)-[0-9]/
+const DARK_PATTERN = /dark:(bg|text|border|ring)-(green|red|yellow|amber|orange|emerald|rose|gray|slate|zinc)-/
 
 function isAllowlisted(relPath: string): boolean {
   return ALLOWLIST_PATHS.some(p => relPath.includes(p))
