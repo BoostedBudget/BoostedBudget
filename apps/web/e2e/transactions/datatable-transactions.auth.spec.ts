@@ -246,11 +246,15 @@ test.describe('DataTable resize — Transactions', () => {
     // The amount column is pinned right (data-pinned="right"). On the real /transactions
     // page, onEdit/onCategorize add an extra actions <td> at the end of each row, so
     // td.last() is the actions cell — use data-pinned="right" to reliably target amount.
-    // First row: amount = -(50) which is inflow (negative in Plaid convention) → green.
-    // Second row: amount = 60 which is outflow → red. Either is a valid color assertion.
+    // First row: amount = -(50) which is inflow (negative in Plaid convention) → text-success.
+    // Second row: amount = 60 which is outflow → text-destructive. Either is a valid assertion.
+    // Select by the style-less BEM hook classes (not token names) so this survives future
+    // recolors — these hooks are intentionally recolor-proof (see TransactionTable.tsx).
     const amountCell = page.locator('table tbody tr').first().locator('td[data-pinned="right"]').first()
     const color = await amountCell.evaluate((el) => {
-      const span = el.querySelector('span[class*="text-red"], span[class*="text-green"]')
+      const span = el.querySelector(
+        'span[class*="transaction-table__amount--debit"], span[class*="transaction-table__amount--credit"]'
+      )
       return span ? getComputedStyle(span).color : null
     })
     expect(color).not.toBeNull()
