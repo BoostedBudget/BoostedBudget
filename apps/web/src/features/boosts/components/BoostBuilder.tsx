@@ -11,6 +11,7 @@ import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeft, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { useReadOnly } from '@/auth/ReadOnlyContext'
 import {
@@ -525,23 +526,22 @@ export function BoostBuilder() {
             the UI controls as defense-in-depth (trial/read-only accounts see no submit) */}
         <ReadOnlyGuard>
           <div className="flex justify-end gap-3 pt-2">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={handleCancel}
-              className="inline-flex items-center gap-2 rounded-lg bg-muted px-5 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/80 dark:bg-muted/50 dark:hover:bg-muted/40"
               aria-label="Cancel"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={isPending}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
               aria-label="Save boost"
             >
               <Save aria-hidden="true" />
               {isPending ? 'Saving...' : 'Save Boost'}
-            </button>
+            </Button>
           </div>
         </ReadOnlyGuard>
       </form>
