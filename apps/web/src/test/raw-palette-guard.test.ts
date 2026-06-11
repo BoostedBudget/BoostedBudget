@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from 'fs'
 import { join, relative } from 'path'
 
 const ROOT = join(import.meta.dir, '..')  // points to apps/web/src
-const SCAN_DIRS = ['features', 'shared'].map(d => join(ROOT, d))
+const SCAN_DIRS = ['features', 'shared', 'auth'].map(d => join(ROOT, d))
 
 const ALLOWLIST_PATHS = [
   'features/landing',
@@ -62,8 +62,8 @@ function scanForRawPalette(): { file: string; line: number; content: string }[] 
         // Skip comment lines
         if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
 
-        // Skip inline style props (different mechanism)
-        if (line.includes('style=')) continue
+        // Skip inline style props (different mechanism — JSX `style={...}` or HTML `style="..."`)
+        if (/\bstyle\s*=\s*[{"']/.test(line)) continue
 
         // Skip CSS variable references
         if (line.includes('var(--')) continue
@@ -79,7 +79,7 @@ function scanForRawPalette(): { file: string; line: number; content: string }[] 
 }
 
 describe('raw-palette guard', () => {
-  it('has no raw palette status colors in features/ or shared/', () => {
+  it('has no raw palette status colors in features/, shared/, or auth/', () => {
     const hits = scanForRawPalette()
     const report = hits.map(h => `  ${h.file}:${h.line}: ${h.content.trim()}`).join('\n')
     expect(hits, `Raw palette classes found:\n${report}`).toHaveLength(0)

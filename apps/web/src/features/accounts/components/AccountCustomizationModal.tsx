@@ -216,6 +216,8 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                 setIsHidden(false)
               }
             }}
+            aria-label={isHidden ? 'Show account' : 'Hide account'}
+            title={isHidden ? 'Show account' : 'Hide account'}
           />
         </div>
       </div>
