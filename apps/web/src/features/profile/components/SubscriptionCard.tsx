@@ -41,7 +41,6 @@ function buildFeatureList(tierData: SubscriptionTier): string[] {
     usersLabel,
     'Unlimited bank accounts',
     'Unlimited automation rules',
-    featureFlags.ads_enabled ? 'Ad-supported' : 'No ads',
   ]
 
   if (featureFlags.ai_insights) features.push('AI-powered insights')

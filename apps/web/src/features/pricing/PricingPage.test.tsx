@@ -323,14 +323,6 @@ describe('PricingPage', () => {
   })
 
   describe('Feature display', () => {
-    it('should show ad-free experience for all tiers', () => {
-      renderWithProviders(<PricingPage />)
-
-      // Ad-free should appear multiple times (once per card)
-      const adFreeTexts = screen.getAllByText('Ad-free experience')
-      expect(adFreeTexts.length).toBe(5) // All 5 tiers are ad-free
-    })
-
     it('should show AI insights feature for household_3+ tiers', () => {
       renderWithProviders(<PricingPage />)
 
