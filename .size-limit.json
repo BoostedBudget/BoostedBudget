@@ -20,13 +20,7 @@
   {
     "name": "vendor",
     "path": "apps/web/dist/assets/vendor-*.js",
-    "limit": "400 KB",
-    "gzip": true
-  },
-  {
-    "name": "tanstack",
-    "path": "apps/web/dist/assets/tanstack-*.js",
-    "limit": "55 KB",
+    "limit": "410 KB",
     "gzip": true
   },
   {

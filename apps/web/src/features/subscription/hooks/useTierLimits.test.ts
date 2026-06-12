@@ -26,7 +26,6 @@ function createMockUser(tier: string = 'free'): User {
 
 function createMockTiers(): SubscriptionTiersResponse {
   const createFeatures = (overrides: Record<string, boolean> = {}) => ({
-    ads_enabled: false,
     api_access: false,
     priority_support: false,
     advanced_reports: false,
@@ -56,7 +55,7 @@ function createMockTiers(): SubscriptionTiersResponse {
         display_name: 'Free',
         description: 'Basic features',
         limits: createLimits(3, 1),
-        features: createFeatures({ ads_enabled: true }),
+        features: createFeatures(),
         pricing: { monthly_price: 0, annual_price: 0, currency: 'USD' },
       },
       premium_lite: {

@@ -42,7 +42,6 @@ function buildFeatureList(tierData: SubscriptionTier): Array<{ feature: string; 
     { feature: usersLabel, included: true },
     { feature: 'Unlimited bank accounts', included: true },
     { feature: 'Unlimited automation rules', included: true },
-    { feature: 'Ad-free experience', included: !featureFlags.ads_enabled },
     { feature: 'AI-powered insights', included: featureFlags.ai_insights || false },
     { feature: 'Priority support', included: featureFlags.priority_support || false },
     { feature: 'Advanced reports', included: featureFlags.advanced_reports || false },

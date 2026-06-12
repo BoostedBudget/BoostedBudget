@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -330,4 +331,22 @@ func TestTierConfig_GetTierByPriceID(t *testing.T) {
 			<-done
 		}
 	})
+}
+
+// TestSubscriptionTierYAMLHasNoAdsEnabled guards against the ads concept being reintroduced in
+// the YAML config files (#1288 follow-on). Go's yaml.v3 silently ignores unknown keys, so
+// ads_enabled could reappear in the YAML and be invisible to Go tests that only inspect the
+// unmarshalled struct — this test reads the raw file bytes instead.
+func TestSubscriptionTierYAMLHasNoAdsEnabled(t *testing.T) {
+	yamlPaths := []string{
+		"../../../config/subscription_tiers.yaml",
+		"../../../config/subscription_tiers.production.yaml",
+		"../../../config/subscription_tiers.sandbox.yaml",
+	}
+	for _, path := range yamlPaths {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err, "could not read %s", path)
+		assert.NotContains(t, strings.ToLower(string(raw)), "ads_enabled",
+			"%s must not contain ads_enabled (#1288 follow-on)", path)
+	}
 }

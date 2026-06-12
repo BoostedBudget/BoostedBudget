@@ -88,7 +88,6 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 //
 // GET /api/v1/admin/users/{user_id}/subscription
 func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubscriptionDetailInput) (*AdminSubscriptionDetailOutput, error) {
-	// 1. Get the user details to see the base tier and manual overrides
 	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
 	if err != nil {
 		if errors.Is(err, services.ErrAdminUserNotFound) {
@@ -97,7 +96,6 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch user: %w", err))
 	}
 
-	// 2. We need a domain.User to get the effective subscription limits and features
 	userObj := &domain.User{
 		ID:                 detail.ID,
 		SubscriptionTier:   detail.SubscriptionTier,
@@ -106,7 +104,6 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		ManualTierEndsAt:   detail.ManualTierEndsAt,
 	}
 
-	// 3. Get effective subscription limits
 	var effectiveSub *domain.EffectiveSubscription
 	if h.subService != nil {
 		effectiveSub, err = h.subService.GetEffectiveSubscription(ctx, userObj)
@@ -121,7 +118,6 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		}
 	}
 
-	// 4. Get specific resource overrides
 	var overrides []domain.UserSubscriptionOverride
 	if h.subService != nil {
 		overrides, _ = h.subService.GetUserOverrides(ctx, userObj.ID)
@@ -130,7 +126,6 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		overrides = []domain.UserSubscriptionOverride{}
 	}
 
-	// Populate response
 	resp := &AdminSubscriptionDetailOutput{}
 	resp.Body.BaseTier = detail.SubscriptionTier
 	resp.Body.SubscriptionStatus = detail.SubscriptionStatus
@@ -150,7 +145,7 @@ type AdminCreateOverrideInput struct {
 	inputs.AdminAuthenticatedInput
 	UserID string `path:"user_id" doc:"ID of the user to override"`
 	Body   struct {
-		ResourceType string `json:"resource_type" enum:"accounts,automation_rules,syncs_per_day,transaction_history_days" doc:"The resource type to override"`
+		ResourceType string `json:"resource_type" enum:"accounts,transaction_history_days,executions_per_day" doc:"The resource type to override"`
 		LimitValue   int    `json:"limit_value" doc:"The new limit value (-1 for unlimited)"`
 		Reason       string `json:"reason" required:"true" doc:"Reason for the override"`
 	}
@@ -227,7 +222,7 @@ func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/users/{user_id}/subscription/override",
 		Summary:     "Create subscription resource override",
-		Description: "Create a per-user resource limit override (e.g. linked_accounts, automation_rules). Requires admin privileges.",
+		Description: "Create a per-user resource limit override (e.g. accounts, transaction_history_days, executions_per_day). Requires admin privileges.",
 		Tags:        []string{"Admin Subscriptions"},
 		Security: []map[string][]string{
 			{"clerk": {}},
