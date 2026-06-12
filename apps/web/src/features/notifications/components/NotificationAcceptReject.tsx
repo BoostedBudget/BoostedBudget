@@ -51,7 +51,7 @@ export function NotificationAcceptReject({
         const msg = savedAmount !== undefined
           ? `Saved ${formatAmount(savedAmount, savedCurrency)}!`
           : 'Transfer suggestion accepted!'
-        toast.success(msg)
+        toast.success(<span data-ph-mask>{msg}</span>)
         trackEvent(ANALYTICS_EVENTS.TRANSFER_SUGGESTION_ACCEPTED, {
           amount: savedAmount,
           source: 'notification_center',
