@@ -42,9 +42,15 @@ BoostedBudget is a global budgeting platform that helps users optimize their fin
 
 ### Business Model
 
-- **Free Tier:** 2-3 automation rules, basic budgeting, ad-supported
-- **Premium ($9.99/mo):** Unlimited rules, no ads, priority execution
-- **Premium Plus ($19.99/mo):** Everything + AI insights, API access
+No free tier. New users get a **60-day Premium trial** (no payment required).
+
+| Tier | Users | Price | Limits |
+|------|-------|-------|--------|
+| `premium` | 1 | $8.99/mo | Unlimited boosts/accounts, 730-day history |
+| `household_2` | 2 | $12.99/mo | Same |
+| `household_3` | 3 | $14.99/mo | Same |
+| `household_4` | 4 | $16.99/mo | Same |
+| `household_5` | 5+ | $18.99/mo | Same |
 
 ## 🚀 Quick Start
 
@@ -75,7 +81,6 @@ cp .env.example .env
 - **Redis**: Cache connection (auto-configured with Docker Compose)
 - **Plaid**: Financial account linking (client ID, secret) - [Get keys](https://dashboard.plaid.com/)
 - **Stripe**: Payment processing (publishable/secret keys, webhook secret) - [Get keys](https://dashboard.stripe.com/)
-- **AdSense**: Ad display for free tier (publisher ID) - [Sign up](https://www.google.com/adsense/)
 
 **Optional Configuration**:
 - **Email**: SMTP settings for notifications (SendGrid, Mailgun, AWS SES)
@@ -264,7 +269,7 @@ Proprietary - All rights reserved
 - **Phase 2:** Plaid Integration & Financial Accounts
 - **Phase 3:** Core Budgeting System
 - **Phase 4:** Rules Engine MVP
-- **Phase 5:** Monetization (Stripe + AdSense)
+- **Phase 5:** Monetization (Paddle)
 - **Phase 6:** Advanced Features & AI Insights
 - **Phase 7+:** Multi-Region Expansion
 

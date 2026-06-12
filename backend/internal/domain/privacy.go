@@ -21,7 +21,7 @@ type PrivacySettings struct {
 	// Analytics cookies consent (Google Analytics, usage tracking)
 	GDPRAnalyticsConsent bool `json:"gdpr_analytics_consent" db:"gdpr_analytics_consent"`
 
-	// Advertising cookies consent (Google AdSense for free tier users)
+	// Advertising cookies consent (GDPR consent category)
 	GDPRAdvertisingConsent bool `json:"gdpr_advertising_consent" db:"gdpr_advertising_consent"`
 
 	// When user last updated their consent preferences

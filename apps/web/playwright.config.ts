@@ -18,23 +18,23 @@ if (!process.env.VITE_CLERK_PUBLISHABLE_KEY && process.env.CLERK_PUBLISHABLE_KEY
  * Playwright E2E Test Configuration
  * See https://playwright.dev/docs/test-configuration
  *
- * Dynamic Port Allocation:
- * - E2E_FRONTEND_PORT: Override frontend port (default: 3000)
- * - E2E_BACKEND_PORT: Override backend port (default: 8080)
- * - E2E_POSTGRES_PORT: Override PostgreSQL port (dynamic, set by run-e2e-with-ports.sh)
- * - DATABASE_URL: PostgreSQL connection string (set by run-e2e-with-ports.sh)
- * - Use scripts/find-available-ports.js in CI to avoid port conflicts
+ * Port allocation: E2E_FRONTEND_PORT, E2E_BACKEND_PORT, E2E_POSTGRES_PORT, E2E_PROD_PORT
+ * (set via scripts/find-available-ports.js in CI)
  *
- * Authentication:
- * - TEST_CLERK_EMAIL: Email of Clerk test user (for authenticated tests)
- * - TEST_CLERK_PASSWORD: Password for test user
- * - Auth session saved to e2e/.auth/user.json, reused by chromium project
+ * Auth: TEST_CLERK_EMAIL + TEST_CLERK_PASSWORD → e2e/.auth/user.json (reused by chromium)
  */
 
 // Get dynamic ports and database URL from environment, fallback to defaults
 const frontendPort = process.env.E2E_FRONTEND_PORT || '3000';
 const backendPort = process.env.E2E_BACKEND_PORT || '8080';
 const databaseUrl = process.env.DATABASE_URL || '';
+
+// Dedicated port for the production-bundle smoke server.
+// Set by find-available-ports.js (via run-e2e-with-ports.sh). When unset (e.g. running
+// `bunx playwright test` directly without the shell wrapper), the prod webServer and
+// chromium-prod-smoke project are skipped — avoids defaulting to a hardcoded port with
+// reuseExistingServer:false, which would kill the entire test run if the port is taken.
+const prodPort = process.env.E2E_PROD_PORT || '';
 
 // Auth session file path
 const authFile = join(__dirname, 'e2e/.auth/user.json');
@@ -137,6 +137,19 @@ export default defineConfig({
       },
       dependencies: ['setup'],
     },
+    // Production bundle smoke project — regression guard for prod-only Rolldown bundler bugs.
+    // Requires E2E_PROD_PORT (set by run-e2e-with-ports.sh). Skipped when running
+    // `bunx playwright test` directly without the shell wrapper (port would be unset).
+    ...(prodPort ? [{
+      name: 'chromium-prod-smoke',
+      testMatch: /prod-bundle-smoke\.noauth\.spec\.ts$/,
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: `http://localhost:${prodPort}`,
+        storageState: { cookies: [], origins: [] },
+      },
+      // No 'setup' dependency: smoke tests don't touch Clerk or the backend.
+    }] : []),
     // Safari/webkit — sticky-table specs that catch Safari-specific rendering bugs:
     // - position:sticky + thead + border-collapse background painting
     // - virtualized scroll container stacking context
@@ -155,14 +168,23 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite
-      // E2E_BACKEND_PORT is needed for the Vite proxy configuration
-      // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars)
+      // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite.
+      // E2E_BACKEND_PORT is needed for the Vite proxy configuration.
+      // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars).
       command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} bun run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,
     },
+    // Production bundle smoke server (only added when E2E_PROD_PORT is set).
+    // Builds the Rolldown production bundle and serves via `vite preview` — the only way
+    // to exercise rolldownOptions.codeSplitting. `vite dev` bypasses chunking entirely.
+    ...(prodPort ? [{
+      command: `VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || 'pk_test_e2e_placeholder'} bun run build && bunx vite preview --port ${prodPort} --strictPort`,
+      url: `http://localhost:${prodPort}`,
+      reuseExistingServer: false, // always rebuild: command includes the build step
+      timeout: 180 * 1000, // ~60s for tsc+rolldown build + preview startup
+    }] : []),
     {
       // Pass env vars to backend for E2E testing:
       // - PORT: Dynamic port allocation

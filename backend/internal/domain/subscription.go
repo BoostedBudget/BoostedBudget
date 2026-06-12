@@ -66,7 +66,6 @@ type SubscriptionLimits struct {
 
 // SubscriptionFeatures defines feature flags for a tier
 type SubscriptionFeatures struct {
-	AdsEnabled        bool `yaml:"ads_enabled" json:"ads_enabled"`
 	AIInsights        bool `yaml:"ai_insights" json:"ai_insights"`
 	APIAccess         bool `yaml:"api_access" json:"api_access"`
 	PrioritySupport   bool `yaml:"priority_support" json:"priority_support"`
@@ -96,7 +95,7 @@ func IsUnlimited(value int) bool {
 type UserSubscriptionOverride struct {
 	ID           int64      `json:"id" db:"id"`
 	UserID       string     `json:"user_id" db:"user_id"`
-	ResourceType string     `json:"resource_type" db:"resource_type"` // "accounts", "rules", etc.
+	ResourceType string     `json:"resource_type" db:"resource_type"` // see ResourceType constants: "accounts", "transaction_history_days", "executions_per_day"
 	LimitValue   int        `json:"limit_value" db:"limit_value"`     // -1 for unlimited
 	Reason       *string    `json:"reason,omitempty" db:"reason"`     // "enterprise_deal", "addon_purchase", "promo"
 	ExpiresAt    *time.Time `json:"expires_at,omitempty" db:"expires_at"` // null for permanent
@@ -124,6 +123,15 @@ const (
 	ResourceTransactionHistoryDays ResourceType = "transaction_history_days"
 	ResourceExecutionsPerDay       ResourceType = "executions_per_day"
 )
+
+// AllResourceTypes is the canonical list of override-able resource types.
+// It must stay in sync with the const block above and the GetLimit/SetLimit switches.
+// The admin override endpoint's enum tag is tested against this slice (issue #1288).
+var AllResourceTypes = []ResourceType{
+	ResourceAccounts,
+	ResourceTransactionHistoryDays,
+	ResourceExecutionsPerDay,
+}
 
 // GetLimit returns the limit value for a specific resource type
 func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
