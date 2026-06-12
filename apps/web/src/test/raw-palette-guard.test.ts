@@ -13,7 +13,6 @@ const ALLOWLIST_PATHS = [
   // AccountIconDisplay uses text-blue-500 as a brand icon color (out of scope per #1285 plan)
   // Both the component and its test are allowlisted so the test can assert the brand color is preserved
   'features/accounts/components/AccountIconDisplay',
-  'features/budgets/components/category-management/AllocationBreakdown.tsx',
   // CategoryIcon (icon picker) uses brand blue colors; test asserts the color className
   'shared/components/IconPicker/CategoryIcon',
 ]
