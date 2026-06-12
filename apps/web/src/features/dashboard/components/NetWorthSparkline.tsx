@@ -78,7 +78,7 @@ export function NetWorthSparkline({ data }: NetWorthSparklineProps) {
         />
       </svg>
       {/* Min/Max labels for context */}
-      <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+      <div className="flex justify-between text-[10px] text-gray-400 mt-0.5" data-ph-mask>
         <span>
           {minY.toLocaleString('en-US', {
             style: 'currency',
