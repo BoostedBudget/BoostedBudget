@@ -108,6 +108,11 @@ const { NetWorthSparkline } = await import('@/features/dashboard/components/NetW
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
 
+// --- Round 10 component imports (card↔table PII consistency) ---
+const { AutoCategorizationRuleTable } = await import(
+  '@/features/auto-categorization/components/AutoCategorizationRuleTable'
+)
+
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
@@ -124,6 +129,7 @@ const SENTINEL_TAG = 'SENTINEL_TAG_LMN'
 const SENTINEL_INSTITUTION = 'SENTINEL_INSTITUTION_DEF'
 const SENTINEL_BUDGET_NAME = 'SENTINEL_BUDGET_UVWX'
 const SENTINEL_RULE_NAME = 'SENTINEL_RULE_IJKL'
+const SENTINEL_RULE_DESC = 'SENTINEL_RULE_DESC_MNOP'
 const SENTINEL_GOAL_NAME = 'SENTINEL_GOAL_NOPQ'
 const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
@@ -1266,6 +1272,50 @@ describe('PII coverage — Round 9: account/institution/merchant names in text, 
     const sentinels: PIISentinel[] = [
       { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account.name in CreateSavingsGoalDialog <option> text' },
       { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name in CreateSavingsGoalDialog <option> text' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 17. Round 10 — card↔table PII consistency: AutoCategorizationRuleTable
+//     The page (test #9) renders in cards view (masked). The TABLE view
+//     was never imported by this gate — this case closes that gap.
+// ---------------------------------------------------------------
+describe('PII coverage — Round 10: AutoCategorizationRuleTable name + description', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('AutoCategorizationRuleTable masks rule name and description (match card)', async () => {
+    // maskedColumnIds={['name']} makes DataTable apply data-ph-mask to the entire name cell,
+    // covering both rule name and description — matching AutoCategorizationRuleCard masking.
+    const rule = {
+      id: 'acat-table-sentinel',
+      user_id: 'user-1',
+      name: SENTINEL_RULE_NAME,
+      description: SENTINEL_RULE_DESC,
+      enabled: true,
+      priority: 1,
+      conditions: [],
+      condition_logic: 'and' as const,
+      target_kind: 'pfc' as const,
+      target_pfc_primary: 'INCOME',
+      tag_behavior: 'add' as const,
+      source: 'manual' as const,
+      match_count: 0,
+      override_count: 0,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    }
+    render(
+      <AutoCategorizationRuleTable rules={[rule as any]} />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_RULE_NAME, fieldDescription: 'auto_cat_rule.name in table view' },
+      { value: SENTINEL_RULE_DESC, fieldDescription: 'auto_cat_rule.description in table view (denylist member)' },
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
