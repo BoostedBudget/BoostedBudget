@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS privacy_settings (
     -- Google Analytics, usage tracking
 
     gdpr_advertising_consent BOOLEAN NOT NULL DEFAULT FALSE,
-    -- Google AdSense (free tier only)
+    -- Advertising cookies (GDPR consent category)
 
     gdpr_consent_timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     -- When user last updated consent preferences
@@ -49,4 +49,4 @@ CREATE TRIGGER update_privacy_settings_updated_at
 COMMENT ON TABLE privacy_settings IS 'GDPR-compliant user privacy and consent preferences';
 COMMENT ON COLUMN privacy_settings.gdpr_necessary_consent IS 'Required cookies - always true';
 COMMENT ON COLUMN privacy_settings.gdpr_analytics_consent IS 'Analytics cookies (Google Analytics)';
-COMMENT ON COLUMN privacy_settings.gdpr_advertising_consent IS 'Advertising cookies (AdSense for free tier)';
+COMMENT ON COLUMN privacy_settings.gdpr_advertising_consent IS 'Advertising cookies (GDPR consent category)';
