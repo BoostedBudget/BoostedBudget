@@ -113,6 +113,9 @@ const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
 )
 
+// --- Round 11 component imports (aria-label currency leak) ---
+const { ChangeIndicator } = await import('@/features/net-worth/components/ChangeIndicator')
+
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
@@ -871,8 +874,8 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
-  test('IncomeSourceItem masks manual income source amount', async () => {
-    const source = { type: 'manual' as const, value: '99999.99', description: 'Salary' }
+  test('IncomeSourceItem masks manual income source amount and free-text description', async () => {
+    const source = { type: 'manual' as const, value: '99999.99', description: SENTINEL_DESC }
     render(
       <IncomeSourceItem source={source} onRemove={mock(() => {})} />,
       { wrapper: createWrapper() }
@@ -881,7 +884,24 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
       () => expect(document.body.textContent ?? '').toContain('$99,999'),
       { timeout: 3000 }
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_DESC, fieldDescription: 'income source free-text description (PII_PROPERTY_DENYLIST member)' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('IncomeSourceItem masks free-text description unconditionally (tag source type)', () => {
+    // Verifies data-ph-mask is NOT guarded behind source.type==='manual';
+    // description is PII_PROPERTY_DENYLIST for all source types.
+    const source = { type: 'tag' as const, value: 'groceries', description: SENTINEL_DESC }
+    render(
+      <IncomeSourceItem source={source} onRemove={mock(() => {})} />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_DESC, fieldDescription: 'income source free-text description on tag source type' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
   test('IncomeSourceConfig masks expected total when showTotal=true', async () => {
@@ -1319,5 +1339,24 @@ describe('PII coverage — Round 10: AutoCategorizationRuleTable name + descript
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 18. Round 11 — aria-label currency leak (ChangeIndicator)
+// ---------------------------------------------------------------
+describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('ChangeIndicator does not leak net-worth change amount in aria-label', () => {
+    render(
+      <ChangeIndicator variant="positive" amount={123456} percent={5.2} />,
+      { wrapper: createWrapper() }
+    )
+    // Visible spans are already data-ph-mask'd.
+    // The scanner reads aria-label text verbatim — no currency must appear there.
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })
