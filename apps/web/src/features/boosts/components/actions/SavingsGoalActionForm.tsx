@@ -24,6 +24,12 @@ export interface SavingsGoalActionFormProps {
 }
 
 type AmountType = 'fixed' | 'percentage' | 'remaining'
+type SavingsGoalItem = {
+  id: string
+  name: string
+  target_amount: number
+  current_amount: number
+}
 
 const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] = [
   {
@@ -55,18 +61,12 @@ export function SavingsGoalActionForm({
   const { accounts: accountsList, isLoading: loadingAccounts } = useActiveAccounts()
   const { data: savingsGoals, isLoading: loadingGoals } = useGetSavingsGoals()
 
-  const goalsList = (savingsGoals ?? []) as {
-    id: string
-    name: string
-    target_amount: number
-    current_amount: number
-  }[]
+  const goalsList = (savingsGoals ?? []) as SavingsGoalItem[]
 
   // Get selected goal for progress display
   const selectedGoal = useMemo(() => {
-    const goals = (savingsGoals ?? []) as { id: string; name: string; target_amount: number; current_amount: number }[]
-    return goals.find((g) => g.id === action.savings_goal_id)
-  }, [savingsGoals, action.savings_goal_id])
+    return goalsList.find((g) => g.id === action.savings_goal_id)
+  }, [goalsList, action.savings_goal_id])
 
   // Current amount type description
   const currentDescription = AMOUNT_TYPES.find(
@@ -158,7 +158,7 @@ export function SavingsGoalActionForm({
         >
           <option value="">Select a savings goal...</option>
           {goalsList.map((goal) => (
-            <option key={goal.id} value={goal.id}>
+            <option key={goal.id} value={goal.id} data-ph-mask>
               {goal.name}
             </option>
           ))}
@@ -186,7 +186,7 @@ export function SavingsGoalActionForm({
         >
           <option value="">Select an account...</option>
           {(accountsList ?? []).map((account: { id: string; name: string }) => (
-            <option key={account.id} value={account.id}>
+            <option key={account.id} value={account.id} data-ph-mask>
               {account.name}
             </option>
           ))}
