@@ -331,7 +331,7 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).toHaveClass('outline', 'outline-2', 'outline-blue-400', '-outline-offset-2')
+      expect(wrapper).toHaveClass('outline', 'outline-2', 'outline-ring', '-outline-offset-2')
     })
 
     it('should not show outline when not editing', () => {
@@ -347,7 +347,7 @@ describe('WidgetWrapper', () => {
       )
 
       const wrapper = container.firstChild as HTMLElement
-      expect(wrapper).not.toHaveClass('outline', 'outline-2', 'outline-blue-400')
+      expect(wrapper).not.toHaveClass('outline', 'outline-2', 'outline-ring')
     })
 
     it('should maintain other styling classes when editing', () => {
@@ -368,7 +368,7 @@ describe('WidgetWrapper', () => {
         'bg-card',
         'rounded-lg',
         'outline',
-        'outline-blue-400'
+        'outline-ring'
       )
     })
   })

@@ -121,8 +121,8 @@ export function TriggerSelector({
             className={cn(
               'flex cursor-pointer items-start gap-3 rounded-xl border-2 bg-card p-4 transition-all',
               config.type === 'schedule'
-                ? 'border-primary bg-blue-50 dark:bg-blue-900'
-                : 'border-border hover:border-blue-300 dark:hover:border-blue-600',
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50',
               disabled && 'cursor-not-allowed opacity-60'
             )}
           >
@@ -137,7 +137,7 @@ export function TriggerSelector({
             />
             <div className="flex-1">
               <div className="mb-1 flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-primary dark:text-blue-400" aria-hidden="true" />
+                <Calendar className="h-5 w-5 text-primary" aria-hidden="true" />
                 <span className="font-semibold text-foreground">
                   {TRIGGER_TYPE_LABELS.schedule}
                 </span>
@@ -153,8 +153,8 @@ export function TriggerSelector({
             className={cn(
               'flex cursor-pointer items-start gap-3 rounded-xl border-2 bg-card p-4 transition-all',
               config.type === 'event'
-                ? 'border-primary bg-blue-50 dark:bg-blue-900'
-                : 'border-border hover:border-blue-300 dark:hover:border-blue-600',
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-primary/50',
               disabled && 'cursor-not-allowed opacity-60'
             )}
           >
@@ -169,7 +169,7 @@ export function TriggerSelector({
             />
             <div className="flex-1">
               <div className="mb-1 flex items-center gap-2">
-                <Zap className="h-5 w-5 text-primary dark:text-blue-400" aria-hidden="true" />
+                <Zap className="h-5 w-5 text-primary" aria-hidden="true" />
                 <span className="font-semibold text-foreground">
                   {TRIGGER_TYPE_LABELS.event}
                 </span>
@@ -184,7 +184,7 @@ export function TriggerSelector({
 
       {/* Schedule Configuration */}
       {config.type === 'schedule' && (
-        <div className="rounded-xl border border-border bg-muted/20 p-4 dark:bg-muted/10">
+        <div className="rounded-xl border border-border bg-muted/20 p-4">
           <CronBuilder
             cron={config.cron ?? DEFAULT_CRON}
             timezone={config.timezone ?? DEFAULT_TIMEZONE}
@@ -197,7 +197,7 @@ export function TriggerSelector({
 
       {/* Event Configuration */}
       {config.type === 'event' && (
-        <div className="rounded-xl border border-border bg-muted/20 p-4 dark:bg-muted/10">
+        <div className="rounded-xl border border-border bg-muted/20 p-4">
           <label htmlFor="event-type" className="mb-2 block text-sm font-medium text-foreground">
             Event type
           </label>
@@ -206,7 +206,7 @@ export function TriggerSelector({
             value={config.event ?? ''}
             onChange={handleEventChange}
             disabled={disabled}
-            className="w-full cursor-pointer rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-card"
+            className="w-full cursor-pointer rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <option value="">Select an event...</option>
             {EVENT_TYPE_OPTIONS.map((option) => (

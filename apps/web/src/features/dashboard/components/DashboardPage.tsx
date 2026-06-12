@@ -102,7 +102,7 @@ function DashboardContent() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
           <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
         </div>
       </div>
@@ -114,7 +114,7 @@ function DashboardContent() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="bg-card rounded-lg shadow-lg p-8 max-w-md text-center">
-          <div className="text-red-600 text-5xl mb-4">⚠️</div>
+          <div className="text-destructive text-5xl mb-4">⚠️</div>
           <h2 className="text-xl font-semibold text-foreground mb-2">
             Failed to Load Dashboard
           </h2>

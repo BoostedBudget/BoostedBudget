@@ -552,7 +552,7 @@ describe('AccountCustomizationModal', () => {
   })
 
   describe('Nickname Input', () => {
-    it('shows placeholder with account name', () => {
+    it('shows generic placeholder and has maxLength/helper text', () => {
       render(
         <AccountCustomizationModal
           account={mockAccount}
@@ -563,33 +563,10 @@ describe('AccountCustomizationModal', () => {
       )
 
       const nicknameInput = screen.getByLabelText('Nickname')
-      expect(nicknameInput).toHaveAttribute('placeholder', 'Chase Total Checking')
-    })
-
-    it('has maxLength of 255', () => {
-      render(
-        <AccountCustomizationModal
-          account={mockAccount}
-          open={true}
-          onOpenChange={mockOnOpenChange}
-          onSave={mockOnSave}
-        />
-      )
-
-      const nicknameInput = screen.getByLabelText('Nickname')
+      // R9.3: placeholder changed to generic string so account name isn't recorded
+      // in PostHog session replay (attributes are scanned verbatim, cannot be masked)
+      expect(nicknameInput).toHaveAttribute('placeholder', 'Account name')
       expect(nicknameInput).toHaveAttribute('maxLength', '255')
-    })
-
-    it('shows helper text', () => {
-      render(
-        <AccountCustomizationModal
-          account={mockAccount}
-          open={true}
-          onOpenChange={mockOnOpenChange}
-          onSave={mockOnSave}
-        />
-      )
-
       expect(
         screen.getByText('A custom name to help you identify this account.')
       ).toBeInTheDocument()
@@ -597,7 +574,7 @@ describe('AccountCustomizationModal', () => {
   })
 
   describe('Dialog Content', () => {
-    it('renders dialog description', () => {
+    it('renders dialog description and institution info with PII protection', () => {
       render(
         <AccountCustomizationModal
           account={mockAccount}
@@ -610,19 +587,17 @@ describe('AccountCustomizationModal', () => {
       expect(
         screen.getByText('Personalize how this account appears in your dashboard.')
       ).toBeInTheDocument()
-    })
 
-    it('renders account institution info in preview', () => {
-      render(
-        <AccountCustomizationModal
-          account={mockAccount}
-          open={true}
-          onOpenChange={mockOnOpenChange}
-          onSave={mockOnSave}
-        />
-      )
-
-      expect(screen.getByText('Chase - checking')).toBeInTheDocument()
+      // R9.2: institution_name is now wrapped in a data-ph-mask span for PII protection;
+      // combined text still reads "Chase - checking" — verify via function matcher since
+      // RTL getByText does not match text split across child elements with a plain string
+      const institutionEl = screen.getByText((_, element) => {
+        return (
+          element?.tagName === 'SPAN' &&
+          element.textContent?.replace(/\s+/g, ' ').trim() === 'Chase - checking'
+        )
+      })
+      expect(institutionEl).toBeInTheDocument()
     })
 
     it('renders color picker', () => {

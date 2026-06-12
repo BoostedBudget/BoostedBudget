@@ -19,7 +19,9 @@ import {
   Clock,
   Edit2,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useUserFilters } from '../hooks/useUserFilters'
 import { useRegions } from '../../../shared/hooks/useRegions'
 import { UserDetailModal } from './UserDetailModal'
@@ -53,18 +55,18 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   past_due: <AlertCircle size={13} className="text-destructive" />,
 }
 
-const tierBadgeClass = (tier: string): string => {
-  if (tier === 'premium') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
-  if (tier === 'trial') return 'bg-info/10 text-info'
-  if (tier.startsWith('household_')) return 'bg-success/10 text-success'
-  return 'bg-muted text-muted-foreground'
+const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
+  if (tier === 'premium') return 'default'
+  if (tier === 'trial') return 'info'
+  if (tier.startsWith('household_')) return 'success'
+  return 'secondary'
 }
 
-const statusBadgeClass = (status: string): string => {
-  if (status === 'active') return 'bg-success/10 text-success'
-  if (status === 'trial' || status === 'trialing') return 'bg-info/10 text-info'
-  if (status === 'past_due') return 'bg-destructive/10 text-destructive'
-  return 'bg-muted text-muted-foreground'
+const statusBadgeVariant = (status: string): BadgeProps['variant'] => {
+  if (status === 'active') return 'success'
+  if (status === 'trial' || status === 'trialing') return 'info'
+  if (status === 'past_due') return 'destructive'
+  return 'secondary'
 }
 
 interface OverrideStatus {
@@ -88,11 +90,11 @@ function getOverrideStatus(
   return { label: `Expires in ${daysLeft}d`, variant: 'expiring' }
 }
 
-const overrideStatusClass = (variant: string): string => {
-  if (variant === 'permanent') return 'bg-success/10 text-success'
-  if (variant === 'expiring') return 'bg-info/10 text-info'
-  if (variant === 'expired') return 'bg-warning/10 text-warning'
-  return 'text-muted-foreground'
+const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
+  if (variant === 'permanent') return 'success'
+  if (variant === 'expiring') return 'info'
+  if (variant === 'expired') return 'warning'
+  return 'secondary'
 }
 
 const formatDate = (dateString: string | undefined | null): string => {
@@ -159,7 +161,7 @@ export function UsersPage() {
         <div className="flex items-center gap-1.5 font-medium">
           {user.email}
           {user.is_admin && (
-            <Shield className="text-amber-500 shrink-0" size={14} aria-label="Administrator" />
+            <Shield className="text-warning shrink-0" size={14} aria-label="Administrator" />
           )}
         </div>
       ),
@@ -174,9 +176,9 @@ export function UsersPage() {
       render: (user) => {
         const effectiveTier = user.manual_tier_override ?? user.subscription_tier
         return (
-          <span className={cn('inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize', tierBadgeClass(effectiveTier))}>
+          <Badge variant={tierBadgeVariant(effectiveTier)}>
             {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
-          </span>
+          </Badge>
         )
       },
     },
@@ -188,10 +190,10 @@ export function UsersPage() {
       minSize: 90,
       maxSize: 140,
       render: (user) => (
-        <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium capitalize', statusBadgeClass(user.subscription_status))}>
+        <Badge variant={statusBadgeVariant(user.subscription_status)} className="capitalize">
           {STATUS_ICON[user.subscription_status]}
           {user.subscription_status}
-        </span>
+        </Badge>
       ),
     },
     {
@@ -204,9 +206,9 @@ export function UsersPage() {
       render: (user) => {
         const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
         return overrideStatus ? (
-          <span className={cn('inline-block px-2 py-0.5 rounded text-xs font-medium', overrideStatusClass(overrideStatus.variant))}>
+          <Badge variant={overrideStatusVariant(overrideStatus.variant)}>
             {overrideStatus.label}
-          </span>
+          </Badge>
         ) : (
           <span className="text-muted-foreground text-sm">—</span>
         )
@@ -352,10 +354,11 @@ export function UsersPage() {
           <span>Failed to load users. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <Users className="opacity-30 w-9 h-9" aria-hidden="true" />
-          <span>No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</span>
-        </div>
+        <EmptyState
+          icon={<Users />}
+          title="No users found"
+          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+        />
       ) : (
         <>
           <DataTable
@@ -369,7 +372,7 @@ export function UsersPage() {
             loading={isLoading}
             onRowClick={(user) => setSelectedUserId(user.id)}
             maskedColumnIds={['email']}
-            emptyState={<p className="py-12 px-4 text-center text-muted-foreground">No users found{hasActiveFilters ? '. Try adjusting your filters.' : '.'}</p>}
+            emptyState={<EmptyState size="compact" icon={<Users />} title={`No users found${hasActiveFilters ? '. Try adjusting your filters.' : '.'}`} />}
             columnSizing={sizing}
             onColumnSizingChange={onSizingChange}
             columnVisibility={columnVisibility}

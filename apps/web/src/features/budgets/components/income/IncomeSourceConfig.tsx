@@ -7,6 +7,9 @@
  */
 
 import { useCallback, useMemo } from 'react';
+import { DollarSign } from 'lucide-react';
+import { formatCurrencyFull } from '@/shared/charts/formatters';
+import { EmptyState } from '@/components/ui/empty-state';
 import type { IncomeSource } from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import type { Primary } from '@boostedbudget/api-client/models/primary';
@@ -26,16 +29,6 @@ export interface IncomeSourceConfigProps {
   disabled?: boolean;
   /** Whether to show the expected total display */
   showTotal?: boolean;
-}
-
-/**
- * Formats a currency amount for display
- */
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
 }
 
 export function IncomeSourceConfig({
@@ -77,9 +70,12 @@ export function IncomeSourceConfig({
     <div className="flex flex-col gap-4">
       {/* Source List */}
       {sources.length === 0 ? (
-        <div className="p-6 text-center text-sm text-muted-foreground bg-muted border border-dashed border-border rounded-lg">
-          No income sources configured. Add sources below to track your income.
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<DollarSign />}
+          title="No income sources configured"
+          description="Add sources below to track your income."
+        />
       ) : (
         <ul
           className="flex flex-col gap-2 list-none m-0 p-0"
@@ -113,8 +109,8 @@ export function IncomeSourceConfig({
           <span className="text-sm font-medium text-success">
             Expected Income:
           </span>
-          <span className="text-base font-semibold text-success" role="status">
-            {formatCurrency(expectedTotal)}
+          <span className="text-base font-semibold text-success" role="status" data-ph-mask>
+            {formatCurrencyFull(expectedTotal)}
           </span>
         </div>
       )}

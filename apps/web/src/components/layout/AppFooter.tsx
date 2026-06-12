@@ -24,8 +24,8 @@ export function AppFooter() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600">
-              <Rocket className="h-3.5 w-3.5 text-white" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
+              <Rocket className="h-3.5 w-3.5 text-primary-foreground" />
             </div>
             <span className="font-semibold text-foreground">BoostedBudget</span>
             <span className="text-sm text-muted-foreground">

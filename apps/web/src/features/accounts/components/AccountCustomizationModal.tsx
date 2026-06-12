@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { ColorPicker } from './ColorPicker'
@@ -127,6 +128,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                 <span
                   className="font-medium truncate"
                   style={customColor ? { color: customColor } : undefined}
+                  data-ph-mask
                 >
                   {displayName}
                 </span>
@@ -137,7 +139,8 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                 )}
               </div>
               <span className="text-sm text-muted-foreground truncate block">
-                {account.institution_name} - {account.subtype || account.type}
+                <span data-ph-mask>{account.institution_name}</span>
+                {' '}- {account.subtype || account.type}
               </span>
             </div>
           </div>
@@ -153,7 +156,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
             type="text"
             value={nickname}
             onChange={(e) => setNickname(e.target.value)}
-            placeholder={account.official_name || account.name}
+            placeholder="Account name"
             maxLength={255}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           />
@@ -206,29 +209,18 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
               Hidden accounts won't appear in the default view.
             </p>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={isHidden}
-            onClick={() => {
-              if (!isHidden) {
+          <Switch
+            checked={isHidden}
+            onCheckedChange={(checked) => {
+              if (checked) {
                 setShowHideConfirm(true)
               } else {
                 setIsHidden(false)
               }
             }}
-            className={cn(
-              'relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
-              isHidden ? 'bg-primary' : 'bg-input'
-            )}
-          >
-            <span
-              className={cn(
-                'pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform',
-                isHidden ? 'translate-x-5' : 'translate-x-0'
-              )}
-            />
-          </button>
+            aria-label={isHidden ? 'Show account' : 'Hide account'}
+            title={isHidden ? 'Show account' : 'Hide account'}
+          />
         </div>
       </div>
 

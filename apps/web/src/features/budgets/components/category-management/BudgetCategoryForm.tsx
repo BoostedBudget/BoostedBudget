@@ -578,7 +578,9 @@ export function BudgetCategoryForm({
               role="status"
               aria-live="polite"
             >
-              Allocations exceed expected income by ${allocationOverage.toFixed(2)}. You&apos;ll be dipping into savings or going over budget.
+              Allocations exceed expected income by{' '}
+              <span data-ph-mask>{formatCurrency(allocationOverage)}</span>.{' '}
+              You&apos;ll be dipping into savings or going over budget.
             </Alert>
           )}
 

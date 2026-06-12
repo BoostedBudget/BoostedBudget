@@ -268,6 +268,7 @@ export * from './topUnreviewedCategory';
 export * from './transaction';
 export * from './transferSuggestion';
 export * from './transferSuggestionListResponse';
+export * from './transferSuggestionMatchState';
 export * from './triggerBoostInputBody';
 export * from './triggerBoostInputBodyTriggerData';
 export * from './triggerConfig';

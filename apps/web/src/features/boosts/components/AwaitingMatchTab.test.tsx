@@ -26,8 +26,8 @@ const acceptedItem: TransferSuggestion = {
   created_at: '2025-01-15T10:00:00Z',
   updated_at: '2025-01-16T10:00:00Z',
   user_action_at: '2025-01-16T10:00:00Z',
-  // Mark Done requires a fuzzy-match reservation
-  can_confirm_match: true,
+  // Mark Done requires a fuzzy-match reservation — server sets match_state 'confirmable'
+  match_state: 'confirmable',
 }
 
 // Enriched item with destination account name (from W1 backend enrichment)
@@ -141,11 +141,11 @@ describe('AwaitingMatchTab', () => {
     expect(doneBtn.getAttribute('disabled')).not.toBeNull()
   })
 
-  it('disables Mark Done when can_confirm_match is false (no reservation)', () => {
+  it('disables Mark Done when match_state is unmatched (no reservation)', () => {
     const itemNoReservation: TransferSuggestion = {
       ...acceptedItem,
       id: 'ts-nores',
-      can_confirm_match: false,
+      match_state: 'unmatched',
     }
     render(
       <AwaitingMatchTab
@@ -163,10 +163,10 @@ describe('AwaitingMatchTab', () => {
     expect(cancelBtn.getAttribute('disabled')).toBeNull()
   })
 
-  it('enables Mark Done when can_confirm_match is true', () => {
+  it('enables Mark Done when match_state is confirmable', () => {
     render(
       <AwaitingMatchTab
-        items={[{ ...acceptedItem, can_confirm_match: true }]}
+        items={[{ ...acceptedItem, match_state: 'confirmable' }]}
         isLoading={false}
         onConfirmMatch={mockOnConfirmMatch}
         onCancelAccepted={mockOnCancelAccepted}
@@ -175,6 +175,24 @@ describe('AwaitingMatchTab', () => {
     )
     const doneBtn = screen.getByRole('button', { name: /mark done|done/i })
     expect(doneBtn.getAttribute('disabled')).toBeNull()
+  })
+
+  it('disables Mark Done when match_state is absent (open-set forward-compat default)', () => {
+    const itemNoMatchState: TransferSuggestion = {
+      ...acceptedItem,
+      match_state: undefined,
+    }
+    render(
+      <AwaitingMatchTab
+        items={[itemNoMatchState]}
+        isLoading={false}
+        onConfirmMatch={mockOnConfirmMatch}
+        onCancelAccepted={mockOnCancelAccepted}
+        isPending={false}
+      />
+    )
+    const doneBtn = screen.getByRole('button', { name: /mark done|done/i })
+    expect(doneBtn.getAttribute('disabled')).not.toBeNull()
   })
 
   // === Gap W4: enriched watching copy with account name ===

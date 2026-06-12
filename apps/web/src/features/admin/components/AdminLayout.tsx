@@ -5,7 +5,7 @@ import { AdminSidebar } from './AdminSidebar'
 export function AdminLayout() {
   return (
     <div className="flex flex-col min-h-screen">
-      <div className="flex items-center justify-center gap-2 px-4 py-2 text-sm bg-amber-500 text-amber-900 dark:bg-amber-800 dark:text-amber-100">
+      <div className="flex items-center justify-center gap-2 px-4 py-2 text-sm bg-warning text-warning-foreground">
         <Shield size={18} />
         <span>
           <strong>Admin Mode</strong> — You are viewing as administrator

@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { useAdminMode } from '../hooks/useAdminMode'
+import { Button } from '@/components/ui/button'
 
 interface AdminRouteProps {
   children: React.ReactNode
@@ -30,7 +31,7 @@ function AdminError({ error }: { error: Error | null }) {
   return (
     <div data-testid="admin-error" className="flex justify-center items-center min-h-screen bg-background">
       <div className="bg-card rounded-lg shadow-lg p-8 max-w-md text-center">
-        <div className="text-red-600 text-5xl mb-4" aria-hidden="true">⚠️</div>
+        <div className="text-destructive text-5xl mb-4" aria-hidden="true">⚠️</div>
         <h2 className="text-xl font-semibold text-foreground mb-2">
           Unable to Check Admin Status
         </h2>
@@ -40,17 +41,14 @@ function AdminError({ error }: { error: Error | null }) {
         {error && (
           <pre
             data-testid="error-message"
-            className="text-xs text-red-500 mb-4 text-left bg-red-50 dark:bg-red-900/20 p-3 rounded overflow-auto max-h-32"
+            className="text-xs text-destructive mb-4 text-left bg-destructive/10 p-3 rounded overflow-auto max-h-32"
           >
             {error.message}
           </pre>
         )}
-        <button
-          onClick={() => window.location.reload()}
-          className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
-        >
+        <Button onClick={() => window.location.reload()}>
           Refresh Page
-        </button>
+        </Button>
       </div>
     </div>
   )

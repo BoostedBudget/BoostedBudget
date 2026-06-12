@@ -3,6 +3,7 @@ import { Tags } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { Card, CardContent } from '@/components/ui/card'
 import { useAutoCategorizationRules } from '../hooks/useAutoCategorizationRules'
 import { useRuleFilters } from '../hooks/useRuleFilters'
 import { AutoCategorizationRuleCard } from './AutoCategorizationRuleCard'
@@ -240,16 +241,14 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
   if (error) {
     return (
       <div className="max-w-[800px] mx-auto py-8 px-4">
-        <div className="flex flex-col items-center py-12 px-8 text-center bg-destructive/10 rounded-lg">
-          <p className="m-0 mb-4 text-destructive">{error}</p>
-          <button
-            type="button"
-            className="px-4 py-2 text-sm font-medium text-foreground bg-background border border-border rounded-md cursor-pointer hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={refresh}
-          >
-            Retry
-          </button>
-        </div>
+        <Card>
+          <CardContent className="flex flex-col items-center py-12 px-8 text-center">
+            <p className="m-0 mb-4 text-destructive">{error}</p>
+            <Button variant="outline" onClick={refresh}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -302,14 +301,9 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             onChange={handleViewChange}
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
-          <button
-            type="button"
-            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground border border-transparent rounded-md cursor-pointer hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleCreateClick}
-            disabled={isAtLimit}
-          >
+          <Button onClick={handleCreateClick} disabled={isAtLimit}>
             Create Rule
-          </button>
+          </Button>
         </div>
       </div>
 
