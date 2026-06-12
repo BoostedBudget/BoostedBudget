@@ -226,7 +226,7 @@ export function AllocationBreakdown({
           <div className="allocation-breakdown__stats">
             <span>Allocated: <span data-ph-mask>{formatCurrency(totalAllocated)}</span> ({percentAllocated}%)</span>
             <span className="allocation-breakdown__divider">|</span>
-            <span className={isOverAllocated ? 'allocation-breakdown__over text-amber-600 dark:text-amber-400' : ''}>
+            <span className={isOverAllocated ? 'allocation-breakdown__over text-warning' : ''}>
               {isOverAllocated
                 ? <>Over expected income: <span data-ph-mask>{formatCurrency(Math.abs(unallocated))}</span></>
                 : <>Unallocated: <span data-ph-mask>{formatCurrency(unallocated)}</span> ({100 - percentAllocated}%)</>
