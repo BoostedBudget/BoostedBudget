@@ -6,9 +6,12 @@
  *
  * Displays auto-categorization rules in a table format with sorting and actions.
  *
- * PII Audit: No columns in this table contain PII requiring data-ph-mask.
- * Audit: name (non-financial), status, priority (integer), conditions (count string),
- * category (label string), matches (integer count).
+ * PII Audit: The `name` column is masked via maskedColumnIds={['name']} so that
+ * DataTable's own <td> renderer applies data-ph-mask to the entire name cell,
+ * covering both the rule name and description rendered there. This matches the
+ * masking applied in AutoCategorizationRuleCard (name at :76, description at :83).
+ * `description` is a PII_PROPERTY_DENYLIST member (posthog.ts:3-17).
+ * Other columns (status, priority, conditions, category, matches) are non-PII.
  */
 
 import { useCallback, useMemo } from 'react'
@@ -336,6 +339,7 @@ export function AutoCategorizationRuleTable({
       onColumnOrderChange={onColumnOrderChange}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
+      maskedColumnIds={['name']}
       rowClassName={onRowClick ? () => 'autocat-table__row--clickable' : undefined}
       emptyState={
         <EmptyState
