@@ -8,7 +8,7 @@ Before setting up GitHub secrets, you must have:
 - ✅ Completed [Clerk Setup](./CLERK_SETUP.md)
 - ✅ Created Plaid developer account
 - ✅ Created Stripe account
-- ✅ (Optional) Set up Google AdSense
+- ✅ (Optional) Set up Paddle for payments
 
 ---
 
@@ -70,16 +70,6 @@ Before setting up GitHub secrets, you must have:
 
 ---
 
-### Google AdSense Secrets (Priority: LOW - Free Tier Only)
-
-| Secret Name | Where to Find | Example Value |
-|-------------|---------------|---------------|
-| `GOOGLE_ADSENSE_CLIENT` | AdSense Dashboard → Account → Account Information → Publisher ID | `ca-pub-1234567890` |
-
-**Where**: https://www.google.com/adsense/
-
-**Note**: Only needed for free tier ad display. Can be added later in Phase 5.
-
 ---
 
 ### Fly.io Secrets (Priority: HIGH - For Deployment)
@@ -130,10 +120,9 @@ After adding all secrets, your GitHub Actions secrets page should show:
 - ⏳ `PLAID_ENV`
 
 ### Phase 5 (Monetization):
-- ⏳ `STRIPE_SECRET_KEY`
-- ⏳ `STRIPE_PUBLISHABLE_KEY`
-- ⏳ `STRIPE_WEBHOOK_SECRET`
-- ⏳ `GOOGLE_ADSENSE_CLIENT`
+- ⏳ `PADDLE_API_KEY`
+- ⏳ `PADDLE_WEBHOOK_SECRET`
+- ⏳ `PADDLE_ENVIRONMENT`
 
 ---
 
