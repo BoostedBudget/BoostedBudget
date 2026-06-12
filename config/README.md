@@ -47,7 +47,6 @@ tiers:
       executions_per_day: 1
       min_execution_interval_minutes: 1440  # 24 hours
     features:
-      ads_enabled: true
       ai_insights: false
       # ... more features
 
