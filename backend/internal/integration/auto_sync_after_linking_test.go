@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -119,7 +118,7 @@ func TestAutoSyncAfterLinking_E2E_Flow(t *testing.T) {
 	user := &domain.User{
 		ID:               userID,
 		Email:            "autosync-test@example.com",
-		SubscriptionTier: string(domain.TierFree),
+		SubscriptionTier: string(domain.TierPremium),
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
 	}
