@@ -44,16 +44,11 @@ export function PlanChangeModal({
   // Sync pre-fill when opening, reset when closing
   useEffect(() => {
     if (open) {
-       
       setSelectedTier(initialTier ?? null)
-       
       setBillingInterval(initialInterval ?? currentBillingInterval)
     } else {
-       
       setSelectedTier(null)
-       
       setDowngradeConfirmed(false)
-       
       setBillingInterval(currentBillingInterval)
     }
   }, [open, initialTier, initialInterval, currentBillingInterval])
@@ -208,7 +203,7 @@ export function PlanChangeModal({
                 <div className="text-sm text-info">
                   <p>
                     <strong>Immediate charge:</strong> You'll be charged{' '}
-                    {previewUpdate.data.currency} {previewUpdate.data.proration_amount} immediately.
+                    <span data-ph-mask>{previewUpdate.data.currency} {previewUpdate.data.proration_amount}</span> immediately.
                   </p>
                   <p className="mt-2">
                     <strong>Next billing:</strong> {previewUpdate.data.currency}{' '}

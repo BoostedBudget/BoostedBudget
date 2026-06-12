@@ -122,7 +122,7 @@ export function ConfirmationDialog({
 
         {hasTypeToConfirm && (
           <div>
-            <label htmlFor={inputId} className="text-sm font-medium">
+            <label htmlFor={inputId} className="text-sm font-medium" data-ph-mask>
               {label}
             </label>
             <input
