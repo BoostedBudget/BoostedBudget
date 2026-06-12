@@ -13,7 +13,7 @@
  *
  * ## Subscription Tiers
  *
- * No free tier. New users get a 60-day Premium trial (ad-supported during the trial).
+ * No free tier. New users get a 60-day Premium trial.
  *
  * | Tier        | Users | Accounts  | Transaction History | Executions/Day | Price     |
  * |-------------|-------|-----------|---------------------|----------------|-----------|
@@ -32,7 +32,6 @@
  */
 
 export interface SubscriptionFeatures {
-  ads_enabled: boolean;
   advanced_reports: boolean;
   ai_insights: boolean;
   api_access: boolean;
