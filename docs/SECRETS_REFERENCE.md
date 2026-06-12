@@ -74,14 +74,6 @@ Set via: `flyctl secrets set KEY=value --app boostedbudget-web`
 |--------|-------------|---------------|----------|
 | `VITE_PLAID_PUBLIC_KEY` | Plaid Link public key | Plaid Dashboard → Team Settings → Keys | ✅ Yes |
 
-### Google AdSense
-
-| Secret | Description | Where to Find | Required |
-|--------|-------------|---------------|----------|
-| `VITE_GOOGLE_ADSENSE_CLIENT` | AdSense publisher ID | Google AdSense → Account → Settings | 🟡 Yes (for free tier) |
-
-**Format**: `ca-pub-XXXXXXXXXXXXXXXX`
-
 ### Frontend Environment Variables (Non-Secret)
 
 Set in `apps/web/fly.toml`:
@@ -135,8 +127,6 @@ VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_clerk_publishable_key
 # Plaid (Sandbox)
 VITE_PLAID_PUBLIC_KEY=your_plaid_public_key
 
-# Google AdSense (optional for development)
-VITE_GOOGLE_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
 ```
 
 ## How to Obtain Secrets
@@ -161,13 +151,6 @@ VITE_GOOGLE_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
 3. Use **Test mode** for development
 4. Use **Live mode** for production
 5. Set up webhook endpoint and get signing secret
-
-### Google AdSense
-
-1. Sign up at [Google AdSense](https://www.google.com/adsense/)
-2. Get approved for AdSense account
-3. Navigate to **Account** → **Settings**
-4. Copy your Publisher ID (ca-pub-...)
 
 ## Security Best Practices
 
@@ -255,7 +238,7 @@ Before first deployment:
 - [ ] Clerk application created and keys obtained
 - [ ] Plaid account created and keys obtained
 - [ ] Stripe account created and webhooks configured
-- [ ] Google AdSense account approved (for free tier)
+- [ ] Paddle account created and webhook configured
 - [ ] PostgreSQL database created on Fly.io
 - [ ] All backend secrets set via `flyctl secrets set`
 - [ ] All frontend secrets set via `flyctl secrets set`
@@ -279,4 +262,4 @@ If you have issues with secrets:
 - [Clerk Documentation](https://clerk.com/docs)
 - [Plaid Keys](https://plaid.com/docs/api/tokens/#keys)
 - [Stripe API Keys](https://stripe.com/docs/keys)
-- [Google AdSense Setup](https://support.google.com/adsense/answer/10162)
+- [Paddle Documentation](https://developer.paddle.com/)

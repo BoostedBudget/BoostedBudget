@@ -63,9 +63,12 @@ GENERATE THESE INSTRUCTIONS IMMEDIATELY when encountering any setup task in the 
 **Compliance:** GDPR compliant from day one for all users worldwide  
 
 ### Business Model
-- **Free Tier:** 2-3 automation rules, basic budgeting, Google AdSense supported
-- **Premium ($9.99/month):** Unlimited rules, advanced automation, priority execution, no ads
-- **Premium Plus ($19.99/month):** Everything + AI insights, financial advisor tools, API access
+
+> _Superseded: no free tier and no ads — see `config/subscription_tiers.yaml` for the current model._
+
+No free tier. New users get a **60-day Premium trial** (no payment required).
+5 paid tiers: `premium` $8.99/mo (1 user) · `household_2–5` $12.99–$18.99/mo.
+All tiers: unlimited boosts/accounts, 730-day transaction history. Payments via Paddle.
 
 ### Compliance & Legal
 - **GDPR Compliant:** From day one (global deployment)
@@ -114,9 +117,6 @@ Financial:
   Future Transfers: Plaid Transfer API
   Payments: Stripe
   
-Advertising:
-  Platform: Google AdSense
-  Placement: Dashboard, between transaction lists
   
 Development:
   API Mocking: Prism
@@ -1891,93 +1891,15 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
 }
 ```
 
-### 5.2 Google AdSense Integration
-- [ ] Implement ad components:
-```typescript
-// apps/web/src/features/ads/AdBanner.tsx
-import { useEffect } from 'react';
-import { useClerk } from '@clerk/clerk-react';
-import { useCookies } from 'react-cookie';
+### ~~5.2 Google AdSense Integration~~ (Abandoned — no ads in this product)
 
-interface AdBannerProps {
-  slot: string;
-  format?: 'auto' | 'fluid' | 'rectangle';
-  style?: React.CSSProperties;
-}
-
-export const AdBanner: React.FC<AdBannerProps> = ({ 
-  slot, 
-  format = 'auto',
-  style 
-}) => {
-  const { user } = useClerk();
-  const [cookies] = useCookies(['gdpr-consent']);
-  const { data: subscription } = useQuery(['subscription'], api.getSubscription);
-  
-  // Don't show ads for premium users
-  if (subscription?.tier !== 'free') {
-    return null;
-  }
-  
-  // Check GDPR consent for advertising
-  const hasAdConsent = cookies['gdpr-consent']?.advertising;
-  
-  useEffect(() => {
-    if (!hasAdConsent) return;
-    
-    try {
-      (window.adsbygoogle = window.adsbygoogle || []).push({});
-    } catch (err) {
-      console.error('AdSense error:', err);
-    }
-  }, [hasAdConsent]);
-  
-  if (!hasAdConsent) {
-    return (
-      <div className="bg-gray-100 p-4 rounded text-center">
-        <p className="text-sm text-gray-600">
-          Enable advertising cookies to support free BoostedBudget
-        </p>
-        <button 
-          onClick={() => window.location.href = '/privacy-settings'}
-          className="text-blue-600 underline text-sm mt-2"
-        >
-          Update Privacy Settings
-        </button>
-      </div>
-    );
-  }
-  
-  return (
-    <ins
-      className="adsbygoogle"
-      style={{ display: 'block', ...style }}
-      data-ad-client={import.meta.env.VITE_GOOGLE_ADSENSE_CLIENT}
-      data-ad-slot={slot}
-      data-ad-format={format}
-      data-full-width-responsive="true"
-    />
-  );
-};
-
-// Strategic ad placements
-export const DashboardAd: React.FC = () => (
-  <AdBanner 
-    slot="1234567890" 
-    style={{ minHeight: '90px', marginBottom: '20px' }}
-  />
-);
-
-export const TransactionListAd: React.FC = () => (
-  <AdBanner 
-    slot="0987654321"
-    format="fluid"
-    style={{ marginTop: '20px', marginBottom: '20px' }}
-  />
-);
-```
+> _BoostedBudget has no free tier and no advertisements. This section is superseded._
 
 ### 5.3 Pricing Page
+
+> _Note: The code sample below uses a superseded tier model (Free/Premium/Premium Plus). The actual
+> PricingPage uses the current model — see `apps/web/src/features/pricing/PricingPage.tsx`._
+
 - [ ] Create pricing page:
 ```typescript
 // apps/web/src/pages/PricingPage.tsx
@@ -2063,10 +1985,8 @@ export const PricingPage: React.FC = () => {
 
 ### Phase 5 Deliverables
 ✅ **Monetization:**
-- Stripe subscription billing
-- 14-day free trial
-- Google AdSense for free tier
-- GDPR-compliant ad consent
+- Paddle subscription billing (premium + household_2–5 tiers)
+- 60-day Premium trial (no payment required)
 - Subscription management portal
 
 ---
