@@ -61,7 +61,7 @@ export function SavingsGoalActionForm({
   const { accounts: accountsList, isLoading: loadingAccounts } = useActiveAccounts()
   const { data: savingsGoals, isLoading: loadingGoals } = useGetSavingsGoals()
 
-  const goalsList = (savingsGoals ?? []) as SavingsGoalItem[]
+  const goalsList = useMemo(() => (savingsGoals ?? []) as SavingsGoalItem[], [savingsGoals])
 
   // Get selected goal for progress display
   const selectedGoal = useMemo(() => {
