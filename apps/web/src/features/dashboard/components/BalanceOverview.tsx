@@ -43,12 +43,12 @@ export function BalanceOverview({ summary }: BalanceOverviewProps) {
         {/* StatCard exception (#1285): text-4xl headline in an <h2>; StatCard forces text-2xl + <p> label
             (heading-semantics loss + 33% shrink). Would break BalanceOverview.test.tsx:430 (text-foreground
             assertion) if trend were used. Stays as-is. */}
-        <p className="text-4xl font-bold text-foreground">{formattedBalance}</p>
+        <p className="text-4xl font-bold text-foreground" data-ph-mask>{formattedBalance}</p>
       </div>
 
       {hasComparison && (
         <div className="flex items-center space-x-2">
-          <span className={`text-sm font-semibold ${isPositiveChange ? 'text-success' : 'text-destructive'}`}>
+          <span className={`text-sm font-semibold ${isPositiveChange ? 'text-success' : 'text-destructive'}`} data-ph-mask>
             {isPositiveChange ? '↑' : '↓'}{' '}
             {new Intl.NumberFormat('en-US', {
               style: 'currency',

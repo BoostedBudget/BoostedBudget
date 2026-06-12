@@ -92,6 +92,10 @@ const { AccountTypeFilter } = await import('@/features/dashboard/components/Acco
 const { BudgetIncomeSection } = await import('@/features/budgets/components/budget-detail/BudgetIncomeSection')
 const { BudgetCategoryForm } = await import('@/features/budgets/components/category-management/BudgetCategoryForm')
 
+// --- Round 7 component imports (BalanceOverview + NetWorthSparkline) ---
+const { BalanceOverview } = await import('@/features/dashboard/components/BalanceOverview')
+const { NetWorthSparkline } = await import('@/features/dashboard/components/NetWorthSparkline')
+
 // ---------------------------------------------------------------
 // Sentinel constants
 // ---------------------------------------------------------------
@@ -957,5 +961,43 @@ describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / Bu
     )
     const sentinels = [{ value: '75.00', fieldDescription: 'over-allocation currency amount in BudgetCategoryForm Alert' }]
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 7: BalanceOverview / NetWorthSparkline', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('BalanceOverview masks total balance and change amount', () => {
+    render(
+      <BalanceOverview summary={{
+        total_balance: 15000.50,
+        as_of_date: '2025-11-15',
+        period_comparison: { change_amount: 250.75, change_percent: 1.7 },
+      }} />,
+      { wrapper: createWrapper() }
+    )
+    // Confirm the currency values are actually in the DOM before scanning
+    expect(document.body.textContent).toContain('$15,000.50')
+    expect(document.body.textContent).toContain('$250.75')
+    // total_balance ($15,000.50) and change_amount ($250.75) must be masked;
+    // change_percent (1.70%) is a percentage, not currency — not flagged by the scanner.
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('NetWorthSparkline masks min/max net-worth currency labels', () => {
+    render(
+      <NetWorthSparkline data={[
+        { date: '2025-09-01', net_worth: 10000, total_assets: 12000, total_liabilities: 2000 },
+        { date: '2025-10-01', net_worth: 25000, total_assets: 27000, total_liabilities: 2000 },
+      ]} />,
+      { wrapper: createWrapper() }
+    )
+    // Confirm the currency values are actually in the DOM before scanning
+    expect(document.body.textContent).toContain('$10,000')
+    expect(document.body.textContent).toContain('$25,000')
+    // min ($10,000) and max ($25,000) net-worth labels must sit inside a data-ph-mask element
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })
