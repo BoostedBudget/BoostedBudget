@@ -782,8 +782,7 @@ export const CookieConsent: React.FC = () => {
       secure: true
     });
     
-    // Initialize Google AdSense
-    initializeAdSense(consent);
+    // (analytics/advertising consent handling here if applicable)
     
     setShowBanner(false);
   };
@@ -914,7 +913,6 @@ services:
       VITE_CLERK_DOMAIN: ${CLERK_DOMAIN}
       VITE_CLERK_CLIENT_ID: ${CLERK_CLIENT_ID}
       VITE_CLERK_AUDIENCE: ${CLERK_AUDIENCE}
-      VITE_GOOGLE_ADSENSE_CLIENT: ${GOOGLE_ADSENSE_CLIENT}
       VITE_PLAID_PUBLIC_KEY: ${PLAID_PUBLIC_KEY}
     volumes:
       - ./frontend:/app
@@ -1067,49 +1065,8 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
 // backend/internal/services/subscription_service.go
 package services
 
-type SubscriptionTier string
-
-const (
-    TierFree        SubscriptionTier = "free"
-    TierPremium     SubscriptionTier = "premium"
-    TierPremiumPlus SubscriptionTier = "premium_plus"
-)
-
-type SubscriptionLimits struct {
-    MaxRules           int
-    MaxAccountsLinked  int
-    RuleExecutionsPerDay int
-    HasAds             bool
-    HasAPIAccess       bool
-    HasAIInsights      bool
-}
-
-var TierLimits = map[SubscriptionTier]SubscriptionLimits{
-    TierFree: {
-        MaxRules:           3,
-        MaxAccountsLinked:  2,
-        RuleExecutionsPerDay: 10,
-        HasAds:             true,
-        HasAPIAccess:       false,
-        HasAIInsights:      false,
-    },
-    TierPremium: {
-        MaxRules:           -1, // unlimited
-        MaxAccountsLinked:  10,
-        RuleExecutionsPerDay: -1,
-        HasAds:             false,
-        HasAPIAccess:       true,
-        HasAIInsights:      false,
-    },
-    TierPremiumPlus: {
-        MaxRules:           -1,
-        MaxAccountsLinked:  -1,
-        RuleExecutionsPerDay: -1,
-        HasAds:             false,
-        HasAPIAccess:       true,
-        HasAIInsights:      true,
-    },
-}
+// _(Superseded: no free tier, no Premium Plus. Real tiers: premium + household_2–5.
+// See config/subscription_tiers.yaml for authoritative limits.)_
 
 func (s *SubscriptionService) CheckLimit(ctx context.Context, userID string, limitType string) (bool, error) {
     user, err := s.userRepo.GetByID(ctx, userID)
@@ -1538,7 +1495,7 @@ export const BudgetDashboard: React.FC = () => {
 ---
 
 ## Phase 4: Rules Engine MVP (Weeks 7-9)
-*Deliverable: Automation rules with free tier limits*
+*Deliverable: Boosts engine MVP*
 
 ### 4.1 Rules Engine Core
 - [ ] Implement rules engine with tier limits:
@@ -1593,7 +1550,7 @@ func (e *RulesEngine) CreateRule(ctx context.Context, userID string, req CreateR
 }
 
 func (e *RulesEngine) ExecuteRule(ctx context.Context, rule *Rule) error {
-    // Check daily execution limits for free tier
+    // Check daily execution limits
     user, _ := e.userRepo.GetByID(ctx, rule.UserID)
     limits := TierLimits[user.SubscriptionTier]
     
@@ -1790,7 +1747,7 @@ export const RuleBuilder: React.FC = () => {
 ---
 
 ## Phase 5: Monetization & Premium Features (Weeks 10-11)
-*Deliverable: Stripe payments and Google AdSense integration*
+*Deliverable: Paddle subscription billing*
 
 ### 5.1 Stripe Payment Integration
 - [ ] Implement Stripe subscription:
@@ -1883,8 +1840,8 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
             return err
         }
         
-        // Downgrade to free tier
-        s.userRepo.UpdateSubscription(ctx, subscription.Customer.ID, TierFree, nil)
+        // Downgrade subscription (trial/expired)
+        s.userRepo.UpdateSubscription(ctx, subscription.Customer.ID, TierPremium, nil)
     }
     
     return nil
@@ -1901,87 +1858,10 @@ func (s *PaymentService) HandleWebhook(ctx context.Context, payload []byte, sign
 > PricingPage uses the current model — see `apps/web/src/features/pricing/PricingPage.tsx`._
 
 - [ ] Create pricing page:
-```typescript
-// apps/web/src/pages/PricingPage.tsx
-export const PricingPage: React.FC = () => {
-  const plans = [
-    {
-      name: 'Free',
-      price: 0,
-      priceId: null,
-      features: [
-        '2-3 automation rules',
-        '2 linked accounts',
-        'Basic budgeting',
-        'Transaction tracking',
-        'Community support',
-        'Ads supported'
-      ],
-      limitations: [
-        'Limited rule executions',
-        'No API access',
-        'No AI insights'
-      ]
-    },
-    {
-      name: 'Premium',
-      price: 9.99,
-      priceId: 'price_premium_monthly',
-      features: [
-        'Unlimited automation rules',
-        '10 linked accounts',
-        'Advanced budgeting',
-        'Priority rule execution',
-        'Email support',
-        'No advertisements',
-        'API access',
-        'Data export'
-      ],
-      popular: true
-    },
-    {
-      name: 'Premium Plus',
-      price: 19.99,
-      priceId: 'price_premium_plus_monthly',
-      features: [
-        'Everything in Premium',
-        'Unlimited linked accounts',
-        'AI-powered insights',
-        'Financial advisor tools',
-        'Priority support',
-        'Custom integrations',
-        'White-label options'
-      ]
-    }
-  ];
-  
-  return (
-    <div className="max-w-7xl mx-auto px-4 py-12">
-      <div className="text-center mb-12">
-        <h1 className="text-4xl font-bold mb-4">
-          Choose Your BoostedBudget Plan
-        </h1>
-        <p className="text-lg text-gray-600">
-          Start free, upgrade anytime. 14-day trial on all paid plans.
-        </p>
-      </div>
-      
-      <div className="grid md:grid-cols-3 gap-8">
-        {plans.map(plan => (
-          <PricingCard 
-            key={plan.name}
-            plan={plan}
-            onSelect={() => handleSelectPlan(plan)}
-          />
-        ))}
-      </div>
-      
-      <TrustBadges />
-      <FAQSection />
-    </div>
-  );
-};
-```
+
+> _(Superseded: the real pricing page is `apps/web/src/features/pricing/PricingPage.tsx`. No free
+> tier; 60-day Premium trial; tiers: `premium` $8.99 + `household_2`–`household_5` $12.99–$18.99;
+> unlimited boosts/accounts; 730-day history. See `config/subscription_tiers.yaml`.)_
 
 ### Phase 5 Deliverables
 ✅ **Monetization:**
@@ -2092,7 +1972,7 @@ export default function App() {
 
 ### Phase 6 Deliverables
 ✅ **Advanced Features:**
-- AI spending predictions (Premium Plus)
+- AI spending predictions (premium / household tiers)
 - Performance optimizations
 - Mobile app foundation
 - Advanced analytics
@@ -2717,7 +2597,7 @@ jobs:
 ### Support Channels
 - Help center (all users)
 - Email support (Premium)
-- Priority support (Premium Plus)
+- Priority support (all paid tiers)
 - Community forum
 
 ---
@@ -2730,7 +2610,7 @@ This plan provides a complete roadmap for building BoostedBudget as a global, GD
 2. **Global deployment from day one** with proper data residency
 3. **GDPR compliance built-in** rather than bolted on
 4. **Phased approach to financial features** - start with suggestions, add transfers later
-5. **Clear monetization path** with free tier limitations and premium features
+5. **Clear monetization path** with 60-day trial and tiered household plans
 
 Each phase produces a deployable, valuable product increment. The architecture supports global scale while maintaining compliance with regional regulations.
 
