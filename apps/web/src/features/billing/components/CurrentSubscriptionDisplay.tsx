@@ -45,7 +45,7 @@ export function CurrentSubscriptionDisplay({
         </div>
 
         <div className="pricing" aria-label="Pricing information">
-          <span className="price" aria-label={`Price: ${currency} ${amount} per ${billingPeriod}`}>
+          <span className="price" aria-label="Subscription price" data-ph-mask>
             {currency} {amount}
           </span>
           <span className="billing-period">per {billingPeriod}</span>
