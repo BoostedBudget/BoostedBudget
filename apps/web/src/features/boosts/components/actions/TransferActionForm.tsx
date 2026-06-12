@@ -116,8 +116,6 @@ export function TransferActionForm({
     [action, onChange]
   )
 
-
-
   return (
     <div className={`flex flex-col gap-5 ${className}`.trim()}>
       {/* Account Selection */}
@@ -135,7 +133,7 @@ export function TransferActionForm({
           >
             <option value="">Select an account...</option>
             {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
-              <option key={account.id} value={account.id}>
+              <option key={account.id} value={account.id} data-ph-mask>
                 {account.name}
                 {account.institution_name && ` (${account.institution_name})`}
               </option>
@@ -156,7 +154,7 @@ export function TransferActionForm({
           >
             <option value="">Select an account...</option>
             {(accountsList ?? []).map((account: { id: string; name: string; institution_name?: string | null }) => (
-              <option key={account.id} value={account.id}>
+              <option key={account.id} value={account.id} data-ph-mask>
                 {account.name}
                 {account.institution_name && ` (${account.institution_name})`}
               </option>
