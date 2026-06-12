@@ -13,12 +13,15 @@
  *
  * ## Subscription Tiers
  *
- * | Tier | Rules | Accounts | Sync Frequency | Price |
- * |------|-------|----------|----------------|-------|
- * | free | 1 | 3 | 1x/day | $0 (ad-supported) |
- * | premium_lite | 5 | 15 | 2x/day | $4.99/mo |
- * | premium | 15 | 30 | 6x/day | $9.99/mo |
- * | premium_plus | Unlimited | Unlimited | every 10min | $19.99/mo |
+ * No free tier. New users get a 60-day Premium trial (ad-supported during the trial).
+ *
+ * | Tier        | Users | Accounts  | Transaction History | Executions/Day | Price     |
+ * |-------------|-------|-----------|---------------------|----------------|-----------|
+ * | premium     | 1     | Unlimited | 730 days            | Unlimited      | $8.99/mo  |
+ * | household_2 | 2     | Unlimited | 730 days            | Unlimited      | $12.99/mo |
+ * | household_3 | 3     | Unlimited | 730 days            | Unlimited      | $14.99/mo |
+ * | household_4 | 4     | Unlimited | 730 days            | Unlimited      | $16.99/mo |
+ * | household_5 | 5+    | Unlimited | 730 days            | Unlimited      | $18.99/mo |
  *
  * ## Regions
  *
@@ -36,7 +39,6 @@ export type AdminCreateOverrideInputBodyResourceType = typeof AdminCreateOverrid
 
 export const AdminCreateOverrideInputBodyResourceType = {
   accounts: 'accounts',
-  automation_rules: 'automation_rules',
-  syncs_per_day: 'syncs_per_day',
   transaction_history_days: 'transaction_history_days',
+  executions_per_day: 'executions_per_day',
 } as const;
