@@ -38,7 +38,6 @@ func TestGetTierLimits_Premium(t *testing.T) {
 	assert.Equal(t, -1, tier.Limits.ExecutionsPerDay, "Premium should have unlimited executions per day (-1)")
 	assert.True(t, tier.Features.PrioritySupport, "Premium should have priority support")
 	assert.True(t, tier.Features.AdvancedReports, "Premium should have advanced reports")
-	assert.False(t, tier.Features.AdsEnabled, "Premium should not have ads")
 }
 
 // TestGetTierLimits_Household5 tests household_5 tier has highest limits

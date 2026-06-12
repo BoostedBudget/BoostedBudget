@@ -20,7 +20,7 @@
 # Using sandbox IDs in production or vice versa will cause checkout failures.
 #
 # Subscription System Simplification (Issues #674-#678):
-# - Removed free tier entirely (users get 60-day premium trial with ads instead)
+# - Removed free tier entirely (users get a 60-day premium trial instead)
 # - Switched from Stripe to Paddle for payment processing
 # - Rules, categories, tags, API calls are now UNLIMITED for all tiers
 # - Only 3 configurable limits remain: accounts, transaction_history_days, executions_per_day
@@ -47,7 +47,6 @@ tiers:
       executions_per_day: 6
 
     features:
-      ads_enabled: false
       ai_insights: true
       api_access: true
       priority_support: true
@@ -71,7 +70,6 @@ tiers:
       executions_per_day: 12
 
     features:
-      ads_enabled: false
       ai_insights: true
       api_access: true
       priority_support: true
@@ -95,7 +93,6 @@ tiers:
       executions_per_day: 18
 
     features:
-      ads_enabled: false
       ai_insights: true
       api_access: true
       priority_support: true
@@ -119,7 +116,6 @@ tiers:
       executions_per_day: 24
 
     features:
-      ads_enabled: false
       ai_insights: true
       api_access: true
       priority_support: true
@@ -143,7 +139,6 @@ tiers:
       executions_per_day: 30
 
     features:
-      ads_enabled: false
       ai_insights: true
       api_access: true
       priority_support: true
@@ -159,4 +154,3 @@ trial:
   enabled: true
   duration_days: 60
   tier: "premium"
-  ads_enabled: true  # Trial users see ads

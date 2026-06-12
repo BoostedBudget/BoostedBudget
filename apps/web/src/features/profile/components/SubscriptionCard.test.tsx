@@ -55,7 +55,6 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/for 1 person/i)).toBeInTheDocument()
-      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
 
@@ -279,9 +278,5 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/for 5 household members/i)).toBeInTheDocument()
     })
 
-    it('should show "no ads" for all paid tiers', () => {
-      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
-      expect(screen.getByText(/no ads/i)).toBeInTheDocument()
-    })
   })
 })

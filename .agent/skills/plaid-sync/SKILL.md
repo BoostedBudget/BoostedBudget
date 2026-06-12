@@ -59,23 +59,19 @@ s.jobQueue.Enqueue(ctx, syncJob,
 
 ## Historical Depth by Tier
 
+No free tier. 60-day trial is on the `premium` tier (full depth).
+
 | Tier | Historical Depth | Notes |
 |------|-----------------|-------|
-| Free | 90 days | 3 months - basic budgeting |
-| Premium Lite | 730 days | 2 years - Plaid maximum |
-| Premium | 730 days | 2 years - Plaid maximum |
-| Premium+ | 730 days | 2 years - Plaid maximum |
+| All paid tiers (`premium`, `household_2`–`household_5`) | 730 days | 2 years — Plaid maximum |
 
 Historical depth is determined by `GetHistoricalDepthLimit()` in `subscription_service.go`.
 
-## Sync Frequency by Tier
+## Sync Frequency
 
-| Tier | Min Interval | Max Syncs/Day |
-|------|-------------|---------------|
-| Premium | 4h | 6 |
-| Premium+ | 10min | 144 |
-
-Configured in `config/subscription_tiers.yaml` as `min_execution_interval_minutes`.
+`executions_per_day = -1` (unlimited) for all tiers — no frequency cap configured. Syncs are
+webhook-driven (`INITIAL_UPDATE`, `DEFAULT_UPDATE`, `HISTORICAL_UPDATE`, `TRANSACTIONS_REMOVED`)
+rather than polled on a fixed interval.
 
 ## Key Files
 

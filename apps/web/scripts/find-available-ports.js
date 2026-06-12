@@ -10,6 +10,7 @@
  *   E2E_FRONTEND_PORT  - Dynamic port for Vite dev server
  *   E2E_BACKEND_PORT   - Dynamic port for backend server
  *   E2E_POSTGRES_PORT  - Dynamic port for PostgreSQL container
+ *   E2E_PROD_PORT      - Dynamic port for Vite production preview (prod-bundle smoke tests)
  *   LHCI_PORT          - Dynamic port for Lighthouse CI static file server
  */
 
@@ -57,22 +58,20 @@ function findAvailablePort(startPort, endPort) {
 async function main() {
   try {
     // Derive unique port range from GITHUB_RUN_ID to prevent conflicts
-    // between concurrent CI jobs on shared self-hosted runner
     const runId = process.env.GITHUB_RUN_ID || '0';
     const portOffset = (parseInt(runId) % 50) * 100;
 
-    // Each job gets an isolated 100-port range:
-    // - Frontend: 30000-34900 (50 ranges of 100 ports)
-    // - Backend: 35000-39900 (50 ranges of 100 ports)
-    // - Postgres: 40000-44900 (50 ranges of 100 ports)
-    // - LHCI:     45000-49900 (50 ranges of 100 ports)
-    // This supports up to 50 concurrent jobs with zero overlap
+    // Each job gets a 100-port range (up to 50 concurrent jobs):
+    // Frontend: 30000+offset, Backend: 35000+offset, Postgres: 40000+offset,
+    // Prod: 44000+offset, LHCI: 45000+offset
     const frontendStart = 30000 + portOffset;
     const frontendEnd = frontendStart + 99;
     const backendStart = 35000 + portOffset;
     const backendEnd = backendStart + 99;
     const postgresStart = 40000 + portOffset;
     const postgresEnd = postgresStart + 99;
+    const prodStart = 44000 + portOffset;
+    const prodEnd = prodStart + 99;
     const lhciStart = 45000 + portOffset;
     const lhciEnd = lhciStart + 99;
 
@@ -80,12 +79,14 @@ async function main() {
     const frontendPort = await findAvailablePort(frontendStart, frontendEnd);
     const backendPort = await findAvailablePort(backendStart, backendEnd);
     const postgresPort = await findAvailablePort(postgresStart, postgresEnd);
+    const prodPort = await findAvailablePort(prodStart, prodEnd);
     const lhciPort = await findAvailablePort(lhciStart, lhciEnd);
 
     // Output as environment variables for CI
     console.log(`E2E_FRONTEND_PORT=${frontendPort}`);
     console.log(`E2E_BACKEND_PORT=${backendPort}`);
     console.log(`E2E_POSTGRES_PORT=${postgresPort}`);
+    console.log(`E2E_PROD_PORT=${prodPort}`);
     console.log(`LHCI_PORT=${lhciPort}`);
 
     // Also output JSON for programmatic use
@@ -93,8 +94,9 @@ async function main() {
       frontend: frontendPort,
       backend: backendPort,
       postgres: postgresPort,
+      prod: prodPort,
       lhci: lhciPort,
-      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}, postgres=${postgresStart}-${postgresEnd}, lhci=${lhciStart}-${lhciEnd}`
+      range: `frontend=${frontendStart}-${frontendEnd}, backend=${backendStart}-${backendEnd}, postgres=${postgresStart}-${postgresEnd}, prod=${prodStart}-${prodEnd}, lhci=${lhciStart}-${lhciEnd}`
     }));
   } catch (error) {
     console.error('Error finding available ports:', error.message);
