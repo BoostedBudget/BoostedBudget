@@ -66,7 +66,6 @@ type SubscriptionLimits struct {
 
 // SubscriptionFeatures defines feature flags for a tier
 type SubscriptionFeatures struct {
-	AdsEnabled        bool `yaml:"ads_enabled" json:"ads_enabled"`
 	AIInsights        bool `yaml:"ai_insights" json:"ai_insights"`
 	APIAccess         bool `yaml:"api_access" json:"api_access"`
 	PrioritySupport   bool `yaml:"priority_support" json:"priority_support"`

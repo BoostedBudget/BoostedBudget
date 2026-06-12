@@ -190,7 +190,7 @@
 ### Trial System (IMPORTANT)
 - BoostedBudget has a **60-day app-level trial** (managed in app, no payment required)
 - New users: `subscription_tier='premium'`, `subscription_status='trial'`, `trial_ends_at=now+60days`
-- **Trial users see ads** (ads_enabled: true in config) despite premium tier
+- Trial users get full premium features during the 60-day trial (no payment required)
 - Paddle subscription only created when user converts to paid
 - Paddle trial: 0 days (billing starts immediately)
 
@@ -198,7 +198,7 @@
 - Rules, categories, tags, API calls: **UNLIMITED for all paid tiers**
 - Only 3 configurable limits: accounts, transaction_history_days, executions_per_day
 - 5 paid tiers: premium ($8.99/mo), household_2-5 ($12.99-$18.99/mo)
-- No free tier - users get 60-day premium trial with ads
+- No free tier - users get a 60-day premium trial (no ads, no payment required)
 
 ### Security
 - All checkout endpoints require Clerk JWT authentication
