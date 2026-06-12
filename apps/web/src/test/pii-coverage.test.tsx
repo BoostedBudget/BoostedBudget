@@ -27,6 +27,13 @@ import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import {
   mockGetTransactions,
   mockUseGetTransactions,
+  mockUseGetTransactionReviewSummary,
+  mockUseSetTransactionReviewed,
+  mockSetTransactionReviewedMutateAsync,
+  mockUseBulkSetTransactionReviewed,
+  mockBulkSetTransactionReviewedMutateAsync,
+  mockUseBulkUpdateTransactionCategory,
+  mockBulkUpdateTransactionCategoryMutateAsync,
 } from '@/test/mocks/transactions-api'
 import { mockUseGetUserTags } from '@/test/mocks/tags-api'
 import {
@@ -100,6 +107,12 @@ const { NetWorthSparkline } = await import('@/features/dashboard/components/NetW
 // --- Round 8 component imports (billing — personal charge surfaces) ---
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
+
+// --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
+const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
+const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
+const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
+const { CreateSavingsGoalDialog } = await import('@/features/savings/components/CreateSavingsGoalDialog')
 
 // ---------------------------------------------------------------
 // Sentinel constants
@@ -812,17 +825,18 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 
-  test('SavingsGoalActionForm masks goal current and target amounts', async () => {
+  test('SavingsGoalActionForm masks goal current/target amounts and goal/account names in <option> text', async () => {
     // SavingsGoalActionForm uses useGetSavingsGoals (savings-goals-api.ts preload)
     // and useActiveAccounts which calls useGetAccounts (accounts-api.ts preload).
+    // Sentinel names are now injected so the gate catches unmasked <option> text (R9.5).
     mockUseGetSavingsGoals.mockReturnValue({
       data: [
-        { id: 'goal-1', name: 'Emergency Fund', target_amount: 99999.99, current_amount: 12345.67 }
+        { id: 'goal-1', name: SENTINEL_GOAL_NAME, target_amount: 99999.99, current_amount: 12345.67 }
       ],
       isLoading: false,
     })
     mockUseGetAccounts.mockReturnValue({
-      data: { accounts: [{ id: 'acc-1', name: 'Checking', status: 'active', user_account_id: 'ua-1' }] },
+      data: { accounts: [{ id: 'acc-1', name: SENTINEL_ACCOUNT_NAME, status: 'active', user_account_id: 'ua-1' }] },
       isLoading: false,
       error: null,
       refetch: mock(() => {}),
@@ -838,11 +852,17 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
       <SavingsGoalActionForm action={action} onChange={mock(() => {})} />,
       { wrapper: createWrapper() }
     )
+    // Wait for the selected goal's currency stats to render (goal pre-selected → shows amounts)
     await waitFor(
       () => expect(document.body.textContent ?? '').toContain('$99,999'),
       { timeout: 3000 }
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_GOAL_NAME, fieldDescription: 'savings_goal.name in SavingsGoalActionForm <option>' },
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account.name in SavingsGoalActionForm <option>' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
   test('IncomeSourceItem masks manual income source amount', async () => {
@@ -1091,5 +1111,163 @@ describe('PII coverage — Round 7: BalanceOverview / NetWorthSparkline', () => 
     expect(document.body.textContent).toContain('$25,000')
     // min ($10,000) and max ($25,000) net-worth labels must sit inside a data-ph-mask element
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 16. Round 9 — non-currency PII: account/institution/merchant names
+//     in DOM text, DOM attributes, and <option> text
+// ---------------------------------------------------------------
+describe('PII coverage — Round 9: account/institution/merchant names in text, attributes, <option> text', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  afterEach(() => {
+    // Restore default happy-dom viewport width (1920) so later tests aren't affected
+    // by the innerWidth=1024 set in the ReviewInboxPage test.
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1920 })
+  })
+
+  test('AccountCustomizationModal masks displayName, institution_name; de-PIIs placeholder attribute', async () => {
+    // R9.1: displayName (= account.nickname) renders unmasked at line 132.
+    // R9.2: account.institution_name renders unmasked at line 141.
+    // R9.3: account.name leaks into the placeholder attribute at line 157.
+    //        Attribute PII cannot be masked with data-ph-mask ancestors — must be de-PII'd (generic string).
+    const account = makeAccount({
+      nickname: SENTINEL_ACCOUNT_NAME,      // → displayName (R9.1)
+      name: SENTINEL_ACCOUNT_NAME,          // → placeholder when official_name absent (R9.3)
+      // institution_name: SENTINEL_INSTITUTION is already the default in makeAccount() (R9.2)
+      // official_name is absent → placeholder falls back to account.name
+    })
+    render(
+      <AccountCustomizationModal
+        account={account as any}
+        open={true}
+        onOpenChange={mock(() => {})}
+        onSave={mock(async () => {})}
+        isSaving={false}
+      />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account displayName/name in AccountCustomizationModal text + placeholder' },
+      { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name in AccountCustomizationModal text' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('ReviewInboxPage select checkbox aria-label does not expose merchant_name', async () => {
+    // R9.4: aria-label={`Select ${tx.merchant_name || tx.name}`} at line 303 exposes the merchant name.
+    //        Attribute PII cannot be masked — must be de-PII'd to a generic "Select transaction".
+    //        The merchant cell (line 316) IS masked via maskedColumnIds — only the aria-label leaks.
+
+    // Simulate desktop viewport so the DataTable renders (not TriageDetailView on mobile).
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 })
+
+    // Set up review mutation mocks (required by ReviewInboxPage even for read-only render).
+    mockUseSetTransactionReviewed.mockReturnValue({
+      mutateAsync: mockSetTransactionReviewedMutateAsync,
+      isPending: false,
+    })
+    mockUseBulkSetTransactionReviewed.mockReturnValue({
+      mutateAsync: mockBulkSetTransactionReviewedMutateAsync,
+      isPending: false,
+    })
+    mockUseBulkUpdateTransactionCategory.mockReturnValue({
+      mutateAsync: mockBulkUpdateTransactionCategoryMutateAsync,
+      isPending: false,
+    })
+    mockUseGetTransactionReviewSummary.mockReturnValue({
+      data: { unreviewed_count: 1, reviewed_by_rule_count: 0, reviewed_by_manual_count: 0, reviewed_by_plaid_count: 0 },
+      isLoading: false,
+      isError: false,
+    })
+
+    // Provide a transaction with the sentinel merchant name via the raw fetcher
+    // (useInfiniteTransactions calls getTransactions from the mocked api-client).
+    mockGetTransactions.mockResolvedValue({
+      transactions: [makeTransaction()],
+      next_cursor: undefined,
+      has_more: false,
+      limit: 30,
+    })
+
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_MERCHANT, fieldDescription: 'merchant_name in ReviewInboxPage select checkbox aria-label' },
+    ]
+    // The merchant cell is masked via maskedColumnIds — but the aria-label is not.
+    // Wait for the transaction row to render (text appears in the masked cell).
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('TransferActionForm masks account name and institution_name in <option> text', async () => {
+    // R9.5: <option> text renders account.name + institution_name unmasked.
+    //        Fix: add data-ph-mask to each <option> element.
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [makeAccount({
+          name: SENTINEL_ACCOUNT_NAME,
+          institution_name: SENTINEL_INSTITUTION,
+        })],
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => {}),
+    })
+    const action = {
+      type: 'transfer' as const,
+      from_account_id: '',
+      to_account_id: '',
+      amount_type: 'fixed' as const,
+      amount: 100,
+    }
+    render(
+      <TransferActionForm action={action as any} onChange={mock(() => {})} />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account.name in TransferActionForm <option> text' },
+      { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name in TransferActionForm <option> text' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+
+  test('CreateSavingsGoalDialog masks account name, mask, and institution_name in <option> text', async () => {
+    // R9.5: <option> text renders account.name + "••••{mask}" + institution_name unmasked.
+    //        "••••1234" is ACCOUNT_MASK_RE-catchable even without a named sentinel.
+    //        Fix: add data-ph-mask to each <option> element.
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [makeAccount({
+          name: SENTINEL_ACCOUNT_NAME,
+          institution_name: SENTINEL_INSTITUTION,
+          mask: '1234',     // → "••••1234" in option text (ACCOUNT_MASK_RE)
+          type: 'depository', // CreateSavingsGoalDialog filters by type=depository
+        })],
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => {}),
+    })
+    render(
+      <CreateSavingsGoalDialog
+        isOpen={true}
+        onCancel={mock(() => {})}
+        onGoalCreated={mock(() => {})}
+      />,
+      { wrapper: createWrapper() }
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account.name in CreateSavingsGoalDialog <option> text' },
+      { value: SENTINEL_INSTITUTION, fieldDescription: 'account.institution_name in CreateSavingsGoalDialog <option> text' },
+    ]
+    await waitForSentinels(sentinels)
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
