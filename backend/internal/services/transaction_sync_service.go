@@ -715,11 +715,11 @@ func (s *transactionSyncService) processRemovedTransactions(
 
 // createBalanceSnapshots fetches current account balances from Plaid and stores snapshots.
 // Issue #353: Balance Tracking Dashboard - Capture balance snapshots during webhook processing
-// Issue #364: Migrated to timestamp-based storage for high-frequency Premium+ syncs
+// Issue #364: Migrated to timestamp-based storage for high-frequency syncs
 //
 // Called after transaction sync completes to capture the current state of all account balances.
 // Uses 5-minute deduplication window to prevent excessive snapshots while allowing
-// multiple snapshots per day for high-frequency sync tiers.
+// multiple snapshots per day for high-frequency syncs.
 //
 // Error Handling:
 //   - Logs warnings but doesn't fail the entire sync

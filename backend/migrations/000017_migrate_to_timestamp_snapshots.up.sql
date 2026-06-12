@@ -2,7 +2,7 @@
 -- Migration 000017: Migrate balance_snapshots from DATE to TIMESTAMPTZ
 -- ============================================================================
 -- Issue #364: Breaking change - Renames snapshot_date to snapshot_at
--- Supports multiple snapshots per account per day for Premium+ high-frequency syncs
+-- Supports multiple snapshots per account per day for high-frequency syncs
 -- Existing date-based data converted to timestamp (midnight UTC)
 -- ============================================================================
 
@@ -43,4 +43,4 @@ ON balance_snapshots(account_id, snapshot_at DESC);
 
 -- Step 8: Add comment
 COMMENT ON COLUMN balance_snapshots.snapshot_at IS
-'Timestamp when this balance snapshot was captured. Supports multiple snapshots per account per day for Premium+ tier high-frequency syncs (10-minute intervals).';
+'Timestamp when this balance snapshot was captured. Supports multiple snapshots per account per day for high-frequency syncs.';

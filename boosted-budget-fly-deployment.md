@@ -201,7 +201,6 @@ ARG VITE_API_URL=https://api.boostedbudget.com/v1
 ARG VITE_CLERK_DOMAIN
 ARG VITE_CLERK_CLIENT_ID
 ARG VITE_CLERK_AUDIENCE
-ARG VITE_GOOGLE_ADSENSE_CLIENT
 ARG VITE_PLAID_PUBLIC_KEY
 
 # Build the application
@@ -393,7 +392,6 @@ jobs:
           VITE_CLERK_DOMAIN=${{ secrets.CLERK_DOMAIN }}
           VITE_CLERK_CLIENT_ID=${{ secrets.CLERK_CLIENT_ID }}
           VITE_CLERK_AUDIENCE=${{ secrets.CLERK_AUDIENCE }}
-          VITE_GOOGLE_ADSENSE_CLIENT=${{ secrets.GOOGLE_ADSENSE_CLIENT }}
           VITE_PLAID_PUBLIC_KEY=${{ secrets.PLAID_PUBLIC_KEY }}
 
     - name: Output image names
@@ -878,8 +876,6 @@ PADDLE_CLIENT_TOKEN         # Paddle client-side token (frontend)
 ENCRYPTION_KEY              # 32-byte encryption key for sensitive data
 
 # Monetization
-GOOGLE_ADSENSE_CLIENT       # AdSense client ID (free tier ads)
-
 # Notifications & Monitoring
 SLACK_WEBHOOK              # Slack notifications
 SONAR_TOKEN                # SonarCloud token

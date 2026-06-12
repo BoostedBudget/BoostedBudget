@@ -253,12 +253,15 @@ PADDLE_ENVIRONMENT=sandbox  # sandbox, production
 
 ### Subscription Tiers
 
-| Tier | Price | Limits |
-|------|-------|--------|
-| Free | $0 | 1 rule, 3 accounts, 1x/day sync |
-| Premium Lite | $4.99/mo | 5 rules, 15 accounts, 2x/day sync |
-| Premium | $9.99/mo | 15 rules, 30 accounts, 6x/day sync |
-| Premium+ | $19.99/mo | Unlimited, 10min sync, AI + API |
+No free tier. New users get a 60-day Premium trial (no payment required).
+
+| Tier | Users | Price | Limits |
+|------|-------|-------|--------|
+| `premium` | 1 | $8.99/mo | Unlimited boosts/accounts, 730-day history |
+| `household_2` | 2 | $12.99/mo | Same |
+| `household_3` | 3 | $14.99/mo | Same |
+| `household_4` | 4 | $16.99/mo | Same |
+| `household_5` | 5+ | $18.99/mo | Same |
 
 ### Webhook Events
 

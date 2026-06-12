@@ -64,21 +64,15 @@ export default defineConfig({
         entryFileNames: 'assets/entry-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
-        // Rolldown 1.0.x: manualChunks function form is a no-op for node_modules;
-        // use codeSplitting.groups (the non-deprecated API) instead.
-        // includeDependenciesRecursively:false prevents the tanstack group from
-        // vacuuming React / Clerk subtrees via recursive dep capture.
+        // Use codeSplitting.groups instead of manualChunks (non-deprecated API).
+        // NOTE: @tanstack/* kept in vendor group (not isolated) to avoid cross-chunk
+        // init failures. Regression guard: e2e/prod-bundle-smoke.noauth.spec.ts.
         codeSplitting: {
           includeDependenciesRecursively: false,
           groups: [
             // ── node_modules splits ──────────────────────────────────────────
             // Higher priority groups prevent lower-priority (vendor) catch-all from
             // vacuuming them. Each is budgeted independently in .size-limit.json.
-            {
-              name: 'tanstack',
-              test: /node_modules\/(@tanstack\/|@dnd-kit\/)/,
-              priority: 20, // @tanstack/* + @dnd-kit/* excluded from vendor
-            },
             {
               name: 'charts',
               test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
@@ -87,7 +81,7 @@ export default defineConfig({
             {
               name: 'vendor',
               test: /node_modules\//,
-              priority: 10, // Stable catch-all for remaining node_modules
+              priority: 10, // Stable catch-all for all node_modules (incl. @tanstack/* + @dnd-kit/*)
             },
 
             // ── shared source splits ─────────────────────────────────────────

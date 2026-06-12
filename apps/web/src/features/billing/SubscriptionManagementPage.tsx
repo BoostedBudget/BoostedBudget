@@ -87,7 +87,6 @@ export function SubscriptionManagementPage() {
     if (!tierData) return []
 
     const featureLabels: Record<string, string> = {
-      ads_enabled: 'Ad-free experience',
       ai_insights: 'AI-powered insights',
       priority_support: 'Priority support',
       advanced_reports: 'Advanced reports',
@@ -97,7 +96,7 @@ export function SubscriptionManagementPage() {
     }
 
     return Object.entries(tierData.features)
-      .filter(([key, value]) => key === 'ads_enabled' ? !value : Boolean(value))
+      .filter(([, value]) => Boolean(value))
       .map(([key]) => featureLabels[key] || key.replace(/_/g, ' '))
   }
 

@@ -102,10 +102,6 @@ flyctl secrets set \
   VITE_PLAID_PUBLIC_KEY="your_plaid_public_key" \
   --app boostedbudget-web
 
-# Google AdSense client ID (for free tier ads)
-flyctl secrets set \
-  VITE_GOOGLE_ADSENSE_CLIENT="ca-pub-XXXXXXXXXXXXXXXX" \
-  --app boostedbudget-web
 ```
 
 ## Step 5: Deploy Applications

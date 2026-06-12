@@ -7,7 +7,7 @@ import (
 
 // BalanceSnapshot represents a point-in-time snapshot of an account's balance.
 // Captured from Plaid webhooks (INITIAL_UPDATE, DEFAULT_UPDATE) to track historical balances.
-// Supports multiple snapshots per day for Premium+ tier high-frequency syncs (10-minute intervals).
+// Supports multiple snapshots per day for high-frequency syncs.
 //
 // Issue #171: UserAccountID provides stable reference across Plaid re-links.
 // When querying balance history, use UserAccountID to get history across all account versions.

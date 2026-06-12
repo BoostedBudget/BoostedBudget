@@ -96,17 +96,6 @@ describe('useSubscriptionTiers', () => {
       expect(premiumTier?.limits.executions_per_day).toBe(-1)
     })
 
-    it('should return premium tier as ad-free', () => {
-      const { result } = renderHook(() => useSubscriptionTiers(), {
-        wrapper: createWrapper(),
-      })
-
-      const premiumTier = result.current.tiers?.tiers.premium
-      // All tiers are now ad-free
-      expect(premiumTier?.features.ads_enabled).toBe(false)
-      expect(premiumTier?.pricing.price_monthly).toBe(8.99)
-    })
-
     it('should return household_5 tier with unlimited limits', () => {
       const { result } = renderHook(() => useSubscriptionTiers(), {
         wrapper: createWrapper(),

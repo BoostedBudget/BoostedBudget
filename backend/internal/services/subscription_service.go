@@ -243,8 +243,6 @@ func (s *SubscriptionService) CanUserAccessFeature(
 		return effectiveSub.Features.CustomCategories, nil
 	case "advanced_reports":
 		return effectiveSub.Features.AdvancedReports, nil
-	case "ads_disabled":
-		return !effectiveSub.Features.AdsEnabled, nil
 	default:
 		return false, fmt.Errorf("unknown feature: %s", featureName)
 	}

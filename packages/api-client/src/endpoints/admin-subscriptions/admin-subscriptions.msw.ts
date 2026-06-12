@@ -13,12 +13,15 @@
  *
  * ## Subscription Tiers
  *
- * | Tier | Rules | Accounts | Sync Frequency | Price |
- * |------|-------|----------|----------------|-------|
- * | free | 1 | 3 | 1x/day | $0 (ad-supported) |
- * | premium_lite | 5 | 15 | 2x/day | $4.99/mo |
- * | premium | 15 | 30 | 6x/day | $9.99/mo |
- * | premium_plus | Unlimited | Unlimited | every 10min | $19.99/mo |
+ * No free tier. New users get a 60-day Premium trial.
+ *
+ * | Tier        | Users | Accounts  | Transaction History | Executions/Day | Price     |
+ * |-------------|-------|-----------|---------------------|----------------|-----------|
+ * | premium     | 1     | Unlimited | 730 days            | Unlimited      | $8.99/mo  |
+ * | household_2 | 2     | Unlimited | 730 days            | Unlimited      | $12.99/mo |
+ * | household_3 | 3     | Unlimited | 730 days            | Unlimited      | $14.99/mo |
+ * | household_4 | 4     | Unlimited | 730 days            | Unlimited      | $16.99/mo |
+ * | household_5 | 5+    | Unlimited | 730 days            | Unlimited      | $18.99/mo |
  *
  * ## Regions
  *
@@ -47,7 +50,7 @@ import type {
 } from '../../models';
 
 
-export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {ads_enabled: faker.datatype.boolean(), advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {accounts: faker.number.int(), executions_per_day: faker.number.int(), transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {accounts: faker.number.int(), executions_per_day: faker.number.int(), transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getCreateAdminSubscriptionOverrideResponseMock = (overrideResponse: Partial<Extract<AdminCreateOverrideOutputBody, object>> = {}): AdminCreateOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
