@@ -116,6 +116,9 @@ const { AutoCategorizationRuleTable } = await import(
 // --- Round 11 component imports (aria-label currency leak) ---
 const { ChangeIndicator } = await import('@/features/net-worth/components/ChangeIndicator')
 
+// --- Round 12 component imports (SearchableSelect account-option PII leak) ---
+const { SearchableSelect } = await import('@/shared/components/SearchableSelect/SearchableSelect')
+
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
@@ -1358,5 +1361,44 @@ describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
     // Visible spans are already data-ph-mask'd.
     // The scanner reads aria-label text verbatim — no currency must appear there.
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 19. Round 12 — SearchableSelect account-option PII leak
+//     The dropdown <ul role="listbox"> renders only when isOpen.
+//     Prior gate tests never opened it — this case closes that gap.
+//     account name (∈ PII_PROPERTY_DENYLIST) + ••••mask (ACCOUNT_MASK_RE)
+//     must be masked once the dropdown is open.
+// ---------------------------------------------------------------
+describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('SearchableSelect masks option label and sublabel when maskOptions is set', async () => {
+    // The option label carries the user's account name (∈ PII_PROPERTY_DENYLIST).
+    // The sublabel carries the account mask (••••9999, catchable by ACCOUNT_MASK_RE).
+    // Without maskOptions these render unmasked in the open <li>; with it they are
+    // wrapped in <span data-ph-mask>.
+    const user = userEvent.setup()
+    render(
+      <SearchableSelect
+        options={[{ value: 'acc-r12', label: SENTINEL_ACCOUNT_NAME, sublabel: 'checking ••••9999' }]}
+        value={null}
+        onChange={mock(() => {})}
+        aria-label="Select account"
+        maskOptions
+      />,
+      { wrapper: createWrapper() }
+    )
+    // Open the dropdown so the <ul role="listbox"> renders.
+    await user.click(screen.getByRole('combobox'))
+    await screen.findByRole('listbox')
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account name in SearchableSelect option label' },
+    ]
+    // SENTINEL_ACCOUNT_NAME must be masked; ••••9999 is auto-flagged by ACCOUNT_MASK_RE.
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
