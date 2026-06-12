@@ -78,6 +78,7 @@ export function IncomeSourceItem({
             <span
               className="text-xs text-muted-foreground truncate"
               data-testid="income-source-description"
+              data-ph-mask
             >
               {source.description}
             </span>
