@@ -15,9 +15,11 @@ import {
   useReplayAdminPaddleWebhook,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { SummaryCard } from '@/features/admin'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useWebhookFilters } from '../hooks/useWebhookFilters'
 import { WebhookDetailModal } from './WebhookDetailModal'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 
@@ -34,10 +36,10 @@ const EVENT_TYPE_OPTIONS = [
   { value: 'transaction.payment_failed', label: 'transaction.payment_failed' },
 ]
 
-const statusBadgeClass = (processed: boolean, hasError: boolean): string => {
-  if (processed) return 'bg-success/10 text-success'
-  if (hasError) return 'bg-destructive/10 text-destructive'
-  return 'bg-warning/10 text-warning'
+const webhookStatusVariant = (processed: boolean, hasError: boolean): 'success' | 'destructive' | 'warning' => {
+  if (processed) return 'success'
+  if (hasError) return 'destructive'
+  return 'warning'
 }
 
 const selectInputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] cursor-pointer transition-colors focus:outline-none focus:border-primary'
@@ -115,18 +117,13 @@ export function WebhooksPage() {
       minSize: 90,
       maxSize: 140,
       render: (event) => (
-        <span
-          className={cn(
-            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-            statusBadgeClass(!!event.processed, !!event.processing_error)
-          )}
-        >
+        <Badge variant={webhookStatusVariant(!!event.processed, !!event.processing_error)}>
           {event.processed
             ? 'Processed'
             : event.processing_error
               ? 'Failed'
               : 'Pending'}
-        </span>
+        </Badge>
       ),
     },
     {
@@ -298,13 +295,13 @@ export function WebhooksPage() {
           <span>Failed to load webhooks. Please try again.</span>
         </div>
       ) : isEmpty ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
-          <Webhook aria-hidden="true" />
-          <span>
-            No webhook events found
-            {hasActiveFilters ? '. Try adjusting your filters.' : '.'}
-          </span>
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<Webhook />}
+          title={hasActiveFilters ? 'No webhook events match your filters' : 'No webhook events found'}
+          description={hasActiveFilters ? 'Try adjusting your filters.' : undefined}
+          className="py-16"
+        />
       ) : (
         <>
           <DataTable

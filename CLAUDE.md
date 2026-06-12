@@ -127,7 +127,7 @@ Every implementation task MUST end with these steps in order:
    cd backend && go test ./... -v
    cd apps/web && bun run test && bun run typecheck && bun run lint
    cd apps/web && bun run test:e2e -- --reporter=line
-4. Run Codex adversarial review on changes for a second opinion (see below)
+4. Run Codex adversarial review on changes for a second opinion (see below, or **Secondary-review fallback** if Codex is unavailable)
 5. Run `/commit-push-pr` to commit, push, and create PR with "Closes #N"
 ```
 
@@ -136,13 +136,14 @@ After completing a round of code edits, testing, and implementation, ALWAYS run 
 adversarial review (`codex:codex-rescue` agent) to get a second opinion on the changes.
 This catches issues that the primary implementation pass may miss — logic errors, edge
 cases, missing test coverage, convention violations, or architectural concerns. Do not
-skip this step even when changes seem straightforward.
+skip this step even when changes seem straightforward. If Codex is unavailable, use the
+**Secondary-review fallback** below (`feature-dev:code-reviewer`, fresh context).
 
 **DO NOT create a PR until:**
 - [ ] TDD was followed (tests written first)
 - [ ] `code-simplifier` has run
 - [ ] ALL tests pass (backend + frontend + e2e + lint)
-- [ ] Codex review completed (second opinion on changes)
+- [ ] Codex review completed (second opinion on changes, or documented Secondary-review fallback in PR body)
 - [ ] PR body includes `Closes #N` to auto-close the issue
 
 ### Codex Secondary Planning (MANDATORY for brainstorming/design)
@@ -157,7 +158,30 @@ in the background to get a secondary perspective on the design decisions. This a
 The Codex agent should be given the full context of the design and asked to critically
 evaluate risks, blind spots, and alternatives. Its findings should be incorporated into
 the final spec/plan before proceeding to implementation. Do not skip this step — a second
-set of eyes catches assumptions that a single planning pass misses.
+set of eyes catches assumptions that a single planning pass misses. If Codex is unavailable,
+use the **Secondary-review fallback** below (`general-purpose`, fresh context).
+
+### Secondary-review fallback (Codex capped/unavailable)
+The Codex second opinion is **mandatory, but the *reviewer* is swappable.** When — and only when —
+`codex:codex-rescue` cannot run (workspace spend cap, not installed, or it produces an error or
+hangs without delivering output), **retry Codex once immediately (same parameters); if it still
+fails, fall back to a Claude adversarial subagent** dispatched with **fresh context** (do not reuse
+this session's history — a same-context review shares the implementer's blind spots). If Codex
+returns any output, even partial, use it rather than triggering the fallback. Use
+**`feature-dev:code-reviewer`** for code review and **`general-purpose`** for design/planning
+review. Tell the subagent to *adversarially refute* the work (find defects, edge cases, convention
+violations), not to confirm it. **Never skip the second opinion** — a fallback reviewer is
+required; silence is not an option. Document the fallback (and that Codex was capped) in **the PR
+body** so it's auditable post-merge.
+
+**Caveat:** Claude-reviewing-Claude shares architectural blind spots that Codex (independent model)
+does not. The fallback is a weaker substitute, not an equal. Prefer real Codex whenever the cap
+lifts.
+
+**Other commands that use Codex** (`/smart-plan`, `/commit-push-pr`, `/requirements-gap-analysis`,
+and other skills) apply this policy through the session's CLAUDE.md context. Subagents dispatched
+directly via `subagent_type` may not have CLAUDE.md in scope — which is why
+`requirements-gap-analysis/SKILL.md` encodes the fallback clause locally in Step 3.
 
 ### Task Tracking (MANDATORY)
 **When formulating a plan, ALWAYS use TaskCreate to track TODOs:**

@@ -9,6 +9,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BarChart3 } from 'lucide-react'
+import { Card } from '@/components/ui/card'
 import { DateRangePicker } from '@/shared/dates/DateRangePicker'
 import { getDateRange } from '@/shared/dates'
 import type { DatePreset } from '@/shared/dates'
@@ -145,12 +146,13 @@ export function SpendingReportsPage() {
                   : 'Click a category to drill into subcategories.'}
               </p>
             </div>
-            <CategoryBreakdownChart
-              data={categoryData}
-              loading={categoryLoading}
-              onCategoryClick={handleCategoryClick}
-              className="rounded-xl border border-border bg-card p-4"
-            />
+            <Card>
+              <CategoryBreakdownChart
+                data={categoryData}
+                loading={categoryLoading}
+                onCategoryClick={handleCategoryClick}
+              />
+            </Card>
           </section>
 
           {/* Spending Trends */}
@@ -163,11 +165,12 @@ export function SpendingReportsPage() {
                 Monthly spending breakdown by top categories.
               </p>
             </div>
-            <SpendingTrendsChart
-              data={trendsData}
-              loading={trendsLoading}
-              className="rounded-xl border border-border bg-card p-4"
-            />
+            <Card>
+              <SpendingTrendsChart
+                data={trendsData}
+                loading={trendsLoading}
+              />
+            </Card>
           </section>
 
           {/* Top Merchants */}
@@ -180,14 +183,15 @@ export function SpendingReportsPage() {
                 Click a merchant to view its transactions.
               </p>
             </div>
-            <TopMerchantsTable
-              data={merchantData}
-              loading={merchantLoading}
-              onMerchantClick={handleMerchantClick}
-              className="rounded-xl border border-border bg-card p-4"
-              sort={merchantSort}
-              onSortChange={setMerchantSort}
-            />
+            <Card>
+              <TopMerchantsTable
+                data={merchantData}
+                loading={merchantLoading}
+                onMerchantClick={handleMerchantClick}
+                sort={merchantSort}
+                onSortChange={setMerchantSort}
+              />
+            </Card>
           </section>
         </div>
       )}

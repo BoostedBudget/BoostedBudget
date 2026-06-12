@@ -12,15 +12,15 @@ export function ReadOnlyBanner({ status }: ReadOnlyBannerProps) {
   return (
     <div
       role="alert"
-      className="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-4 py-3 flex items-center justify-between gap-4"
+      className="bg-warning/10 border-b border-warning/30 px-4 py-3 flex items-center justify-between gap-4"
     >
-      <div className="flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200">
+      <div className="flex items-center gap-2 text-sm text-warning-foreground">
         <span aria-hidden="true">⚠️</span>
         <span>{message}</span>
       </div>
       <Link
         to="/pricing"
-        className="shrink-0 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
+        className="shrink-0 px-3 py-1.5 text-sm font-medium bg-warning text-warning-foreground hover:bg-warning/90 rounded-lg transition-colors"
       >
         Subscribe to restore access
       </Link>

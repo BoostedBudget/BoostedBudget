@@ -103,12 +103,12 @@ describe('BalanceOverview', () => {
   })
 
   describe('Period Comparison - Positive Change', () => {
-    it('should show green upward arrow for positive change', () => {
+    it('should show success upward arrow for positive change', () => {
       // Act
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
-      // Assert - Check for green text color and upward arrow
-      const changeElement = container.querySelector('.text-green-600')
+      // Assert - Check for success text color and upward arrow
+      const changeElement = container.querySelector('.text-success')
       expect(changeElement).toBeInTheDocument()
       expect(changeElement).toHaveTextContent('↑')
     })
@@ -118,7 +118,7 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
       // Assert
-      const changeElement = container.querySelector('.text-green-600')
+      const changeElement = container.querySelector('.text-success')
       expect(changeElement).toHaveTextContent('$1,000.50')
     })
 
@@ -135,19 +135,19 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithPositiveChange} />)
 
       // Assert - Should show $1,000.50, not +$1,000.50
-      const changeElement = container.querySelector('.text-green-600')
+      const changeElement = container.querySelector('.text-success')
       expect(changeElement).toHaveTextContent('↑ $1,000.50')
       expect(changeElement).not.toHaveTextContent('+')
     })
   })
 
   describe('Period Comparison - Negative Change', () => {
-    it('should show red downward arrow for negative change', () => {
+    it('should show destructive downward arrow for negative change', () => {
       // Act
       const { container } = render(<BalanceOverview summary={mockSummaryWithNegativeChange} />)
 
-      // Assert - Check for red text color and downward arrow
-      const changeElement = container.querySelector('.text-red-600')
+      // Assert - Check for destructive text color and downward arrow
+      const changeElement = container.querySelector('.text-destructive')
       expect(changeElement).toBeInTheDocument()
       expect(changeElement).toHaveTextContent('↓')
     })
@@ -157,7 +157,7 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithNegativeChange} />)
 
       // Assert
-      const changeElement = container.querySelector('.text-red-600')
+      const changeElement = container.querySelector('.text-destructive')
       expect(changeElement).toHaveTextContent('$1,000.00')
     })
 
@@ -174,7 +174,7 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithNegativeChange} />)
 
       // Assert - Should show $1,000.00, not -$1,000.00 (absolute value)
-      const changeElement = container.querySelector('.text-red-600')
+      const changeElement = container.querySelector('.text-destructive')
       expect(changeElement).toHaveTextContent('↓ $1,000.00')
       expect(changeElement).not.toHaveTextContent('-')
     })
@@ -186,7 +186,7 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithZeroChange} />)
 
       // Assert - Zero change is considered positive (>=0), so green
-      const changeElement = container.querySelector('.text-green-600')
+      const changeElement = container.querySelector('.text-success')
       expect(changeElement).toBeInTheDocument()
       expect(changeElement).toHaveTextContent('↑ $0.00')
     })
@@ -196,7 +196,7 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithZeroChange} />)
 
       // Assert
-      const changeElement = container.querySelector('.text-green-600')
+      const changeElement = container.querySelector('.text-success')
       expect(changeElement).toHaveTextContent('↑')
     })
   })
@@ -229,8 +229,8 @@ describe('BalanceOverview', () => {
       const { container } = render(<BalanceOverview summary={mockSummaryWithoutComparison} />)
 
       // Assert
-      expect(container.querySelector('.text-green-600')).not.toBeInTheDocument()
-      expect(container.querySelector('.text-red-600')).not.toBeInTheDocument()
+      expect(container.querySelector('.text-success')).not.toBeInTheDocument()
+      expect(container.querySelector('.text-destructive')).not.toBeInTheDocument()
     })
 
     it('should not show percentage when no comparison data', () => {

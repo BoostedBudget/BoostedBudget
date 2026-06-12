@@ -6,7 +6,10 @@
  * Shows execution time, status, duration, and trigger type.
  */
 
-import { Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle, History } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useGetBoostExecutions } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import type { BoostExecution } from '@boostedbudget/api-client/models'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
@@ -71,14 +74,11 @@ export function BoostExecutionHistory({
   const totalPages = limit ? Math.ceil(total / limit) : 1
   const showPagination = limit && total > limit
 
-  const statusBadgeClass = (status: string) => {
-    const base = 'inline-block px-2 py-0.5 text-xs font-medium rounded-full'
-    switch (status) {
-      case 'completed': return `${base} status-completed bg-success/10 text-success`
-      case 'failed': return `${base} status-failed bg-destructive/10 text-destructive`
-      case 'running': return `${base} status-running bg-info/10 text-info`
-      default: return `${base} status-pending bg-muted text-muted-foreground`
-    }
+  const STATUS_BADGE: Record<string, BadgeProps['variant']> = {
+    completed: 'success',
+    failed: 'destructive',
+    running: 'info',
+    pending: 'secondary',
   }
 
   if (isLoading) {
@@ -115,9 +115,12 @@ export function BoostExecutionHistory({
     return (
       <div className={`bg-background border border-border rounded-lg overflow-hidden ${className}`.trim()}>
         <h3 className="m-0 px-6 py-4 text-base font-semibold text-foreground border-b border-border">Execution History</h3>
-        <div className="p-8 text-center text-muted-foreground">
-          <p>No executions yet</p>
-        </div>
+        <EmptyState
+          size="compact"
+          icon={<History />}
+          title="No executions yet"
+          className="py-8"
+        />
       </div>
     )
   }
@@ -139,9 +142,12 @@ export function BoostExecutionHistory({
       minSize: 90,
       maxSize: 140,
       render: (execution) => (
-        <span className={statusBadgeClass(execution.status)}>
+        <Badge
+          variant={STATUS_BADGE[execution.status] ?? 'secondary'}
+          className={`status-${execution.status}`}
+        >
           {execution.status}
-        </span>
+        </Badge>
       ),
     },
     {

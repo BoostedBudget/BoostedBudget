@@ -1,5 +1,6 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { StatCard } from '@/components/ui/stat-card'
 import type { SummaryCardProps } from '../types'
 
 const trendIcons = {
@@ -8,51 +9,42 @@ const trendIcons = {
   neutral: Minus,
 }
 
-const statusBorderMap: Record<string, string> = {
-  success: 'border-l-success',
-  warning: 'border-l-warning',
-  error: 'border-l-destructive',
-  neutral: 'border-l-info',
+const statusAccentMap: Record<string, 'success' | 'warning' | 'destructive' | 'info'> = {
+  success: 'success',
+  warning: 'warning',
+  error: 'destructive',
+  neutral: 'info',
 }
 
 export function SummaryCard({ title, value, icon, trend, status = 'neutral' }: SummaryCardProps) {
-  return (
-    <div
+  const TrendIcon = trend ? trendIcons[trend.direction] : null
+  const prefix = trend?.direction === 'up' ? '+' : trend?.direction === 'down' ? '-' : ''
+
+  const trendChip = trend ? (
+    <span
       className={cn(
-        'bg-card rounded-lg border border-border border-l-4 p-5 shadow-sm hover:shadow-md transition-shadow',
-        statusBorderMap[status] ?? 'border-l-info'
+        'flex items-center gap-1 text-sm font-medium',
+        trend.direction === 'up' && 'text-success',
+        trend.direction === 'down' && 'text-destructive',
+        trend.direction === 'neutral' && 'text-muted-foreground'
       )}
     >
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-muted-foreground">{icon}</span>
-        <span className="text-sm font-medium text-muted-foreground uppercase tracking-wide">{title}</span>
-      </div>
+      {TrendIcon && <TrendIcon size={16} aria-hidden={true} />}
+      <span>{prefix}{trend.value}</span>
+    </span>
+  ) : null
 
-      <div className="flex items-baseline gap-3">
-        <span className="text-3xl font-bold text-foreground max-xs:text-2xl">{value}</span>
-
-        {trend && (
-          <span
-            className={cn(
-              'flex items-center gap-1 text-sm font-medium',
-              trend.direction === 'up' && 'text-success',
-              trend.direction === 'down' && 'text-destructive',
-              trend.direction === 'neutral' && 'text-muted-foreground'
-            )}
-          >
-            {(() => {
-              const Icon = trendIcons[trend.direction]
-              const prefix = trend.direction === 'up' ? '+' : trend.direction === 'down' ? '-' : ''
-              return (
-                <>
-                  <Icon size={16} />
-                  <span>{prefix}{trend.value}</span>
-                </>
-              )
-            })()}
-          </span>
-        )}
-      </div>
-    </div>
+  return (
+    <StatCard
+      label={title}
+      value={
+        <span className="flex items-baseline gap-3">
+          <span>{value}</span>
+          {trendChip}
+        </span>
+      }
+      icon={icon}
+      accent={statusAccentMap[status] ?? 'info'}
+    />
   )
 }

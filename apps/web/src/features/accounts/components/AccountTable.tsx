@@ -1,6 +1,8 @@
 import { useCallback } from 'react'
-import { Edit, Trash2, EyeOff, Unplug } from 'lucide-react'
+import { Edit, Trash2, EyeOff, Unplug, Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -169,19 +171,21 @@ export function AccountTable({
               {displayName}
             </span>
             {isDisconnected && (
-              <span
-                className="ml-2 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:bg-[#451a03] dark:text-yellow-300"
+              <Badge
+                variant="warning"
+                size="sm"
+                className="ml-2"
                 title="Account disconnected - resubscribe to reconnect"
               >
                 <Unplug className="h-2.5 w-2.5" aria-hidden="true" />
                 Disconnected
-              </span>
+              </Badge>
             )}
             {row.is_hidden && (
-              <span className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground">
+              <Badge variant="secondary" size="sm" className="ml-2">
                 <EyeOff className="h-2.5 w-2.5" aria-hidden="true" />
                 Hidden
-              </span>
+              </Badge>
             )}
           </div>
         )
@@ -233,7 +237,7 @@ export function AccountTable({
             className={cn(
               'font-semibold tabular-nums',
               isNegative
-                ? 'account-table__balance--negative text-red-600 dark:text-red-400'
+                ? 'account-table__balance--negative text-destructive'
                 : 'account-table__balance--positive text-foreground'
             )}
           >
@@ -247,14 +251,12 @@ export function AccountTable({
 
   if (!loading && accounts.length === 0 && !hasActiveFilters) {
     return (
-      <div
-        className={cn(
-          'rounded-lg border border-dashed border-border bg-card px-6 py-12 text-center text-muted-foreground',
-          className
-        )}
-      >
-        <p>No accounts found. Connect a bank account to get started.</p>
-      </div>
+      <EmptyState
+        className={className}
+        icon={<Building2 />}
+        title="No accounts found"
+        description="Connect a bank account to get started."
+      />
     )
   }
 
@@ -284,15 +286,18 @@ export function AccountTable({
           onRowClick && 'account-table__row--clickable',
           row.is_hidden && 'opacity-60',
           isDisconnected &&
-            'bg-amber-50/30 hover:bg-amber-50/50 dark:bg-[rgba(69,26,3,0.3)] dark:hover:bg-[rgba(69,26,3,0.5)]'
+            'bg-warning/10 hover:bg-warning/20'
         )
       }}
       className={cn(loading && 'account-table--loading', className)}
       maskedColumnIds={['institution', 'name', 'mask', 'balance']}
       emptyState={
-        <p className="py-12 px-4 text-center text-muted-foreground italic">
-          No accounts match your filters. Try adjusting your criteria.
-        </p>
+        <EmptyState
+          size="compact"
+          icon={<Building2 />}
+          title="No accounts match your filters"
+          description="Try adjusting your criteria."
+        />
       }
       rowActions={
         hasActions
@@ -315,7 +320,7 @@ export function AccountTable({
                     type="button"
                     onClick={() => onDelete(row)}
                     disabled={loading}
-                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
                     aria-label="Delete account"
                     title="Delete account"
                   >

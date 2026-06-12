@@ -15,7 +15,7 @@ interface DateRangePickerProps {
 }
 
 const dateInputClass =
-  'w-full px-3 py-2 rounded-md border border-input bg-background text-foreground focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm'
+  'w-full px-3 py-2 rounded-md border border-input bg-background text-foreground focus:ring-2 focus:ring-ring focus:border-ring text-sm'
 
 export function DateRangePicker({
   preset,

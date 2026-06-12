@@ -14,13 +14,13 @@ interface FilterPillProps {
 
 export function FilterPill({ label, value, onRemove }: FilterPillProps) {
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-blue-50 text-blue-700 rounded-full border border-blue-200">
-      <span className="text-blue-500">{label}:</span>
+    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-info/10 text-info rounded-full border border-info/20">
+      <span className="text-info/70">{label}:</span>
       <span className="max-w-[150px] truncate">{value}</span>
       <button
         type="button"
         onClick={onRemove}
-        className="ml-0.5 p-0.5 rounded-full hover:bg-blue-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="ml-0.5 p-0.5 rounded-full hover:bg-info/20 focus:outline-none focus:ring-1 focus:ring-ring"
         aria-label={`Remove ${label} filter`}
       >
         <XMarkIcon className="w-3 h-3" />

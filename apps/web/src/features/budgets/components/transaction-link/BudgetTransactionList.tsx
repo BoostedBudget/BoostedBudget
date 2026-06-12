@@ -5,8 +5,12 @@
  * Displays a paginated list of transactions matching a budget category.
  */
 
+import { Receipt } from 'lucide-react';
+import { formatCurrencyFull } from '@/shared/charts/formatters';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Button } from '@/components/ui/button';
 
 interface BudgetTransactionListProps {
   budgetId: string;
@@ -29,14 +33,6 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
     refetch,
   } = useBudgetTransactions(budgetId, categoryId);
 
-  // Format currency
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(amount);
-  };
-
   // Loading state
   if (loading) {
     return (
@@ -57,13 +53,9 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
         <p className="m-0 mb-4 text-destructive">
           {error.message || 'Failed to load transactions'}
         </p>
-        <button
-          className="px-4 py-2 text-sm font-medium text-destructive bg-transparent border border-destructive rounded-md cursor-pointer transition-colors duration-150 hover:bg-destructive hover:text-background"
-          onClick={refetch}
-          type="button"
-        >
+        <Button variant="destructive" onClick={refetch}>
           Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -71,9 +63,11 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
   // Empty state
   if (transactions.length === 0) {
     return (
-      <div className="p-8 text-center text-muted-foreground">
-        <p>No transactions found for this category.</p>
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<Receipt />}
+        title="No transactions found for this category."
+      />
     );
   }
 
@@ -84,8 +78,8 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
         <h3 className="m-0 text-sm font-semibold text-foreground">
           Transactions ({totalCount})
         </h3>
-        <span className="text-sm font-medium text-muted-foreground">
-          Total: {formatCurrency(totalAmount)}
+        <span className="text-sm font-medium text-muted-foreground" data-ph-mask>
+          Total: {formatCurrencyFull(totalAmount)}
         </span>
       </div>
 
@@ -101,14 +95,9 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
       {/* Load more button */}
       {hasMore && (
         <div className="flex justify-center py-4">
-          <button
-            className="px-6 py-2 text-sm font-medium text-primary bg-transparent border border-primary rounded-md cursor-pointer transition-colors duration-150 hover:bg-primary hover:text-primary-foreground disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={loadMore}
-            disabled={loadingMore}
-            type="button"
-          >
+          <Button variant="outline" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading...' : 'Load More'}
-          </button>
+          </Button>
         </div>
       )}
     </div>

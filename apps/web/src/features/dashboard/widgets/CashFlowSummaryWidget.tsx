@@ -13,14 +13,12 @@ import {
   ArrowsRightLeftIcon,
 } from '@heroicons/react/24/solid';
 import { BarChart3 } from 'lucide-react';
+import { formatCurrency } from '@/shared/charts/formatters';
 import { useCashFlowSummary } from '../hooks/useCashFlowData';
 import { DashboardContext } from '../context/DashboardContext';
 import { registerWidget } from './registry';
 import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
-
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value);
 
 interface SummaryCardProps {
   title: string;
@@ -41,11 +39,15 @@ function SummaryCard({
   color,
   icon: Icon,
 }: SummaryCardProps) {
+  // StatCard exception (#1285): each tile has a "N transactions" subline + a two-part "±% · vs prior period"
+  // caption + colored icon chip. StatCard has no subline slot and its `trend` prop colors the value itself
+  // (TREND_CLASS → text-success/text-destructive), which would tint the currency. Stays as-is.
+
   const colorClasses = {
-    blue: 'text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-900/30',
-    orange: 'text-orange-600 bg-orange-100 dark:text-orange-400 dark:bg-orange-900/30',
-    green: 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30',
-    red: 'text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30',
+    blue: 'text-info bg-info/10',
+    orange: 'text-warning bg-warning/10',
+    green: 'text-success bg-success/10',
+    red: 'text-destructive bg-destructive/10',
   };
 
   const formatPercent = (percent: number) => {
@@ -68,7 +70,7 @@ function SummaryCard({
 
       <div className="flex-1 flex flex-col justify-center">
         <div className="text-2xl font-bold text-foreground">
-          {formatCurrency(value)}
+          <span data-ph-mask>{formatCurrency(value)}</span>
         </div>
 
         {count !== undefined && (
@@ -82,8 +84,8 @@ function SummaryCard({
             <span
               className={`inline-flex items-center text-xs font-medium ${
                 isPositiveChange
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-red-600 dark:text-red-400'
+                  ? 'text-success'
+                  : 'text-destructive'
               }`}
             >
               {isPositiveChange ? (
@@ -131,14 +133,14 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full text-red-500">
+      <div className="flex items-center justify-center h-full text-destructive">
         {error}
       </div>
     );

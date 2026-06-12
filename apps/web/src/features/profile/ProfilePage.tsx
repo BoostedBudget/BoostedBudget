@@ -5,6 +5,7 @@ import { ProfileForm } from './ProfileForm'
 import { lazy, Suspense } from 'react'
 import { PrivacySettings } from './PrivacySettings'
 import { useProfile } from './hooks/useProfile'
+import { Card } from '../../components/ui/card'
 
 // Lazy-loaded: keeps the category manager (and its icon set) out of the profile
 // route bundle — it's only needed when the Categories tab is opened (#1203).
@@ -118,7 +119,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
 
       {activeTab === 'profile' && (
         <>
-          <section className="bg-card border border-border rounded-lg p-6 mb-8">
+          <Card className="mb-8">
             <h2 className="text-2xl font-semibold text-foreground mt-0 mb-6 border-b-2 border-muted pb-2">Account Information</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <div className="flex flex-col gap-2 p-4 bg-muted/50 rounded-lg border border-border">
@@ -172,22 +173,22 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
                 </div>
               </div>
             </div>
-          </section>
+          </Card>
 
-          <section className="bg-card border border-border rounded-lg p-6 mb-8">
+          <Card className="mb-8">
             <h2 className="text-2xl font-semibold text-foreground mt-0 mb-6 border-b-2 border-muted pb-2">Subscription</h2>
             <SubscriptionCard
               tier={user.effective_tier ?? user.subscription_tier}
               status={user.subscription_status}
               trialDaysRemaining={user.trial_days_remaining}
             />
-          </section>
+          </Card>
 
-          <section className="bg-card border border-border rounded-lg p-6 mb-8">
+          <Card className="mb-8">
             <h2 className="text-base font-semibold text-foreground mb-1">Appearance</h2>
             <p className="text-sm text-muted-foreground mb-4">Choose how BoostedBudget looks to you.</p>
             <ThemeSelector />
-          </section>
+          </Card>
 
           <ProfileForm user={user} onProfileUpdate={handleProfileUpdate} />
 
@@ -203,11 +204,11 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
       {activeTab === 'privacy' && <PrivacySettings onSettingsChange={onPrivacySettingsChange} />}
 
       {activeTab === 'categories' && (
-        <section className="bg-card border border-border rounded-lg p-6">
+        <Card>
           <Suspense fallback={<p className="text-sm text-muted-foreground">Loading categories…</p>}>
             <CustomCategoryManager />
           </Suspense>
-        </section>
+        </Card>
       )}
     </div>
   )

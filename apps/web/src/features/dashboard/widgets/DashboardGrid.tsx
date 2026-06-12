@@ -318,7 +318,7 @@ export function DashboardGrid({
                     onRemove={() => onRemoveWidget(widget.i)}
                   />
                 ) : (
-                  <div className="flex items-center justify-center h-full text-gray-400">
+                  <div className="flex items-center justify-center h-full text-muted-foreground">
                     Widget not found: {widget.type}
                   </div>
                 )}

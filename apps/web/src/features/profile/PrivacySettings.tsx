@@ -8,6 +8,7 @@ import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
+import { Card } from '../../components/ui/card'
 
 interface PrivacySettingsProps {
   onSettingsChange?: (settings: PrivacySettingsType) => void
@@ -148,7 +149,7 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
       <h2 className="text-2xl font-bold text-foreground mt-0 mb-6">Privacy Settings</h2>
 
       {/* GDPR Cookie Consent Section */}
-      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+      <Card className="mb-6">
         <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">GDPR Cookie Consent</h3>
         <p className="text-muted-foreground mb-6 leading-relaxed">
           Manage your cookie preferences. Necessary cookies are required for the app to function.
@@ -186,10 +187,10 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
           </p>
         </div>
 
-      </section>
+      </Card>
 
       {/* Email Preferences Section */}
-      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+      <Card className="mb-6">
         <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">Email Preferences</h3>
         <p className="text-muted-foreground mb-6 leading-relaxed">
           Choose which emails you'd like to receive from us.
@@ -242,10 +243,10 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
             Important security notifications and account activity.
           </p>
         </div>
-      </section>
+      </Card>
 
       {/* Data Sharing Section */}
-      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+      <Card className="mb-6">
         <h3 className="text-xl font-semibold text-foreground mt-0 mb-2">Data Sharing</h3>
         <p className="text-muted-foreground mb-6 leading-relaxed">
           Control how your data is shared with third parties.
@@ -282,7 +283,7 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
             Your transfer totals (anonymized) help us show social proof on our public page. Opt out at any time.
           </p>
         </div>
-      </section>
+      </Card>
 
       {/* Status Messages */}
       {successMessage && (

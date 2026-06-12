@@ -24,8 +24,10 @@
  */
 
 import { useCallback, useEffect } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Filter } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   CONDITION_FIELD_OPTIONS,
   CONDITION_FIELDS_BY_EVENT,
@@ -170,7 +172,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
   )
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+    <Card className="flex flex-col gap-3">
       <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 max-md:grid-cols-[1fr_1fr] [&_.condition-value]:max-md:col-span-2">
         {/* Field selector */}
         <div className="flex flex-col gap-1">
@@ -237,7 +239,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
           type="button"
           onClick={() => onRemove(index)}
           disabled={disabled}
-          className="flex h-9 w-9 items-center justify-center self-end rounded-md border-none bg-transparent text-muted-foreground transition-all hover:bg-red-50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-red-900 dark:hover:text-red-400"
+          className="flex h-9 w-9 items-center justify-center self-end rounded-md border-none bg-transparent text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
           aria-label="Remove condition"
           title="Remove condition"
         >
@@ -294,7 +296,7 @@ function ConditionRow({ condition, index, availableFields, budgets, onChange, on
           </select>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -362,7 +364,7 @@ export function ConditionBuilder({
     <div className={cn('flex flex-col gap-4', className)}>
       {/* Logic toggle (only show when multiple conditions) */}
       {conditions.length > 1 && (
-        <div className="flex items-center gap-2 rounded-lg bg-muted px-4 py-3 dark:bg-muted/50">
+        <div className="flex items-center gap-2 rounded-lg bg-muted px-4 py-3">
           <span className="text-sm text-muted-foreground">Match</span>
           <div className="flex overflow-hidden rounded-md border border-border">
             <button
@@ -374,7 +376,7 @@ export function ConditionBuilder({
                 'border-none px-3 py-1.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50',
                 logic === 'AND'
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                  : 'bg-card text-muted-foreground hover:bg-muted dark:bg-muted/30 dark:hover:bg-muted/50'
+                  : 'bg-card text-muted-foreground hover:bg-muted '
               )}
             >
               AND
@@ -388,7 +390,7 @@ export function ConditionBuilder({
                 'border-none px-3 py-1.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50',
                 logic === 'OR'
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                  : 'bg-card text-muted-foreground hover:bg-muted dark:bg-muted/30 dark:hover:bg-muted/50'
+                  : 'bg-card text-muted-foreground hover:bg-muted '
               )}
             >
               OR
@@ -400,9 +402,11 @@ export function ConditionBuilder({
 
       {/* Conditions list */}
       {conditions.length === 0 ? (
-        <div className="rounded-lg border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm text-muted-foreground">No conditions added yet. This boost will run unconditionally.</p>
-        </div>
+        <EmptyState
+          icon={<Filter />}
+          title="No conditions added yet."
+          description="This boost will run unconditionally."
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {conditions.map((condition, index) => (
@@ -425,7 +429,7 @@ export function ConditionBuilder({
         type="button"
         onClick={handleAdd}
         disabled={disabled}
-        className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-transparent px-4 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary hover:bg-blue-50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-blue-900 dark:hover:text-blue-400"
+        className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-transparent px-4 py-2.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Plus className="h-4 w-4" aria-hidden="true" />
         Add condition

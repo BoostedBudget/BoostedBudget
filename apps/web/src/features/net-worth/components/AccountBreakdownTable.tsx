@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { TrendingUp } from 'lucide-react'
+import { Building2, TrendingUp } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -231,9 +231,11 @@ function AccountSection({
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
       emptyState={
-        <span className="block px-4 py-6 text-sm text-muted-foreground text-center">
-          No {emptyLabel} accounts match the current filters.
-        </span>
+        <EmptyState
+          size="compact"
+          icon={<Building2 />}
+          title={`No ${emptyLabel} accounts match the current filters.`}
+        />
       }
     />
   )

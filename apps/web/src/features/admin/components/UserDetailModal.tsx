@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
 import { useRegions } from '../../../shared/hooks/useRegions'
@@ -74,10 +75,10 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                 <User className="w-5 h-5 text-primary" />
                 {user.email}
                 {user.is_admin && (
-                  <span className="inline-flex items-center gap-1 ml-2 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 rounded-full">
+                  <Badge variant="warning" className="ml-2 gap-1">
                     <Shield size={14} />
                     Admin
-                  </span>
+                  </Badge>
                 )}
               </DialogTitle>
               <DialogDescription id="user-detail-description">

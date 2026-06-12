@@ -194,8 +194,8 @@ export function CronBuilder({
             className={cn(
               'inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50',
               activePreset?.cron === preset.cron
-                ? 'border-primary bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                : 'border-border bg-card text-foreground hover:border-primary hover:text-primary dark:hover:border-blue-400 dark:hover:text-blue-400'
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border bg-card text-foreground hover:border-primary hover:text-primary'
             )}
             title={preset.description}
           >
@@ -225,7 +225,7 @@ export function CronBuilder({
 
       {/* Custom cron input */}
       {showCustom && (
-        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-4 dark:bg-muted/20">
+        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-4">
           <label htmlFor="cron-expression" className="text-sm font-medium text-foreground">
             Cron expression
           </label>
@@ -255,7 +255,7 @@ export function CronBuilder({
       )}
 
       {/* Description */}
-      <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+      <div className="flex items-center gap-2 rounded-lg bg-info/10 px-4 py-3 text-sm text-info">
         <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>{description}</span>
       </div>
@@ -270,7 +270,7 @@ export function CronBuilder({
           value={timezone}
           onChange={handleTimezoneChange}
           disabled={disabled}
-          className="cursor-pointer rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-card"
+          className="cursor-pointer rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {COMMON_TIMEZONES.map((tz) => (
             <option key={tz.value} value={tz.value}>
