@@ -52,10 +52,6 @@ cleanup() {
 # Set up trap for cleanup on exit
 trap cleanup EXIT
 
-# =============================================================================
-# Find Available Ports
-# =============================================================================
-
 echo "🔍 Finding available ports for E2E tests..."
 PORTS_OUTPUT=$(node "${SCRIPT_DIR}/find-available-ports.js")
 
@@ -63,23 +59,12 @@ PORTS_OUTPUT=$(node "${SCRIPT_DIR}/find-available-ports.js")
 export $(echo "$PORTS_OUTPUT" | grep -E "^E2E_")
 
 echo ""
-echo "📍 Using ports:"
-echo "   Frontend: $E2E_FRONTEND_PORT"
-echo "   Backend:  $E2E_BACKEND_PORT"
-echo "   Postgres: $E2E_POSTGRES_PORT"
-
-# =============================================================================
-# Build Backend (always rebuild to prevent stale-binary/schema mismatches)
-# =============================================================================
-
+echo "📍 Using ports: Frontend=$E2E_FRONTEND_PORT Backend=$E2E_BACKEND_PORT Postgres=$E2E_POSTGRES_PORT Prod=$E2E_PROD_PORT"
 echo ""
 echo "Building backend binary..."
 (cd "$BACKEND_DIR" && go build -o bin/server ./cmd/server)
 echo "   Backend built successfully"
-
-# =============================================================================
-# Setup PostgreSQL Database
-# =============================================================================
+echo ""
 
 if [ "${E2E_SKIP_POSTGRES:-}" = "true" ]; then
   echo ""
@@ -130,10 +115,6 @@ else
     echo "   Continuing without database (Docker not available)"
   fi
 fi
-
-# =============================================================================
-# Run E2E Tests
-# =============================================================================
 
 echo ""
 echo "🧪 Starting E2E tests..."
