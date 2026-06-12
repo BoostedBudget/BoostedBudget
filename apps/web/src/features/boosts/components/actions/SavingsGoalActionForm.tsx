@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useMemo } from 'react'
+import { formatCurrencyFull } from '@/shared/charts/formatters'
 import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useGetSavingsGoals } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalAction } from '../../types'
@@ -23,6 +24,12 @@ export interface SavingsGoalActionFormProps {
 }
 
 type AmountType = 'fixed' | 'percentage' | 'remaining'
+type SavingsGoalItem = {
+  id: string
+  name: string
+  target_amount: number
+  current_amount: number
+}
 
 const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] = [
   {
@@ -42,13 +49,6 @@ const AMOUNT_TYPES: { value: AmountType; label: string; description: string }[] 
   },
 ]
 
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount)
-}
-
 /**
  * SavingsGoalActionForm component for configuring savings goal actions.
  */
@@ -61,18 +61,12 @@ export function SavingsGoalActionForm({
   const { accounts: accountsList, isLoading: loadingAccounts } = useActiveAccounts()
   const { data: savingsGoals, isLoading: loadingGoals } = useGetSavingsGoals()
 
-  const goalsList = (savingsGoals ?? []) as {
-    id: string
-    name: string
-    target_amount: number
-    current_amount: number
-  }[]
+  const goalsList = useMemo(() => (savingsGoals ?? []) as SavingsGoalItem[], [savingsGoals])
 
   // Get selected goal for progress display
   const selectedGoal = useMemo(() => {
-    const goals = (savingsGoals ?? []) as { id: string; name: string; target_amount: number; current_amount: number }[]
-    return goals.find((g) => g.id === action.savings_goal_id)
-  }, [savingsGoals, action.savings_goal_id])
+    return goalsList.find((g) => g.id === action.savings_goal_id)
+  }, [goalsList, action.savings_goal_id])
 
   // Current amount type description
   const currentDescription = AMOUNT_TYPES.find(
@@ -160,19 +154,19 @@ export function SavingsGoalActionForm({
           value={action.savings_goal_id}
           onChange={handleGoalChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select a savings goal...</option>
           {goalsList.map((goal) => (
-            <option key={goal.id} value={goal.id}>
+            <option key={goal.id} value={goal.id} data-ph-mask>
               {goal.name}
             </option>
           ))}
         </select>
         {selectedGoal && (
-          <p className="mt-1 text-xs font-medium text-green-600 dark:text-green-400">
-            {formatCurrency(selectedGoal.current_amount)} of{' '}
-            {formatCurrency(selectedGoal.target_amount)} saved (
+          <p className="mt-1 text-xs font-medium text-success" data-ph-mask>
+            {formatCurrencyFull(selectedGoal.current_amount)} of{' '}
+            {formatCurrencyFull(selectedGoal.target_amount)} saved (
             {Math.round((selectedGoal.current_amount / selectedGoal.target_amount) * 100)}%)
           </p>
         )}
@@ -188,11 +182,11 @@ export function SavingsGoalActionForm({
           value={action.from_account_id}
           onChange={handleFromAccountChange}
           disabled={disabled || isLoading}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           <option value="">Select an account...</option>
           {(accountsList ?? []).map((account: { id: string; name: string }) => (
-            <option key={account.id} value={account.id}>
+            <option key={account.id} value={account.id} data-ph-mask>
               {account.name}
             </option>
           ))}
@@ -209,7 +203,7 @@ export function SavingsGoalActionForm({
           value={action.amount_type}
           onChange={handleAmountTypeChange}
           disabled={disabled}
-          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-[3px] focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {AMOUNT_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -228,7 +222,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="amount" className="text-sm font-medium text-foreground">
             Amount
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="amount"
@@ -249,7 +243,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="percentage" className="text-sm font-medium text-foreground">
             Percentage
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <input
               id="percentage"
               type="number"
@@ -271,7 +265,7 @@ export function SavingsGoalActionForm({
           <label htmlFor="minimum-balance" className="text-sm font-medium text-foreground">
             Minimum Balance
           </label>
-          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-blue-500 focus-within:ring-[3px] focus-within:ring-blue-500/10">
+          <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring">
             <span className="bg-muted px-3 py-2.5 text-sm font-medium text-muted-foreground">$</span>
             <input
               id="minimum-balance"

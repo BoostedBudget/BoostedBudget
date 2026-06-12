@@ -1,7 +1,8 @@
 import { useCallback } from 'react'
-import { Settings, Trash2 } from 'lucide-react'
+import { Settings, Trash2, LayoutList } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -249,14 +250,12 @@ export function BudgetTable({
 
   if (!loading && budgets.length === 0 && !hasActiveFilters) {
     return (
-      <div
-        className={cn(
-          'text-center py-12 px-6 text-muted-foreground bg-card border border-dashed border-border rounded-lg',
-          className
-        )}
-      >
-        <p>No budgets found. Create a budget to get started.</p>
-      </div>
+      <EmptyState
+        className={className}
+        icon={<LayoutList />}
+        title="No budgets found"
+        description="Create a budget to get started."
+      />
     )
   }
 
@@ -287,9 +286,12 @@ export function BudgetTable({
       className={cn(loading && 'budget-table--loading', className)}
       maskedColumnIds={['amount', 'income', 'remaining']}
       emptyState={
-        <p className="py-12 px-4 text-center text-muted-foreground italic">
-          No budgets match your filters. Try adjusting your criteria.
-        </p>
+        <EmptyState
+          size="compact"
+          icon={<LayoutList />}
+          title="No budgets match your filters."
+          description="Try adjusting your criteria."
+        />
       }
       rowActions={
         hasActions

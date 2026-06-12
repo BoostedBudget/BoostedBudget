@@ -5,6 +5,7 @@ import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
 import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Card } from '@/components/ui/card';
 
 const statusToVariant = (status: string): 'success' | 'warning' | 'error' => {
   if (status === 'up' || status === 'healthy') return 'success';
@@ -186,7 +187,7 @@ export function HealthDashboardPage() {
         <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Job Queues</h2>
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))] max-md:[grid-template-columns:1fr]">
           {Object.entries(data.job_queues).map(([queueName, metrics]) => (
-            <div key={queueName} className="p-4 bg-card border border-border rounded-lg">
+            <Card key={queueName}>
               <h3 className="m-0 mb-3 text-base font-semibold text-foreground">{queueName}</h3>
               <div className="flex flex-col gap-2">
                 <div className="flex justify-between items-center">
@@ -208,7 +209,7 @@ export function HealthDashboardPage() {
                   <span className="text-sm font-semibold text-foreground">{metrics.completed_last_hour}</span>
                 </div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       </section>

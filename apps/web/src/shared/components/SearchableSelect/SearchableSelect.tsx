@@ -16,6 +16,12 @@ export interface SearchableSelectProps {
   'aria-label'?: string
   allowClear?: boolean
   clearLabel?: string
+  /**
+   * When true, wraps each option label and sublabel in a `data-ph-mask` span so
+   * PostHog session replay does not record their text. Set this on any consumer
+   * whose options carry PII (e.g. account names, account masks).
+   */
+  maskOptions?: boolean
 }
 
 export function SearchableSelect({
@@ -28,6 +34,7 @@ export function SearchableSelect({
   'aria-label': ariaLabel,
   allowClear = false,
   clearLabel = 'Clear selection',
+  maskOptions = false,
 }: SearchableSelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [searchText, setSearchText] = useState('')
@@ -228,9 +235,15 @@ export function SearchableSelect({
                 }`}
                 onClick={() => handleSelect(option.value)}
               >
-                <span className={`text-sm whitespace-nowrap overflow-hidden text-ellipsis ${option.value === value ? 'text-primary' : 'text-foreground'}`}>{option.label}</span>
+                <span
+                  className={`text-sm whitespace-nowrap overflow-hidden text-ellipsis ${option.value === value ? 'text-primary' : 'text-foreground'}`}
+                  {...(maskOptions && { 'data-ph-mask': '' })}
+                >{option.label}</span>
                 {option.sublabel && (
-                  <span className="text-xs text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">
+                  <span
+                    className="text-xs text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis"
+                    {...(maskOptions && { 'data-ph-mask': '' })}
+                  >
                     {option.sublabel}
                   </span>
                 )}

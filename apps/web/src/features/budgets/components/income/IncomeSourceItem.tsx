@@ -6,6 +6,7 @@
  */
 
 import { XIcon, TagIcon, DollarSignIcon, FolderIcon } from 'lucide-react';
+import { formatCurrencyFull } from '@/shared/charts/formatters';
 import type { IncomeSource } from '../../types';
 import { getPFCIncomeSourceLabel } from '../../utils/incomeSourceLabel';
 import { Badge } from '@/components/ui/badge';
@@ -19,19 +20,16 @@ export interface IncomeSourceItemProps {
   disabled?: boolean;
 }
 
-function formatCurrency(value: string): string {
+function formatCurrencyDisplay(value: string): string {
   const amount = parseFloat(value);
   if (isNaN(amount)) return '$0.00';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
+  return formatCurrencyFull(amount);
 }
 
 function getDisplayValue(source: IncomeSource): string {
   if (source.type === 'pfc_primary') return getPFCIncomeSourceLabel(source)
   if (source.type === 'tag') return source.value
-  if (source.type === 'manual') return formatCurrency(source.value)
+  if (source.type === 'manual') return formatCurrencyDisplay(source.value)
   return 'Unknown source type'
 }
 
@@ -68,11 +66,19 @@ export function IncomeSourceItem({
           {getIcon(source.type)}
         </span>
         <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-sm font-medium text-foreground truncate">{displayValue}</span>
+          <span
+            className="text-sm font-medium text-foreground truncate"
+            // data-ph-mask: || undefined prevents data-ph-mask="false" in the DOM.
+            // Only 'manual' sources display a currency amount; pfc/tag labels aren't financial PII.
+            data-ph-mask={source.type === 'manual' || undefined}
+          >
+            {displayValue}
+          </span>
           {hasDescription && (
             <span
               className="text-xs text-muted-foreground truncate"
               data-testid="income-source-description"
+              data-ph-mask
             >
               {source.description}
             </span>

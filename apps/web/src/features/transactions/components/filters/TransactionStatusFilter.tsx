@@ -48,7 +48,7 @@ export function TransactionStatusFilter({
           >
             {option.label}
             {option.value === 'pending' && pendingCount !== undefined && pendingCount > 0 && (
-              <span className="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+              <span className="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-medium bg-warning/10 text-warning-foreground rounded-full">
                 {pendingCount}
               </span>
             )}

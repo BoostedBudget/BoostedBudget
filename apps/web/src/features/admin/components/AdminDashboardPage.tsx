@@ -6,6 +6,7 @@ import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { SummaryCard } from './SummaryCard'
 import { QuickActionLink } from './QuickActionLink'
 import { EnvironmentBadge } from './EnvironmentBadge'
+import { Card } from '@/components/ui/card'
 import { ADMIN_ROUTES } from '../constants'
 
 export function AdminDashboardPage() {
@@ -50,7 +51,7 @@ export function AdminDashboardPage() {
         />
       </div>
 
-      <section className="bg-card border border-border rounded-lg p-6 mb-6">
+      <Card className="mb-6">
         <h2 className="text-lg font-semibold text-foreground m-0 mb-4">Quick Actions</h2>
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))] max-sm:[grid-template-columns:1fr]">
           <QuickActionLink
@@ -66,7 +67,7 @@ export function AdminDashboardPage() {
             icon={<Wrench size={20} />}
           />
         </div>
-      </section>
+      </Card>
     </div>
   )
 }

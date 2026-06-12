@@ -6,14 +6,20 @@
  *
  * Displays auto-categorization rules in a table format with sorting and actions.
  *
- * PII Audit: No columns in this table contain PII requiring data-ph-mask.
- * Audit: name (non-financial), status, priority (integer), conditions (count string),
- * category (label string), matches (integer count).
+ * PII Audit: The `name` column is masked via maskedColumnIds={['name']} so that
+ * DataTable's own <td> renderer applies data-ph-mask to the entire name cell,
+ * covering both the rule name and description rendered there. This matches the
+ * masking applied in AutoCategorizationRuleCard (name at :76, description at :83).
+ * `description` is a PII_PROPERTY_DENYLIST member (posthog.ts:3-17).
+ * Other columns (status, priority, conditions, category, matches) are non-PII.
  */
 
 import { useCallback, useMemo } from 'react'
-import { Edit, Trash2 } from 'lucide-react'
+import { Edit, Filter, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Switch } from '@/components/ui/switch'
 import type { CategorizationRule } from '../types'
 import { formatPFCEnum } from '@/shared/categories/formatPfc'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
@@ -98,9 +104,9 @@ function getSourceLabel(source: CategorizationRule['source']): string {
 
 /** CSS class for source badge */
 function getSourceBadgeClass(source: CategorizationRule['source']): string {
-  if (source === 'manual') return 'bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-  if (source === 'ai') return 'bg-purple-50 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
-  if (source === 'template') return 'bg-green-50 text-green-700 dark:bg-green-900 dark:text-green-300'
+  if (source === 'manual') return 'bg-info/10 text-info'
+  if (source === 'ai') return 'bg-primary/10 text-primary'
+  if (source === 'template') return 'bg-success/10 text-success'
   return ''
 }
 
@@ -187,13 +193,6 @@ export function AutoCategorizationRuleTable({
     [onStatusFilterChange, onCategoryFilterChange, onPriorityRangeChange]
   )
 
-  const handleToggle = useCallback(
-    (rule: CategorizationRule) => {
-      if (onToggle && !loading) onToggle(rule, !rule.enabled)
-    },
-    [onToggle, loading]
-  )
-
   const columns = useMemo((): ColumnDef<CategorizationRule>[] => [
     {
       id: 'name',
@@ -234,14 +233,9 @@ export function AutoCategorizationRuleTable({
         ? { type: 'select', options: statusOptions, multiSelect: true }
         : undefined,
       render: (r) => (
-        <span className={cn(
-          'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium',
-          r.enabled
-            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
-            : 'bg-muted text-muted-foreground'
-        )}>
+        <Badge variant={r.enabled ? 'success' : 'secondary'}>
           {r.enabled ? 'Enabled' : 'Disabled'}
-        </span>
+        </Badge>
       ),
     },
     {
@@ -289,7 +283,7 @@ export function AutoCategorizationRuleTable({
           {r.target_tags && r.target_tags.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {r.target_tags.map((tag) => (
-                <span key={tag} className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[0.625rem] font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                <span key={tag} className="inline-flex items-center rounded bg-info/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-info">
                   {tag}
                 </span>
               ))}
@@ -318,12 +312,12 @@ export function AutoCategorizationRuleTable({
   // Pre-filters empty state: no data and no active filters → return external div
   if (rules.length === 0 && !hasActiveFilters) {
     return (
-      <div className={cn(
-        'text-center rounded-lg border border-dashed border-border bg-card px-6 py-12 text-muted-foreground',
-        className
-      )}>
-        <p>No rules found. Create your first auto-categorization rule to get started.</p>
-      </div>
+      <EmptyState
+        icon={<Filter />}
+        title="No rules found"
+        description="Create your first auto-categorization rule to get started."
+        className={className}
+      />
     )
   }
 
@@ -345,34 +339,26 @@ export function AutoCategorizationRuleTable({
       onColumnOrderChange={onColumnOrderChange}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
+      maskedColumnIds={['name']}
       rowClassName={onRowClick ? () => 'autocat-table__row--clickable' : undefined}
       emptyState={
-        <span className="px-4 py-12 text-center italic text-muted-foreground">
-          No rules match your filters. Try adjusting your criteria.
-        </span>
+        <EmptyState
+          size="compact"
+          icon={<Filter />}
+          title="No rules match your filters"
+          description="Try adjusting your criteria."
+        />
       }
       rowActions={hasActions ? (rule) => (
         <div className="flex items-center justify-end gap-2">
           {onToggle && (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={rule.enabled}
-              onClick={() => handleToggle(rule)}
-              onKeyDown={(e) => { if (e.key === ' ') e.preventDefault() }}
+            <Switch
+              checked={rule.enabled}
+              onCheckedChange={(checked) => onToggle(rule, checked)}
               disabled={loading}
-              className={cn(
-                'relative h-5 w-10 cursor-pointer rounded-full border-none p-0 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50',
-                rule.enabled ? 'bg-green-500 dark:bg-green-600' : 'bg-muted-foreground/30'
-              )}
               aria-label={rule.enabled ? 'Disable rule' : 'Enable rule'}
               title={rule.enabled ? 'Disable rule' : 'Enable rule'}
-            >
-              <span className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-200',
-                rule.enabled ? 'left-0.5 translate-x-5' : 'left-0.5'
-              )} />
-            </button>
+            />
           )}
           {onEdit && (
             <button
@@ -391,7 +377,7 @@ export function AutoCategorizationRuleTable({
               type="button"
               onClick={() => onDelete(rule)}
               disabled={loading}
-              className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4 dark:hover:bg-red-900 dark:hover:text-red-400"
+              className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
               aria-label="Delete rule"
               title="Delete rule"
             >

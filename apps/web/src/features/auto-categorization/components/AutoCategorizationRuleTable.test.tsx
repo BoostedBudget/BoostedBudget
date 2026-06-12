@@ -5,9 +5,10 @@
  * Tests for the auto-categorization rule table display component.
  * TDD RED: Writing tests before implementation.
  *
- * PII Audit: No columns in this table contain PII requiring data-ph-mask.
- * Audit: name (non-financial), status, priority (integer), conditions (count string),
- * category (label string), matches (integer count).
+ * PII Audit: The `name` column is masked via maskedColumnIds={['name']} — DataTable's
+ * <td> renderer applies data-ph-mask to the cell, covering the rule name and description
+ * (description is a PII_PROPERTY_DENYLIST member). Other columns (status, priority,
+ * conditions, category, matches) are non-PII and are not masked.
  */
 
 import { describe, it, expect, mock } from 'bun:test'

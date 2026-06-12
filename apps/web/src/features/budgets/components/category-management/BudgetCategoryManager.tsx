@@ -9,7 +9,8 @@
  */
 
 import { useState, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
-import { PlusIcon, SettingsIcon } from 'lucide-react';
+import { PlusIcon, SettingsIcon, LayoutList } from 'lucide-react';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 
@@ -360,11 +361,11 @@ export function BudgetCategoryManager({
           })}
         </div>
       ) : (
-        <div className="p-8 text-center bg-muted border border-dashed border-border rounded-lg">
-          <p className="text-sm text-muted-foreground m-0">
-            No categories yet. Add a category to start tracking your budget allocations.
-          </p>
-        </div>
+        <EmptyState
+          icon={<LayoutList />}
+          title="No categories yet."
+          description="Add a category to start tracking your budget allocations."
+        />
       )}
 
       {/* Add/Edit Form Dialog */}

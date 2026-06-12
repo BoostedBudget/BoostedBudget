@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
 export interface UnallocatedFundsCardProps {
   /** Amount of unallocated funds (can be negative if over-allocated) */
@@ -84,8 +85,8 @@ export function UnallocatedFundsCard({
     'text-primary'
 
   return (
-    <section
-      className={`bg-card border border-border rounded-xl p-6 ${cardVariant}`}
+    <Card
+      className={cardVariant}
       role="region"
       aria-labelledby="unallocated-card-title"
     >
@@ -178,6 +179,6 @@ export function UnallocatedFundsCard({
           )}
         </div>
       )}
-    </section>
+    </Card>
   );
 }

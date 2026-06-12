@@ -71,6 +71,8 @@ function SavingsImpactWidget(_props: WidgetProps) {
   return (
     <div className="h-full flex flex-col gap-4 p-1">
       {/* Total saved */}
+      {/* StatCard exception (#1285): one of three stacked sections in a composite widget; converting only
+          the top block fragments the widget. Stays as-is. */}
       <div>
         <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
           Total Moved to Savings

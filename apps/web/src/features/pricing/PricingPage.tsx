@@ -53,7 +53,7 @@ function buildFeatureList(tierData: SubscriptionTier): Array<{ feature: string; 
 function TrialBanner({ daysRemaining }: { daysRemaining: number }) {
   return (
     <div
-      className="flex items-center bg-info/10 border border-blue-400 border-l-4 border-l-info rounded-lg px-6 py-4 mb-8"
+      className="flex items-center bg-info/10 border border-info/30 border-l-4 border-l-info rounded-lg px-6 py-4 mb-8"
       role="status"
     >
       <div className="flex-1">
@@ -74,7 +74,7 @@ function FrozenAccountBanner() {
       <AlertTriangle className="shrink-0 w-6 h-6 text-warning mt-0.5" aria-hidden="true" />
       <div className="flex-1">
         <h2 className="text-base font-semibold text-warning m-0 mb-1.5">Your subscription has expired</h2>
-        <p className="text-[0.9375rem] text-warning/90 m-0 leading-relaxed">
+        <p className="text-[0.9375rem] text-warning m-0 leading-relaxed">
           Subscribe to continue using BoostedBudget. Your data is safe and will be
           available once you resubscribe.
         </p>
@@ -155,7 +155,7 @@ function TierCard({
         </div>
       )}
       {isHousehold5 && !isCurrentTier && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide whitespace-nowrap bg-warning text-white">
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide whitespace-nowrap bg-warning text-warning-foreground">
           Best Value
         </div>
       )}
@@ -173,7 +173,7 @@ function TierCard({
 
       <div className="text-center mb-6 pb-6 border-b border-muted">
         {billingPeriod === 'yearly' && currentPrice > 0 && (
-          <span className="inline-block bg-success text-white text-xs font-semibold px-3 py-1 rounded-full mb-2 animate-[fadeSlideIn_0.3s_ease_forwards]">
+          <span className="inline-block bg-success text-success-foreground text-xs font-semibold px-3 py-1 rounded-full mb-2 animate-[fadeSlideIn_0.3s_ease_forwards]">
             Save {savingsPercent}%
           </span>
         )}

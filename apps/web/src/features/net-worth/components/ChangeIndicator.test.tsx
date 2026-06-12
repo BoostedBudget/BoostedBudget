@@ -9,7 +9,7 @@ describe('ChangeIndicator', () => {
     )
     const el = container.firstChild as HTMLElement
     expect(el.className).toContain('text-success')
-    expect(el.getAttribute('aria-label')).toBe('Net worth up $1,234 (5.20%) versus previous period')
+    expect(el.getAttribute('aria-label')).toBe('Net worth up by 5.20% versus previous period')
   })
 
   it('renders negative variant with down glyph and destructive color', () => {
@@ -18,7 +18,7 @@ describe('ChangeIndicator', () => {
     )
     const el = container.firstChild as HTMLElement
     expect(el.className).toContain('text-destructive')
-    expect(el.getAttribute('aria-label')).toBe('Net worth down $500 (2.10%) versus previous period')
+    expect(el.getAttribute('aria-label')).toBe('Net worth down by 2.10% versus previous period')
   })
 
   it('renders neutral variant with muted color', () => {

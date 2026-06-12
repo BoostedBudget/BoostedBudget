@@ -300,7 +300,7 @@ export function ReviewInboxPage() {
           checked={isSelected(tx.id)}
           onChange={() => toggle(tx.id)}
           onClick={(e) => e.stopPropagation()}
-          aria-label={`Select ${tx.merchant_name || tx.name}`}
+          aria-label="Select transaction"
           className="size-4 rounded border-border"
         />
       ),
