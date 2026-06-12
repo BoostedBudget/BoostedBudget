@@ -4,7 +4,6 @@
  * Issue #529: Transaction page filtering
  */
 
-export { TransactionAccountFilter } from './TransactionAccountFilter'
 export { TransactionAmountFilter } from './TransactionAmountFilter'
 export { TransactionDateFilter } from './TransactionDateFilter'
 export { TransactionStatusFilter } from './TransactionStatusFilter'

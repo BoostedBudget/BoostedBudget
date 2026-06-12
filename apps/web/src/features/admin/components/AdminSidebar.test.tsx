@@ -35,7 +35,7 @@ describe('AdminSidebar', () => {
     renderWithRouter(<AdminSidebar />, ['/admin'])
 
     const dashboardLink = screen.getByRole('link', { name: 'Dashboard' })
-    expect(dashboardLink).toHaveClass('bg-amber-50')
+    expect(dashboardLink).toHaveClass('bg-warning/10')
   })
 
   it('should have navigation landmark', () => {

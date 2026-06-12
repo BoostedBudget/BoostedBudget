@@ -1,3 +1,6 @@
+import { CreditCard } from 'lucide-react'
+import { formatCurrencyFull } from '@/shared/charts/formatters'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { BalanceSummary } from '../types'
 
 interface AccountBalanceCardsProps {
@@ -19,34 +22,27 @@ interface AccountBalanceCardsProps {
 export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
   const { by_type } = summary
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(value)
-  }
-
   // Color scheme for account types
   const typeColors: Record<string, { bg: string; border: string; text: string }> = {
     depository: {
-      bg: 'bg-green-50 dark:bg-green-950',
-      border: 'border-green-200 dark:border-green-800',
-      text: 'text-green-900 dark:text-green-100',
+      bg: 'bg-success/10',
+      border: 'border-success/30',
+      text: 'text-success',
     },
     credit: {
-      bg: 'bg-red-50 dark:bg-red-950',
-      border: 'border-red-200 dark:border-red-800',
-      text: 'text-red-900 dark:text-red-100',
+      bg: 'bg-destructive/10',
+      border: 'border-destructive/30',
+      text: 'text-destructive',
     },
     investment: {
-      bg: 'bg-purple-50 dark:bg-purple-950',
-      border: 'border-purple-200 dark:border-purple-800',
-      text: 'text-purple-900 dark:text-purple-100',
+      bg: 'bg-muted/30',
+      border: 'border-border',
+      text: 'text-foreground',
     },
     loan: {
-      bg: 'bg-amber-50 dark:bg-amber-950',
-      border: 'border-amber-200 dark:border-amber-800',
-      text: 'text-amber-900 dark:text-amber-100',
+      bg: 'bg-warning/10',
+      border: 'border-warning/30',
+      text: 'text-warning',
     },
     other: {
       bg: 'bg-muted',
@@ -68,9 +64,11 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
 
   if (accountTypes.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-center text-muted-foreground">No accounts found</p>
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<CreditCard />}
+        title="No accounts found"
+      />
     )
   }
 
@@ -92,8 +90,8 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                 {label}
               </h3>
               <div className="text-right">
-                <p className={`text-xl font-bold ${colors.text}`}>
-                  {formatCurrency(typeData.balance)}
+                <p className={`text-xl font-bold ${colors.text}`} data-ph-mask>
+                  {formatCurrencyFull(typeData.balance)}
                 </p>
                 <p className="text-sm text-muted-foreground">
                   {typeData.account_count} account{typeData.account_count !== 1 ? 's' : ''}
@@ -111,8 +109,8 @@ export function AccountBalanceCards({ summary }: AccountBalanceCardsProps) {
                   <span className="text-sm font-medium text-foreground">
                     {account.name}
                   </span>
-                  <span className="text-sm font-semibold text-foreground">
-                    {formatCurrency(account.balance)}
+                  <span className="text-sm font-semibold text-foreground" data-ph-mask>
+                    {formatCurrencyFull(account.balance)}
                   </span>
                 </div>
               ))}

@@ -11,6 +11,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeftIcon, BellAlertIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
 import { useTags } from '../../tags/hooks/useTags';
@@ -133,7 +135,7 @@ export function BudgetDetailPage() {
     return (
       <div className="max-w-[1200px] mx-auto p-6">
         <div className="flex flex-col items-center justify-center min-h-[300px] gap-4 text-muted-foreground">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
           <p>Loading budget...</p>
         </div>
       </div>
@@ -144,15 +146,15 @@ export function BudgetDetailPage() {
     return (
       <div className="max-w-[1200px] mx-auto p-6">
         <div className="flex flex-col items-center justify-center gap-4 p-8 bg-destructive/10 rounded-lg text-destructive">
-          <span className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-semibold text-xl">!</span>
+          <span className="flex items-center justify-center w-10 h-10 rounded-full bg-destructive/10 text-destructive font-semibold text-xl">!</span>
           <span>Error: {error.message}</span>
-          <button
+          <Button
             type="button"
+            variant="destructive"
             onClick={refetch}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 border-none rounded-md cursor-pointer transition-colors"
           >
             Retry
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -163,7 +165,7 @@ export function BudgetDetailPage() {
       <div className="max-w-[1200px] mx-auto p-6">
         <div className="flex flex-col items-center justify-center gap-4 p-8 text-muted-foreground">
           <p>Budget not found</p>
-          <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-blue-600 dark:text-blue-400 no-underline hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
+          <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-primary no-underline hover:text-primary/80 transition-colors">
             <ArrowLeftIcon className="h-5 w-5" />
             Back to Budgets
           </Link>
@@ -176,7 +178,7 @@ export function BudgetDetailPage() {
     <div className="max-w-[1200px] mx-auto p-6">
       {/* Header */}
       <header className="mb-8">
-        <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-blue-600 dark:text-blue-400 no-underline hover:text-blue-700 dark:hover:text-blue-300 transition-colors">
+        <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-primary no-underline hover:text-primary/80 transition-colors">
           <ArrowLeftIcon className="h-5 w-5" />
           Back to Budgets
         </Link>
@@ -184,7 +186,7 @@ export function BudgetDetailPage() {
         <div className="flex items-center gap-3 mb-2">
           <h1 className="m-0 text-3xl font-bold text-foreground"><span data-ph-mask>{budget.name}</span></h1>
           {budget.is_active && (
-            <span className="px-3 py-1 text-xs font-semibold rounded-full text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900">Active</span>
+            <Badge variant="success">Active</Badge>
           )}
         </div>
 
@@ -225,7 +227,7 @@ export function BudgetDetailPage() {
         <div className="flex flex-wrap gap-3 mt-4">
           <Link
             to={`/boosts/new?type=budget_alert&budget_id=${budgetId}`}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary/30 rounded-lg no-underline hover:bg-primary/20 hover:border-primary/50 transition-all"
             aria-label="Create budget alert rule"
           >
             <BellAlertIcon className="h-4 w-4" aria-hidden="true" />
@@ -233,7 +235,7 @@ export function BudgetDetailPage() {
           </Link>
           <Link
             to={`/boosts/new?type=category_rollover&budget_id=${budgetId}`}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg no-underline hover:bg-blue-100 dark:hover:bg-blue-800 hover:border-blue-300 dark:hover:border-blue-600 transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 border border-primary/30 rounded-lg no-underline hover:bg-primary/20 hover:border-primary/50 transition-all"
             aria-label="Create category rollover rule"
           >
             <ArrowPathIcon className="h-4 w-4" aria-hidden="true" />

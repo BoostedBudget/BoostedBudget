@@ -19,6 +19,7 @@ import { AlertCircle, Plus, Zap } from 'lucide-react'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import {
   useGetBoosts,
   useToggleBoost,
@@ -194,14 +195,13 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
           <AlertCircle className="mb-4 h-12 w-12 text-destructive" />
           <h2 className="mb-2 text-xl font-semibold text-foreground">Error loading boosts</h2>
           <p className="mb-6 text-muted-foreground">There was a problem loading your boosts.</p>
-          <button
-            type="button"
+          <Button
+            variant="outline"
             onClick={() => refetch()}
-            className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-300 dark:hover:bg-blue-800"
             aria-label="Retry loading boosts"
           >
             Retry
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -273,9 +273,9 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
       <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-semibold text-foreground">Automation Boosts</h1>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-{boosts.length} {boosts.length === 1 ? 'boost' : 'boosts'}
-          </span>
+          <Badge variant="secondary">
+            {boosts.length} {boosts.length === 1 ? 'boost' : 'boosts'}
+          </Badge>
         </div>
 
         <div className="flex items-center gap-4">
@@ -285,15 +285,13 @@ export function BoostsManagePage({ showTypeSegment = false, boostTypeFilter }: B
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
           <ReadOnlyGuard>
-            <button
-              type="button"
+            <Button
               onClick={handleCreateBoost}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:h-4 [&>svg]:w-4"
               aria-label="Create new boost"
             >
               <Plus aria-hidden="true" />
               Create Boost
-            </button>
+            </Button>
           </ReadOnlyGuard>
         </div>
       </header>

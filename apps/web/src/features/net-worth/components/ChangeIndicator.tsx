@@ -34,7 +34,7 @@ function formatAmount(amount: number): string {
 export function ChangeIndicator({ variant = 'neutral', amount, percent, className }: ChangeIndicatorProps) {
   const directionMap = { positive: 'up', negative: 'down', neutral: 'unchanged' } as const
   const direction = directionMap[variant ?? 'neutral']
-  const ariaLabel = `Net worth ${direction} ${formatAmount(amount)} (${Math.abs(percent).toFixed(2)}%) versus previous period`
+  const ariaLabel = `Net worth ${direction} by ${Math.abs(percent).toFixed(2)}% versus previous period`
   const glyph = GLYPHS[variant ?? 'neutral']
 
   return (

@@ -93,7 +93,7 @@ export function AccountTypeFilter({
                     {type.count} account{type.count !== 1 ? 's' : ''}
                   </p>
                 </div>
-                <span className="text-sm font-semibold">
+                <span className="text-sm font-semibold" data-ph-mask>
                   {formatCurrency(type.total_balance)}
                 </span>
               </div>

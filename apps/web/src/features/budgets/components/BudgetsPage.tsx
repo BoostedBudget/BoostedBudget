@@ -76,7 +76,7 @@ export function BudgetsPage() {
     try {
       await deleteBudget(deletingBudget.id);
       trackEvent(ANALYTICS_EVENTS.BUDGET_DELETED)
-      toast.success(`Budget "${deletingBudget.name}" deleted successfully`);
+      toast.success(<span data-ph-mask>{`Budget "${deletingBudget.name}" deleted successfully`}</span>);
       closeDialog();
     } catch (error) {
       if (error instanceof Error && error.message.includes('404')) {

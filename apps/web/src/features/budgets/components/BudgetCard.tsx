@@ -9,6 +9,7 @@
 import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
 import { getBudgetDetailPath } from '../constants';
@@ -80,9 +81,9 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
   };
 
   return (
-    <div
+    <Card
       data-testid="budget-card"
-      className="bg-card border border-border rounded-xl p-6 flex flex-col gap-4 transition-shadow hover:shadow-md"
+      className="flex flex-col gap-4 transition-shadow hover:shadow-md"
     >
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
@@ -164,6 +165,6 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
           </Button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

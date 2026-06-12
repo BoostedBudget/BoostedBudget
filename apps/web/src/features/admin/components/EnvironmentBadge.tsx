@@ -1,26 +1,24 @@
-import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import type { Environment } from '../hooks/useEnvironment'
+import type { BadgeProps } from '@/components/ui/badge'
 
 interface EnvironmentBadgeProps {
   environment: Environment
 }
 
-const envStyles: Record<string, string> = {
-  development: 'bg-info/10 text-info border border-info/20',
-  qa: 'bg-warning/10 text-warning border border-warning/20',
-  staging: 'bg-warning/10 text-warning border border-warning/20',
-  production: 'bg-success/10 text-success border border-success/20',
+const envVariants: Record<string, BadgeProps['variant']> = {
+  development: 'info',
+  qa: 'warning',
+  staging: 'warning',
+  production: 'success',
 }
 
 export function EnvironmentBadge({ environment }: EnvironmentBadgeProps) {
+  const variant = envVariants[environment] ?? 'default'
+
   return (
-    <span
-      className={cn(
-        'inline-block px-3 py-1 text-xs font-semibold tracking-wider rounded-full',
-        envStyles[environment] ?? 'bg-muted text-muted-foreground border border-border'
-      )}
-    >
+    <Badge variant={variant} className="tracking-wider">
       {environment.toUpperCase()}
-    </span>
+    </Badge>
   )
 }

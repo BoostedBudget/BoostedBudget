@@ -8,6 +8,8 @@ export interface StatCardProps extends React.HTMLAttributes<HTMLDivElement> {
   icon?: React.ReactNode
   /** 'up' applies text-success, 'down' applies text-destructive, 'neutral' / undefined is default foreground */
   trend?: 'up' | 'down' | 'neutral'
+  /** When set, renders a left accent border (border-l-4) in the given semantic color */
+  accent?: 'success' | 'warning' | 'destructive' | 'info'
   /** When true, renders data-ph-mask on the value element (PostHog PII masking) */
   maskValue?: boolean
 }
@@ -18,13 +20,20 @@ const TREND_CLASS: Record<NonNullable<StatCardProps['trend']>, string> = {
   neutral: 'text-foreground',
 }
 
+const ACCENT_CLASS: Record<NonNullable<StatCardProps['accent']>, string> = {
+  success: 'border-l-success',
+  warning: 'border-l-warning',
+  destructive: 'border-l-destructive',
+  info: 'border-l-info',
+}
+
 /**
  * StatCard — compact summary stat card used in dashboards and summary headers.
  * Promotes the hand-rolled stat card pattern from SavingsSummaryHeader to a shared primitive.
  */
-function StatCard({ label, value, icon, trend, maskValue, className, ...props }: StatCardProps) {
+function StatCard({ label, value, icon, trend, accent, maskValue, className, ...props }: StatCardProps) {
   return (
-    <Card className={cn("flex flex-col gap-1", className)} {...props}>
+    <Card className={cn("flex flex-col gap-1", accent && `border-l-4 ${ACCENT_CLASS[accent]}`, className)} {...props}>
       <div className="flex items-center justify-between">
         <p
           data-slot="stat-label"

@@ -8,6 +8,7 @@ import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 import { Button } from '../../components/ui/button'
 import { AlertCircle } from 'lucide-react'
 import { posthog } from '../../shared/lib/posthog'
+import { Card } from '../../components/ui/card'
 import type { User, UpdateProfileRequest } from './types'
 import { IANA_TIMEZONES } from './timezones'
 
@@ -133,7 +134,7 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
   }
 
   return (
-    <section className="bg-card border border-border rounded-lg p-6 mb-8">
+    <Card className="mb-8">
       <h2 className="text-2xl font-semibold text-foreground mt-0 mb-6 border-b-2 border-muted pb-2">
         Update Profile
       </h2>
@@ -257,6 +258,6 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
         loading={submitting}
       />
 
-    </section>
+    </Card>
   )
 }

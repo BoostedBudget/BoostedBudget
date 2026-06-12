@@ -11,9 +11,9 @@ export function SubscriptionErrorState({ message, onRetry }: SubscriptionErrorSt
     <div className="max-w-[800px] mx-auto p-8">
       <div
         role="alert"
-        className="flex flex-col items-center justify-center text-center rounded-xl border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-900/20 px-6 py-12"
+        className="flex flex-col items-center justify-center text-center rounded-xl border border-destructive/30 bg-destructive/10 px-6 py-12"
       >
-        <RefreshCw className="h-12 w-12 text-red-400 dark:text-red-500 mb-3" aria-hidden="true" />
+        <RefreshCw className="h-12 w-12 text-destructive mb-3" aria-hidden="true" />
         <h2 className="text-base font-medium text-foreground">
           Unable to load subscription
         </h2>

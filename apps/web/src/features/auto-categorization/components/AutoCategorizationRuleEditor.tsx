@@ -625,6 +625,7 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
             aria-label="Select account"
             allowClear
             clearLabel="Select an account"
+            maskOptions
           />
         )
       }

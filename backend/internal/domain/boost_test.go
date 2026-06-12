@@ -1091,6 +1091,71 @@ func TestTransferSuggestion_Complete(t *testing.T) {
 	})
 }
 
+func TestTransferSuggestion_MatchState(t *testing.T) {
+	txnID := "txn-reserved-1"
+
+	tests := []struct {
+		name     string
+		status   SuggestionStatus
+		matchedID *string
+		want     string
+	}{
+		{
+			name:      "completed status → 'completed' (no reservation)",
+			status:    SuggestionStatusCompleted,
+			matchedID: nil,
+			want:      "completed",
+		},
+		{
+			name:      "completed status → 'completed' (with reservation set from Complete())",
+			status:    SuggestionStatusCompleted,
+			matchedID: &txnID,
+			want:      "completed",
+		},
+		{
+			name:      "accepted with reservation → 'confirmable'",
+			status:    SuggestionStatusAccepted,
+			matchedID: &txnID,
+			want:      "confirmable",
+		},
+		{
+			name:      "accepted without reservation → 'unmatched'",
+			status:    SuggestionStatusAccepted,
+			matchedID: nil,
+			want:      "unmatched",
+		},
+		{
+			name:      "pending → empty (omitted)",
+			status:    SuggestionStatusPending,
+			matchedID: nil,
+			want:      "",
+		},
+		{
+			name:      "rejected → empty (omitted)",
+			status:    SuggestionStatusRejected,
+			matchedID: nil,
+			want:      "",
+		},
+		{
+			name:      "expired → empty (omitted)",
+			status:    SuggestionStatusExpired,
+			matchedID: nil,
+			want:      "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &TransferSuggestion{
+				Status:               tc.status,
+				MatchedTransactionID: tc.matchedID,
+			}
+			got := s.ComputeMatchState()
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // =============================================================================
 // Error Constants Tests
 // =============================================================================

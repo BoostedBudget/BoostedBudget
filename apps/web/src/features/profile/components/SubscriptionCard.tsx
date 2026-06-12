@@ -1,7 +1,17 @@
 import { Link } from 'react-router-dom'
 import { Award, Check } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
 import { useSubscriptionTiers } from '../../subscription/hooks/useSubscriptionTiers'
 import type { SubscriptionTier } from '../../subscription/types'
+
+const SUBSCRIPTION_STATUS_BADGE: Record<string, BadgeProps['variant']> = {
+  active: 'success',
+  inactive: 'destructive',
+  cancelled: 'secondary',
+  trial: 'info',
+}
 
 interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
@@ -48,18 +58,18 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   // Handle loading state
   if (loading || !tier || !status) {
     return (
-      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-muted-foreground">
+      <Card className="border-2 my-4 flex justify-center items-center min-h-[200px] text-muted-foreground">
         <p>Loading subscription details...</p>
-      </div>
+      </Card>
     )
   }
 
   // Handle error state
   if (error) {
     return (
-      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-destructive">
+      <Card className="border-2 my-4 flex justify-center items-center min-h-[200px] text-destructive">
         <p>Error loading subscription: {error.message}</p>
-      </div>
+      </Card>
     )
   }
 
@@ -69,9 +79,9 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   // Handle invalid tier (shouldn't happen, but safety check)
   if (!tierInfo) {
     return (
-      <div className="border-2 border-border rounded-xl p-6 my-4 bg-card flex justify-center items-center min-h-[200px] text-destructive">
+      <Card className="border-2 my-4 flex justify-center items-center min-h-[200px] text-destructive">
         <p>Invalid subscription tier</p>
-      </div>
+      </Card>
     )
   }
 
@@ -82,7 +92,7 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
   const isPremiumTier = ['premium', 'household_2', 'household_3', 'household_4', 'household_5'].includes(tier)
 
   return (
-    <div className={`subscription-card tier-${tier} border-2 rounded-xl p-6 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : 'border-border bg-card'}`}>
+    <Card className={`subscription-card tier-${tier} border-2 my-4 ${isPremiumTier ? 'border-primary bg-gradient-to-br from-card to-primary/5' : ''}`}>
       <div className="flex justify-between items-start mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <Award className="w-8 h-8 text-primary" aria-hidden="true" />
@@ -94,17 +104,11 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
             <span className="text-sm text-muted-foreground font-normal">/month</span>
           )}
         </div>
-        <span className={`px-3.5 py-1.5 rounded-full text-xs font-semibold capitalize tracking-wide ${
-          status === 'active' ? 'bg-success/10 text-success' :
-          status === 'inactive' ? 'bg-destructive/10 text-destructive' :
-          status === 'cancelled' ? 'bg-muted text-muted-foreground' :
-          status === 'trial' ? 'bg-info/10 text-info' :
-          'bg-muted text-muted-foreground'
-        }`}>
+        <Badge variant={SUBSCRIPTION_STATUS_BADGE[status] ?? 'secondary'} className="capitalize tracking-wide">
           {status === 'trial' && trialDaysRemaining !== undefined
             ? `Trial — ${trialDaysRemaining} day${trialDaysRemaining === 1 ? '' : 's'} remaining`
             : status}
-        </span>
+        </Badge>
       </div>
 
       <div className="mb-6">
@@ -132,6 +136,6 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
           Compare Plans →
         </Link>
       </div>
-    </div>
+    </Card>
   )
 }

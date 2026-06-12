@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
+import { Store } from 'lucide-react'
 import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
 import { formatCurrencyFull } from '@/shared/charts'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState } from '@/shared/components/DataTable'
 import type { SpendingMerchant } from '../types'
@@ -118,7 +120,11 @@ export function TopMerchantsTable({
         onColumnVisibilityChange={onColumnVisibilityChange}
         className="border-0 rounded-none bg-transparent"
         emptyState={
-          <p className="px-4 py-3 text-sm text-muted-foreground">No merchant data for this period.</p>
+          <EmptyState
+            size="compact"
+            icon={<Store />}
+            title="No merchant data for this period."
+          />
         }
       />
     </div>

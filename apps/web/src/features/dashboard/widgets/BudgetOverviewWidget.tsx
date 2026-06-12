@@ -36,7 +36,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
       </div>
     );
   }
@@ -44,7 +44,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
   if (error && !hasNoBudget) {
     return (
       <div className="flex items-center justify-center h-full gap-2 text-destructive text-sm">
-        <span className="flex items-center justify-center w-6 h-6 bg-destructive text-white rounded-full text-xs font-bold">!</span>
+        <span className="flex items-center justify-center w-6 h-6 bg-destructive text-destructive-foreground rounded-full text-xs font-bold">!</span>
         <span>Error loading budget</span>
       </div>
     );
@@ -80,7 +80,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
         <span className="text-xs capitalize text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{budget.period}</span>
       </div>
 
-      <div className="text-2xl font-bold text-foreground">
+      <div className="text-2xl font-bold text-foreground" data-ph-mask>
         {formatCurrency(totalBasis, budget.currency_code)}
       </div>
 
@@ -94,7 +94,7 @@ function BudgetOverviewWidget(_props: WidgetProps) {
       <div className="flex justify-between mt-auto">
         <div className="flex flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">Remaining</span>
-          <span className="text-sm font-semibold text-foreground">
+          <span className="text-sm font-semibold text-foreground" data-ph-mask>
             {formatCurrency(remaining, budget.currency_code)}
           </span>
         </div>

@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { CheckCircle2, Circle, X, PartyPopper, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import type { GettingStartedStep } from '../hooks/useGettingStarted'
 
 interface GettingStartedChecklistProps {
@@ -23,7 +24,7 @@ export function GettingStartedChecklist({
   const progressPercent = Math.round((completedCount / totalSteps) * 100)
 
   return (
-    <div className="rounded-xl border border-blue-200 bg-card shadow-sm dark:border-blue-900">
+    <Card className="p-0 shadow-sm">
       <div className="flex items-start justify-between px-5 pt-4 pb-2">
         <div className="flex-1 min-w-0">
           <h2 className="text-base font-semibold text-foreground">
@@ -41,7 +42,7 @@ export function GettingStartedChecklist({
             className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted"
           >
             <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-500"
+              className="h-full rounded-full bg-primary transition-all duration-500"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -60,7 +61,7 @@ export function GettingStartedChecklist({
       <div className="px-5 pb-4">
         {isCelebrating ? (
           <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-4 text-center">
-            <PartyPopper className="mb-2 h-8 w-8 text-emerald-500" aria-hidden="true" />
+            <PartyPopper className="mb-2 h-8 w-8 text-success" aria-hidden="true" />
             <p className="text-sm font-medium text-foreground">
               You're all set!
             </p>
@@ -79,7 +80,7 @@ export function GettingStartedChecklist({
               >
                 {step.complete ? (
                   <CheckCircle2
-                    className="h-4.5 w-4.5 shrink-0 text-emerald-500"
+                    className="h-4.5 w-4.5 shrink-0 text-success"
                     aria-label="Completed"
                   />
                 ) : (
@@ -98,7 +99,7 @@ export function GettingStartedChecklist({
                     <Link
                       to={step.href}
                       onClick={() => onStepClick?.(step.id)}
-                      className="group flex items-center justify-between gap-1 text-sm font-medium text-foreground hover:text-blue-600 dark:hover:text-blue-400"
+                      className="group flex items-center justify-between gap-1 text-sm font-medium text-foreground hover:text-primary"
                     >
                       <span>{step.label}</span>
                       <ChevronRight
@@ -113,6 +114,6 @@ export function GettingStartedChecklist({
           </ul>
         )}
       </div>
-    </div>
+    </Card>
   )
 }

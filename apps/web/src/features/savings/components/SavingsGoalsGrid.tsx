@@ -6,6 +6,8 @@
 import { SavingsGoalCard } from './SavingsGoalCard'
 import type { SavingsGoalWithProgress } from '../hooks/useSavingsGoals'
 import type { SavingsGoal } from '../types'
+import { EmptyState } from '@/components/ui/empty-state'
+import { SearchX } from 'lucide-react'
 
 export interface SavingsGoalsGridProps {
   goals: SavingsGoalWithProgress[]
@@ -17,7 +19,7 @@ export interface SavingsGoalsGridProps {
 
 export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage }: SavingsGoalsGridProps) {
   if (goals.length === 0 && emptyMessage) {
-    return <p className="text-sm text-muted-foreground py-8 text-center">{emptyMessage}</p>
+    return <EmptyState size="compact" icon={<SearchX />} title={emptyMessage} />
   }
 
   return (
