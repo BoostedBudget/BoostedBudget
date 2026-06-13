@@ -76,8 +76,8 @@ func TestInvestmentTransactionRepository_GetByUserIDKeyset_FirstPage(t *testing.
 		AddRow(makeInvKeysetRow(userID, accountID, date1)...).
 		AddRow(makeInvKeysetRow(userID, accountID, date2)...)
 
-	// Match the unique JOIN phrase present in every GetByUserIDKeyset query.
-	mock.ExpectQuery(`JOIN accounts a ON a\.id = it\.account_id AND a\.status = 'active'`).
+	// Match the EXISTS chain-expansion phrase present in every GetByUserIDKeyset query.
+	mock.ExpectQuery(`chain_a\.status = 'active'`).
 		WithArgs(anyArgs(2)...). // userID, limit+1
 		WillReturnRows(rows)
 
@@ -195,7 +195,8 @@ func TestInvestmentTransactionRepository_GetByUserIDKeyset_NextCursorSet(t *test
 		AddRow(makeInvKeysetRow(userID, accountID, date2)...).
 		AddRow(makeInvKeysetRow(userID, accountID, date3)...)
 
-	mock.ExpectQuery(`JOIN accounts a ON a\.id = it\.account_id AND a\.status = 'active'`).
+	// Match the EXISTS chain-expansion phrase present in every GetByUserIDKeyset query.
+	mock.ExpectQuery(`chain_a\.status = 'active'`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 

@@ -501,12 +501,8 @@ func mapPlaidInvestmentTransactions(
 		if subtype := string(pt.Subtype); subtype != "" {
 			txn.Subtype = &subtype
 		}
-		if qty := pt.Quantity; qty != 0 {
-			txn.Quantity = &qty
-		}
-		if price := pt.Price; price != 0 {
-			txn.Price = &price
-		}
+		txn.Quantity = &pt.Quantity
+		txn.Price = &pt.Price
 		txn.Fees = pt.Fees.Get()
 
 		result = append(result, txn)
