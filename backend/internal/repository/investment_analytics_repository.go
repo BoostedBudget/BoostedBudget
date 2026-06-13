@@ -195,15 +195,23 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 }
 
 // UnrealizedGainLoss returns the user's total unrealized gain/loss and a
-// per-account breakdown. Holdings with NULL cost_basis are included in the
-// value total but excluded from gain/loss calculations to avoid phantom gains.
+// per-account breakdown.
+//
+// Two cost-basis figures are computed:
+//   - cost_basis_known_pair (FILTER WHERE both non-null): used only for gain/loss gain figure
+//     and per-account/total percentage denominator — keeps the gain phantom-free.
+//   - cost_basis_all (COALESCE SUM over all non-nil): exposed as the API TotalCostBasis
+//     and per-account CostBasis, matching GetPortfolioSummary + snapshot Upsert semantics
+//     (all-non-null anchor). A holding with cost_basis set but institution_value NULL
+//     still has a known basis that belongs in the total. — R9-1 fix.
+//
 // Single round-trip aggregate.
 func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, userID string) (*domain.GainLossSummary, error) {
 	query := `
 		SELECT
 			h.account_id::text,
 			COALESCE(SUM(h.institution_value), 0) AS value,
-			-- Gain/loss only over holdings with non-NULL cost_basis and institution_value
+			-- Gain/loss only over holdings with non-NULL cost_basis AND institution_value
 			-- (see portfolio_snapshot_repository.go Upsert comment for rationale).
 			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0)
 			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS unrealized_gl,
@@ -215,7 +223,11 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 				) / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL) * 100
 				ELSE NULL
 			END AS unrealized_gl_pct,
-			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS cost_basis_known
+			-- known_pair: used only as pct denominator (not exposed directly).
+			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS cost_basis_known_pair,
+			-- cost_basis_all: all non-nil cost_basis, exposed as the API CostBasis field.
+			-- Matches GetPortfolioSummary totalCostBasis and snapshot Upsert total_cost_basis.
+			COALESCE(SUM(h.cost_basis), 0) AS cost_basis_all
 		FROM holdings h
 		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
 		WHERE h.user_id = $1
@@ -229,20 +241,23 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 	defer rows.Close()
 
 	var byAccount []domain.AccountGainLoss
-	var totalValue, totalCostBasis, totalGL float64
+	var totalValue, totalCostBasis, totalKnownPairCost, totalGL float64
 	for rows.Next() {
 		var ag domain.AccountGainLoss
+		var costBasisKnownPair float64
 		if err := rows.Scan(
 			&ag.AccountID,
 			&ag.Value,
 			&ag.UnrealizedGainLoss,
 			&ag.UnrealizedGainLossPct,
-			&ag.CostBasis,
+			&costBasisKnownPair,
+			&ag.CostBasis, // cost_basis_all: all-non-nil, exposed in API response
 		); err != nil {
 			return nil, fmt.Errorf("UnrealizedGainLoss scan: %w", err)
 		}
 		totalValue += ag.Value
-		totalCostBasis += ag.CostBasis
+		totalCostBasis += ag.CostBasis         // all-non-nil → exposed TotalCostBasis
+		totalKnownPairCost += costBasisKnownPair // both-non-nil → pct denominator only
 		// Accumulate per-account GL directly (already FILTER-scoped in SQL) rather than
 		// recomputing totalValue - totalCostBasis, which would mix all-holdings value
 		// with known-basis-only cost and produce phantom gains for NULL-basis holdings.
@@ -253,9 +268,12 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		return nil, fmt.Errorf("UnrealizedGainLoss rows: %w", rows.Err())
 	}
 
+	// Pct denominator = known-pair cost (not totalCostBasis) so a holding with
+	// cost_basis set but NULL institution_value doesn't inflate the denominator
+	// and collapse the apparent return percentage.
 	var totalGLPct *float64
-	if totalCostBasis > 0 {
-		v := totalGL / totalCostBasis * 100
+	if totalKnownPairCost > 0 {
+		v := totalGL / totalKnownPairCost * 100
 		totalGLPct = &v
 	}
 	if byAccount == nil {
@@ -264,7 +282,7 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 	return &domain.GainLossSummary{
 		TotalUnrealizedGainLoss:    totalGL,
 		TotalUnrealizedGainLossPct: totalGLPct,
-		TotalCostBasis:             totalCostBasis,
+		TotalCostBasis:             totalCostBasis, // all-non-nil basis
 		TotalValue:                 totalValue,
 		RealizedGainLossSupported:  false,
 		ByAccount:                  byAccount,

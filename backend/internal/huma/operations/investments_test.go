@@ -302,6 +302,30 @@ func TestInvestmentHandler_GetInvestmentTransactions_InvalidAccountID(t *testing
 	}
 }
 
+// TestInvestmentHandler_GetInvestmentTransactions_InvertedDateRange verifies that
+// providing end_date before start_date returns 400 (parity with getPortfolioHistory
+// and getInvestmentIncomeSummary). — Round-9 R9-2 RED→GREEN
+func TestInvestmentHandler_GetInvestmentTransactions_InvertedDateRange(t *testing.T) {
+	handler := NewInvestmentHandler(&mockInvestmentService{}, &mockInvestmentAnalyticsService{})
+
+	input := &GetInvestmentTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		StartDate:             "2025-02-01",
+		EndDate:               "2025-01-01", // inverted: end < start
+	}
+
+	_, err := handler.GetInvestmentTransactions(context.Background(), input)
+
+	require.Error(t, err, "inverted date range must return an error")
+	var statusErr interface{ GetStatus() int }
+	if errors.As(err, &statusErr) {
+		assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(), "inverted date range must return 400 not 200")
+	} else {
+		t.Errorf("expected a huma status error, got %T: %v", err, err)
+	}
+}
+
 // ============================================================================
 // GetPortfolioAllocationBreakdown
 // ============================================================================

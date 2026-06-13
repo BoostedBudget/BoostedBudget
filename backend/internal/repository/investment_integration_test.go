@@ -277,13 +277,16 @@ func TestInvestment_UnrealizedGainLoss_NullInstitutionValue_Integration(t *testi
 
 	// TotalValue: only A contributes (B has NULL institution_value)
 	assert.InDelta(t, 2000.0, result.TotalValue, 0.01, "TotalValue must only sum non-nil institution_value")
-	// TotalCostBasis: only A's cost_basis (known-basis pair, FILTER semantics)
-	assert.InDelta(t, 1600.0, result.TotalCostBasis, 0.01, "TotalCostBasis must only count known-basis pairs")
-	// gain = A only: 2000-1600 = 400, NOT 2000-(1600+500) = -100 phantom loss
+	// TotalCostBasis: all non-nil cost_basis — A(1600) + B(500) = 2100.
+	// Matches GetPortfolioSummary + snapshot Upsert (all-non-null anchor). — R9-1 fix
+	assert.InDelta(t, 2100.0, result.TotalCostBasis, 0.01, "TotalCostBasis must include all non-nil cost_basis (R9-1)")
+	// gain = A only: 2000-1600 = 400, NOT 2000-(1600+500) = -100 phantom loss.
+	// The gain/loss FIGURE uses the known-pair FILTER (both non-null), so B is excluded.
 	assert.InDelta(t, 400.0, result.TotalUnrealizedGainLoss, 0.01,
 		"gain/loss must NOT be phantom-loss due to NULL institution_value holding")
 	require.NotNil(t, result.TotalUnrealizedGainLossPct)
-	assert.InDelta(t, 25.0, *result.TotalUnrealizedGainLossPct, 0.01, "pct = 400/1600*100 = 25%")
+	// pct denominator = known-pair cost (1600, not 2100): 400/1600*100 = 25%
+	assert.InDelta(t, 25.0, *result.TotalUnrealizedGainLossPct, 0.01, "pct denominator = known-pair cost (1600)")
 }
 
 // ── GAP E: unified UNION page boundary — cross-source same-date ──────────────
@@ -1052,4 +1055,133 @@ func TestInvestment_TopMovers_Integration(t *testing.T) {
 	}
 	assert.NotContains(t, allIDs, excludedHoldingID.String(),
 		"null-close-price holding must be excluded from TopMovers results")
+}
+
+// ── Round-9 R9-3: AllocationBreakdown real-DB coverage (closes GAP-E class) ──
+
+// TestInvestment_AllocationBreakdown_Integration is the first real-Postgres execution
+// of the AllocationBreakdown query. It covers:
+//   - Multi-bucket grouping by security type (stock + etf)
+//   - NULL security.type → "unknown" bucket
+//   - Inactive-account holdings excluded
+//   - Per-bucket percentage = value / grandTotal * 100 (computed in Go post-total)
+//   - ORDER BY total_value DESC ordering
+//
+// This locks the query against the GAP-E class (pgxmock-only coverage → silent
+// SQL or semantics bug): R7-B (income sign), R8-1 (TopMovers UNION ORDER BY crash),
+// and now AllocationBreakdown complete the coverage of all 4 analytics queries.
+func TestInvestment_AllocationBreakdown_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountID, _ := seedInvestmentFixture(ctx, t, tx, "alloc")
+
+	// ── additional securities with distinct types ──────────────────────────────
+	// Two equity securities (different IDs) — needed because unique_account_security
+	// prevents two holdings with the same (account_id, security_id).
+	stockSecID1 := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, type) VALUES ($1, $2, 'AAPL', 'equity')`,
+		stockSecID1, "alloc-stock1-"+stockSecID1.String())
+	require.NoError(t, err)
+
+	stockSecID2 := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, type) VALUES ($1, $2, 'MSFT', 'equity')`,
+		stockSecID2, "alloc-stock2-"+stockSecID2.String())
+	require.NoError(t, err)
+
+	etfSecID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, type) VALUES ($1, $2, 'SPY', 'etf')`,
+		etfSecID, "alloc-etf-"+etfSecID.String())
+	require.NoError(t, err)
+
+	nullTypeSecID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name) VALUES ($1, $2, 'PRIV')`,
+		nullTypeSecID, "alloc-null-"+nullTypeSecID.String())
+	require.NoError(t, err)
+
+	// ── active-account holdings ────────────────────────────────────────────────
+	// Equity bucket: two distinct securities × one holding each = 2 holdings, total 3000
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 2000.00)
+	`, uuid.New(), userID, accountID, stockSecID1)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 5, 1000.00)
+	`, uuid.New(), userID, accountID, stockSecID2)
+	require.NoError(t, err)
+
+	// ETF: value 4000 (largest bucket → should come first)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 20, 4000.00)
+	`, uuid.New(), userID, accountID, etfSecID)
+	require.NoError(t, err)
+
+	// NULL type: value 500
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 1, 500.00)
+	`, uuid.New(), userID, accountID, nullTypeSecID)
+	require.NoError(t, err)
+
+	// ── inactive-account holding (must be excluded) ────────────────────────────
+	inactiveAccID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, replaced_at)
+		VALUES ($1, $2, $3, $4, 'Old Brokerage', 'investment', 'replaced', now())
+	`, inactiveAccID, linkedItemID, userID, "alloc-inactive-acct-"+inactiveAccID.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 100, 99999.00)
+	`, uuid.New(), userID, inactiveAccID, etfSecID)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	result, err := repo.AllocationBreakdown(ctx, userID.String())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// ── bucket count ──────────────────────────────────────────────────────────
+	// 3 active buckets: "equity" (3000), "etf" (4000), "unknown" (500).
+	// The inactive-account holding (99999) must not appear.
+	require.Len(t, result.Buckets, 3, "expected 3 buckets: equity, etf, unknown")
+
+	// ── TotalValue excludes inactive-account holdings ─────────────────────────
+	const wantTotal = 7500.0 // 2000+1000+4000+500
+	assert.InDelta(t, wantTotal, result.TotalValue, 0.01, "TotalValue must exclude inactive-account holdings")
+
+	// ── ORDER BY total_value DESC: etf (4000) must come first ─────────────────
+	assert.Equal(t, "etf", result.Buckets[0].SecurityType, "highest-value bucket must be first")
+	assert.InDelta(t, 4000.0, result.Buckets[0].TotalValue, 0.01)
+	assert.Equal(t, 1, result.Buckets[0].HoldingCount)
+
+	assert.Equal(t, "equity", result.Buckets[1].SecurityType)
+	assert.InDelta(t, 3000.0, result.Buckets[1].TotalValue, 0.01)
+	assert.Equal(t, 2, result.Buckets[1].HoldingCount, "equity bucket must aggregate both holdings")
+
+	// ── NULL type → "unknown" bucket ──────────────────────────────────────────
+	assert.Equal(t, "unknown", result.Buckets[2].SecurityType, "NULL type must bucket as 'unknown'")
+	assert.InDelta(t, 500.0, result.Buckets[2].TotalValue, 0.01)
+	assert.Equal(t, 1, result.Buckets[2].HoldingCount)
+
+	// ── percentage correctness ────────────────────────────────────────────────
+	// etf:    4000/7500*100 ≈ 53.33%
+	// equity: 3000/7500*100 = 40.00%
+	// unknown: 500/7500*100 ≈  6.67%
+	assert.InDelta(t, 53.33, result.Buckets[0].Percentage, 0.02, "etf percentage")
+	assert.InDelta(t, 40.0, result.Buckets[1].Percentage, 0.02, "equity percentage")
+	assert.InDelta(t, 6.67, result.Buckets[2].Percentage, 0.02, "unknown percentage")
+
+	// Percentages must sum to ~100
+	totalPct := result.Buckets[0].Percentage + result.Buckets[1].Percentage + result.Buckets[2].Percentage
+	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100")
 }
