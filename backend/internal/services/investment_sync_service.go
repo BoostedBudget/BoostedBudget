@@ -44,15 +44,16 @@ type InvestmentSyncService interface {
 }
 
 type investmentSyncService struct {
-	logger            *slog.Logger
-	analytics         phclient.Analytics
-	webhookRepo       repository.WebhookRepository
-	linkedItemRepo    repository.LinkedItemRepository
-	accountRepo       repository.AccountRepository
-	securityRepo      repository.SecurityRepository
-	holdingRepo       repository.HoldingRepository
-	investmentTxnRepo repository.InvestmentTransactionRepository
-	plaidService      PlaidService
+	logger               *slog.Logger
+	analytics            phclient.Analytics
+	webhookRepo          repository.WebhookRepository
+	linkedItemRepo       repository.LinkedItemRepository
+	accountRepo          repository.AccountRepository
+	securityRepo         repository.SecurityRepository
+	holdingRepo          repository.HoldingRepository
+	investmentTxnRepo    repository.InvestmentTransactionRepository
+	portfolioSnapshotRepo repository.PortfolioSnapshotRepository
+	plaidService         PlaidService
 }
 
 // SetAnalytics sets the PostHog analytics client.
@@ -68,6 +69,7 @@ func NewInvestmentSyncService(
 	securityRepo repository.SecurityRepository,
 	holdingRepo repository.HoldingRepository,
 	investmentTxnRepo repository.InvestmentTransactionRepository,
+	portfolioSnapshotRepo repository.PortfolioSnapshotRepository,
 	plaidService PlaidService,
 	logger *slog.Logger,
 ) InvestmentSyncService {
@@ -75,14 +77,15 @@ func NewInvestmentSyncService(
 		logger = slog.Default()
 	}
 	return &investmentSyncService{
-		logger:            logger,
-		webhookRepo:       webhookRepo,
-		linkedItemRepo:    linkedItemRepo,
-		accountRepo:       accountRepo,
-		securityRepo:      securityRepo,
-		holdingRepo:       holdingRepo,
-		investmentTxnRepo: investmentTxnRepo,
-		plaidService:      plaidService,
+		logger:                logger,
+		webhookRepo:           webhookRepo,
+		linkedItemRepo:        linkedItemRepo,
+		accountRepo:           accountRepo,
+		securityRepo:          securityRepo,
+		holdingRepo:           holdingRepo,
+		investmentTxnRepo:     investmentTxnRepo,
+		portfolioSnapshotRepo: portfolioSnapshotRepo,
+		plaidService:          plaidService,
 	}
 }
 
@@ -262,6 +265,20 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			"holdings_replaced":   result.HoldingsReplaced,
 			"accounts_processed":  result.AccountsProcessed,
 		})
+	}
+
+	// Issue #138: Upsert portfolio snapshot from committed holdings state.
+	// Skip when accounts were skipped (partial sync must not become a day-change baseline).
+	// Each per-item webhook recomputes the full-user aggregate via aggregate-at-write SQL,
+	// so concurrent multi-institution syncs converge to the correct total.
+	if len(result.Errors) == 0 && s.portfolioSnapshotRepo != nil {
+		snapshotDate := time.Now().UTC().Truncate(24 * time.Hour)
+		if _, snapErr := s.portfolioSnapshotRepo.Upsert(ctx, linkedItem.UserID, snapshotDate); snapErr != nil {
+			s.logger.Warn("portfolio snapshot upsert failed (non-fatal)",
+				"user_id", linkedItem.UserID,
+				"error", snapErr,
+			)
+		}
 	}
 
 	return result, nil

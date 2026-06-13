@@ -96,10 +96,13 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    // 156 total ops − 54 excluded = 102 allowed (was 101 before #1267 R3-4 regen); mirrors capability-manifest.test.ts
+    // 164 total ops − 54 excluded = 110 allowed; mirrors capability-manifest.test.ts
     // +4 from #972: getSavingsImpactAggregate, getSavingsImpactMe,
     //               confirmTransferSuggestionMatch, declineTransferSuggestionMatch
     // +1 from #1267 R3-4: cancelTransferSuggestion (was in OpenAPI/manifests but facade was stale)
-    expect(count).toBe(102)
+    // +8 from #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
+    //               getInvestmentTransactions, getPortfolioAllocationBreakdown,
+    //               getTopMovers, getInvestmentGainLossSummary, getInvestmentIncomeSummary
+    expect(count).toBe(110)
   })
 })

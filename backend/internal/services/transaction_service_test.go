@@ -184,6 +184,19 @@ func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userI
 	return txs, nextCursor, args.Error(2)
 }
 
+func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+	args := m.Called(ctx, userID, filters, cursor, limit)
+	var items []*domain.ActivityItem
+	if v := args.Get(0); v != nil {
+		items = v.([]*domain.ActivityItem)
+	}
+	var nextCursor *domain.TransactionCursor
+	if v := args.Get(1); v != nil {
+		nextCursor = v.(*domain.TransactionCursor)
+	}
+	return items, nextCursor, args.Error(2)
+}
+
 func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
 	args := m.Called(ctx, userID, since)
 	if args.Get(0) == nil {

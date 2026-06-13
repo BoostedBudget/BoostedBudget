@@ -121,6 +121,29 @@ components:
         - name
         - balance
       type: object
+    AccountGainLoss:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        cost_basis:
+          format: double
+          type: number
+        unrealized_gain_loss:
+          format: double
+          type: number
+        unrealized_gain_loss_pct:
+          format: double
+          type: number
+        value:
+          format: double
+          type: number
+      required:
+        - account_id
+        - unrealized_gain_loss
+        - cost_basis
+        - value
+      type: object
     AccountOrder:
       additionalProperties: false
       properties:
@@ -190,6 +213,117 @@ components:
             - "null"
       required:
         - types
+      type: object
+    ActivityItem:
+      additionalProperties: false
+      properties:
+        account:
+          $ref: "#/components/schemas/Account"
+        account_id:
+          type: string
+        activity_type:
+          type: string
+        amount:
+          format: double
+          type: number
+        authorized_date:
+          format: date-time
+          type: string
+        category_override_kind:
+          type: string
+        custom_category_override_display:
+          type: string
+        data_source:
+          type: string
+        date:
+          format: date-time
+          type: string
+        effective_category_name:
+          type: string
+        effective_pfc_detailed:
+          type: string
+        effective_pfc_primary:
+          type: string
+        external_transaction_id:
+          type: string
+        id:
+          type: string
+        investment_fees:
+          format: double
+          type: number
+        investment_price:
+          format: double
+          type: number
+        investment_quantity:
+          format: double
+          type: number
+        investment_subtype:
+          type: string
+        linked_item_id:
+          type: string
+        merchant_id:
+          type: string
+        merchant_name:
+          type: string
+        name:
+          type: string
+        payment_channel:
+          type: string
+        pending:
+          type: boolean
+        pfc_category_icon_url:
+          type: string
+        pfc_confidence_level:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_detailed_display:
+          type: string
+        pfc_detailed_override_display:
+          type: string
+        pfc_primary:
+          type: string
+        pfc_primary_display:
+          type: string
+        pfc_primary_override_display:
+          type: string
+        reviewed:
+          type: boolean
+        reviewed_at:
+          format: date-time
+          type: string
+        security_id:
+          type: string
+        security_name:
+          type: string
+        sort_date:
+          format: date-time
+          type: string
+        source:
+          type: string
+        tags:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        ticker_symbol:
+          type: string
+        user_account_id:
+          type: string
+        user_id:
+          type: string
+        user_notes:
+          type: string
+      required:
+        - source
+        - sort_date
+        - id
+        - user_id
+        - account_id
+        - date
+        - amount
+        - name
       type: object
     AddDLQNotesRequest:
       additionalProperties: false
@@ -494,6 +628,49 @@ components:
         - page_size
         - total_pages
         - has_more
+      type: object
+    AllocationBreakdown:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AllocationBreakdown.json
+          format: uri
+          readOnly: true
+          type: string
+        buckets:
+          items:
+            $ref: "#/components/schemas/AllocationItem"
+          type:
+            - array
+            - "null"
+        total_value:
+          format: double
+          type: number
+      required:
+        - buckets
+        - total_value
+      type: object
+    AllocationItem:
+      additionalProperties: false
+      properties:
+        holding_count:
+          format: int64
+          type: integer
+        percentage:
+          format: double
+          type: number
+        security_type:
+          type: string
+        total_value:
+          format: double
+          type: number
+      required:
+        - security_type
+        - total_value
+        - percentage
+        - holding_count
       type: object
     AverageMonthlySpendResponse:
       additionalProperties: false
@@ -2560,6 +2737,43 @@ components:
         - item_id
         - webhook_code
       type: object
+    GainLossSummary:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GainLossSummary.json
+          format: uri
+          readOnly: true
+          type: string
+        by_account:
+          items:
+            $ref: "#/components/schemas/AccountGainLoss"
+          type:
+            - array
+            - "null"
+        realized_gain_loss_supported:
+          type: boolean
+        total_cost_basis:
+          format: double
+          type: number
+        total_unrealized_gain_loss:
+          format: double
+          type: number
+        total_unrealized_gain_loss_pct:
+          format: double
+          type: number
+        total_value:
+          format: double
+          type: number
+      required:
+        - total_unrealized_gain_loss
+        - total_cost_basis
+        - total_value
+        - realized_gain_loss_supported
+        - by_account
+      type: object
     GetAccountsOutputBody:
       additionalProperties: false
       properties:
@@ -2679,6 +2893,54 @@ components:
         - currency
         - cancel_at_period_end
       type: object
+    GetHoldingsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetHoldingsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        count:
+          format: int64
+          type: integer
+        holdings:
+          items:
+            $ref: "#/components/schemas/HoldingView"
+          type:
+            - array
+            - "null"
+      required:
+        - holdings
+        - count
+      type: object
+    GetInvestmentTransactionsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetInvestmentTransactionsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        limit:
+          format: int64
+          type: integer
+        next_cursor:
+          type: string
+        transactions:
+          items:
+            $ref: "#/components/schemas/InvestmentTransaction"
+          type:
+            - array
+            - "null"
+      required:
+        - transactions
+        - limit
+      type: object
     GetPaymentFailuresOutputBody:
       additionalProperties: false
       properties:
@@ -2710,6 +2972,25 @@ components:
         - limit
         - offset
       type: object
+    GetPortfolioHistoryOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetPortfolioHistoryOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        history:
+          items:
+            $ref: "#/components/schemas/PortfolioHistoryPoint"
+          type:
+            - array
+            - "null"
+      required:
+        - history
+      type: object
     GetTransactionsOutputBody:
       additionalProperties: false
       properties:
@@ -2727,7 +3008,7 @@ components:
           type: string
         transactions:
           items:
-            $ref: "#/components/schemas/Transaction"
+            $ref: "#/components/schemas/ActivityItem"
           type:
             - array
             - "null"
@@ -2816,6 +3097,72 @@ components:
         - timestamp
         - checks
       type: object
+    HoldingView:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        cost_basis:
+          format: double
+          type: number
+        day_change:
+          format: double
+          type: number
+        day_change_pct:
+          format: double
+          type: number
+        gain_loss:
+          format: double
+          type: number
+        gain_loss_pct:
+          format: double
+          type: number
+        id:
+          type: string
+        institution_price:
+          format: double
+          type: number
+        institution_value:
+          format: double
+          type: number
+        quantity:
+          format: double
+          type: number
+        security_id:
+          type: string
+        security_name:
+          type: string
+        security_type:
+          type: string
+        ticker_symbol:
+          type: string
+        user_account_id:
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - account_id
+        - security_id
+        - quantity
+      type: object
+    IncomeByType:
+      additionalProperties: false
+      properties:
+        count:
+          format: int64
+          type: integer
+        income_type:
+          type: string
+        total_amount:
+          format: double
+          type: number
+      required:
+        - income_type
+        - total_amount
+        - count
+      type: object
     IncomeSource:
       additionalProperties: false
       properties:
@@ -2882,6 +3229,89 @@ components:
         - total
         - percentage
         - transaction_count
+      type: object
+    IncomeSummary:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/IncomeSummary.json
+          format: uri
+          readOnly: true
+          type: string
+        by_type:
+          items:
+            $ref: "#/components/schemas/IncomeByType"
+          type:
+            - array
+            - "null"
+        end_date:
+          format: date-time
+          type: string
+        start_date:
+          format: date-time
+          type: string
+        total_income:
+          format: double
+          type: number
+      required:
+        - total_income
+        - by_type
+        - start_date
+        - end_date
+      type: object
+    InvestmentTransaction:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        amount:
+          format: double
+          type: number
+        created_at:
+          format: date-time
+          type: string
+        date:
+          format: date-time
+          type: string
+        fees:
+          format: double
+          type: number
+        id:
+          type: string
+        name:
+          type: string
+        plaid_investment_transaction_id:
+          type: string
+        plaid_security_id:
+          type: string
+        price:
+          format: double
+          type: number
+        quantity:
+          format: double
+          type: number
+        security_id:
+          type: string
+        subtype:
+          type: string
+        type:
+          type: string
+        user_account_id:
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - account_id
+        - plaid_investment_transaction_id
+        - type
+        - name
+        - amount
+        - date
+        - created_at
       type: object
     LargestTransactionItem:
       additionalProperties: false
@@ -3553,6 +3983,62 @@ components:
       required:
         - status
         - message
+      type: object
+    PortfolioHistoryPoint:
+      additionalProperties: false
+      properties:
+        date:
+          format: date-time
+          type: string
+        total_value:
+          format: double
+          type: number
+      required:
+        - date
+        - total_value
+      type: object
+    PortfolioSummary:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PortfolioSummary.json
+          format: uri
+          readOnly: true
+          type: string
+        day_change:
+          format: double
+          type:
+            - number
+            - "null"
+        day_change_pct:
+          format: double
+          type:
+            - number
+            - "null"
+        holdings_count:
+          format: int64
+          type: integer
+        total_cost_basis:
+          format: double
+          type: number
+        total_gain_loss:
+          format: double
+          type: number
+        total_gain_loss_pct:
+          format: double
+          type: number
+        total_value:
+          format: double
+          type: number
+      required:
+        - total_value
+        - total_cost_basis
+        - total_gain_loss
+        - day_change
+        - day_change_pct
+        - holdings_count
       type: object
     PreviewUpdateInputBody:
       additionalProperties: false
@@ -4688,6 +5174,56 @@ components:
         - date
         - start_date
         - end_date
+      type: object
+    TopMoverItem:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        day_change:
+          format: double
+          type: number
+        day_change_pct:
+          format: double
+          type: number
+        holding_id:
+          type: string
+        security_name:
+          type: string
+        ticker_symbol:
+          type: string
+        total_gain_loss:
+          format: double
+          type: number
+      required:
+        - holding_id
+        - account_id
+      type: object
+    TopMovers:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/TopMovers.json
+          format: uri
+          readOnly: true
+          type: string
+        gainers:
+          items:
+            $ref: "#/components/schemas/TopMoverItem"
+          type:
+            - array
+            - "null"
+        losers:
+          items:
+            $ref: "#/components/schemas/TopMoverItem"
+          type:
+            - array
+            - "null"
+      required:
+        - gainers
+        - losers
       type: object
     TopUnreviewedCategory:
       additionalProperties: false
@@ -9459,6 +9995,290 @@ paths:
       summary: Get available widget types
       tags:
         - Dashboard
+  /api/v1/investments/holdings:
+    get:
+      description: Returns all holdings for the authenticated user, joined with security metadata (ticker, name, type) and pre-computed gain/loss and day_change values. Optionally filter to a single account via account_id.
+      operationId: getHoldings
+      parameters:
+        - description: Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.
+          explode: false
+          in: query
+          name: account_id
+          schema:
+            description: Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetHoldingsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List portfolio holdings
+      tags:
+        - Investments
+  /api/v1/investments/investment-transactions:
+    get:
+      description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.
+      operationId: getInvestmentTransactions
+      parameters:
+        - description: Opaque cursor from previous page's next_cursor; omit for first page
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque cursor from previous page's next_cursor; omit for first page
+            type: string
+        - description: Number of transactions to return (1-100)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: Number of transactions to return (1-100)
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Filter by account ID (chain-expanded)
+          explode: false
+          in: query
+          name: account_id
+          schema:
+            description: Filter by account ID (chain-expanded)
+            type: string
+        - description: Filter by security ID
+          explode: false
+          in: query
+          name: security_id
+          schema:
+            description: Filter by security ID
+            type: string
+        - description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"
+          explode: false
+          in: query
+          name: activity_types
+          schema:
+            description: "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"
+            type: string
+        - description: Filter transactions on or after this date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: start_date
+          schema:
+            description: Filter transactions on or after this date (YYYY-MM-DD)
+            type: string
+        - description: Filter transactions on or before this date (YYYY-MM-DD)
+          explode: false
+          in: query
+          name: end_date
+          schema:
+            description: Filter transactions on or before this date (YYYY-MM-DD)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetInvestmentTransactionsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List investment transactions
+      tags:
+        - Investments
+  /api/v1/investments/portfolio/allocation:
+    get:
+      description: Returns portfolio value grouped by security type (stock, etf, bond, crypto, cash, other, unknown). Each bucket includes total value, percentage, and holding count. Single DB round-trip; designed as an AI-tool-callable function.
+      operationId: getPortfolioAllocationBreakdown
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AllocationBreakdown"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get portfolio allocation breakdown
+      tags:
+        - Analytics
+  /api/v1/investments/portfolio/gain-loss:
+    get:
+      description: Returns unrealized gain/loss totals and a per-account breakdown. realized_gain_loss_supported is always false — Plaid does not provide per-lot cost basis and the 2-year transaction lookback truncates buy history. Single DB round-trip; designed as an AI-tool-callable function.
+      operationId: getInvestmentGainLossSummary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GainLossSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get investment gain/loss summary
+      tags:
+        - Analytics
+  /api/v1/investments/portfolio/history:
+    get:
+      description: Returns portfolio value snapshots between start_date and end_date (inclusive), ordered by date ascending. Each point is one daily portfolio_snapshots row. Use for chart data.
+      operationId: getPortfolioHistory
+      parameters:
+        - description: Start of date range (YYYY-MM-DD, inclusive)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD, inclusive)
+            type: string
+        - description: End of date range (YYYY-MM-DD, inclusive)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD, inclusive)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetPortfolioHistoryOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get portfolio value history
+      tags:
+        - Investments
+  /api/v1/investments/portfolio/income:
+    get:
+      description: Returns investment income (dividends, interest, and reinvested dividends/interest — all economically income) within a date range, grouped by normalized income type. Single DB round-trip; designed as an AI-tool-callable function.
+      operationId: getInvestmentIncomeSummary
+      parameters:
+        - description: Start of date range (YYYY-MM-DD, inclusive)
+          explode: false
+          in: query
+          name: start_date
+          required: true
+          schema:
+            description: Start of date range (YYYY-MM-DD, inclusive)
+            type: string
+        - description: End of date range (YYYY-MM-DD, inclusive)
+          explode: false
+          in: query
+          name: end_date
+          required: true
+          schema:
+            description: End of date range (YYYY-MM-DD, inclusive)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncomeSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get investment income summary
+      tags:
+        - Analytics
+  /api/v1/investments/portfolio/summary:
+    get:
+      description: Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists.
+      operationId: getPortfolioSummary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortfolioSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get portfolio summary
+      tags:
+        - Investments
+  /api/v1/investments/portfolio/top-movers:
+    get:
+      description: Returns the top N gainers and losers by day_change (today's institution_price vs prior close_price). Holdings with NULL close_price are excluded. Default limit is 5; max is 20. Single DB round-trip; designed as an AI-tool-callable function.
+      operationId: getTopMovers
+      parameters:
+        - description: Number of top gainers and losers to return (default 5, max 20)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 5
+            description: Number of top gainers and losers to return (default 5, max 20)
+            format: int64
+            maximum: 20
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopMovers"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get top portfolio movers
+      tags:
+        - Analytics
   /api/v1/linked-items/{id}:
     delete:
       description: Disconnects an institution and all associated accounts.
@@ -10643,6 +11463,20 @@ paths:
             enum:
               - asc
               - desc
+            type: string
+        - description: Merge investment transactions into feed (true/false, default false). Requires sort_by=date.
+          explode: false
+          in: query
+          name: include_investment_activity
+          schema:
+            description: Merge investment transactions into feed (true/false, default false). Requires sort_by=date.
+            type: string
+        - description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."
+          explode: false
+          in: query
+          name: activity_types
+          schema:
+            description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."
             type: string
       responses:
         "200":

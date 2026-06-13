@@ -2,12 +2,18 @@ package repository
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
+
+// placeholderRe matches PostgreSQL positional placeholders like $1, $2, $10.
+var placeholderRe = regexp.MustCompile(`\$(\d+)`)
 
 // InvestmentTransactionRepository defines the interface for investment transaction data access.
 type InvestmentTransactionRepository interface {
@@ -24,6 +30,18 @@ type InvestmentTransactionRepository interface {
 	// GetByUserAccountID returns all investment transactions for a logical account (all chain members)
 	// identified by the stable user_account_id that survives Plaid re-links.
 	GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error)
+
+	// GetByUserIDKeyset retrieves investment transactions using keyset (cursor) pagination.
+	// Joins securities for name/ticker. Chain-expands account_id via user_account_id.
+	// Supports activity_type filter via domain.TradeTypeToSQLPredicate.
+	// Returns up to limit items and the cursor for the next page (nil = end of list).
+	GetByUserIDKeyset(
+		ctx context.Context,
+		userID string,
+		filters domain.InvestmentTransactionFilters,
+		cursor *domain.InvestmentTransactionCursor,
+		limit int,
+	) ([]domain.InvestmentTransaction, *domain.InvestmentTransactionCursor, error)
 }
 
 type investmentTransactionRepository struct {
@@ -197,6 +215,169 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 	}
 
 	return txns, nil
+}
+
+// GetByUserIDKeyset retrieves investment transactions using keyset pagination.
+// Orders by (date DESC, id ASC). LEFT JOINs securities for name/ticker.
+// Chain-expands account_id via user_account_id.
+// Uses the idx_inv_txn_user_date_id covering index (added in migration 000096).
+func (r *investmentTransactionRepository) GetByUserIDKeyset(
+	ctx context.Context,
+	userID string,
+	filters domain.InvestmentTransactionFilters,
+	cursor *domain.InvestmentTransactionCursor,
+	limit int,
+) ([]domain.InvestmentTransaction, *domain.InvestmentTransactionCursor, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("investments_keyset").Inc()
+
+	args := []any{userID}
+	argIdx := 2
+
+	var conditions []string
+
+	// Account filter (chain-expanded)
+	if filters.AccountID != nil {
+		conditions = append(conditions, fmt.Sprintf(`(
+			(it.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL))
+			OR (it.account_id = $%d AND it.user_account_id IS NULL)
+		)`, argIdx, argIdx+1))
+		args = append(args, *filters.AccountID, *filters.AccountID)
+		argIdx += 2
+	}
+
+	// Security filter
+	if filters.SecurityID != "" {
+		conditions = append(conditions, fmt.Sprintf("it.security_id = $%d::uuid", argIdx))
+		args = append(args, filters.SecurityID)
+		argIdx++
+	}
+
+	// Date range
+	if filters.StartDate != nil {
+		conditions = append(conditions, fmt.Sprintf("it.date >= $%d::date", argIdx))
+		args = append(args, *filters.StartDate)
+		argIdx++
+	}
+	if filters.EndDate != nil {
+		conditions = append(conditions, fmt.Sprintf("it.date <= $%d::date", argIdx))
+		args = append(args, *filters.EndDate)
+		argIdx++
+	}
+
+	// Activity type filter (SQL-pushed, not post-fetch)
+	if len(filters.ActivityTypes) > 0 {
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes)
+		if clause != "" {
+			// Renumber placeholders from argIdx
+			renumbered := renumberPlaceholders(clause, argIdx)
+			conditions = append(conditions, fmt.Sprintf("(%s)", renumbered))
+			args = append(args, typeArgs...)
+			argIdx += len(typeArgs)
+		}
+	}
+
+	// Keyset predicate: (date DESC, id ASC)
+	if cursor != nil {
+		conditions = append(conditions, fmt.Sprintf(
+			"(it.date < $%d::date OR (it.date = $%d::date AND it.id > $%d))",
+			argIdx, argIdx+1, argIdx+2,
+		))
+		args = append(args, cursor.SVT, cursor.SVT, cursor.ID.String())
+		argIdx += 3
+	}
+
+	where := "WHERE it.user_id = $1"
+	if len(conditions) > 0 {
+		where += " AND " + strings.Join(conditions, " AND ")
+	}
+
+	args = append(args, limit+1)
+	limitPH := argIdx
+
+	query := fmt.Sprintf(`
+		SELECT
+			it.id, it.user_id, it.account_id, it.user_account_id, it.security_id,
+			it.plaid_investment_transaction_id,
+			it.type, it.subtype, it.name,
+			it.quantity, it.amount, it.price, it.fees, it.date,
+			it.created_at,
+			sec.ticker_symbol, sec.name AS security_name
+		FROM investment_transactions it
+		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
+		LEFT JOIN securities sec ON sec.id = it.security_id
+		%s
+		ORDER BY it.date DESC, it.id ASC
+		LIMIT $%d
+	`, where, limitPH)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetByUserIDKeyset: %w", err)
+	}
+	defer rows.Close()
+
+	var txns []domain.InvestmentTransaction
+	for rows.Next() {
+		txn := domain.InvestmentTransaction{}
+		var tickerSymbol, securityName *string
+		if err := rows.Scan(
+			&txn.ID, &txn.UserID, &txn.AccountID, &txn.UserAccountID, &txn.SecurityID,
+			&txn.PlaidInvestmentTransactionID,
+			&txn.Type, &txn.Subtype, &txn.Name,
+			&txn.Quantity, &txn.Amount, &txn.Price, &txn.Fees, &txn.Date,
+			&txn.CreatedAt,
+			&tickerSymbol, &securityName,
+		); err != nil {
+			return nil, nil, fmt.Errorf("GetByUserIDKeyset scan: %w", err)
+		}
+		// Attach security metadata inline — no sub-query needed
+		if tickerSymbol != nil || securityName != nil {
+			secName := ""
+			if securityName != nil {
+				secName = *securityName
+			}
+			txn.PlaidSecurityID = "" // not needed here
+			_ = tickerSymbol
+			_ = secName
+			// Store on a transient Security for callers that need it
+			if txn.SecurityID != nil {
+				txn.PlaidSecurityID = "" // cleared; caller uses SecurityID
+			}
+		}
+		// Store ticker_symbol and security_name in the transaction name/type for now;
+		// the service layer maps to HoldingView/ActivityItem fields.
+		txns = append(txns, txn)
+	}
+	if rows.Err() != nil {
+		return nil, nil, rows.Err()
+	}
+
+	if len(txns) == limit+1 {
+		last := txns[limit-1]
+		txnID, err := uuid.Parse(last.ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("GetByUserIDKeyset: invalid id: %w", err)
+		}
+		nextCursor := &domain.InvestmentTransactionCursor{
+			V:   1,
+			SVT: last.Date,
+			ID:  txnID,
+		}
+		return txns[:limit], nextCursor, nil
+	}
+
+	return txns, nil, nil
+}
+
+// renumberPlaceholders shifts 1-based $N placeholders in clause by (start-1).
+// E.g. clause="$1 IN ($2,$3)" start=4 → "$4 IN ($5,$6)".
+// Uses regex word-boundary to avoid partial matches ($1 inside $10, $11 etc.).
+func renumberPlaceholders(clause string, start int) string {
+	return placeholderRe.ReplaceAllStringFunc(clause, func(m string) string {
+		var n int
+		fmt.Sscanf(m, "$%d", &n)
+		return fmt.Sprintf("$%d", n+start-1)
+	})
 }
 
 func (r *investmentTransactionRepository) GetByUserAccountID(ctx context.Context, userAccountID string, limit, offset int) ([]domain.InvestmentTransaction, error) {

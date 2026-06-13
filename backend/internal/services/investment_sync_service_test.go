@@ -63,6 +63,51 @@ func (m *MockHoldingRepository) GetByUserAccountID(ctx context.Context, userAcco
 	return args.Get(0).([]domain.Holding), args.Error(1)
 }
 
+func (m *MockHoldingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
+	args := m.Called(ctx, userID, accountID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.Holding), args.Error(1)
+}
+
+func (m *MockHoldingRepository) GetDistinctUserIDsWithHoldings(ctx context.Context) ([]string, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+// MockPortfolioSnapshotRepository implements repository.PortfolioSnapshotRepository for testing.
+type MockPortfolioSnapshotRepository struct {
+	mock.Mock
+}
+
+func (m *MockPortfolioSnapshotRepository) Upsert(ctx context.Context, userID string, snapshotDate time.Time) (*domain.PortfolioSnapshot, error) {
+	args := m.Called(ctx, userID, snapshotDate)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.PortfolioSnapshot), args.Error(1)
+}
+
+func (m *MockPortfolioSnapshotRepository) GetByUserDateRange(ctx context.Context, userID string, start, end time.Time) ([]domain.PortfolioSnapshot, error) {
+	args := m.Called(ctx, userID, start, end)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.PortfolioSnapshot), args.Error(1)
+}
+
+func (m *MockPortfolioSnapshotRepository) GetLatestBefore(ctx context.Context, userID string, date time.Time) (*domain.PortfolioSnapshot, error) {
+	args := m.Called(ctx, userID, date)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.PortfolioSnapshot), args.Error(1)
+}
+
 type MockInvestmentTransactionRepository struct {
 	mock.Mock
 }
@@ -94,6 +139,13 @@ func (m *MockInvestmentTransactionRepository) GetByUserAccountID(ctx context.Con
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]domain.InvestmentTransaction), args.Error(1)
+}
+
+func (m *MockInvestmentTransactionRepository) GetByUserIDKeyset(ctx context.Context, userID string, filters domain.InvestmentTransactionFilters, cursor *domain.InvestmentTransactionCursor, limit int) ([]domain.InvestmentTransaction, *domain.InvestmentTransactionCursor, error) {
+	args := m.Called(ctx, userID, filters, cursor, limit)
+	txns, _ := args.Get(0).([]domain.InvestmentTransaction)
+	cur, _ := args.Get(1).(*domain.InvestmentTransactionCursor)
+	return txns, cur, args.Error(2)
 }
 
 // ============================================================================
@@ -207,6 +259,7 @@ type investmentSyncDeps struct {
 	securityRepo   *MockSecurityRepository
 	holdingRepo    *MockHoldingRepository
 	invTxnRepo     *MockInvestmentTransactionRepository
+	snapshotRepo   *MockPortfolioSnapshotRepository
 	plaidSvc       *MockPlaidService
 }
 
@@ -219,8 +272,13 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		securityRepo:   new(MockSecurityRepository),
 		holdingRepo:    new(MockHoldingRepository),
 		invTxnRepo:     new(MockInvestmentTransactionRepository),
+		snapshotRepo:   new(MockPortfolioSnapshotRepository),
 		plaidSvc:       new(MockPlaidService),
 	}
+	// Default permissive expectation for snapshot upsert.
+	// Tests that need to verify snapshot behavior set up specific expectations instead.
+	deps.snapshotRepo.On("Upsert", mock.Anything, mock.Anything, mock.Anything).
+		Return((*domain.PortfolioSnapshot)(nil), nil).Maybe()
 	svc := NewInvestmentSyncService(
 		deps.webhookRepo,
 		deps.linkedItemRepo,
@@ -228,6 +286,7 @@ func setupInvestmentSyncService(t *testing.T) (InvestmentSyncService, investment
 		deps.securityRepo,
 		deps.holdingRepo,
 		deps.invTxnRepo,
+		deps.snapshotRepo,
 		deps.plaidSvc,
 		nil, // logger
 	)
@@ -438,6 +497,114 @@ func TestInvestmentSyncService_SyncHoldings_PlaidAPIError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PRODUCT_NOT_READY")
 	assert.Nil(t, result)
+}
+
+// TestInvestmentSyncService_SyncHoldings_SnapshotUpsertedOnSuccess verifies that a
+// portfolio snapshot is upserted after a fully successful holdings sync (no skipped accounts).
+func TestInvestmentSyncService_SyncHoldings_SnapshotUpsertedOnSuccess(t *testing.T) {
+	_, baseDeps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	plaidAccountID := "plaid-acct-snap"
+	internalAccountID := uuid.New().String()
+	plaidSecurityID := "plaid-sec-snap"
+	internalSecurityID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-snap", userID)
+
+	sec := makePlaidSecurity(plaidSecurityID, "Snap Inc.", "SNAP")
+	holding := makePlaidHolding(plaidAccountID, plaidSecurityID, 10.0, 15.0, 150.0, 120.0)
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{holding},
+		[]plaid.Security{sec},
+		makeMinimalPlaidItem(),
+		"req-snap",
+	)
+	baseDeps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
+	baseDeps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{
+		plaidSecurityID: internalSecurityID,
+	}, nil)
+	baseDeps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+	baseDeps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).Return(nil)
+
+	// Use a fresh snapshot mock (no Maybe default) to assert Upsert is called exactly once.
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	snap := &domain.PortfolioSnapshot{ID: uuid.New().String(), UserID: userID}
+	snapshotRepo.On("Upsert", ctx, userID, mock.AnythingOfType("time.Time")).Return(snap, nil)
+
+	svc := NewInvestmentSyncService(
+		baseDeps.webhookRepo,
+		baseDeps.linkedItemRepo,
+		baseDeps.accountRepo,
+		baseDeps.securityRepo,
+		baseDeps.holdingRepo,
+		baseDeps.invTxnRepo,
+		snapshotRepo,
+		baseDeps.plaidSvc,
+		nil,
+	)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.AccountsProcessed)
+	assert.Empty(t, result.Errors, "no errors → snapshot must be upserted")
+	snapshotRepo.AssertExpectations(t)
+}
+
+// TestInvestmentSyncService_SyncHoldings_SnapshotSkippedOnPartialError verifies that
+// the portfolio snapshot upsert is skipped when accounts are skipped due to unmapped securities.
+// A partial sync result must not become a day-change baseline.
+func TestInvestmentSyncService_SyncHoldings_SnapshotSkippedOnPartialError(t *testing.T) {
+	_, baseDeps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	plaidAccountID := "plaid-acct-partial"
+	internalAccountID := uuid.New().String()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-partial", userID)
+
+	// Plaid returns a holding for a security that is NOT in the security map → skippedAny = true
+	unknownSecurityID := "plaid-sec-unknown"
+	holding := makePlaidHolding(plaidAccountID, unknownSecurityID, 5.0, 100.0, 500.0, 400.0)
+	holdingsResp := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{},
+		[]plaid.Holding{holding},
+		[]plaid.Security{}, // security not returned → not in map
+		makeMinimalPlaidItem(),
+		"req-partial",
+	)
+	baseDeps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
+	// UpsertBatch returns empty map → the security lookup fails
+	baseDeps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{}, nil)
+	baseDeps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	// Snapshot repo must NOT be called when accounts are skipped.
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	// No On("Upsert", ...) registered — unexpected call would fail the test.
+
+	svc := NewInvestmentSyncService(
+		baseDeps.webhookRepo,
+		baseDeps.linkedItemRepo,
+		baseDeps.accountRepo,
+		baseDeps.securityRepo,
+		baseDeps.holdingRepo,
+		baseDeps.invTxnRepo,
+		snapshotRepo,
+		baseDeps.plaidSvc,
+		nil,
+	)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Errors, "should have errors for skipped account")
+	snapshotRepo.AssertNotCalled(t, "Upsert")
 }
 
 // ============================================================================

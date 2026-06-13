@@ -278,3 +278,36 @@ func TestMCPManifest_Issue1267_CancelTransferSuggestion(t *testing.T) {
 		t.Errorf("MCPOperationManifest[%q] = %q, want MCPClassWrite (Issue #1267 gap R2-F)", opID, class)
 	}
 }
+
+// TestMCPManifest_Issue138InvestmentOps verifies that all 8 Issue #138 investment
+// portfolio operations are present in the Go manifest as MCPClassRead.
+// Also asserts getTransactions is still read (unified-feed shape change is MCP-safe).
+// The 4 analytics helpers are tagged "Analytics" in the Huma spec — this test guards
+// against accidental removal from the Go manifest.
+func TestMCPManifest_Issue138InvestmentOps(t *testing.T) {
+	wantRead := []string{
+		// Core investment operations (tag: Investments)
+		"getHoldings",
+		"getPortfolioSummary",
+		"getPortfolioHistory",
+		"getInvestmentTransactions",
+		// Analytics helpers (tag: Analytics — load-bearing for MCP parity)
+		"getPortfolioAllocationBreakdown",
+		"getTopMovers",
+		"getInvestmentGainLossSummary",
+		"getInvestmentIncomeSummary",
+		// Unified feed — response shape changed to ActivityItem, but op remains read.
+		"getTransactions",
+	}
+
+	for _, opID := range wantRead {
+		class, found := domain.MCPOperationManifest[opID]
+		if !found {
+			t.Errorf("MCPOperationManifest missing entry for %q (Issue #138)", opID)
+			continue
+		}
+		if class != domain.MCPClassRead {
+			t.Errorf("MCPOperationManifest[%q] = %q, want MCPClassRead (Issue #138)", opID, class)
+		}
+	}
+}

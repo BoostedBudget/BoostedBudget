@@ -73,6 +73,57 @@ func (h *Holding) Validate() error {
 	return nil
 }
 
+// GainLoss returns the unrealized gain/loss (institution_value - cost_basis),
+// or nil when either value is absent. Realized gain/loss is not supported —
+// Plaid does not provide per-lot cost basis and the 2-year lookback truncates
+// buy history a FIFO replay would need.
+func (h *Holding) GainLoss() *float64 {
+	if h.InstitutionValue == nil || h.CostBasis == nil {
+		return nil
+	}
+	v := *h.InstitutionValue - *h.CostBasis
+	return &v
+}
+
+// GainLossPct returns the unrealized gain/loss as a percentage of cost basis,
+// or nil when cost basis is absent or zero.
+func (h *Holding) GainLossPct() *float64 {
+	if h.InstitutionValue == nil || h.CostBasis == nil || *h.CostBasis == 0 {
+		return nil
+	}
+	v := (*h.InstitutionValue - *h.CostBasis) / *h.CostBasis * 100
+	return &v
+}
+
+// DayChange returns quantity × (holdings.institution_price − securities.close_price),
+// or nil when either price is absent. IMPORTANT: always use holdings.institution_price
+// (current intraday price, always synced) vs securities.close_price (prior close).
+// securities.institution_price is a dead column — always NULL from Plaid — never use it.
+func (h *Holding) DayChange() *float64 {
+	if h.InstitutionPrice == nil {
+		return nil
+	}
+	if h.Security == nil || h.Security.ClosePrice == nil {
+		return nil
+	}
+	v := h.Quantity * (*h.InstitutionPrice - *h.Security.ClosePrice)
+	return &v
+}
+
+// DayChangePct returns DayChange / institution_value * 100, or nil when either
+// DayChange is nil or institution_value is absent/zero.
+func (h *Holding) DayChangePct() *float64 {
+	dc := h.DayChange()
+	if dc == nil {
+		return nil
+	}
+	if h.InstitutionValue == nil || *h.InstitutionValue == 0 {
+		return nil
+	}
+	v := *dc / *h.InstitutionValue * 100
+	return &v
+}
+
 // InvestmentTransaction represents a trade, dividend, fee, or other investment activity.
 // Investment transactions are immutable once posted by Plaid.
 type InvestmentTransaction struct {
@@ -136,9 +187,12 @@ type InvestmentTransactionSyncResult struct {
 
 // InvestmentTransactionFilters holds optional filters for querying investment transactions.
 type InvestmentTransactionFilters struct {
-	AccountID  string
+	// AccountID filters to a specific account (chain-expanded via user_account_id).
+	AccountID *string
 	SecurityID string
-	Type       string
+	// ActivityTypes filters by normalized trade type (buy/sell/dividend/reinvest/fee/cash/other).
+	// Applied as a SQL WHERE via domain.TradeTypeToSQLPredicate; never post-fetch.
+	ActivityTypes []string
 	StartDate  *time.Time
 	EndDate    *time.Time
 }
