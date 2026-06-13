@@ -117,4 +117,12 @@ sort_by?: GetTransactionsSortBy;
  * Sort direction
  */
 sort_dir?: GetTransactionsSortDir;
+/**
+ * Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.
+ */
+include_investment_activity?: string;
+/**
+ * Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.
+ */
+activity_types?: string;
 };

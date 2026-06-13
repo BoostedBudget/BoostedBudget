@@ -70,14 +70,30 @@ type GetTransactionsInput struct {
 	// Sort parameters
 	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
 	SortDir string `query:"sort_dir" enum:"asc,desc"                      default:"desc" doc:"Sort direction"`
+
+	// Investment activity — Issue #138.
+	// IncludeInvestmentActivity merges investment_transactions into the response feed.
+	// Default: true (unified feed). When omitted on a non-date sort the flag silently
+	// degrades to false (graceful degradation — existing non-date-sort clients are
+	// unaffected). An explicit "true" on a non-date sort returns 400.
+	IncludeInvestmentActivity string `query:"include_investment_activity" doc:"Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge."`
+
+	// ActivityTypes filters investment activity by normalized trade type when
+	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, fee, cash, other.
+	ActivityTypes string `query:"activity_types" doc:"Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
+// Transactions is []*domain.ActivityItem — a superset of Transaction that adds
+// Source ("banking"|"investment") and investment-specific fields. All banking
+// fields are always populated for banking rows; investment fields are null.
+// This is a backward-compatible change: existing banking consumers see all
+// the same fields they previously consumed from []*domain.Transaction.
 type GetTransactionsOutput struct {
 	Body struct {
-		Transactions []*domain.Transaction `json:"transactions"`
-		NextCursor   *string               `json:"next_cursor,omitempty"`
-		Limit        int                   `json:"limit"`
+		Transactions []*domain.ActivityItem `json:"transactions"`
+		NextCursor   *string                `json:"next_cursor,omitempty"`
+		Limit        int                    `json:"limit"`
 	}
 }
 
@@ -368,9 +384,36 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.SortDir = "desc"
 	}
 
+	// Investment activity filter — Issue #138.
+	// Default is true (unified feed). When explicitly set, parse the bool; an invalid
+	// value returns 400. When omitted on a non-date sort, silently degrade to false
+	// so existing non-date-sort clients never receive a 400 due to the default flip.
+	// An explicit "true" + non-date sort is handled by the service (ErrInvestmentMergeRequiresDateSort → 400).
+	if input.IncludeInvestmentActivity != "" {
+		incl, parseErr := strconv.ParseBool(input.IncludeInvestmentActivity)
+		if parseErr != nil {
+			return nil, huma.Error400BadRequest("Invalid include_investment_activity parameter (expected true or false)")
+		}
+		filters.IncludeInvestmentActivity = incl
+	} else if filters.SortBy == "date" || filters.SortBy == "" {
+		// Param omitted — default true for date sort. Non-date sorts degrade to false (zero value).
+		filters.IncludeInvestmentActivity = true
+	}
+
+	// Activity type filter (comma-separated normalized trade types)
+	if input.ActivityTypes != "" {
+		filters.ActivityTypes = parseCommaSeparated(input.ActivityTypes)
+	}
+
 	// Call service layer (cursor-based pagination)
 	result, err := h.service.ListTransactionsByCursor(ctx, input.UserID, filters, cursor, input.Limit)
 	if err != nil {
+		if errors.Is(err, domain.ErrInvestmentMergeRequiresDateSort) {
+			return nil, huma.Error400BadRequest("include_investment_activity requires sort_by=date")
+		}
+		if errors.Is(err, domain.ErrCursorFilterMismatch) {
+			return nil, huma.Error400BadRequest("cursor filter mismatch: restart pagination")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 

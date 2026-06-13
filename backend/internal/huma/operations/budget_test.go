@@ -175,6 +175,10 @@ func (m *mockTransactionRepoForBudget) GetByUserIDKeyset(ctx context.Context, us
 	return nil, nil, nil
 }
 
+func (m *mockTransactionRepoForBudget) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+	return nil, nil, nil
+}
+
 func (m *mockTransactionRepoForBudget) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
 	return nil, nil
 }

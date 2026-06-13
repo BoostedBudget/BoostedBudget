@@ -11,6 +11,7 @@ import type { GetTransactionsOutputBody } from '@boostedbudget/api-client/models
 import type { GetTransactionsSortBy } from '@boostedbudget/api-client/models/getTransactionsSortBy';
 import type { GetTransactionsSortDir } from '@boostedbudget/api-client/models/getTransactionsSortDir';
 import type { Transaction as ApiTransaction } from '@boostedbudget/api-client/models/transaction';
+import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem';
 import type { TransactionFilters } from '../types';
 
 export type TransactionFiltersState = TransactionFilters;
@@ -87,6 +88,9 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
   const updateTransaction = useCallback(
     async (updated: ApiTransaction) => {
       await queryClient.cancelQueries({ queryKey });
+      // The API now returns ActivityItem (superset of Transaction). Spread the banking
+      // fields from the updated Transaction into the existing ActivityItem to preserve
+      // investment-specific fields (source, ticker, etc.) that the caller doesn't own.
       queryClient.setQueryData<InfiniteData<GetTransactionsOutputBody>>(
         queryKey,
         (old): InfiniteData<GetTransactionsOutputBody> | undefined => {
@@ -96,7 +100,7 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
             pages: old.pages.map((page) => ({
               ...page,
               transactions: (page.transactions ?? []).map((t) =>
-                t.id === updated.id ? updated : t,
+                t.id === updated.id ? ({ ...t, ...updated } as ActivityItem) : t,
               ),
             })),
           };

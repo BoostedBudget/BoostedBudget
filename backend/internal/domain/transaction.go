@@ -386,4 +386,15 @@ type TransactionFilters struct {
 
 	// SortDir specifies sort direction. Allowed values: asc, desc. Defaults to "desc" when empty.
 	SortDir string
+
+	// IncludeInvestmentActivity merges investment_transactions into the feed when true.
+	// Requires SortBy="date" (or empty, which defaults to date). Returns
+	// ErrInvestmentMergeRequiresDateSort when combined with a non-date SortBy.
+	// Default false — service layer sets true based on query param.
+	IncludeInvestmentActivity bool
+
+	// ActivityTypes filters investment activity by normalized trade type when
+	// IncludeInvestmentActivity=true. Empty = no filter. Values: buy/sell/dividend/
+	// reinvest/fee/cash/other (see domain.TradeType* constants).
+	ActivityTypes []string
 }
