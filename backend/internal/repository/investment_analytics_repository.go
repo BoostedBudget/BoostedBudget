@@ -100,6 +100,10 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 // day_change = quantity × (holdings.institution_price − securities.close_price).
 // Holdings with NULL institution_price or securities with NULL close_price are excluded.
 // Uses a single CTE query that computes both gainers and losers in one round-trip.
+//
+// The UNION ALL is wrapped in a `combined` CTE to allow ORDER BY with a CASE expression.
+// PostgreSQL forbids expressions in set-operation ORDER BY, so the UNION is lifted into
+// a CTE and the outer SELECT applies the final ORDER BY.
 func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID string, limit int) (*domain.TopMovers, error) {
 	query := `
 		WITH movers AS (
@@ -141,14 +145,19 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			WHERE day_change < 0
 			ORDER BY day_change ASC
 			LIMIT $2
+		),
+		combined AS (
+			SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
+			       day_change, day_change_pct, total_gain_loss, mover_type
+			FROM gainers
+			UNION ALL
+			SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
+			       day_change, day_change_pct, total_gain_loss, mover_type
+			FROM losers
 		)
-		SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
+		SELECT holding_id, account_id, ticker_symbol, security_name,
 		       day_change, day_change_pct, total_gain_loss, mover_type
-		FROM gainers
-		UNION ALL
-		SELECT holding_id::text, account_id::text, ticker_symbol, security_name,
-		       day_change, day_change_pct, total_gain_loss, mover_type
-		FROM losers
+		FROM combined
 		ORDER BY mover_type ASC, CASE WHEN mover_type = 'gainer' THEN day_change ELSE -day_change END DESC
 	`
 

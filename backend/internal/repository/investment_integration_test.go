@@ -922,3 +922,134 @@ func mustParseDate(s string) time.Time {
 	}
 	return t
 }
+
+// ── R8-1: TopMovers UNION ORDER BY must not use expressions (Postgres restriction) ──
+
+// TestInvestment_TopMovers_Integration verifies that the TopMovers query executes against
+// real Postgres, correctly splits rows into gainers/losers, applies the intended per-group
+// ordering (gainers DESC, losers most-negative-first), excludes NULL-close-price holdings,
+// and respects the limit. The query wraps UNION ALL in a `combined` CTE to allow ORDER BY
+// with a CASE expression (PostgreSQL forbids expressions in set-operation ORDER BY).
+func TestInvestment_TopMovers_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, _ := seedInvestmentFixture(ctx, t, tx, "inv-r81")
+	userIDStr := userID.String()
+
+	// ── securities ─────────────────────────────────────────────────────────────
+
+	// Two gainer securities: close=100; inst_price will be 120 and 110 respectively.
+	gainSec1ID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, close_price) VALUES ($1, $2, 'Big Gainer', 'BGAIN', 100.00)`,
+		gainSec1ID, "r81-bg-sec-"+gainSec1ID.String())
+	require.NoError(t, err)
+
+	gainSec2ID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, close_price) VALUES ($1, $2, 'Small Gainer', 'SGAIN', 100.00)`,
+		gainSec2ID, "r81-sg-sec-"+gainSec2ID.String())
+	require.NoError(t, err)
+
+	// Two loser securities: close=200; inst_price will be 180 and 190 respectively.
+	loseSec1ID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, close_price) VALUES ($1, $2, 'Big Loser', 'BLOSE', 200.00)`,
+		loseSec1ID, "r81-bl-sec-"+loseSec1ID.String())
+	require.NoError(t, err)
+
+	loseSec2ID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, close_price) VALUES ($1, $2, 'Small Loser', 'SLOSE', 200.00)`,
+		loseSec2ID, "r81-sl-sec-"+loseSec2ID.String())
+	require.NoError(t, err)
+
+	// Security with NULL close_price — its holding must be EXCLUDED.
+	nullPriceSecID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name, ticker_symbol) VALUES ($1, $2, 'No Price Corp', 'NOPE')`,
+		nullPriceSecID, "r81-null-sec-"+nullPriceSecID.String())
+	require.NoError(t, err)
+
+	// ── holdings ───────────────────────────────────────────────────────────────
+
+	// Big gainer: qty=10, inst=120, close=100 → day_change=+200
+	bigGainerID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_price, institution_value) VALUES ($1, $2, $3, $4, 10, 120.00, 1200.00)`,
+		bigGainerID, userID, accountID, gainSec1ID)
+	require.NoError(t, err)
+
+	// Small gainer: qty=10, inst=110, close=100 → day_change=+100
+	smallGainerID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_price, institution_value) VALUES ($1, $2, $3, $4, 10, 110.00, 1100.00)`,
+		smallGainerID, userID, accountID, gainSec2ID)
+	require.NoError(t, err)
+
+	// Big loser: qty=5, inst=180, close=200 → day_change=-100
+	bigLoserID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_price, institution_value) VALUES ($1, $2, $3, $4, 5, 180.00, 900.00)`,
+		bigLoserID, userID, accountID, loseSec1ID)
+	require.NoError(t, err)
+
+	// Small loser: qty=5, inst=190, close=200 → day_change=-50
+	smallLoserID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_price, institution_value) VALUES ($1, $2, $3, $4, 5, 190.00, 950.00)`,
+		smallLoserID, userID, accountID, loseSec2ID)
+	require.NoError(t, err)
+
+	// Excluded: institution_price set but security has NULL close_price → must not appear.
+	excludedHoldingID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_price, institution_value) VALUES ($1, $2, $3, $4, 20, 50.00, 1000.00)`,
+		excludedHoldingID, userID, accountID, nullPriceSecID)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	// ── basic: no SQL parse error, correct split ────────────────────────────────
+	result, err := repo.TopMovers(ctx, userIDStr, 5)
+	require.NoError(t, err, "TopMovers must not error (R8-1: UNION ORDER BY CASE fix)")
+	require.NotNil(t, result)
+	require.Len(t, result.Gainers, 2, "should have 2 gainers")
+	require.Len(t, result.Losers, 2, "should have 2 losers")
+
+	// ── ordering: gainers highest day_change first ──────────────────────────────
+	require.NotNil(t, result.Gainers[0].DayChange)
+	require.NotNil(t, result.Gainers[1].DayChange)
+	assert.Equal(t, bigGainerID.String(), result.Gainers[0].HoldingID,
+		"first gainer must be the big gainer (day_change=+200)")
+	assert.Equal(t, smallGainerID.String(), result.Gainers[1].HoldingID,
+		"second gainer must be the small gainer (day_change=+100)")
+	assert.InDelta(t, 200.0, *result.Gainers[0].DayChange, 0.01, "big gainer day_change = 10*(120-100)=200")
+	assert.InDelta(t, 100.0, *result.Gainers[1].DayChange, 0.01, "small gainer day_change = 10*(110-100)=100")
+
+	// ── ordering: losers most-negative first ───────────────────────────────────
+	require.NotNil(t, result.Losers[0].DayChange)
+	require.NotNil(t, result.Losers[1].DayChange)
+	assert.Equal(t, bigLoserID.String(), result.Losers[0].HoldingID,
+		"first loser must be the big loser (day_change=-100)")
+	assert.Equal(t, smallLoserID.String(), result.Losers[1].HoldingID,
+		"second loser must be the small loser (day_change=-50)")
+	assert.InDelta(t, -100.0, *result.Losers[0].DayChange, 0.01, "big loser day_change = 5*(180-200)=-100")
+	assert.InDelta(t, -50.0, *result.Losers[1].DayChange, 0.01, "small loser day_change = 5*(190-200)=-50")
+
+	// ── limit: limit=1 must return only the top mover per side ─────────────────
+	limited, err := repo.TopMovers(ctx, userIDStr, 1)
+	require.NoError(t, err)
+	require.Len(t, limited.Gainers, 1, "limit=1 must return 1 gainer")
+	require.Len(t, limited.Losers, 1, "limit=1 must return 1 loser")
+	assert.Equal(t, bigGainerID.String(), limited.Gainers[0].HoldingID, "limit=1 gainer must be the big gainer")
+	assert.Equal(t, bigLoserID.String(), limited.Losers[0].HoldingID, "limit=1 loser must be the big loser")
+
+	// ── NULL-close-price holding must not appear in either list ────────────────
+	// (Count assertions above already prove this since all 5 holdings are seeded,
+	// but we assert by HoldingID to make the exclusion explicit and catch false-positive orderings.)
+	allIDs := make([]string, 0, len(result.Gainers)+len(result.Losers))
+	for _, g := range result.Gainers {
+		allIDs = append(allIDs, g.HoldingID)
+	}
+	for _, l := range result.Losers {
+		allIDs = append(allIDs, l.HoldingID)
+	}
+	assert.NotContains(t, allIDs, excludedHoldingID.String(),
+		"null-close-price holding must be excluded from TopMovers results")
+}
