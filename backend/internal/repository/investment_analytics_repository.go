@@ -194,18 +194,19 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		SELECT
 			h.account_id::text,
 			COALESCE(SUM(h.institution_value), 0) AS value,
-			-- Gain/loss only over cost-basis-present holdings to avoid phantom gains.
-			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
-			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) AS unrealized_gl,
+			-- Gain/loss only over holdings with non-NULL cost_basis and institution_value
+			-- (see portfolio_snapshot_repository.go Upsert comment for rationale).
+			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0)
+			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS unrealized_gl,
 			CASE
-				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) > 0
+				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) > 0
 				THEN (
-				    COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
-				    - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL)
-				) / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL) * 100
+				    COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0)
+				    - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL)
+				) / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL) * 100
 				ELSE NULL
 			END AS unrealized_gl_pct,
-			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) AS cost_basis_known
+			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) AS cost_basis_known
 		FROM holdings h
 		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
 		WHERE h.user_id = $1
