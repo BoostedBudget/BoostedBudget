@@ -59,23 +59,29 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			gen_random_uuid(),
 			$1::uuid,
 			$2::date,
-			COALESCE(SUM(institution_value), 0),
-			COALESCE(SUM(cost_basis), 0),
-			-- When no cost_basis data exists (all NULL) report 0 gain/loss, not total_value.
-			-- total_gain_loss_pct is already NULL in that case (CASE below).
-			CASE WHEN SUM(cost_basis) IS NOT NULL
-			    THEN COALESCE(SUM(institution_value), 0) - COALESCE(SUM(cost_basis), 0)
-			    ELSE 0
-			END,
+			COALESCE(SUM(h.institution_value), 0),
+			COALESCE(SUM(h.cost_basis), 0),
+			-- Gain/loss is computed only over holdings whose cost_basis is non-NULL.
+			-- This prevents unknown-basis holdings from inflating the figure: a holding
+			-- with no cost_basis is excluded from both sides of the subtraction so it
+			-- contributes 0 to gain/loss rather than its full value.
+			-- total_value (first column above) still covers ALL holdings.
+			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
+			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0),
 			CASE
-				WHEN COALESCE(SUM(cost_basis), 0) > 0
-				THEN ((COALESCE(SUM(institution_value), 0) - COALESCE(SUM(cost_basis), 0)) / SUM(cost_basis)) * 100
+				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) > 0
+				THEN (
+				    (COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
+				     - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL))
+				    / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL)
+				) * 100
 				ELSE NULL
 			END,
 			NOW(),
 			NOW()
-		FROM holdings
-		WHERE user_id = $1::uuid
+		FROM holdings h
+		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		WHERE h.user_id = $1::uuid
 		ON CONFLICT (user_id, snapshot_date) DO UPDATE SET
 			total_value       = EXCLUDED.total_value,
 			total_cost_basis  = EXCLUDED.total_cost_basis,

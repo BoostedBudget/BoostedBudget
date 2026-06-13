@@ -56,7 +56,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_InsertNew(t *testing.T) {
 	// CTE returns 1 row inserted
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
-		WithArgs(anyArgs(14)...).
+		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
@@ -81,7 +81,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_SkipDuplicates(t *testing.T
 	// ON CONFLICT DO NOTHING — 0 rows inserted (already exists)
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
-		WithArgs(anyArgs(14)...).
+		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
@@ -111,9 +111,9 @@ func TestInvestmentTransactionRepository_UpsertBatch_MixedNewAndDuplicate(t *tes
 	r0 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	r1 := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	r2 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(14)...).WillReturnRows(r0)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(14)...).WillReturnRows(r1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(14)...).WillReturnRows(r2)
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r0)
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r1)
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r2)
 
 	inserted, err := repo.UpsertBatch(ctx, txns)
 
@@ -240,7 +240,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_NullSecurityID(t *testing.T
 
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
-		WithArgs(anyArgs(14)...).
+		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
 	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{cashTxn})

@@ -70,15 +70,19 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 		txn.CreatedAt = time.Now()
 
 		// COUNT(*) FILTER trick: returns 1 if inserted, 0 if skipped (ON CONFLICT DO NOTHING)
+		// user_account_id is the stable chain-expansion key set at insert time so that
+		// pre-relink rows remain visible after a Plaid re-link (Issue #1109).
+		// The backfill UPDATE below repairs rows that were inserted before this fix
+		// (user_account_id IS NULL) without affecting the insertion count.
 		query := `
 			WITH ins AS (
 				INSERT INTO investment_transactions (
-					id, user_id, account_id, security_id,
+					id, user_id, account_id, user_account_id, security_id,
 					plaid_investment_transaction_id,
 					type, subtype, name,
 					quantity, amount, price, fees, date,
 					created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 				ON CONFLICT (plaid_investment_transaction_id) DO NOTHING
 				RETURNING id
 			)
@@ -90,6 +94,7 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 			txn.ID,
 			txn.UserID,
 			txn.AccountID,
+			txn.UserAccountID,
 			txn.SecurityID,
 			txn.PlaidInvestmentTransactionID,
 			txn.Type,
@@ -106,6 +111,19 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 			return totalInserted, err
 		}
 		totalInserted += inserted
+
+		// Backfill user_account_id for pre-fix rows (user_account_id IS NULL). No-op for newly inserted rows.
+		if txn.UserAccountID != nil {
+			backfillQuery := `
+				UPDATE investment_transactions
+				SET user_account_id = $1
+				WHERE plaid_investment_transaction_id = $2
+				  AND user_account_id IS NULL
+			`
+			if _, err := r.db.Exec(ctx, backfillQuery, txn.UserAccountID, txn.PlaidInvestmentTransactionID); err != nil {
+				return totalInserted, err
+			}
+		}
 	}
 
 	return totalInserted, nil
@@ -266,7 +284,7 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 
 	// Activity type filter (SQL-pushed, not post-fetch)
 	if len(filters.ActivityTypes) > 0 {
-		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes)
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
 		if clause != "" {
 			// Renumber placeholders from argIdx
 			renumbered := renumberPlaceholders(clause, argIdx)

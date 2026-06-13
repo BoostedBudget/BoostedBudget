@@ -66,13 +66,66 @@ func TestTradeTypeToSQLPredicate_SingleBucket(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clause, _ := TradeTypeToSQLPredicate(tt.activityTypes)
+			// tableAlias="" exercises the unqualified path (no JOIN ambiguity context).
+			clause, _ := TradeTypeToSQLPredicate(tt.activityTypes, "")
 			if tt.wantNoClause {
 				assert.Empty(t, clause)
 			} else {
 				assert.NotEmpty(t, clause)
 				assert.Contains(t, clause, tt.wantClause)
 			}
+		})
+	}
+}
+
+// TestTradeTypeToSQLPredicate_TableAlias verifies that providing a tableAlias qualifies
+// the type/subtype column references to prevent "column reference is ambiguous" errors
+// when the query JOINs accounts (which also has type/subtype columns).
+func TestTradeTypeToSQLPredicate_TableAlias(t *testing.T) {
+	tests := []struct {
+		name          string
+		activityTypes []string
+		tableAlias    string
+		wantContains  string
+		wantAbsent    string // must NOT appear (bare column name)
+	}{
+		{
+			name:          "buy with alias qualifies type",
+			activityTypes: []string{"buy"},
+			tableAlias:    "it",
+			wantContains:  "it.type = 'buy'",
+			wantAbsent:    "type = 'buy'", // this partial match would also hit "it.type = 'buy'"
+		},
+		{
+			name:          "sell with alias qualifies type",
+			activityTypes: []string{"sell"},
+			tableAlias:    "it",
+			wantContains:  "it.type = 'sell'",
+		},
+		{
+			name:          "dividend with alias qualifies subtype",
+			activityTypes: []string{"dividend"},
+			tableAlias:    "it",
+			wantContains:  "it.subtype IN",
+		},
+		{
+			name:          "fee with alias qualifies both type and subtype",
+			activityTypes: []string{"fee"},
+			tableAlias:    "it",
+			wantContains:  "it.type = 'fee'",
+		},
+		{
+			name:          "empty alias produces unqualified columns",
+			activityTypes: []string{"buy"},
+			tableAlias:    "",
+			wantContains:  "type = 'buy'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clause, _ := TradeTypeToSQLPredicate(tt.activityTypes, tt.tableAlias)
+			assert.NotEmpty(t, clause)
+			assert.Contains(t, clause, tt.wantContains)
 		})
 	}
 }

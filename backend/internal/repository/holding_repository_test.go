@@ -52,7 +52,7 @@ func TestHoldingRepository_ReplaceForAccount_DeletesOldInsertNew(t *testing.T) {
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(10)...).
+		WithArgs(anyArgs(11)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -100,7 +100,7 @@ func TestHoldingRepository_ReplaceForAccount_RollbackOnInsertError(t *testing.T)
 		WithArgs(accountID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO holdings`)).
-		WithArgs(anyArgs(10)...).
+		WithArgs(anyArgs(11)...).
 		WillReturnError(errors.New("db constraint error"))
 	mock.ExpectRollback()
 

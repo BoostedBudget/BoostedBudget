@@ -2214,18 +2214,25 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	}
 
 	// ── Banking-only filters ──────────────────────────────────────────────────
+	// These filters apply to the banking branch only.  When any of them is set we
+	// also append AND FALSE to the investment branch so that investment rows are
+	// excluded rather than silently over-returned.
 
 	bankingExtraFilter := ""
+	investBankingOnlyFilter := "" // zeroes out investment rows when a banking-only filter is active
+	hasBankingOnlyFilter := false
 
 	if filters.Pending != nil {
 		bankingExtraFilter += fmt.Sprintf(" AND t.pending = $%d", argIdx)
 		args = append(args, *filters.Pending)
 		argIdx++
+		hasBankingOnlyFilter = true
 	}
 	if filters.Reviewed != nil {
 		bankingExtraFilter += fmt.Sprintf(" AND t.reviewed = $%d", argIdx)
 		args = append(args, *filters.Reviewed)
 		argIdx++
+		hasBankingOnlyFilter = true
 	}
 	if filters.AmountType != nil {
 		switch *filters.AmountType {
@@ -2234,16 +2241,22 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		case "expense":
 			bankingExtraFilter += " AND t.amount > 0"
 		}
+		hasBankingOnlyFilter = true
 	}
 	if filters.MinAmount != nil {
 		bankingExtraFilter += fmt.Sprintf(" AND ABS(t.amount) >= $%d", argIdx)
 		args = append(args, *filters.MinAmount)
 		argIdx++
+		hasBankingOnlyFilter = true
 	}
 	if filters.MaxAmount != nil {
 		bankingExtraFilter += fmt.Sprintf(" AND ABS(t.amount) <= $%d", argIdx)
 		args = append(args, *filters.MaxAmount)
 		argIdx++
+		hasBankingOnlyFilter = true
+	}
+	if hasBankingOnlyFilter {
+		investBankingOnlyFilter = " AND FALSE"
 	}
 
 	// PFC / custom-category filters (banking only).
@@ -2268,14 +2281,86 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		}
 		if len(orParts) > 0 {
 			bankingExtraFilter += " AND (" + strings.Join(orParts, " OR ") + ")"
+			investBankingOnlyFilter = " AND FALSE"
 		}
+	}
+
+	// AccountIDs (multi-value) — chain-expanded via user_account_id on both branches.
+	if len(filters.AccountIDs) > 0 {
+		bPHs := make([]string, len(filters.AccountIDs))
+		iPHs := make([]string, len(filters.AccountIDs))
+		bFbPHs := make([]string, len(filters.AccountIDs))
+		iFbPHs := make([]string, len(filters.AccountIDs))
+		for i, id := range filters.AccountIDs {
+			bPHs[i] = fmt.Sprintf("$%d", argIdx)
+			bFbPHs[i] = fmt.Sprintf("$%d", argIdx+1)
+			iPHs[i] = fmt.Sprintf("$%d", argIdx+2)
+			iFbPHs[i] = fmt.Sprintf("$%d", argIdx+3)
+			args = append(args, id, id, id, id)
+			argIdx += 4
+		}
+		bankingExtraFilter += fmt.Sprintf(
+			" AND (t.user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (t.account_id IN (%s) AND t.user_account_id IS NULL))",
+			strings.Join(bPHs, ", "), strings.Join(bFbPHs, ", "),
+		)
+		investAcctFilter += fmt.Sprintf(
+			" AND (it.user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (it.account_id IN (%s) AND it.user_account_id IS NULL))",
+			strings.Join(iPHs, ", "), strings.Join(iFbPHs, ", "),
+		)
+	}
+
+	// UserAccountID — stable logical account identity across re-links (both branches).
+	if filters.UserAccountID != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.user_account_id = $%d", argIdx)
+		investAcctFilter += fmt.Sprintf(" AND it.user_account_id = $%d", argIdx)
+		args = append(args, *filters.UserAccountID)
+		argIdx++
+	}
+
+	// MerchantID — banking rows only; investment rows have no merchant → zero them out.
+	if filters.MerchantID != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.merchant_id = $%d", argIdx)
+		args = append(args, *filters.MerchantID)
+		argIdx++
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// CategorySources — banking rows only; investment rows have no category_source → zero them out.
+	if len(filters.CategorySources) > 0 {
+		phs := make([]string, len(filters.CategorySources))
+		for i, s := range filters.CategorySources {
+			phs[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, s)
+			argIdx++
+		}
+		bankingExtraFilter += " AND t.category_source IN (" + strings.Join(phs, ", ") + ")"
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// CustomCategoryIDs — rolls up children (parent_id), banking rows only → zero out investment.
+	if len(filters.CustomCategoryIDs) > 0 {
+		phs := make([]string, len(filters.CustomCategoryIDs))
+		for i, id := range filters.CustomCategoryIDs {
+			phs[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, id)
+			argIdx++
+		}
+		idList := strings.Join(phs, ", ")
+		bankingExtraFilter += fmt.Sprintf(
+			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
+				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+			idList, idList,
+		)
+		investBankingOnlyFilter = " AND FALSE"
 	}
 
 	// ── Investment-only filters ───────────────────────────────────────────────
 
 	investActivityFilter := ""
 	if len(filters.ActivityTypes) > 0 {
-		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes)
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
 		if clause != "" {
 			renumbered := renumberPlaceholders(clause, argIdx)
 			investActivityFilter = " AND (" + renumbered + ")"
@@ -2370,6 +2455,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			t.pfc_detailed,
 			t.pfc_confidence_level,
 			t.pfc_category_icon_url,
+			t.pfc_primary_override,
+			t.pfc_detailed_override,
+			t.custom_category_override_id::text,
 			t.payment_channel,
 			t.pending,
 			t.user_notes,
@@ -2415,6 +2503,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::text,
 			NULL::text,
 			NULL::text,
+			NULL::text,   -- pfc_primary_override
+			NULL::text,   -- pfc_detailed_override
+			NULL::text,   -- custom_category_override_id
 			NULL::text,
 			NULL::bool,
 			NULL::text,
@@ -2437,13 +2528,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
-		%s%s%s%s%s
+		%s%s%s%s%s%s
 
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
 		LIMIT $%d
 	`,
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter,
-		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter,
+		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,
 	)
 
@@ -2465,6 +2556,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			externalTxnID                              *string
 			pfcPrimary, pfcDetailed                    *string
 			pfcConfidenceLevel, pfcCategoryIconURL     *string
+			pfcPrimaryOverride, pfcDetailedOverride    *string
+			customCategoryOverrideID                   *string
 			paymentChannel                             *string
 			pending                                    *bool
 			userNotes, categoryOverrideKind            *string
@@ -2486,6 +2579,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&merchantName, &merchantID, &dataSource,
 			&externalTxnID,
 			&pfcPrimary, &pfcDetailed, &pfcConfidenceLevel, &pfcCategoryIconURL,
+			&pfcPrimaryOverride, &pfcDetailedOverride, &customCategoryOverrideID,
 			&paymentChannel, &pending, &userNotes,
 			&categoryOverrideKind,
 			&effectivePFCPrimary, &effectivePFCDetailed, &effectiveCategoryName,
@@ -2513,11 +2607,14 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			MerchantName:          merchantName,
 			MerchantID:            merchantID,
 			DataSource:            dataSource,
-			PFCPrimary:            pfcPrimary,
-			PFCDetailed:           pfcDetailed,
-			PFCConfidenceLevel:    pfcConfidenceLevel,
-			PFCCategoryIconURL:    pfcCategoryIconURL,
-			PaymentChannel:        paymentChannel,
+			PFCPrimary:               pfcPrimary,
+			PFCDetailed:              pfcDetailed,
+			PFCConfidenceLevel:       pfcConfidenceLevel,
+			PFCCategoryIconURL:       pfcCategoryIconURL,
+			PFCPrimaryOverride:       pfcPrimaryOverride,
+			PFCDetailedOverride:      pfcDetailedOverride,
+			CustomCategoryOverrideID: customCategoryOverrideID,
+			PaymentChannel:           paymentChannel,
 			Pending:               pending,
 			UserNotes:             userNotes,
 			CategoryOverrideKind:  categoryOverrideKind,

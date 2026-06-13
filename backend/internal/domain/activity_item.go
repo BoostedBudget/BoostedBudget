@@ -55,6 +55,11 @@ type ActivityItem struct {
 	PFCDetailed           *string        `json:"pfc_detailed,omitempty"`
 	PFCConfidenceLevel    *string        `json:"pfc_confidence_level,omitempty"`
 	PFCCategoryIconURL    *string        `json:"pfc_category_icon_url,omitempty"`
+	// PFC override raw values — needed to compute PFCPrimaryOverrideDisplay/PFCDetailedOverrideDisplay.
+	PFCPrimaryOverride  *string `json:"pfc_primary_override,omitempty"`
+	PFCDetailedOverride *string `json:"pfc_detailed_override,omitempty"`
+	// Custom category override ID (used to look up CustomCategoryOverrideDisplay).
+	CustomCategoryOverrideID *string `json:"custom_category_override_id,omitempty"`
 	// Human-readable PFC display names (set by PopulatePFCDisplay; null for investment rows).
 	PFCPrimaryDisplay          *string `json:"pfc_primary_display,omitempty"`
 	PFCDetailedDisplay         *string `json:"pfc_detailed_display,omitempty"`
@@ -97,7 +102,6 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 	src := string(t.Source)
 	pending := t.Pending
 	reviewed := t.Reviewed
-	linkedItemID := t.LinkedItemID
 	return &ActivityItem{
 		Source:                        FeedSourceBanking,
 		SortDate:                      sortDate,
@@ -108,7 +112,7 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 		Amount:                        t.Amount,
 		Name:                          t.Name,
 		UserAccountID:                 t.UserAccountID,
-		LinkedItemID:                  &linkedItemID,
+		LinkedItemID:                  &t.LinkedItemID,
 		AuthorizedDate:                t.AuthorizedDate,
 		MerchantName:                  t.MerchantName,
 		MerchantID:                    t.MerchantID,
@@ -118,6 +122,9 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 		PFCDetailed:                   t.PFCDetailed,
 		PFCConfidenceLevel:            t.PFCConfidenceLevel,
 		PFCCategoryIconURL:            t.PFCCategoryIconURL,
+		PFCPrimaryOverride:            t.PFCPrimaryOverride,
+		PFCDetailedOverride:           t.PFCDetailedOverride,
+		CustomCategoryOverrideID:      t.CustomCategoryOverrideID,
 		PFCPrimaryDisplay:             t.PFCPrimaryDisplay,
 		PFCDetailedDisplay:            t.PFCDetailedDisplay,
 		PFCPrimaryOverrideDisplay:     t.PFCPrimaryOverrideDisplay,

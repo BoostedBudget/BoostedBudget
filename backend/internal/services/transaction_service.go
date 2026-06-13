@@ -286,13 +286,20 @@ func (s *transactionService) ListTransactionsByCursor(
 			return nil, fmt.Errorf("failed to get unified feed by cursor: %w", err)
 		}
 
-		var encodedCursor *string
-		if nextRepoCursor != nil {
-			s2, encErr := domain.EncodeTransactionCursor(*nextRepoCursor)
-			if encErr != nil {
-				return nil, fmt.Errorf("failed to encode next cursor: %w", encErr)
+		// Populate PFC display names and custom-category display names for banking items.
+		// Investment items have no PFC fields so the call is a no-op for them.
+		for _, item := range items {
+			if item.Source == domain.FeedSourceBanking {
+				item.PopulatePFCDisplay()
 			}
-			encodedCursor = &s2
+		}
+		if err := s.enrichCustomCategoryDisplayForItems(ctx, userID, items); err != nil {
+			return nil, err
+		}
+
+		encodedCursor, err := encodeNextCursor(nextRepoCursor)
+		if err != nil {
+			return nil, err
 		}
 		return &TransactionListResponse{
 			Transactions: items,
@@ -325,20 +332,27 @@ func (s *transactionService) ListTransactionsByCursor(
 		bankingItems[i] = domain.NewBankingActivityItem(p)
 	}
 
-	var encodedCursor *string
-	if nextRepoCursor != nil {
-		s2, encErr := domain.EncodeTransactionCursor(*nextRepoCursor)
-		if encErr != nil {
-			return nil, fmt.Errorf("failed to encode next cursor: %w", encErr)
-		}
-		encodedCursor = &s2
+	encodedCursor, err := encodeNextCursor(nextRepoCursor)
+	if err != nil {
+		return nil, err
 	}
-
 	return &TransactionListResponse{
 		Transactions: bankingItems,
 		Limit:        limit,
 		NextCursor:   encodedCursor,
 	}, nil
+}
+
+// encodeNextCursor encodes a cursor for pagination. Returns nil if cursor is nil.
+func encodeNextCursor(cursor *domain.TransactionCursor) (*string, error) {
+	if cursor == nil {
+		return nil, nil
+	}
+	encoded, err := domain.EncodeTransactionCursor(*cursor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode next cursor: %w", err)
+	}
+	return &encoded, nil
 }
 
 // sanitizeSearchInput removes or escapes potentially dangerous characters from search input
@@ -538,6 +552,39 @@ func (s *transactionService) BulkUpdateTransactionCategory(ctx context.Context, 
 		})
 	}
 	return n, nil
+}
+
+// enrichCustomCategoryDisplayForItems fetches custom-category names in one batched query and
+// sets CustomCategoryOverrideDisplay on banking ActivityItems that have a custom override.
+// Investment rows never have a CustomCategoryOverrideID, so they are skipped automatically.
+// No-ops when no item has a custom override ID.
+func (s *transactionService) enrichCustomCategoryDisplayForItems(ctx context.Context, userID string, items []*domain.ActivityItem) error {
+	ids := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item.CustomCategoryOverrideID != nil {
+			id := *item.CustomCategoryOverrideID
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	names, err := s.customCategoryRepo.GetNamesByIDs(ctx, userID, ids)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.CustomCategoryOverrideID != nil {
+			if name, ok := names[*item.CustomCategoryOverrideID]; ok {
+				item.CustomCategoryOverrideDisplay = &name
+			}
+		}
+	}
+	return nil
 }
 
 // enrichCustomCategoryDisplay fetches custom-category names in one batched query and sets

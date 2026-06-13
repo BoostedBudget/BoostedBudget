@@ -125,14 +125,27 @@ func NormalizeTradeType(typ string, subtype *string) string {
 // and the dedicated /investment-transactions endpoint — always as a SQL WHERE, never
 // post-fetch, so that LIMIT n+1 keyset pagination is not corrupted.
 //
+// tableAlias qualifies the type/subtype column references (e.g. "it") to avoid
+// the "column reference is ambiguous" error when the query JOINs accounts, which
+// also has type/subtype columns. Pass an empty string only when there is no JOIN
+// that would introduce ambiguity.
+//
 // The buckets are mutually exclusive over the Plaid v23 subtype enum so that a row
 // can match at most one bucket when multiple types are requested (OR semantics in the
 // returned clause).
 //
 // Returns ("", nil) when activityTypes is empty (no filter needed).
-func TradeTypeToSQLPredicate(activityTypes []string) (string, []any) {
+func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string, []any) {
 	if len(activityTypes) == 0 {
 		return "", nil
+	}
+
+	// col returns "alias.column" when tableAlias is non-empty, or just "column" otherwise.
+	col := func(column string) string {
+		if tableAlias == "" {
+			return column
+		}
+		return tableAlias + "." + column
 	}
 
 	var parts []string
@@ -141,25 +154,25 @@ func TradeTypeToSQLPredicate(activityTypes []string) (string, []any) {
 	for _, at := range activityTypes {
 		switch at {
 		case TradeTypeBuy:
-			parts = append(parts, "type = 'buy'")
+			parts = append(parts, fmt.Sprintf("%s = 'buy'", col("type")))
 		case TradeTypeSell:
-			parts = append(parts, "type = 'sell'")
+			parts = append(parts, fmt.Sprintf("%s = 'sell'", col("type")))
 		case TradeTypeDividend:
 			placeholders := sqlInPlaceholders(len(args)+1, len(dividendSubtypes))
-			parts = append(parts, fmt.Sprintf("subtype IN (%s)", placeholders))
+			parts = append(parts, fmt.Sprintf("%s IN (%s)", col("subtype"), placeholders))
 			for _, s := range dividendSubtypes {
 				args = append(args, s)
 			}
 		case TradeTypeReinvest:
 			placeholders := sqlInPlaceholders(len(args)+1, len(reinvestSubtypes))
-			parts = append(parts, fmt.Sprintf("subtype IN (%s)", placeholders))
+			parts = append(parts, fmt.Sprintf("%s IN (%s)", col("subtype"), placeholders))
 			for _, s := range reinvestSubtypes {
 				args = append(args, s)
 			}
 		case TradeTypeFee:
 			// type='fee' OR subtype IN feeTaxSubtypes
 			feePlaceholders := sqlInPlaceholders(len(args)+1, len(feeTaxSubtypes))
-			parts = append(parts, fmt.Sprintf("(type = 'fee' OR subtype IN (%s))", feePlaceholders))
+			parts = append(parts, fmt.Sprintf("(%s = 'fee' OR %s IN (%s))", col("type"), col("subtype"), feePlaceholders))
 			for _, s := range feeTaxSubtypes {
 				args = append(args, s)
 			}
@@ -167,13 +180,14 @@ func TradeTypeToSQLPredicate(activityTypes []string) (string, []any) {
 			// type='cash' AND subtype NOT IN (dividendSubtypes ∪ reinvestSubtypes ∪ feeTaxSubtypes)
 			excludedSubtypes := append(append(append([]string{}, dividendSubtypes...), reinvestSubtypes...), feeTaxSubtypes...)
 			placeholders := sqlInPlaceholders(len(args)+1, len(excludedSubtypes))
-			parts = append(parts, fmt.Sprintf("(type = 'cash' AND (subtype IS NULL OR subtype NOT IN (%s)))", placeholders))
+			parts = append(parts, fmt.Sprintf("(%s = 'cash' AND (%s IS NULL OR %s NOT IN (%s)))",
+				col("type"), col("subtype"), col("subtype"), placeholders))
 			for _, s := range excludedSubtypes {
 				args = append(args, s)
 			}
 		case TradeTypeOther:
 			// Everything that is not buy/sell/cash/fee
-			parts = append(parts, "(type NOT IN ('buy', 'sell', 'cash', 'fee', 'transfer'))")
+			parts = append(parts, fmt.Sprintf("(%s NOT IN ('buy', 'sell', 'cash', 'fee', 'transfer'))", col("type")))
 		}
 	}
 

@@ -72,17 +72,19 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		h.CreatedAt = now
 		h.UpdatedAt = now
 
+		// user_account_id is the stable chain-expansion key that survives Plaid re-links (Issue #1109).
 		insertQuery := `
 			INSERT INTO holdings (
-				id, user_id, account_id, security_id,
+				id, user_id, account_id, user_account_id, security_id,
 				quantity, cost_basis, institution_value, institution_price,
 				created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`
 		if _, err := tx.Exec(ctx, insertQuery,
 			h.ID,
 			h.UserID,
 			h.AccountID,
+			h.UserAccountID,
 			h.SecurityID,
 			h.Quantity,
 			h.CostBasis,
@@ -311,10 +313,17 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 	return holdings, nil
 }
 
-// GetDistinctUserIDsWithHoldings returns all distinct user_ids that have at least one holding.
+// GetDistinctUserIDsWithHoldings returns all distinct user_ids that have at least one holding
+// on an active account. Inactive/replaced accounts are excluded so ghost holdings from
+// disconnected institutions don't generate misleading snapshot totals.
 // Used by the daily portfolio snapshot cron to enumerate users needing a snapshot update.
 func (r *holdingRepository) GetDistinctUserIDsWithHoldings(ctx context.Context) ([]string, error) {
-	query := `SELECT DISTINCT user_id::text FROM holdings ORDER BY user_id::text`
+	query := `
+		SELECT DISTINCT h.user_id::text
+		FROM holdings h
+		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		ORDER BY h.user_id::text
+	`
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {

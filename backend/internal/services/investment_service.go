@@ -96,7 +96,12 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		return nil, fmt.Errorf("GetPortfolioSummary: holdings: %w", err)
 	}
 
-	var totalValue, totalCostBasis float64
+	// totalValue covers ALL holdings (whether or not cost_basis is known).
+	// totalGainLoss is computed only over cost-basis-present holdings to avoid
+	// phantom gains: a holding with no cost_basis contributes 0 to gain/loss
+	// rather than its full value. Matches the SQL FILTER semantics in the
+	// snapshot Upsert and investment_analytics_repository UnrealizedGainLoss.
+	var totalValue, totalCostBasis, knownBasisValue float64
 	for i := range holdings {
 		h := &holdings[i]
 		if h.InstitutionValue != nil {
@@ -104,9 +109,12 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		}
 		if h.CostBasis != nil {
 			totalCostBasis += *h.CostBasis
+			if h.InstitutionValue != nil {
+				knownBasisValue += *h.InstitutionValue
+			}
 		}
 	}
-	totalGainLoss := totalValue - totalCostBasis
+	totalGainLoss := knownBasisValue - totalCostBasis
 	var totalGainLossPct *float64
 	if totalCostBasis > 0 {
 		v := totalGainLoss / totalCostBasis * 100
