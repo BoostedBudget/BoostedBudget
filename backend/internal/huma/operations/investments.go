@@ -229,6 +229,9 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
+	if startDate != nil && endDate != nil && endDate.Before(*startDate) {
+		return nil, huma.Error400BadRequest("end_date must be on or after start_date")
+	}
 
 	filters := domain.InvestmentTransactionFilters{}
 	if input.AccountID != "" {
