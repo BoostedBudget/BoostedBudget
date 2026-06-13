@@ -2358,7 +2358,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 
 	// ── Investment-only filters ───────────────────────────────────────────────
 
-	investActivityFilter := ""
+	// bankingActivityFilter zeroes the banking branch when an activity_types filter is active:
+	// banking rows carry no activity_type and must not bleed into an investment-activity-scoped result.
+	// When TradeTypeToSQLPredicate returns an empty clause (all types unrecognized), both branches
+	// return zero rows — consistent empty result rather than asymmetric (all invest, no banking).
+	var bankingActivityFilter, investActivityFilter string
 	if len(filters.ActivityTypes) > 0 {
 		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
 		if clause != "" {
@@ -2366,7 +2370,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			investActivityFilter = " AND (" + renumbered + ")"
 			args = append(args, typeArgs...)
 			argIdx += len(typeArgs)
+		} else {
+			// Unrecognized activity types → zero both branches (consistent empty result).
+			investActivityFilter = " AND FALSE"
 		}
+		bankingActivityFilter = " AND FALSE"
 	}
 
 	// ── Keyset predicate: 3-part (sort_date DESC, source ASC, id ASC) ─────────
@@ -2479,7 +2487,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		FROM transactions t
 		JOIN accounts a ON a.id = t.account_id AND a.status = 'active'
 		WHERE t.user_id = $1
-		%s%s%s%s%s
+		%s%s%s%s%s%s
 
 		UNION ALL
 
@@ -2533,7 +2541,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
 		LIMIT $%d
 	`,
-		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter,
+		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,
 	)

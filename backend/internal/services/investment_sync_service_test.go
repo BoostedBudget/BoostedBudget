@@ -1327,6 +1327,65 @@ func TestInvestmentSyncService_ProcessWebhook_NilWebhook(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil")
 }
 
+// TestInvestmentSyncService_SyncInvestmentTransactions_CashTxnQuantityPriceAlwaysSet
+// proves that Quantity and Price are always set (non-nil) even when Plaid reports 0.
+// This is the contract lock for R2-3: a code-simplifier revert that conditionally
+// set qty/price only when != 0 broke cash/dividend/fee rows (Go nil → JSON omit).
+func TestInvestmentSyncService_SyncInvestmentTransactions_CashTxnQuantityPriceAlwaysSet(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+
+	userID := uuid.New().String()
+	plaidAccountID := "plaid-acct-r23"
+	internalAccountID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-r23", userID)
+
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+	}, nil)
+
+	// Cash dividend: Quantity=0, Price=0 (Plaid standard for cash transactions)
+	cashTxn := makePlaidCashTxn("cash-r23-001", plaidAccountID, 75.00, "2024-02-10")
+
+	txnResp := plaid.NewInvestmentsTransactionsGetResponse(
+		makeMinimalPlaidItem(), nil, nil, []plaid.InvestmentTransaction{cashTxn}, 1, "req-r23",
+	)
+	deps.plaidSvc.On("InvestmentsTransactionsGet", ctx, "tok", mock.Anything, mock.Anything, int32(0), int32(500)).
+		Return(txnResp, nil)
+
+	// KEY ASSERTION: Quantity and Price must be non-nil (pointer to 0) — not nil — for cash txns.
+	// If R2-3 regresses, qty/price are only set when != 0, leaving them nil here.
+	deps.invTxnRepo.On("UpsertBatch", ctx, mock.MatchedBy(func(txns []domain.InvestmentTransaction) bool {
+		if len(txns) != 1 {
+			return false
+		}
+		txn := txns[0]
+		// Quantity must be non-nil pointer to 0 (not nil)
+		if txn.Quantity == nil {
+			return false
+		}
+		if *txn.Quantity != 0.0 {
+			return false
+		}
+		// Price must be non-nil pointer to 0 (not nil)
+		if txn.Price == nil {
+			return false
+		}
+		if *txn.Price != 0.0 {
+			return false
+		}
+		return true
+	})).Return(1, nil)
+
+	deps.linkedItemRepo.On("UpdateInvestmentsLastSyncedDate", ctx, linkedItem.ID, mock.Anything).Return(nil)
+
+	result, err := svc.SyncInvestmentTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TransactionsInserted)
+	deps.invTxnRepo.AssertExpectations(t) // verifies Quantity and Price are non-nil
+}
+
 // TestInvestmentSyncService_ProcessWebhook_MissingItemID verifies that a webhook
 // without an item_id is rejected and the webhook is updated with an error.
 func TestInvestmentSyncService_ProcessWebhook_MissingItemID(t *testing.T) {

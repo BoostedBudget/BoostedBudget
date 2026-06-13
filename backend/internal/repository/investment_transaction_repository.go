@@ -62,6 +62,11 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 
 	totalInserted := 0
 
+	// Collect (plaid_id, user_account_id) pairs for the post-loop bulk backfill.
+	// This avoids N round-trips (one per row) for the pre-fix NULL repair path.
+	// Only non-nil UserAccountIDs are collected; these will batch-repair pre-fix rows.
+	var backfillPIDs, backfillUAIDs []string
+
 	for i := range transactions {
 		txn := &transactions[i]
 		if txn.ID == "" {
@@ -72,8 +77,6 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 		// COUNT(*) FILTER trick: returns 1 if inserted, 0 if skipped (ON CONFLICT DO NOTHING)
 		// user_account_id is the stable chain-expansion key set at insert time so that
 		// pre-relink rows remain visible after a Plaid re-link (Issue #1109).
-		// The backfill UPDATE below repairs rows that were inserted before this fix
-		// (user_account_id IS NULL) without affecting the insertion count.
 		query := `
 			WITH ins AS (
 				INSERT INTO investment_transactions (
@@ -112,17 +115,24 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 		}
 		totalInserted += inserted
 
-		// Backfill user_account_id for pre-fix rows (user_account_id IS NULL). No-op for newly inserted rows.
 		if txn.UserAccountID != nil {
-			backfillQuery := `
-				UPDATE investment_transactions
-				SET user_account_id = $1
-				WHERE plaid_investment_transaction_id = $2
-				  AND user_account_id IS NULL
-			`
-			if _, err := r.db.Exec(ctx, backfillQuery, txn.UserAccountID, txn.PlaidInvestmentTransactionID); err != nil {
-				return totalInserted, err
-			}
+			backfillPIDs = append(backfillPIDs, txn.PlaidInvestmentTransactionID)
+			backfillUAIDs = append(backfillUAIDs, *txn.UserAccountID)
+		}
+	}
+
+	// Bulk backfill: repair pre-fix rows (user_account_id IS NULL) in one round-trip.
+	// No-op when all rows were inserted fresh (their user_account_id is already set above).
+	if len(backfillPIDs) > 0 {
+		backfillQuery := `
+			UPDATE investment_transactions t
+			SET user_account_id = data.uaid::uuid
+			FROM unnest($1::text[], $2::text[]) AS data(pid, uaid)
+			WHERE t.plaid_investment_transaction_id = data.pid
+			  AND t.user_account_id IS NULL
+		`
+		if _, err := r.db.Exec(ctx, backfillQuery, backfillPIDs, backfillUAIDs); err != nil {
+			return totalInserted, err
 		}
 	}
 
@@ -237,7 +247,9 @@ func (r *investmentTransactionRepository) GetByAccountID(ctx context.Context, ac
 
 // GetByUserIDKeyset retrieves investment transactions using keyset pagination.
 // Orders by (date DESC, id ASC). LEFT JOINs securities for name/ticker.
-// Chain-expands account_id via user_account_id.
+// Chain-expands account_id via user_account_id: a pre-relink transaction whose
+// account_id points to a replaced account is still returned when an active account
+// shares the same user_account_id (the stable chain key set at insert time).
 // Uses the idx_inv_txn_user_date_id covering index (added in migration 000096).
 func (r *investmentTransactionRepository) GetByUserIDKeyset(
 	ctx context.Context,
@@ -304,9 +316,10 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		argIdx += 3
 	}
 
-	where := "WHERE it.user_id = $1"
+	// extraConditions holds per-filter AND clauses appended after the base WHERE.
+	extraConditions := ""
 	if len(conditions) > 0 {
-		where += " AND " + strings.Join(conditions, " AND ")
+		extraConditions = " AND " + strings.Join(conditions, " AND ")
 	}
 
 	args = append(args, limit+1)
@@ -321,12 +334,28 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			it.created_at,
 			sec.ticker_symbol, sec.name AS security_name
 		FROM investment_transactions it
-		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
 		LEFT JOIN securities sec ON sec.id = it.security_id
+		WHERE it.user_id = $1
+		  -- Chain-expansion active-account filter: include pre-relink rows whose
+		  -- account_id is replaced, as long as an active account shares the same
+		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
+		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
+		  -- accounts share a user_account_id.
+		  AND (
+		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
+		      OR (
+		          it.user_account_id IS NOT NULL
+		          AND EXISTS (
+		              SELECT 1 FROM accounts chain_a
+		              WHERE chain_a.user_account_id = it.user_account_id
+		                AND chain_a.status = 'active'
+		          )
+		      )
+		  )
 		%s
 		ORDER BY it.date DESC, it.id ASC
 		LIMIT $%d
-	`, where, limitPH)
+	`, extraConditions, limitPH)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {

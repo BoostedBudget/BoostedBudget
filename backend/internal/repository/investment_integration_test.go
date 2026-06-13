@@ -358,3 +358,305 @@ func TestInvestment_UnifiedFeed_PageBoundary_Integration(t *testing.T) {
 	assert.Equal(t, 2, bankCount, "expected 2 banking items across both pages")
 	assert.Equal(t, 2, invCount, "expected 2 investment items across both pages")
 }
+
+// ── R2-4: activity_types filter must exclude banking rows ────────────────────
+
+// TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration proves that
+// when activity_types is set in the unified feed, banking rows are excluded entirely.
+// Before the R2-4 fix, banking rows leaked through because only the investment branch
+// had an activity filter — the banking branch was unaffected and returned all its rows.
+func TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, investAcctID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r24")
+
+	// Seed a separate banking account
+	bankLinkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, bankLinkedItemID, userID, "bank-item-r24-"+bankLinkedItemID.String())
+	require.NoError(t, err)
+
+	bankAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Checking R24', 'depository', 'active')
+	`, bankAcctID, bankLinkedItemID, userID, "plaid-bank-r24-"+bankAcctID.String())
+	require.NoError(t, err)
+
+	sameDate := "2024-04-10"
+
+	// 1 banking transaction
+	bankTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, source,
+			 external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, 'plaid', $5, $6, 50.00, $7::date, 'Coffee',
+			 'food_and_drink', 'coffee_shop', false, now(), now())
+	`, bankTxnID, userID, bankAcctID, bankLinkedItemID,
+		"bank-ext-r24-"+bankTxnID.String(), "bank-blind-r24-"+bankTxnID.String(), sameDate)
+	require.NoError(t, err)
+
+	// 1 investment "buy" transaction
+	invTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Buy VTI', 1000.00, $6::date)
+	`, invTxnID, userID, investAcctID, secID, "plaid-buy-r24-"+invTxnID.String(), sameDate)
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, enc)
+	filters := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		ActivityTypes:             []string{"buy"},
+	}
+
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "query must not error")
+
+	// Only the investment row (buy) must be returned — banking must be excluded (R2-4 fix)
+	require.Len(t, items, 1, "only the investment buy transaction should be returned when activity_types filter is active")
+	assert.Equal(t, domain.FeedSourceInvestment, items[0].Source, "result must be the investment row")
+	assert.Equal(t, invTxnID.String(), items[0].ID, "result must be the buy investment transaction")
+}
+
+// ── R2-1: user_account_id re-link propagation ───────────────────────────────
+
+// TestInvestment_UserAccountID_SurvivesRelink_Integration proves that:
+// 1. UpsertBatch populates user_account_id at INSERT time (GAP D fix).
+// 2. A second UpsertBatch with the same plaid_investment_transaction_id and a
+//    non-nil UserAccountID backfills user_account_id on pre-fix NULL rows (R2-5 bulk-backfill).
+// 3. GetByUserIDKeyset filtered by a NEW account_id (post-relink) still returns the
+//    pre-relink transactions via chain-expansion through user_account_id.
+func TestInvestment_UserAccountID_SurvivesRelink_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountA, secID := seedInvestmentFixture(ctx, t, tx, "inv-r21")
+
+	// Set user_account_id on account A (the stable chain key)
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
+		userAcctID, accountA)
+	require.NoError(t, err)
+
+	userAcctIDStr := userAcctID.String()
+	secIDStr := secID.String()
+	plaidTxnID := "plaid-r21-relink-001"
+
+	// Insert a transaction on account A with user_account_id set (GAP D path)
+	txnID := uuid.New()
+	repo := NewInvestmentTransactionRepository(tx)
+	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           txnID.String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountA.String(),
+		UserAccountID:                &userAcctIDStr,
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: plaidTxnID,
+		Type:                         "buy",
+		Name:                         "Buy VTI pre-relink",
+		Amount:                       1200.00,
+		Date:                         mustParseDate("2024-03-01"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted)
+
+	// Verify user_account_id was stored at INSERT time (not nil)
+	var storedUAID *string
+	err = tx.QueryRow(ctx,
+		`SELECT user_account_id::text FROM investment_transactions WHERE plaid_investment_transaction_id = $1`,
+		plaidTxnID).Scan(&storedUAID)
+	require.NoError(t, err, "row must exist")
+	require.NotNil(t, storedUAID, "user_account_id must be non-nil after UpsertBatch (GAP D)")
+	assert.Equal(t, userAcctIDStr, *storedUAID, "user_account_id must match the account's user_account_id")
+
+	// Simulate a Plaid re-link: create account B with the same user_account_id; mark A replaced
+	accountB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Brokerage', 'investment', 'active', $5)
+	`, accountB, linkedItemID, userID, "plaid-relink-acct-r21-"+accountB.String(), userAcctID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced' WHERE id = $1`, accountA)
+	require.NoError(t, err)
+
+	// GetByUserIDKeyset filtered by account B (the new post-relink account)
+	// must still return the pre-relink transaction via chain-expansion
+	accountBStr := accountB.String()
+	filters := domain.InvestmentTransactionFilters{
+		AccountID: &accountBStr,
+	}
+	txns, _, err := repo.GetByUserIDKeyset(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, txns, 1, "pre-relink transaction must be returned via chain-expansion after re-link")
+	assert.Equal(t, txnID.String(), txns[0].ID, "must return the pre-relink transaction ID")
+
+	// ── Backfill test (R2-5): row with NULL user_account_id gets repaired in one batch ──
+
+	// Insert a second row with NULL user_account_id (simulates a pre-fix row)
+	txnID2 := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Pre-fix row', 800.00, '2024-01-15')
+	`, txnID2, userID, accountA, secID, "plaid-r21-prefixrow")
+	require.NoError(t, err)
+
+	// UpsertBatch with the same plaid IDs and non-nil UserAccountID — bulk backfill must repair both NULL rows
+	txnID3 := uuid.New()
+	_, err = repo.UpsertBatch(ctx, []domain.InvestmentTransaction{
+		{
+			ID:                           txnID3.String(), // new txn (will conflict → skip)
+			UserID:                       userID.String(),
+			AccountID:                    accountA.String(),
+			UserAccountID:                &userAcctIDStr,
+			SecurityID:                   &secIDStr,
+			PlaidInvestmentTransactionID: "plaid-r21-prefixrow", // same plaid ID → conflict, do nothing
+			Type:                         "buy",
+			Name:                         "Pre-fix row",
+			Amount:                       800.00,
+			Date:                         mustParseDate("2024-01-15"),
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify the NULL-user_account_id row was backfilled
+	var backfilledUAID *string
+	err = tx.QueryRow(ctx,
+		`SELECT user_account_id::text FROM investment_transactions WHERE plaid_investment_transaction_id = 'plaid-r21-prefixrow'`,
+	).Scan(&backfilledUAID)
+	require.NoError(t, err)
+	require.NotNil(t, backfilledUAID, "backfill must repair NULL user_account_id (R2-5)")
+	assert.Equal(t, userAcctIDStr, *backfilledUAID)
+}
+
+// ── R2-2: banking-only filters must zero investment rows ─────────────────────
+
+// TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration proves
+// that banking-only filters (Pending, MerchantID) constrain the result to banking rows
+// only and return zero investment rows. This locks the GAP G fix.
+// Second assertion: AccountIDs (a both-branch filter) still returns investment rows
+// for the matching account.
+func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, investAcctID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r22")
+
+	// Seed banking account
+	bankLinkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, bankLinkedItemID, userID, "bank-item-r22-"+bankLinkedItemID.String())
+	require.NoError(t, err)
+
+	bankAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Checking R22', 'depository', 'active')
+	`, bankAcctID, bankLinkedItemID, userID, "plaid-bank-r22-"+bankAcctID.String())
+	require.NoError(t, err)
+
+	sameDate := "2024-03-20"
+
+	// 1 pending banking transaction
+	bankTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, source,
+			 external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, 'plaid', $5, $6, 30.00, $7::date, 'Starbucks',
+			 'food_and_drink', 'coffee_shop', true, now(), now())
+	`, bankTxnID, userID, bankAcctID, bankLinkedItemID,
+		"bank-ext-r22-"+bankTxnID.String(), "bank-blind-r22-"+bankTxnID.String(), sameDate)
+	require.NoError(t, err)
+
+	// 1 investment transaction
+	invTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'cash', 'Dividend', 25.00, $6::date)
+	`, invTxnID, userID, investAcctID, secID, "plaid-div-r22-"+invTxnID.String(), sameDate)
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, enc)
+
+	// ── Assertion 1: Pending=true filter → only banking row, zero investment ──
+	pendingTrue := true
+	filters := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		Pending:                   &pendingTrue,
+	}
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "Pending filter must not error")
+	require.Len(t, items, 1, "only the pending banking transaction should be returned")
+	assert.Equal(t, domain.FeedSourceBanking, items[0].Source, "result must be the banking row (proves GAP G fix)")
+
+	// ── Assertion 1b: MerchantID filter → only banking row, zero investment ──
+	merchantID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name) VALUES ($1, $2)
+	`, merchantID, "TestCo-R22-"+merchantID.String())
+	require.NoError(t, err)
+	merchantIDStr := merchantID.String()
+	filtersMerchant := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		MerchantID:                &merchantIDStr,
+	}
+	itemsMerchant, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filtersMerchant, nil, 10)
+	require.NoError(t, err, "MerchantID filter must not error")
+	// Merchant filter returns zero rows (no txn has that merchant), confirming investment branch zeroed
+	assert.Empty(t, itemsMerchant, "MerchantID filter must zero investment rows (proves transaction_repository.go:2323-2328 branch)")
+
+	// ── Assertion 2: AccountIDs (both-branch filter) returns investment rows ──
+	investAcctIDStr := investAcctID.String()
+	filters2 := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		AccountIDs:                []string{investAcctIDStr},
+	}
+	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
+	require.NoError(t, err, "AccountIDs filter must not error")
+	require.Len(t, items2, 1, "only the investment transaction for that account should be returned")
+	assert.Equal(t, domain.FeedSourceInvestment, items2[0].Source, "AccountIDs must return investment rows")
+}
+
+// mustParseDate parses a "YYYY-MM-DD" string into time.Time. Panics on error (test-only helper).
+func mustParseDate(s string) time.Time {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
