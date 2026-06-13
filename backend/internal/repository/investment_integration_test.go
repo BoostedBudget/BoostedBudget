@@ -40,27 +40,27 @@ func seedInvestmentFixture(ctx context.Context, t *testing.T, db DB, prefix stri
 	secID = uuid.New()
 
 	_, err := db.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+prefix+"-"+userID.String(), prefix+"-"+userID.String()+"@example.com")
-	require.NoError(t, err, "seed user")
+	require.NoError(t, err)
 
 	_, err = db.Exec(ctx, `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
 		VALUES ($1, $2, $3, 'enc-test-token')
 	`, linkedItemID, userID, prefix+"-item-"+linkedItemID.String())
-	require.NoError(t, err, "seed linked_item")
+	require.NoError(t, err)
 
 	_, err = db.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
 		VALUES ($1, $2, $3, $4, 'Test Brokerage', 'investment', 'active')
 	`, accountID, linkedItemID, userID, prefix+"-acct-"+accountID.String())
-	require.NoError(t, err, "seed investment account")
+	require.NoError(t, err)
 
 	_, err = db.Exec(ctx, `
 		INSERT INTO securities (id, plaid_security_id, name) VALUES ($1, $2, 'Test Security')
 	`, secID, prefix+"-sec-"+secID.String())
-	require.NoError(t, err, "seed security")
+	require.NoError(t, err)
 
 	return
 }
@@ -164,8 +164,8 @@ func TestInvestment_Snapshot_ExcludesInactiveAccounts_Integration(t *testing.T) 
 
 	inactiveAcct := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
-		VALUES ($1, $2, $3, $4, 'Old Brokerage', 'investment', 'replaced')
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, replaced_at)
+		VALUES ($1, $2, $3, $4, 'Old Brokerage', 'investment', 'replaced', now())
 	`, inactiveAcct, linkedItemID, userID, "plaid-replaced-"+inactiveAcct.String())
 	require.NoError(t, err, "seed inactive account")
 
@@ -287,7 +287,7 @@ func TestInvestment_UnifiedFeed_PageBoundary_Integration(t *testing.T) {
 				 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
 			VALUES
 				($1, $2, $3, $4, 'plaid', $5, $6, $7, $8::date, $9,
-				 'food_and_drink', 'groceries', false, now(), now())
+				 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES', false, now(), now())
 		`, txnID, userID, bankingAcctID, bankLinkedItemID,
 			fmt.Sprintf("bank-ext-gape-%d-%s", i, txnID),
 			fmt.Sprintf("bank-blind-gape-%d-%s", i, txnID),
@@ -402,7 +402,7 @@ func TestInvestment_UnifiedFeed_ActivityTypesExcludesBanking_Integration(t *test
 			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
 		VALUES
 			($1, $2, $3, $4, 'plaid', $5, $6, 50.00, $7::date, 'Coffee',
-			 'food_and_drink', 'coffee_shop', false, now(), now())
+			 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE_SHOP', false, now(), now())
 	`, bankTxnID, userID, bankAcctID, bankLinkedItemID,
 		"bank-ext-r24-"+bankTxnID.String(), "bank-blind-r24-"+bankTxnID.String(), sameDate)
 	require.NoError(t, err)
@@ -451,8 +451,16 @@ func TestInvestment_UserAccountID_SurvivesRelink_Integration(t *testing.T) {
 
 	userID, linkedItemID, accountA, secID := seedInvestmentFixture(ctx, t, tx, "inv-r21")
 
-	// Set user_account_id on account A (the stable chain key)
+	// Insert a user_accounts row (stable reference surviving re-links).
+	// user_accounts.id is the FK target for accounts.user_account_id (000031/000033).
 	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-r21')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	// Set user_account_id on account A (the stable chain key)
 	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
 		userAcctID, accountA)
 	require.NoError(t, err)
@@ -496,7 +504,7 @@ func TestInvestment_UserAccountID_SurvivesRelink_Integration(t *testing.T) {
 	`, accountB, linkedItemID, userID, "plaid-relink-acct-r21-"+accountB.String(), userAcctID)
 	require.NoError(t, err)
 
-	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced' WHERE id = $1`, accountA)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
 	require.NoError(t, err)
 
 	// GetByUserIDKeyset filtered by account B (the new post-relink account)
@@ -593,7 +601,7 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
 		VALUES
 			($1, $2, $3, $4, 'plaid', $5, $6, 30.00, $7::date, 'Starbucks',
-			 'food_and_drink', 'coffee_shop', true, now(), now())
+			 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE_SHOP', true, now(), now())
 	`, bankTxnID, userID, bankAcctID, bankLinkedItemID,
 		"bank-ext-r22-"+bankTxnID.String(), "bank-blind-r22-"+bankTxnID.String(), sameDate)
 	require.NoError(t, err)

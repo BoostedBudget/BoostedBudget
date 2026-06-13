@@ -61,19 +61,18 @@ func (r *portfolioSnapshotRepository) Upsert(ctx context.Context, userID string,
 			$2::date,
 			COALESCE(SUM(h.institution_value), 0),
 			COALESCE(SUM(h.cost_basis), 0),
-			-- Gain/loss is computed only over holdings whose cost_basis is non-NULL.
-			-- This prevents unknown-basis holdings from inflating the figure: a holding
-			-- with no cost_basis is excluded from both sides of the subtraction so it
-			-- contributes 0 to gain/loss rather than its full value.
-			-- total_value (first column above) still covers ALL holdings.
-			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
-			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0),
+			-- Gain/loss only over holdings with non-NULL cost_basis and institution_value.
+			-- NULL cost_basis is excluded to prevent phantom gains; NULL institution_value
+			-- is excluded to prevent phantom losses (known_basis − COALESCE(NULL,0)).
+			-- total_value (first column) still covers ALL holdings. Matches analytics paths.
+			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0)
+			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0),
 			CASE
-				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) > 0
+				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0) > 0
 				THEN (
-				    (COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
-				     - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL))
-				    / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL)
+				    (COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL), 0)
+				     - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL))
+				    / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL AND h.institution_value IS NOT NULL)
 				) * 100
 				ELSE NULL
 			END,

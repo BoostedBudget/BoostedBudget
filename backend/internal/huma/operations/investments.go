@@ -160,6 +160,9 @@ type GetInvestmentIncomeSummaryOutput struct {
 func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsInput) (*GetHoldingsOutput, error) {
 	var accountID *string
 	if input.AccountID != "" {
+		if _, err := uuid.Parse(input.AccountID); err != nil {
+			return nil, huma.Error400BadRequest("invalid account_id: must be a valid UUID")
+		}
 		accountID = &input.AccountID
 	}
 
@@ -172,10 +175,7 @@ func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsI
 		Body: struct {
 			Holdings []*domain.HoldingView `json:"holdings"`
 			Count    int                   `json:"count"`
-		}{
-			Holdings: holdings,
-			Count:    len(holdings),
-		},
+		}{Holdings: holdings, Count: len(holdings)},
 	}, nil
 }
 
@@ -209,9 +209,7 @@ func (h *InvestmentHandler) GetPortfolioHistory(ctx context.Context, input *GetP
 	return &GetPortfolioHistoryOutput{
 		Body: struct {
 			History []domain.PortfolioHistoryPoint `json:"history"`
-		}{
-			History: history,
-		},
+		}{History: history},
 	}, nil
 }
 
@@ -234,6 +232,9 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 
 	filters := domain.InvestmentTransactionFilters{}
 	if input.AccountID != "" {
+		if _, err := uuid.Parse(input.AccountID); err != nil {
+			return nil, huma.Error400BadRequest("invalid account_id: must be a valid UUID")
+		}
 		filters.AccountID = &input.AccountID
 	}
 	if input.SecurityID != "" {
@@ -266,11 +267,7 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 			Transactions []domain.InvestmentTransaction `json:"transactions"`
 			NextCursor   *string                        `json:"next_cursor,omitempty"`
 			Limit        int                            `json:"limit"`
-		}{
-			Transactions: txns,
-			NextCursor:   nextCursor,
-			Limit:        limit,
-		},
+		}{Transactions: txns, NextCursor: nextCursor, Limit: limit},
 	}, nil
 }
 
