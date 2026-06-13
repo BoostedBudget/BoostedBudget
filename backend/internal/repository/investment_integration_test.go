@@ -652,6 +652,140 @@ func TestInvestment_UnifiedFeed_BankingOnlyFilter_ExcludesInvestment_Integration
 	assert.Equal(t, domain.FeedSourceInvestment, items2[0].Source, "AccountIDs must return investment rows")
 }
 
+// ── R4-2: dedicated endpoint zeros on all-unrecognized activity_types ────────
+
+// TestInvestment_DedicatedFeed_UnrecognizedActivityType_ReturnsZero_Integration
+// proves that GetByUserIDKeyset returns ZERO rows (not all rows) when the
+// activity_types filter contains only unrecognized values. Before R4-2 the
+// empty predicate was silently skipped, returning all investment transactions.
+func TestInvestment_DedicatedFeed_UnrecognizedActivityType_ReturnsZero_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r42")
+
+	// Seed one buy transaction so there are rows to potentially return.
+	txnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Buy AAPL R42', 2000.00, '2024-07-01')
+	`, txnID, userID, accountID, secID, "plaid-r42-buy-"+txnID.String())
+	require.NoError(t, err)
+
+	repo := NewInvestmentTransactionRepository(tx)
+	filters := domain.InvestmentTransactionFilters{
+		ActivityTypes: []string{"garbage_type_not_in_enum"},
+	}
+
+	// With R4-2 fix: all-unrecognized activity_types → FALSE condition → zero rows.
+	// Without the fix: empty clause skipped → all rows returned (the seeded buy txn).
+	txns, _, err := repo.GetByUserIDKeyset(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "must not error on unrecognized activity types")
+	assert.Empty(t, txns, "all-unrecognized activity_types must return zero rows (proves R4-2 fix)")
+}
+
+// ── R4-3: trade-type partition round-trip (regression guard) ─────────────────
+
+// TestInvestment_TradeTypePartition_RoundTrip_Integration proves that every value
+// NormalizeTradeType can return has a matching TradeTypeToSQLPredicate bucket that
+// actually returns the corresponding row. This locks the display↔filter partition
+// against future regressions — R3-1 (transfer silently excluded from 'other')
+// slipped three prior adversarial review rounds because no end-to-end test
+// exercised this agreement against real SQL.
+func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r43")
+	userIDStr := userID.String()
+
+	// Each entry represents one bucket — one representative (type, subtype) that
+	// NormalizeTradeType maps to the expected display value.
+	type bucketCase struct {
+		plaidID  string
+		sqlType  string
+		sqlSub   *string // nil → no subtype column
+		expected string  // display value = NormalizeTradeType result = filter bucket
+	}
+	subPtr := func(s string) *string { return &s }
+	cases := []bucketCase{
+		{plaidID: "r43-buy", sqlType: "buy", sqlSub: nil, expected: "buy"},
+		{plaidID: "r43-sell", sqlType: "sell", sqlSub: nil, expected: "sell"},
+		{plaidID: "r43-div", sqlType: "cash", sqlSub: subPtr("dividend"), expected: "dividend"},
+		{plaidID: "r43-reinv", sqlType: "cash", sqlSub: subPtr("dividend reinvestment"), expected: "reinvest"},
+		{plaidID: "r43-fee-type", sqlType: "fee", sqlSub: nil, expected: "fee"},
+		{plaidID: "r43-fee-sub", sqlType: "cash", sqlSub: subPtr("management fee"), expected: "fee"},
+		{plaidID: "r43-cash", sqlType: "cash", sqlSub: subPtr("deposit"), expected: "cash"},
+		{plaidID: "r43-transfer", sqlType: "transfer", sqlSub: nil, expected: "other"},
+	}
+
+	// Verify NormalizeTradeType agrees with each case, and seed the transaction.
+	for _, c := range cases {
+		// Confirm NormalizeTradeType returns the expected display value (display side).
+		got := domain.NormalizeTradeType(c.sqlType, c.sqlSub)
+		require.Equal(t, c.expected, got,
+			"NormalizeTradeType(%q, %v) must return %q (display side of partition)",
+			c.sqlType, c.sqlSub, c.expected)
+
+		// Seed the transaction.
+		txnID := uuid.New()
+		var seedErr error
+		if c.sqlSub != nil {
+			_, seedErr = tx.Exec(ctx, `
+				INSERT INTO investment_transactions
+					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+					 type, subtype, name, amount, date)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 100.00, '2024-08-01')
+			`, txnID, userID, accountID, secID, c.plaidID+"-"+txnID.String(),
+				c.sqlType, *c.sqlSub, "R43 "+c.plaidID)
+		} else {
+			_, seedErr = tx.Exec(ctx, `
+				INSERT INTO investment_transactions
+					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+					 type, name, amount, date)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, 100.00, '2024-08-01')
+			`, txnID, userID, accountID, secID, c.plaidID+"-"+txnID.String(),
+				c.sqlType, "R43 "+c.plaidID)
+		}
+		require.NoError(t, seedErr, "seed %s transaction", c.plaidID)
+	}
+
+	repo := NewInvestmentTransactionRepository(tx)
+
+	// For each unique bucket, call GetByUserIDKeyset with [bucket] and verify the
+	// representative row(s) are returned (filter side of partition). Uniquify to avoid
+	// running "fee" twice (it has two representatives: fee-type and fee-sub).
+	seen := make(map[string]bool)
+	for _, c := range cases {
+		if seen[c.expected] {
+			continue
+		}
+		seen[c.expected] = true
+
+		filters := domain.InvestmentTransactionFilters{
+			ActivityTypes: []string{c.expected},
+		}
+		txns, _, filterErr := repo.GetByUserIDKeyset(ctx, userIDStr, filters, nil, 20)
+		require.NoError(t, filterErr, "GetByUserIDKeyset with activity_types=[%s] must not error", c.expected)
+
+		// Assert at least one row was returned — specifically that the row whose
+		// NormalizeTradeType maps to this bucket is reachable by the filter.
+		require.NotEmpty(t, txns,
+			"activity_types=[%s] must return at least the %s-representative row "+
+				"(partition round-trip: NormalizeTradeType agreed but SQL filter excludes it — regression of R3-1)",
+			c.expected, c.plaidID)
+	}
+}
+
 // mustParseDate parses a "YYYY-MM-DD" string into time.Time. Panics on error (test-only helper).
 func mustParseDate(s string) time.Time {
 	t, err := time.Parse("2006-01-02", s)

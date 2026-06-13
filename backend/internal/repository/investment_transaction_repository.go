@@ -303,6 +303,11 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 			conditions = append(conditions, fmt.Sprintf("(%s)", renumbered))
 			args = append(args, typeArgs...)
 			argIdx += len(typeArgs)
+		} else {
+			// A non-empty ActivityTypes list produced an empty predicate — all requested
+			// values are unrecognized. Zero the result set rather than silently returning
+			// all rows (mirrors GetByUserIDKeysetUnified's bankingActivityFilter="AND FALSE").
+			conditions = append(conditions, "FALSE")
 		}
 	}
 
