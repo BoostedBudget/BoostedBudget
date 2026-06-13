@@ -3050,7 +3050,7 @@
         {
           "name": "include_investment_activity",
           "in": "query",
-          "description": "Merge investment transactions into feed (true/false, default false). Requires sort_by=date.",
+          "description": "Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.",
           "type": "string"
         },
         {
