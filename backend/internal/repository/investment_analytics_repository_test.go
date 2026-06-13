@@ -202,6 +202,12 @@ func TestInvestmentAnalytics_UnrealizedGainLoss_AggregatesAccounts(t *testing.T)
 
 // TestInvestmentAnalytics_IncomeSummary_GroupsByType tests that IncomeSummary aggregates
 // income rows into ByType entries and computes TotalIncome correctly.
+//
+// The mock rows simulate what the real DB returns AFTER the COALESCE(-SUM(it.amount), 0)
+// negation in the query. Plaid stores income (dividends, interest) as negative amounts
+// (cash-credit convention); the SQL negates them so the DB returns positive magnitudes.
+// The mock feeds those already-positive values — the unit test covers Go scanning logic.
+// Real-sign correctness is locked by TestInvestment_IncomeSummary_NegativePlaidAmounts_Integration.
 func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	mock, repo := setupInvestmentAnalyticsMockDB(t)
 	defer mock.Close()
@@ -211,6 +217,7 @@ func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 3, 31, 23, 59, 59, 0, time.UTC)
 
+	// Positive values — represent post-negation DB output (COALESCE(-SUM(amount), 0) = +200/+50).
 	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount"}).
 		AddRow("dividend", 5, 200.0).
 		AddRow("interest", 3, 50.0)

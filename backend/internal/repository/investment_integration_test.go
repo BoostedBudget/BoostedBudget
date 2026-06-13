@@ -744,6 +744,79 @@ func TestInvestment_DedicatedFeed_UnrecognizedActivityType_ReturnsZero_Integrati
 	assert.Empty(t, txns, "all-unrecognized activity_types must return zero rows (proves R4-2 fix)")
 }
 
+// ── R7-B: IncomeSummary must report positive income for Plaid-negative amounts ──
+
+// TestInvestment_IncomeSummary_NegativePlaidAmounts_Integration proves that
+// IncomeSummary reports positive (cash-magnitude) income even though Plaid stores
+// dividend and interest amounts as NEGATIVE values (cash credited convention:
+// positive = cash debited, negative = cash credited). Before R7-B the query used
+// SUM(it.amount) → negative total_income, corrupting /portfolio/income responses.
+//
+// This test seeds transactions with Plaid-realistic negative amounts and asserts
+// the output is positive — something pgxmock tests cannot verify because they feed
+// fabricated positive values.
+func TestInvestment_IncomeSummary_NegativePlaidAmounts_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-r7b")
+
+	// Seed income transactions with Plaid-realistic NEGATIVE amounts.
+	// dividend: $200 cash credit → Plaid amount = -200
+	divID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, subtype, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'cash', 'dividend', 'AAPL Dividend', -200.00, '2024-06-15')
+	`, divID, userID, accountID, secID, "plaid-r7b-div-"+divID.String())
+	require.NoError(t, err)
+
+	// interest: $50 cash credit → Plaid amount = -50
+	intID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, subtype, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'cash', 'interest', 'Money Market Interest', -50.00, '2024-06-20')
+	`, intID, userID, accountID, secID, "plaid-r7b-int-"+intID.String())
+	require.NoError(t, err)
+
+	// dividend reinvestment: $30 reinvested → Plaid amount = -30
+	reinvID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, subtype, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'cash', 'dividend reinvestment', 'DRIP Reinvestment', -30.00, '2024-06-25')
+	`, reinvID, userID, accountID, secID, "plaid-r7b-reinv-"+reinvID.String())
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)
+
+	result, err := repo.IncomeSummary(ctx, userID.String(), start, end)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// TotalIncome must be POSITIVE (R7-B fix: negate the Plaid cash-credit sign).
+	// Without the fix: SUM(-200 + -50 + -30) = -280 → this assertion fails.
+	assert.InDelta(t, 280.0, result.TotalIncome, 0.01,
+		"TotalIncome must be positive +280 (Plaid stores income as negative cash credits)")
+	assert.Len(t, result.ByType, 3, "must have 3 income buckets")
+
+	// Each per-type TotalAmount must also be positive
+	for _, bt := range result.ByType {
+		assert.Greater(t, bt.TotalAmount, 0.0,
+			"ByType[%s].TotalAmount must be positive (proves R7-B sign fix)", bt.IncomeType)
+	}
+}
+
 // ── R4-3: trade-type partition round-trip (regression guard) ─────────────────
 
 // TestInvestment_TradeTypePartition_RoundTrip_Integration proves that every value

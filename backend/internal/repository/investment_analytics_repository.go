@@ -264,7 +264,8 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 
 // IncomeSummary aggregates investment income within [start, end] by normalized income type.
 // The income set (domain.IncomeSubtypes) is wider than the display "dividend" bucket —
-// it includes reinvested dividends/interest. All amounts are as-reported by Plaid (positive = inflow).
+// it includes reinvested dividends/interest. Plaid stores income (cash credits) as negative
+// amounts; the query negates them so returned TotalAmount values are positive magnitudes.
 func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userID string, start, end time.Time) (*domain.IncomeSummary, error) {
 	// Build IN clause for the income subtype set.
 	subtypes := domain.IncomeSubtypes
@@ -276,6 +277,12 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	}
 	inClause := strings.Join(placeholders, ", ")
 
+	// Plaid investment-transaction amount sign convention:
+	//   positive  = cash DEBITED  (buys, fees)
+	//   negative  = cash CREDITED (sells, dividends, interest)
+	// Income subtypes (dividends, interest, reinvestments) are cash credits, so Plaid
+	// stores them as NEGATIVE amounts. Negate before SUM so callers receive a positive
+	// income magnitude. COALESCE guards the edge case where all amounts in a group are NULL.
 	query := fmt.Sprintf(`
 		SELECT
 			CASE
@@ -288,9 +295,9 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 				WHEN it.subtype = 'interest reinvestment'
 				     THEN 'interest_reinvestment'
 				ELSE 'other_income'
-			END                 AS income_type,
-			COUNT(*)            AS count,
-			SUM(it.amount)      AS total_amount
+			END                          AS income_type,
+			COUNT(*)                     AS count,
+			COALESCE(-SUM(it.amount), 0) AS total_amount
 		FROM investment_transactions it
 		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
 		WHERE it.user_id = $1

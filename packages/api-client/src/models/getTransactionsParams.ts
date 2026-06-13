@@ -118,7 +118,7 @@ sort_by?: GetTransactionsSortBy;
  */
 sort_dir?: GetTransactionsSortDir;
 /**
- * Merge investment transactions into feed (true/false, default false). Requires sort_by=date.
+ * Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.
  */
 include_investment_activity?: string;
 /**

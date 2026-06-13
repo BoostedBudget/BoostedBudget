@@ -1716,3 +1716,100 @@ func TestBulkSetTransactionReviewed_NonMCPNoAudit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, auditRepo.recordedEntry, "non-MCP call must not write audit entry")
 }
+
+// ── R7-A: include_investment_activity default-true + graceful degradation ──────
+
+// TestGetTransactions_IncludeInvestmentActivity_DefaultTrue_DateSort verifies that
+// omitting include_investment_activity when sort_by=date (the default) results in the
+// service being called with IncludeInvestmentActivity=true. This is the R7-A restoration
+// of the plan's §6 Decision #5 (default="true").
+// RED: currently fails because the handler leaves IncludeInvestmentActivity=false when
+// the param is empty.
+func TestGetTransactions_IncludeInvestmentActivity_DefaultTrue_DateSort(t *testing.T) {
+	userID := "user-r7a-default"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.ActivityItem{},
+			Limit:        50,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	// Omit include_investment_activity entirely; sort_by defaults to "date".
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		// IncludeInvestmentActivity: "" (omitted)
+		// SortBy: "" (will resolve to "date" via handler default)
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err, "omitting include_investment_activity must not error")
+	require.NotNil(t, output)
+	assert.True(t, mockService.capturedFilters.IncludeInvestmentActivity,
+		"omitted include_investment_activity must default to true (R7-A)")
+}
+
+// TestGetTransactions_IncludeInvestmentActivity_DefaultTrue_NonDateSortDegrades verifies
+// that omitting include_investment_activity with a non-date sort (e.g. sort_by=amount)
+// silently degrades to false — so existing clients using non-date sorts are NOT broken
+// by the default-true change. The request must succeed (no 400).
+// RED: currently this returns false already (old default-false), but the test is
+// written to lock the degrade semantics: it must be false AND it must not error.
+func TestGetTransactions_IncludeInvestmentActivity_DefaultTrue_NonDateSortDegrades(t *testing.T) {
+	userID := "user-r7a-degrade"
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.ActivityItem{},
+			Limit:        50,
+		},
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		SortBy:                "amount",
+		// IncludeInvestmentActivity: "" (omitted) — must degrade to false, NOT 400
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err, "omitted flag + non-date sort must NOT return 400 (graceful degradation)")
+	require.NotNil(t, output)
+	assert.False(t, mockService.capturedFilters.IncludeInvestmentActivity,
+		"omitted flag + non-date sort must degrade to false (protect existing non-date-sort clients)")
+}
+
+// TestGetTransactions_IncludeInvestmentActivity_ExplicitTrue_NonDateSort400 verifies
+// that explicitly setting include_investment_activity=true with a non-date sort
+// returns 400 (you explicitly asked for an impossible combination).
+func TestGetTransactions_IncludeInvestmentActivity_ExplicitTrue_NonDateSort400(t *testing.T) {
+	userID := "user-r7a-explicit400"
+	mockService := &mockTransactionService{
+		// Mock service returns the sort-guard error (as the real service does)
+		listErr: domain.ErrInvestmentMergeRequiresDateSort,
+	}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:        inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput:     inputs.CursorPaginationInput{Limit: 50},
+		SortBy:                    "amount",
+		IncludeInvestmentActivity: "true", // EXPLICIT true
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err, "explicit include_investment_activity=true + non-date sort must error")
+
+	var statusErr interface{ GetStatus() int }
+	if errors.As(err, &statusErr) {
+		assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(),
+			"error must be 400 Bad Request")
+	} else {
+		t.Errorf("expected a status-bearing Huma error, got: %T %v", err, err)
+	}
+}
