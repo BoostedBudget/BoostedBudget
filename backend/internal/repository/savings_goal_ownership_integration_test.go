@@ -150,5 +150,5 @@ func TestGetByIDForUser_NonexistentGoalReturnsNotFound(t *testing.T) {
 	goal, err := repo.GetByIDForUser(ctx, uuid.New().String(), userID.String())
 	require.Error(t, err, "nonexistent goal must return error")
 	assert.Nil(t, goal)
-	assert.ErrorIs(t, err, ErrSavingsGoalNotFound)
+	assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
 }

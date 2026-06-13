@@ -243,10 +243,13 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 156 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 164 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
+    // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
+    //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
+    //   getInvestmentGainLossSummary, getInvestmentIncomeSummary
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(156)
+    expect(ALL_OPERATION_IDS.length).toBe(164)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
@@ -345,5 +348,39 @@ describe('issue #972: savings transfer automation operations', () => {
     expect(isWrite('cancelTransferSuggestion')).toBe(true)
     expect(isWrite('getSavingsImpactAggregate')).toBe(false)
     expect(isWrite('getSavingsImpactMe')).toBe(false)
+  })
+})
+
+// ── Issue #138: investment portfolio operations ────────────────────────────
+
+describe('issue #138: investment portfolio operations', () => {
+  const coreOps = [
+    'getHoldings',
+    'getPortfolioSummary',
+    'getPortfolioHistory',
+    'getInvestmentTransactions',
+  ]
+  const analyticsOps = [
+    'getPortfolioAllocationBreakdown',
+    'getTopMovers',
+    'getInvestmentGainLossSummary',
+    'getInvestmentIncomeSummary',
+  ]
+
+  it('classifies all 8 investment ops as read and allowed', () => {
+    for (const opId of [...coreOps, ...analyticsOps]) {
+      const entry = getCapability(opId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe('read')
+      expect(entry?.excluded).toBe(false)
+      expect(isAllowed(opId)).toBe(true)
+    }
+  })
+
+  it('getTransactions remains read (unified-feed response shape change is MCP-safe)', () => {
+    const entry = getCapability('getTransactions')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(false)
   })
 })

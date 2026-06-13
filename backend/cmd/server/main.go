@@ -258,8 +258,16 @@ func main() {
 	// Issue #972: Declare savings stats snapshot worker (daily aggregate, no Plaid dependency)
 	var savingsStatsWorker *jobs.SavingsStatsWorker
 
+	// Issue #138: Declare portfolio snapshot worker (daily per-user snapshot, no Plaid dependency)
+	var portfolioSnapshotWorker *jobs.PortfolioSnapshotWorker
+
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
+
+	// Issue #138: Declare investment read services at outer scope (initialized inside Plaid block;
+	// nil-checked in route registration since repos are available regardless of Plaid config).
+	var investmentService services.InvestmentService
+	var investmentAnalyticsService services.InvestmentAnalyticsService
 
 	// Issue #1015: Declare Plaid-dependent workers at outer scope so they can be nil-checked
 	// during River registration (which now occurs after the Plaid block).
@@ -348,6 +356,8 @@ func main() {
 		securityRepo := repository.NewSecurityRepository(db)                                         // Issue #659: Plaid Investments
 		holdingRepo := repository.NewHoldingRepository(db)                                           // Issue #659: Plaid Investments
 		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                       // Issue #659: Plaid Investments
+		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                       // Issue #138: Portfolio snapshots
+		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                   // Issue #138: Investment analytics
 		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                           // Issue #910: Plaid Liabilities
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
@@ -407,6 +417,15 @@ func main() {
 		budgetLogger := appLogger
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
 		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
+
+		// Issue #138: Investment read services — DB-only, no Plaid dependency.
+		// Initialized here (outside the Plaid block) so investment route handlers
+		// always have a non-nil service even when Plaid credentials are absent.
+		investmentService = services.NewInvestmentService(holdingRepo, portfolioSnapshotRepo, investmentTxnRepo)
+		investmentAnalyticsService = services.NewInvestmentAnalyticsService(investmentAnalyticsRepo)
+		if phClient != nil {
+			investmentService.SetAnalytics(phClient)
+		}
 
 		// Issue #494: Budget Sync Service for Envelope Budgeting
 		// Recalculates budget income and category spent amounts after transaction sync
@@ -669,6 +688,14 @@ func main() {
 		})
 		appLogger.Info("Savings stats snapshot worker created (River)")
 
+		// Issue #138: Create portfolio snapshot worker (daily per-user snapshot).
+		portfolioSnapshotWorker = jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{
+			HoldingRepo:  holdingRepo,
+			SnapshotRepo: portfolioSnapshotRepo,
+			Logger:       appLogger,
+		})
+		appLogger.Info("Portfolio snapshot worker created (River)")
+
 		// Issue #1123: Create effective category refresh worker (no external dependencies)
 		effectiveCategoryRefreshWorker = jobs.NewEffectiveCategoryRefreshWorker(jobs.EffectiveCategoryRefreshWorkerDeps{
 			TransactionRepo: transactionRepo,
@@ -780,6 +807,7 @@ func main() {
 					securityRepo,
 					holdingRepo,
 					investmentTxnRepo,
+					portfolioSnapshotRepo,
 					plaidService,
 					appLogger,
 				)
@@ -1027,6 +1055,26 @@ func main() {
 				appLogger.Info("Savings stats snapshot periodic job configured (daily)")
 			}
 
+			// Issue #138: Portfolio snapshot (daily) — per-user holdings aggregate upsert.
+			// UniqueOpts constrains to one snapshot job per 24h period (on top of ON CONFLICT upsert).
+			if portfolioSnapshotWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.PortfolioSnapshotArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: queue.QueueLow,
+								UniqueOpts: river.UniqueOpts{
+									ByPeriod: 24 * time.Hour,
+								},
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Portfolio snapshot periodic job configured (daily)")
+			}
+
 			// Issue #1087 R4-7: Idempotency keys cleanup (daily — deletes expired rows)
 			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 				river.PeriodicInterval(24*time.Hour),
@@ -1108,6 +1156,10 @@ func main() {
 			if savingsStatsWorker != nil {
 				river.AddWorker(riverWorkers, savingsStatsWorker)
 				appLogger.Info("Savings stats snapshot worker registered with River")
+			}
+			if portfolioSnapshotWorker != nil {
+				river.AddWorker(riverWorkers, portfolioSnapshotWorker)
+				appLogger.Info("Portfolio snapshot worker registered with River")
 			}
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
@@ -1345,6 +1397,11 @@ func main() {
 		humaAnalyticsHandler := operations.NewAnalyticsHandler(analyticsService)
 		operations.RegisterAnalyticsRoutes(humaAPI, humaAnalyticsHandler)
 		appLogger.Info("Huma analytics routes registered")
+
+		// Register investment portfolio routes (Issue #138)
+		humaInvestmentHandler := operations.NewInvestmentHandler(investmentService, investmentAnalyticsService)
+		operations.RegisterInvestmentRoutes(humaAPI, humaInvestmentHandler)
+		appLogger.Info("Investment routes registered")
 
 		// Register MCP recipe routes (Issue #1087: MCP server)
 		humaRecipeRepo := repository.NewRecipeRepository(db)

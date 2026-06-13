@@ -30,7 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
-import type { Transaction } from './transaction';
+import type { ActivityItem } from './activityItem';
 
 export interface GetTransactionsOutputBody {
   /** A URL to the JSON Schema for this object. */
@@ -38,5 +38,5 @@ export interface GetTransactionsOutputBody {
   limit: number;
   next_cursor?: string;
   /** @nullable */
-  transactions: Transaction[] | null;
+  transactions: ActivityItem[] | null;
 }

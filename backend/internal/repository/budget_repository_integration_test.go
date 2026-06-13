@@ -23,7 +23,6 @@ import (
 
 func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewBudgetRepository(pool)
 	ctx := context.Background()
 
 	// Wrap all seed data in a transaction that rolls back automatically.

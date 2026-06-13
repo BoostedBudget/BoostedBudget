@@ -18,7 +18,8 @@
     "build:artifacts": "bun run build:spec-index && bun run build:facade",
     "check:manifest": "bun run scripts/check-manifest-completeness.ts",
     "check:no-bypass": "bun run scripts/check-no-direct-api-calls.ts",
-    "check:all": "bun run check:manifest && bun run check:no-bypass && bun run build:artifacts"
+    "check:artifacts-committed": "git diff --exit-code -- src/spec/generated/ src/client/generated/",
+    "check:all": "bun run check:manifest && bun run check:no-bypass && bun run build:artifacts && bun run check:artifacts-committed"
   },
   "dependencies": {
     "@boostedbudget/api-client": "workspace:*",

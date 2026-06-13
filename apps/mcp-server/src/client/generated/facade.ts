@@ -99,6 +99,22 @@ export function createApiClient(mutator: FetchMutator) {
       getUnusualSpend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/unusual-spend', method: 'GET', params, signal })
       },
+      /** GET /api/v1/investments/portfolio/allocation */
+      getPortfolioAllocationBreakdown(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/allocation', method: 'GET', signal })
+      },
+      /** GET /api/v1/investments/portfolio/gain-loss */
+      getInvestmentGainLossSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/gain-loss', method: 'GET', signal })
+      },
+      /** GET /api/v1/investments/portfolio/income */
+      getInvestmentIncomeSummary(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/income', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/top-movers */
+      getTopMovers(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/top-movers', method: 'GET', params, signal })
+      },
     } as const,
     autoCategorization: {
       /** GET /api/v1/auto-categorization */
@@ -250,6 +266,24 @@ export function createApiClient(mutator: FetchMutator) {
       /** GET /api/v1/dashboard/widget-types */
       getWidgetTypes(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/dashboard/widget-types', method: 'GET', signal })
+      },
+    } as const,
+    investments: {
+      /** GET /api/v1/investments/holdings */
+      getHoldings(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/holdings', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/investment-transactions */
+      getInvestmentTransactions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/investment-transactions', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/history */
+      getPortfolioHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/history', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/summary */
+      getPortfolioSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/summary', method: 'GET', signal })
       },
     } as const,
     mcpRecipes: {

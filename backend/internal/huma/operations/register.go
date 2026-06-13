@@ -75,6 +75,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #1087: MCP audit log
 	mcpAuditHandler := &MCPAuditHandler{}
 
+	// Issue #138: Investment portfolio endpoints (8 ops: 4 core + 4 analytics)
+	investmentHandler := &InvestmentHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -124,4 +127,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP audit log
 	RegisterMCPAuditRoutes(api, mcpAuditHandler)
+
+	// Issue #138: Investment portfolio (4 core + 4 analytics operations)
+	RegisterInvestmentRoutes(api, investmentHandler)
 }
