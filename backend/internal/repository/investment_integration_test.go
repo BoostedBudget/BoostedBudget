@@ -1185,3 +1185,131 @@ func TestInvestment_AllocationBreakdown_Integration(t *testing.T) {
 	totalPct := result.Buckets[0].Percentage + result.Buckets[1].Percentage + result.Buckets[2].Percentage
 	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100")
 }
+
+// ── R10-1: AC#6 — unified feed search must match investment ticker symbols ────
+//
+// TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration locks AC#6
+// ("search matches tickers") with a real-Postgres execution of the unified UNION
+// feed's investment-branch search clause:
+//
+//	AND (it.name ILIKE $N OR sec.ticker_symbol ILIKE $N OR sec.name ILIKE $N)
+//
+// The SQL is correct on static inspection (single bound $N referenced by both
+// UNION branches; LEFT JOIN securities is NULL-safe for cash rows), but this
+// was the LAST acceptance-criterion behavior with zero test coverage — sitting
+// in the exact GAP-E surface that produced HIGH bugs in R7-B, R8-1, and R9-1.
+//
+// This test proves:
+//  1. Search="BGAIN" (ticker_symbol) → only the investment row is returned.
+//  2. Search="Coffee" (banking txn name) → only the banking row is returned.
+//  3. Search="Boosted" (security name prefix) → only the investment row is returned.
+//
+// The shared $N parameter binding is validated implicitly: if the banking branch
+// accidentally picked up the ticker pattern (or the investment branch dropped it),
+// the assertion counts would be wrong.
+func TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, investAcctID, _ := seedInvestmentFixture(ctx, t, tx, "inv-r10")
+
+	// ── Create a security with a distinctive ticker and security name ────────────
+	bgainSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol)
+		VALUES ($1, $2, 'Boosted Gain Fund', 'BGAIN')
+	`, bgainSecID, "r10-bgain-"+bgainSecID.String())
+	require.NoError(t, err)
+
+	// ── Seed a depository account for banking transactions ───────────────────────
+	bankLinkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, bankLinkedItemID, userID, "bank-item-r10-"+bankLinkedItemID.String())
+	require.NoError(t, err)
+
+	bankAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Checking R10', 'depository', 'active')
+	`, bankAcctID, bankLinkedItemID, userID, "plaid-bank-r10-"+bankAcctID.String())
+	require.NoError(t, err)
+
+	txnDate := "2024-09-15"
+
+	// ── Seed the investment transaction (references BGAIN security) ─────────────
+	invTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Boosted Gain Fund Trade', 1500.00, $6::date)
+	`, invTxnID, userID, investAcctID, bgainSecID, "plaid-r10-buy-"+invTxnID.String(), txnDate)
+	require.NoError(t, err)
+
+	// ── Seed the banking transaction (name="Coffee", no investment fields) ───────
+	bankTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, source,
+			 external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, 'plaid', $5, $6, 5.00, $7::date, 'Coffee',
+			 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE_SHOP', false, now(), now())
+	`, bankTxnID, userID, bankAcctID, bankLinkedItemID,
+		"bank-ext-r10-"+bankTxnID.String(), "bank-blind-r10-"+bankTxnID.String(), txnDate)
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, enc)
+
+	// ── Assertion 1: ticker search "BGAIN" returns only the investment row ───────
+	searchTicker := "BGAIN"
+	filters1 := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		Search:                    &searchTicker,
+	}
+	items1, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters1, nil, 10)
+	require.NoError(t, err, "search by ticker")
+	require.Len(t, items1, 1, "Search=BGAIN must return exactly the investment row")
+	assert.Equal(t, domain.FeedSourceInvestment, items1[0].Source,
+		"Search=BGAIN result must be the investment row (ticker_symbol match)")
+	assert.Equal(t, invTxnID.String(), items1[0].ID,
+		"result ID must be the investment transaction ID")
+
+	// ── Assertion 2: name search "Coffee" returns only the banking row ───────────
+	searchName := "Coffee"
+	filters2 := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		Search:                    &searchName,
+	}
+	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters2, nil, 10)
+	require.NoError(t, err, "search by banking name")
+	require.Len(t, items2, 1, "Search=Coffee must return exactly the banking row")
+	assert.Equal(t, domain.FeedSourceBanking, items2[0].Source,
+		"Search=Coffee result must be the banking row (proves shared $N does not cross-contaminate branches)")
+	assert.Equal(t, bankTxnID.String(), items2[0].ID,
+		"result ID must be the banking transaction ID")
+
+	// ── Assertion 3: security-name search "Boosted" also matches the investment row ─
+	// This exercises the `sec.name ILIKE $N` path (distinct from ticker_symbol).
+	searchSecName := "Boosted"
+	filters3 := domain.TransactionFilters{
+		SortBy:                    "date",
+		IncludeInvestmentActivity: true,
+		Search:                    &searchSecName,
+	}
+	items3, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters3, nil, 10)
+	require.NoError(t, err, "search by security name")
+	require.Len(t, items3, 1, "Search=Boosted must return exactly the investment row via sec.name")
+	assert.Equal(t, domain.FeedSourceInvestment, items3[0].Source,
+		"Search=Boosted must match security name and return the investment row")
+}
