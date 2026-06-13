@@ -97,11 +97,14 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 	}
 
 	// totalValue covers ALL holdings (whether or not cost_basis is known).
-	// totalGainLoss is computed only over cost-basis-present holdings to avoid
-	// phantom gains: a holding with no cost_basis contributes 0 to gain/loss
-	// rather than its full value. Matches the SQL FILTER semantics in the
-	// snapshot Upsert and investment_analytics_repository UnrealizedGainLoss.
-	var totalValue, totalCostBasis, knownBasisValue float64
+	// totalCostBasis accumulates all non-nil cost_basis values — matches the snapshot
+	// Upsert's total_cost_basis = COALESCE(SUM(h.cost_basis), 0) (all non-nil, not filtered).
+	// totalGainLoss and its pct are computed ONLY over holdings where BOTH institution_value
+	// AND cost_basis are non-nil (the "known-basis pair"), mirroring the SQL FILTER semantics
+	// in portfolio_snapshot_repository.go Upsert and investment_analytics_repository.go
+	// UnrealizedGainLoss. A holding with cost_basis set but institution_value NULL must NOT
+	// become a phantom loss (subtracting its basis without its value). — Round-6 R6-1 fix.
+	var totalValue, totalCostBasis, knownBasisValue, knownBasisCost float64
 	for i := range holdings {
 		h := &holdings[i]
 		if h.InstitutionValue != nil {
@@ -111,13 +114,14 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 			totalCostBasis += *h.CostBasis
 			if h.InstitutionValue != nil {
 				knownBasisValue += *h.InstitutionValue
+				knownBasisCost += *h.CostBasis
 			}
 		}
 	}
-	totalGainLoss := knownBasisValue - totalCostBasis
+	totalGainLoss := knownBasisValue - knownBasisCost
 	var totalGainLossPct *float64
-	if totalCostBasis > 0 {
-		v := totalGainLoss / totalCostBasis * 100
+	if knownBasisCost > 0 {
+		v := totalGainLoss / knownBasisCost * 100
 		totalGainLossPct = &v
 	}
 
