@@ -99,13 +99,19 @@ type TransactionService interface {
 // TransactionListResponse contains paginated transaction results with metadata.
 // The offset-based path populates TotalCount, Offset, and HasMore.
 // The cursor-based path populates NextCursor and leaves the offset fields zero/false.
+//
+// Transactions is []*domain.ActivityItem (superset of Transaction) so the unified
+// investment feed and the banking-only path share one response type. Banking rows
+// have Source="banking"; investment rows have Source="investment". Clients that
+// previously consumed []*domain.Transaction see all the same fields — ActivityItem
+// is a strict superset.
 type TransactionListResponse struct {
-	Transactions []*domain.Transaction `json:"transactions"`
-	TotalCount   int                   `json:"total_count,omitempty"`
-	Limit        int                   `json:"limit"`
-	Offset       int                   `json:"offset,omitempty"`
-	HasMore      bool                  `json:"has_more,omitempty"`
-	NextCursor   *string               `json:"next_cursor,omitempty"`
+	Transactions []*domain.ActivityItem `json:"transactions"`
+	TotalCount   int                    `json:"total_count,omitempty"`
+	Limit        int                    `json:"limit"`
+	Offset       int                    `json:"offset,omitempty"`
+	HasMore      bool                   `json:"has_more,omitempty"`
+	NextCursor   *string                `json:"next_cursor,omitempty"`
 }
 
 // transactionService implements TransactionService
@@ -187,7 +193,8 @@ func (s *transactionService) ListTransactions(
 		return nil, fmt.Errorf("failed to count transactions: %w", err)
 	}
 
-	// Enrich each transaction with PFC display names and custom-category display names.
+	// Enrich each transaction with PFC display names and custom-category display names,
+	// then wrap in ActivityItem (source="banking") for the unified response shape.
 	ptrs := make([]*domain.Transaction, len(transactions))
 	for i := range transactions {
 		transactions[i].PopulatePFCDisplay()
@@ -196,13 +203,17 @@ func (s *transactionService) ListTransactions(
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
 		return nil, err
 	}
+	items := make([]*domain.ActivityItem, len(ptrs))
+	for i, p := range ptrs {
+		items[i] = domain.NewBankingActivityItem(p)
+	}
 
 	// Calculate has_more flag for pagination
 	// hasMore is true if there are more results beyond current page
 	hasMore := (offset + len(transactions)) < totalCount
 
 	return &TransactionListResponse{
-		Transactions: ptrs,
+		Transactions: items,
 		TotalCount:   totalCount,
 		Limit:        limit,
 		Offset:       offset,
@@ -254,6 +265,48 @@ func (s *transactionService) ListTransactionsByCursor(
 		filters.Search = &sanitized
 	}
 
+	// Unified investment feed path: merge banking + investment_transactions via UNION ALL.
+	if filters.IncludeInvestmentActivity {
+		if sortBy != "date" {
+			return nil, domain.ErrInvestmentMergeRequiresDateSort
+		}
+		// Reject cursors minted under a different IncludeInvestmentActivity flag.
+		if cursor != nil {
+			if cursor.V == 2 && !cursor.Inc {
+				return nil, domain.ErrCursorFilterMismatch
+			}
+			if cursor.V == 1 {
+				// V:1 cursor carries no Inc flag — treat as mismatch when investment merge is requested.
+				return nil, domain.ErrCursorFilterMismatch
+			}
+		}
+
+		items, nextRepoCursor, err := s.repo.GetByUserIDKeysetUnified(ctx, userID, filters, cursor, limit)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get unified feed by cursor: %w", err)
+		}
+
+		var encodedCursor *string
+		if nextRepoCursor != nil {
+			s2, encErr := domain.EncodeTransactionCursor(*nextRepoCursor)
+			if encErr != nil {
+				return nil, fmt.Errorf("failed to encode next cursor: %w", encErr)
+			}
+			encodedCursor = &s2
+		}
+		return &TransactionListResponse{
+			Transactions: items,
+			Limit:        limit,
+			NextCursor:   encodedCursor,
+		}, nil
+	}
+
+	// Banking-only path: V:2 cursor with Inc=true means it was minted under the investment-feed
+	// flag; reject so the client resets to page 1 with the new flag.
+	if cursor != nil && cursor.V == 2 && cursor.Inc {
+		return nil, domain.ErrCursorFilterMismatch
+	}
+
 	transactions, nextRepoCursor, err := s.repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transactions by cursor: %w", err)
@@ -267,6 +320,10 @@ func (s *transactionService) ListTransactionsByCursor(
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
 		return nil, err
 	}
+	bankingItems := make([]*domain.ActivityItem, len(ptrs))
+	for i, p := range ptrs {
+		bankingItems[i] = domain.NewBankingActivityItem(p)
+	}
 
 	var encodedCursor *string
 	if nextRepoCursor != nil {
@@ -278,7 +335,7 @@ func (s *transactionService) ListTransactionsByCursor(
 	}
 
 	return &TransactionListResponse{
-		Transactions: ptrs,
+		Transactions: bankingItems,
 		Limit:        limit,
 		NextCursor:   encodedCursor,
 	}, nil

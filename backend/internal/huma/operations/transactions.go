@@ -70,14 +70,28 @@ type GetTransactionsInput struct {
 	// Sort parameters
 	SortBy  string `query:"sort_by"  enum:"date,merchant,amount,category" default:"date"  doc:"Column to sort by"`
 	SortDir string `query:"sort_dir" enum:"asc,desc"                      default:"desc" doc:"Sort direction"`
+
+	// Investment activity — Issue #138.
+	// IncludeInvestmentActivity merges investment_transactions into the response feed.
+	// Requires sort_by=date; returns 400 otherwise.
+	IncludeInvestmentActivity string `query:"include_investment_activity" doc:"Merge investment transactions into feed (true/false, default false). Requires sort_by=date."`
+
+	// ActivityTypes filters investment activity by normalized trade type when
+	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, fee, cash, other.
+	ActivityTypes string `query:"activity_types" doc:"Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
+// Transactions is []*domain.ActivityItem — a superset of Transaction that adds
+// Source ("banking"|"investment") and investment-specific fields. All banking
+// fields are always populated for banking rows; investment fields are null.
+// This is a backward-compatible change: existing banking consumers see all
+// the same fields they previously consumed from []*domain.Transaction.
 type GetTransactionsOutput struct {
 	Body struct {
-		Transactions []*domain.Transaction `json:"transactions"`
-		NextCursor   *string               `json:"next_cursor,omitempty"`
-		Limit        int                   `json:"limit"`
+		Transactions []*domain.ActivityItem `json:"transactions"`
+		NextCursor   *string                `json:"next_cursor,omitempty"`
+		Limit        int                    `json:"limit"`
 	}
 }
 
@@ -368,9 +382,29 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 		filters.SortDir = "desc"
 	}
 
+	// Investment activity filter — Issue #138.
+	if input.IncludeInvestmentActivity != "" {
+		incl, parseErr := strconv.ParseBool(input.IncludeInvestmentActivity)
+		if parseErr != nil {
+			return nil, huma.Error400BadRequest("Invalid include_investment_activity parameter (expected true or false)")
+		}
+		filters.IncludeInvestmentActivity = incl
+	}
+
+	// Activity type filter (comma-separated normalized trade types)
+	if input.ActivityTypes != "" {
+		filters.ActivityTypes = parseCommaSeparated(input.ActivityTypes)
+	}
+
 	// Call service layer (cursor-based pagination)
 	result, err := h.service.ListTransactionsByCursor(ctx, input.UserID, filters, cursor, input.Limit)
 	if err != nil {
+		if errors.Is(err, domain.ErrInvestmentMergeRequiresDateSort) {
+			return nil, huma.Error400BadRequest("include_investment_activity requires sort_by=date")
+		}
+		if errors.Is(err, domain.ErrCursorFilterMismatch) {
+			return nil, huma.Error400BadRequest("cursor filter mismatch: restart pagination")
+		}
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 

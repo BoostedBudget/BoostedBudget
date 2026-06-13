@@ -146,27 +146,33 @@ func TestTransactionCursor_DecodeInvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor json")
 }
 
-// TestTransactionCursor_DecodeUnknownField tests that an unknown JSON field causes an error (DisallowUnknownFields).
+// TestTransactionCursor_DecodeUnknownField tests that unknown JSON fields are tolerated.
+// DisallowUnknownFields was removed in #138 to allow forward-compat with V:2 cursors
+// during rolling deploys / rollbacks. Unknown fields are silently ignored.
 func TestTransactionCursor_DecodeUnknownField(t *testing.T) {
 	id := uuid.New()
+	sv := "2026-01-15"
 	m := map[string]interface{}{
 		"v":     1,
 		"k":     "date",
 		"d":     "desc",
+		"sv":    sv,
 		"id":    id.String(),
-		"bogus": "field",
+		"bogus": "field", // unknown field — must be tolerated
 	}
 	encoded := encodeCursorMap(t, m)
 
-	_, err := DecodeTransactionCursor(encoded)
-	require.Error(t, err, "unknown field should be rejected")
+	c, err := DecodeTransactionCursor(encoded)
+	require.NoError(t, err, "unknown field should be tolerated (forward-compat)")
+	assert.Equal(t, 1, c.V)
 }
 
-// TestTransactionCursor_DecodeVersionUnsupported tests that V != 1 returns ErrCursorVersionUnsupported.
+// TestTransactionCursor_DecodeVersionUnsupported tests that V > 2 returns ErrCursorVersionUnsupported.
+// V:1 (banking-only) and V:2 (unified feed) are both valid after #138.
 func TestTransactionCursor_DecodeVersionUnsupported(t *testing.T) {
 	id := uuid.New()
 	m := map[string]interface{}{
-		"v":  2,
+		"v":  3, // unsupported future version
 		"k":  "date",
 		"d":  "desc",
 		"id": id.String(),
@@ -175,6 +181,32 @@ func TestTransactionCursor_DecodeVersionUnsupported(t *testing.T) {
 
 	_, err := DecodeTransactionCursor(encoded)
 	require.ErrorIs(t, err, ErrCursorVersionUnsupported)
+}
+
+// TestTransactionCursor_V2RoundTrip tests that a V:2 cursor (unified feed) survives encode/decode.
+func TestTransactionCursor_V2RoundTrip(t *testing.T) {
+	id := uuid.New()
+	sv := "2026-03-10"
+	svt := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	c := TransactionCursor{
+		V:   2,
+		K:   "date",
+		D:   "desc",
+		SV:  &sv,
+		SVT: &svt,
+		ID:  id,
+		Src: FeedSourceBanking,
+		Inc: true,
+	}
+	encoded, err := EncodeTransactionCursor(c)
+	require.NoError(t, err)
+
+	decoded, err := DecodeTransactionCursor(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, 2, decoded.V)
+	assert.Equal(t, FeedSourceBanking, decoded.Src)
+	assert.True(t, decoded.Inc)
+	assert.Equal(t, id, decoded.ID)
 }
 
 // TestTransactionCursor_DecodeInvalidSortKey tests that an invalid sort key returns an error.

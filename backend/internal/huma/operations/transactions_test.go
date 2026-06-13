@@ -154,7 +154,7 @@ func TestGetTransactions_Success(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{tx},
+			Transactions: []*domain.ActivityItem{domain.NewBankingActivityItem(tx)},
 			Limit:        50,
 		},
 	}
@@ -180,7 +180,7 @@ func TestGetTransactions_WithFilters(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -213,7 +213,7 @@ func TestGetTransactions_PFCDetailedsParsing(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -239,7 +239,7 @@ func TestGetTransactions_CustomCategoryIDsParsing(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -265,7 +265,7 @@ func TestGetTransactions_ReviewedFilterParsing(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -772,7 +772,7 @@ func TestGetPlaidCategories_EmptyList(t *testing.T) {
 func TestTransactionRouteRegistration(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -839,7 +839,7 @@ func TestTransactionListResponseJSON(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{tx},
+			Transactions: []*domain.ActivityItem{domain.NewBankingActivityItem(tx)},
 			TotalCount:   1,
 			Limit:        50,
 			Offset:       0,
@@ -868,7 +868,7 @@ func TestGetTransactions_UserAccountIDFilter(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -1008,7 +1008,7 @@ func TestGetTransactions_CursorFirstPage(t *testing.T) {
 	nextCursor := "opaque-cursor-token"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{tx},
+			Transactions: []*domain.ActivityItem{domain.NewBankingActivityItem(tx)},
 			Limit:        10,
 			NextCursor:   &nextCursor,
 		},
@@ -1052,7 +1052,7 @@ func TestGetTransactions_CursorSecondPage(t *testing.T) {
 
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        10,
 		},
 	}
@@ -1130,13 +1130,14 @@ func TestGetTransactions_CursorSortMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor does not match sort_by/sort_dir")
 }
 
-// TestGetTransactions_CursorVersionUnsupported verifies that a cursor with V=2 yields a 400.
+// TestGetTransactions_CursorVersionUnsupported verifies that a cursor with V=3 (unknown future
+// version) yields a 400. V=2 is now a valid version (unified feed); we use V=3 to test rejection.
 func TestGetTransactions_CursorVersionUnsupported(t *testing.T) {
 	userID := "user-cursor-ver"
 
-	// Manually encode a cursor with V=2 (unsupported version) bypassing DecodeTransactionCursor
+	// Manually encode a cursor with V=3 (future/unknown version) bypassing DecodeTransactionCursor
 	v2Cursor := domain.TransactionCursor{
-		V:  2,
+		V:  3,
 		K:  "date",
 		D:  "desc",
 		ID: uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
@@ -1194,7 +1195,7 @@ func TestGetTransactions_CursorMissingRequiredFields(t *testing.T) {
 func TestGetTransactions_OldOffsetParamSilentlyIgnored(t *testing.T) {
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -1218,7 +1219,7 @@ func TestGetTransactions_CategorySourceFilterParsing(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -1243,7 +1244,7 @@ func TestGetTransactions_CategorySourceSingleValue(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}
@@ -1286,7 +1287,7 @@ func TestGetTransactions_EmptyCategorySource(t *testing.T) {
 	userID := "user-123"
 	mockService := &mockTransactionService{
 		listResponse: &services.TransactionListResponse{
-			Transactions: []*domain.Transaction{},
+			Transactions: []*domain.ActivityItem{},
 			Limit:        50,
 		},
 	}

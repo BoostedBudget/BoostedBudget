@@ -44,6 +44,7 @@ import type {
 } from 'msw';
 
 import type {
+  AllocationBreakdown,
   AverageMonthlySpendResponse,
   BudgetVsActualResponse,
   CashFlowHistoryResponse,
@@ -51,7 +52,9 @@ import type {
   CategoryBreakdownForMerchantResponse,
   CategoryTotalResponse,
   FinancialSummaryResponse,
+  GainLossSummary,
   IncomeSourceBreakdownResponse,
+  IncomeSummary,
   LargestTransactionsResponse,
   MonthOverMonthResponse,
   NetWorthTrendResponse,
@@ -61,6 +64,7 @@ import type {
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
   TopExpenseResponse,
+  TopMovers,
   UnusualSpendResponse
 } from '../../models';
 
@@ -100,6 +104,14 @@ export const getGetSpendingTrendsResponseMock = (overrideResponse: Partial<Extra
 export const getGetTopExpenseResponseMock = (overrideResponse: Partial<Extract<TopExpenseResponse, object>> = {}): TopExpenseResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.number.float({fractionDigits: 2}), category: faker.string.alpha({length: {min: 10, max: 20}}), date: faker.string.alpha({length: {min: 10, max: 20}}), end_date: faker.string.alpha({length: {min: 10, max: 20}}), merchant_name: faker.string.alpha({length: {min: 10, max: 20}}), pfc_primary_display: faker.string.alpha({length: {min: 10, max: 20}}), start_date: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getGetUnusualSpendResponseMock = (overrideResponse: Partial<Extract<UnusualSpendResponse, object>> = {}): UnusualSpendResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), end_date: faker.string.alpha({length: {min: 10, max: 20}}), items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({amount: faker.number.float({fractionDigits: 2}), baseline_avg: faker.number.float({fractionDigits: 2}), category: faker.string.alpha({length: {min: 10, max: 20}}), date: faker.string.alpha({length: {min: 10, max: 20}}), merchant_name: faker.string.alpha({length: {min: 10, max: 20}}), pfc_primary_display: faker.string.alpha({length: {min: 10, max: 20}}), sigma_above: faker.number.float({fractionDigits: 2}), transaction_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), sigma_threshold: faker.number.float({fractionDigits: 2}), start_date: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetPortfolioAllocationBreakdownResponseMock = (overrideResponse: Partial<Extract<AllocationBreakdown, object>> = {}): AllocationBreakdown => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), buckets: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({holding_count: faker.number.int(), percentage: faker.number.float({fractionDigits: 2}), security_type: faker.string.alpha({length: {min: 10, max: 20}}), total_value: faker.number.float({fractionDigits: 2})})), null]), total_value: faker.number.float({fractionDigits: 2}), ...overrideResponse})
+
+export const getGetInvestmentGainLossSummaryResponseMock = (overrideResponse: Partial<Extract<GainLossSummary, object>> = {}): GainLossSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), by_account: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.string.alpha({length: {min: 10, max: 20}}), cost_basis: faker.number.float({fractionDigits: 2}), unrealized_gain_loss: faker.number.float({fractionDigits: 2}), unrealized_gain_loss_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), value: faker.number.float({fractionDigits: 2})})), null]), realized_gain_loss_supported: faker.datatype.boolean(), total_cost_basis: faker.number.float({fractionDigits: 2}), total_unrealized_gain_loss: faker.number.float({fractionDigits: 2}), total_unrealized_gain_loss_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), total_value: faker.number.float({fractionDigits: 2}), ...overrideResponse})
+
+export const getGetInvestmentIncomeSummaryResponseMock = (overrideResponse: Partial<Extract<IncomeSummary, object>> = {}): IncomeSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), by_type: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({count: faker.number.int(), income_type: faker.string.alpha({length: {min: 10, max: 20}}), total_amount: faker.number.float({fractionDigits: 2})})), null]), end_date: faker.date.past().toISOString().slice(0, 19) + 'Z', start_date: faker.date.past().toISOString().slice(0, 19) + 'Z', total_income: faker.number.float({fractionDigits: 2}), ...overrideResponse})
+
+export const getGetTopMoversResponseMock = (overrideResponse: Partial<Extract<TopMovers, object>> = {}): TopMovers => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), gainers: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.string.alpha({length: {min: 10, max: 20}}), day_change: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), day_change_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), holding_id: faker.string.alpha({length: {min: 10, max: 20}}), security_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), total_gain_loss: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined])})), null]), losers: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.string.alpha({length: {min: 10, max: 20}}), day_change: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), day_change_pct: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), holding_id: faker.string.alpha({length: {min: 10, max: 20}}), security_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), total_gain_loss: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined])})), null]), ...overrideResponse})
 
 
 export const getGetAverageMonthlySpendMockHandler = (overrideResponse?: AverageMonthlySpendResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AverageMonthlySpendResponse> | AverageMonthlySpendResponse), options?: RequestHandlerOptions) => {
@@ -317,6 +329,54 @@ export const getGetUnusualSpendMockHandler = (overrideResponse?: UnusualSpendRes
       })
   }, options)
 }
+
+export const getGetPortfolioAllocationBreakdownMockHandler = (overrideResponse?: AllocationBreakdown | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AllocationBreakdown> | AllocationBreakdown), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/investments/portfolio/allocation', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetPortfolioAllocationBreakdownResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetInvestmentGainLossSummaryMockHandler = (overrideResponse?: GainLossSummary | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GainLossSummary> | GainLossSummary), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/investments/portfolio/gain-loss', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetInvestmentGainLossSummaryResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetInvestmentIncomeSummaryMockHandler = (overrideResponse?: IncomeSummary | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<IncomeSummary> | IncomeSummary), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/investments/portfolio/income', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetInvestmentIncomeSummaryResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetTopMoversMockHandler = (overrideResponse?: TopMovers | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<TopMovers> | TopMovers), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/investments/portfolio/top-movers', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetTopMoversResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 export const getAnalyticsMock = () => [
   getGetAverageMonthlySpendMockHandler(),
   getGetBudgetVsActualMockHandler(),
@@ -335,5 +395,9 @@ export const getAnalyticsMock = () => [
   getGetSpendingByMerchantMockHandler(),
   getGetSpendingTrendsMockHandler(),
   getGetTopExpenseMockHandler(),
-  getGetUnusualSpendMockHandler()
+  getGetUnusualSpendMockHandler(),
+  getGetPortfolioAllocationBreakdownMockHandler(),
+  getGetInvestmentGainLossSummaryMockHandler(),
+  getGetInvestmentIncomeSummaryMockHandler(),
+  getGetTopMoversMockHandler()
 ]

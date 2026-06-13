@@ -110,6 +110,15 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"setTransactionReviewed":       MCPClassWrite,
 	"bulkSetTransactionReviewed":   MCPClassWrite,
 	"bulkUpdateTransactionCategory": MCPClassWrite,
+	// Investments — Issue #138
+	"getHoldings":                        MCPClassRead,
+	"getPortfolioSummary":                MCPClassRead,
+	"getPortfolioHistory":                MCPClassRead,
+	"getInvestmentTransactions":          MCPClassRead,
+	"getPortfolioAllocationBreakdown":    MCPClassRead,
+	"getTopMovers":                       MCPClassRead,
+	"getInvestmentGainLossSummary":       MCPClassRead,
+	"getInvestmentIncomeSummary":         MCPClassRead,
 	// Transfer Suggestions
 	"getTransferSuggestions":            MCPClassRead,
 	"acceptTransferSuggestion":          MCPClassWrite,
