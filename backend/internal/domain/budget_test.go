@@ -621,7 +621,7 @@ func TestBudgetCategory_Validate(t *testing.T) {
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category_kind must be pfc or custom",
+			errMsg:  "category_kind must be pfc, custom, or savings",
 		},
 		{
 			name: "negative allocated_amount",
@@ -1725,3 +1725,93 @@ func TestBuildCategoryEventData_KeysAndAllocated(t *testing.T) {
 }
 
 // Note: contains helper is defined in linked_item_test.go
+
+// TestBudgetCategory_Validate_SavingsKind tests the savings category_kind branch (Issue #1300).
+func TestBudgetCategory_Validate_SavingsKind(t *testing.T) {
+	goalID := "goal-abc-123"
+
+	tests := []struct {
+		name    string
+		cat     BudgetCategory
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid savings category with goal",
+			cat: BudgetCategory{
+				BudgetID:        "budget-1",
+				CategoryKind:    "savings",
+				SavingsGoalID:   ptrStr(goalID),
+				AllocatedAmount: 0,
+			},
+			wantErr: false,
+		},
+		{
+			name: "savings category without savings_goal_id is invalid",
+			cat: BudgetCategory{
+				BudgetID:     "budget-1",
+				CategoryKind: "savings",
+			},
+			wantErr: true,
+			errMsg:  "savings_goal_id is required when category_kind is savings",
+		},
+		{
+			name: "savings category with pfc_primary is invalid",
+			cat: BudgetCategory{
+				BudgetID:      "budget-1",
+				CategoryKind:  "savings",
+				SavingsGoalID: ptrStr(goalID),
+				PFCPrimary:    ptrStr("INCOME"),
+			},
+			wantErr: true,
+			errMsg:  "pfc_primary and pfc_detailed must not be set when category_kind is savings",
+		},
+		{
+			name: "savings category with custom_category_id is invalid",
+			cat: BudgetCategory{
+				BudgetID:         "budget-1",
+				CategoryKind:     "savings",
+				SavingsGoalID:    ptrStr(goalID),
+				CustomCategoryID: ptrStr("custom-cat-456"),
+			},
+			wantErr: true,
+			errMsg:  "custom_category_id must not be set when category_kind is savings",
+		},
+		{
+			name: "pfc category with savings_goal_id is invalid",
+			cat: BudgetCategory{
+				BudgetID:      "budget-1",
+				CategoryKind:  "pfc",
+				PFCPrimary:    ptrStr("INCOME"),
+				SavingsGoalID: ptrStr(goalID),
+			},
+			wantErr: true,
+			errMsg:  "savings_goal_id must not be set when category_kind is pfc",
+		},
+		{
+			name: "custom category with savings_goal_id is invalid",
+			cat: BudgetCategory{
+				BudgetID:         "budget-1",
+				CategoryKind:     "custom",
+				CustomCategoryID: ptrStr("custom-cat-456"),
+				SavingsGoalID:    ptrStr(goalID),
+			},
+			wantErr: true,
+			errMsg:  "savings_goal_id must not be set when category_kind is custom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cat.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
