@@ -187,21 +187,25 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 
 // UnrealizedGainLoss returns the user's total unrealized gain/loss and a
 // per-account breakdown. Holdings with NULL cost_basis are included in the
-// value total but excluded from percentage calculations.
+// value total but excluded from gain/loss calculations to avoid phantom gains.
 // Single round-trip aggregate.
 func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, userID string) (*domain.GainLossSummary, error) {
 	query := `
 		SELECT
 			h.account_id::text,
-			COALESCE(SUM(h.institution_value), 0)  AS value,
-			COALESCE(SUM(h.cost_basis), 0)          AS cost_basis,
-			COALESCE(SUM(h.institution_value), 0) - COALESCE(SUM(h.cost_basis), 0) AS unrealized_gl,
+			COALESCE(SUM(h.institution_value), 0) AS value,
+			-- Gain/loss only over cost-basis-present holdings to avoid phantom gains.
+			COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
+			    - COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) AS unrealized_gl,
 			CASE
-				WHEN COALESCE(SUM(h.cost_basis), 0) > 0
-				THEN (COALESCE(SUM(h.institution_value), 0) - COALESCE(SUM(h.cost_basis), 0))
-				     / SUM(h.cost_basis) * 100
+				WHEN COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) > 0
+				THEN (
+				    COALESCE(SUM(h.institution_value) FILTER (WHERE h.cost_basis IS NOT NULL), 0)
+				    - SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL)
+				) / SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL) * 100
 				ELSE NULL
-			END AS unrealized_gl_pct
+			END AS unrealized_gl_pct,
+			COALESCE(SUM(h.cost_basis) FILTER (WHERE h.cost_basis IS NOT NULL), 0) AS cost_basis_known
 		FROM holdings h
 		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
 		WHERE h.user_id = $1
@@ -215,27 +219,30 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 	defer rows.Close()
 
 	var byAccount []domain.AccountGainLoss
-	var totalValue, totalCostBasis float64
+	var totalValue, totalCostBasis, totalGL float64
 	for rows.Next() {
 		var ag domain.AccountGainLoss
 		if err := rows.Scan(
 			&ag.AccountID,
 			&ag.Value,
-			&ag.CostBasis,
 			&ag.UnrealizedGainLoss,
 			&ag.UnrealizedGainLossPct,
+			&ag.CostBasis,
 		); err != nil {
 			return nil, fmt.Errorf("UnrealizedGainLoss scan: %w", err)
 		}
 		totalValue += ag.Value
 		totalCostBasis += ag.CostBasis
+		// Accumulate per-account GL directly (already FILTER-scoped in SQL) rather than
+		// recomputing totalValue - totalCostBasis, which would mix all-holdings value
+		// with known-basis-only cost and produce phantom gains for NULL-basis holdings.
+		totalGL += ag.UnrealizedGainLoss
 		byAccount = append(byAccount, ag)
 	}
 	if rows.Err() != nil {
 		return nil, fmt.Errorf("UnrealizedGainLoss rows: %w", rows.Err())
 	}
 
-	totalGL := totalValue - totalCostBasis
 	var totalGLPct *float64
 	if totalCostBasis > 0 {
 		v := totalGL / totalCostBasis * 100
@@ -245,12 +252,12 @@ func (r *investmentAnalyticsRepository) UnrealizedGainLoss(ctx context.Context, 
 		byAccount = []domain.AccountGainLoss{}
 	}
 	return &domain.GainLossSummary{
-		TotalUnrealizedGainLoss:   totalGL,
+		TotalUnrealizedGainLoss:    totalGL,
 		TotalUnrealizedGainLossPct: totalGLPct,
-		TotalCostBasis:            totalCostBasis,
-		TotalValue:                totalValue,
-		RealizedGainLossSupported: false,
-		ByAccount:                 byAccount,
+		TotalCostBasis:             totalCostBasis,
+		TotalValue:                 totalValue,
+		RealizedGainLossSupported:  false,
+		ByAccount:                  byAccount,
 	}, nil
 }
 

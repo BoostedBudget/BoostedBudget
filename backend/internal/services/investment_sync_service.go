@@ -182,14 +182,18 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		return nil, fmt.Errorf("failed to upsert securities: %w", err)
 	}
 
-	// Build plaid_account_id → internal account ID map from our DB
+	// Build plaid_account_id → internal account ID and user_account_id maps from our DB.
+	// userAccountMap is used to set user_account_id on each holding at insert time
+	// so the stable chain-expansion key is populated (Issue #1109).
 	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)
 	}
 	accountMap := make(map[string]string, len(accounts))
+	holdingUserAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
 		accountMap[a.PlaidAccountID] = a.ID
+		holdingUserAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}
 
 	// Group Plaid holdings by plaid_account_id for efficient lookup
@@ -220,10 +224,11 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			}
 
 			h := domain.Holding{
-				UserID:     linkedItem.UserID,
-				AccountID:  internalAccountID,
-				SecurityID: internalSecurityID,
-				Quantity:   ph.Quantity,
+				UserID:        linkedItem.UserID,
+				AccountID:     internalAccountID,
+				UserAccountID: holdingUserAccountMap[plaidAccountID], // stable chain-expansion key (Issue #1109)
+				SecurityID:    internalSecurityID,
+				Quantity:      ph.Quantity,
 			}
 
 			instValue := ph.InstitutionValue
@@ -312,14 +317,19 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		)
 	}
 
-	// Build account map for transaction → account ID resolution
+	// Build account maps for transaction → account ID and user_account_id resolution.
+	// userAccountMap carries the stable user_account_id (survives Plaid re-links)
+	// so investment transactions written here have the chain-expansion key set on
+	// insert (mirrors the banking UpsertBatch approach — Issue #1109).
 	accounts, err := s.accountRepo.GetByLinkedItemID(ctx, linkedItem.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get accounts for linked item: %w", err)
 	}
 	accountMap := make(map[string]string, len(accounts))
+	userAccountMap := make(map[string]*string, len(accounts))
 	for _, a := range accounts {
 		accountMap[a.PlaidAccountID] = a.ID
+		userAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}
 
 	result := &domain.InvestmentTransactionSyncResult{}
@@ -348,7 +358,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		}
 
 		// Map and upsert investment transactions for this page
-		domainTxns := mapPlaidInvestmentTransactions(resp.InvestmentTransactions, linkedItem.UserID, accountMap, securityMap, s.logger)
+		domainTxns := mapPlaidInvestmentTransactions(resp.InvestmentTransactions, linkedItem.UserID, accountMap, userAccountMap, securityMap, s.logger)
 		if len(domainTxns) > 0 {
 			inserted, err := s.investmentTxnRepo.UpsertBatch(ctx, domainTxns)
 			if err != nil {
@@ -429,12 +439,15 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 }
 
 // mapPlaidInvestmentTransactions converts Plaid investment transactions to domain types,
-// resolving account IDs and security IDs using the provided maps.
+// resolving account IDs, user_account_ids, and security IDs using the provided maps.
+// user_account_id is the stable chain-expansion key (Issue #1109): setting it here on
+// insert ensures pre-relink rows remain visible after a Plaid re-link.
 // Transactions for unmapped accounts are silently skipped (logged as warning).
 func mapPlaidInvestmentTransactions(
 	plaidTxns []plaid.InvestmentTransaction,
 	userID string,
 	accountMap map[string]string,
+	userAccountMap map[string]*string,
 	securityMap map[string]string,
 	logger *slog.Logger,
 ) []domain.InvestmentTransaction {
@@ -466,6 +479,7 @@ func mapPlaidInvestmentTransactions(
 		txn := domain.InvestmentTransaction{
 			UserID:                       userID,
 			AccountID:                    internalAccountID,
+			UserAccountID:                userAccountMap[pt.AccountId], // stable chain-expansion key (Issue #1109)
 			PlaidInvestmentTransactionID: pt.InvestmentTransactionId,
 			Type:                         string(pt.Type),
 			Name:                         pt.Name,
@@ -484,17 +498,15 @@ func mapPlaidInvestmentTransactions(
 		}
 
 		// Optional fields
-		subtype := string(pt.Subtype)
-		if subtype != "" {
+		if subtype := string(pt.Subtype); subtype != "" {
 			txn.Subtype = &subtype
 		}
-
-		qty := pt.Quantity
-		txn.Quantity = &qty
-
-		price := pt.Price
-		txn.Price = &price
-
+		if qty := pt.Quantity; qty != 0 {
+			txn.Quantity = &qty
+		}
+		if price := pt.Price; price != 0 {
+			txn.Price = &price
+		}
 		txn.Fees = pt.Fees.Get()
 
 		result = append(result, txn)

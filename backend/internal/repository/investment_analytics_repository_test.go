@@ -171,11 +171,12 @@ func TestInvestmentAnalytics_UnrealizedGainLoss_AggregatesAccounts(t *testing.T)
 	// Account 2: value=4000, cost_basis=5000, unrealized_gl=-1000, pct=-20.0%
 	pct2 := -20.0
 
+	// Column order matches the repository scan: account_id, value, unrealized_gl, unrealized_gl_pct, cost_basis_known
 	rows := pgxmock.NewRows([]string{
-		"account_id", "value", "cost_basis", "unrealized_gl", "unrealized_gl_pct",
+		"account_id", "value", "unrealized_gl", "unrealized_gl_pct", "cost_basis_known",
 	}).
-		AddRow(accountID1, 8000.0, 6000.0, 2000.0, &pct1).
-		AddRow(accountID2, 4000.0, 5000.0, -1000.0, &pct2)
+		AddRow(accountID1, 8000.0, 2000.0, &pct1, 6000.0).
+		AddRow(accountID2, 4000.0, -1000.0, &pct2, 5000.0)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`h.account_id::text`)).
 		WithArgs(pgxmock.AnyArg()).
