@@ -45,10 +45,15 @@ COMMENT ON COLUMN portfolio_snapshots.total_cost_basis IS
     'SUM(holdings.cost_basis) for holdings where cost_basis IS NOT NULL.';
 
 COMMENT ON COLUMN portfolio_snapshots.total_gain_loss IS
-    'total_value - total_cost_basis (zero when no cost_basis data available).';
+    'SUM(institution_value) FILTER (WHERE cost_basis IS NOT NULL AND institution_value IS NOT NULL) '
+    '- SUM(cost_basis) FILTER (WHERE cost_basis IS NOT NULL AND institution_value IS NOT NULL). '
+    'Computed only over holdings where BOTH cost_basis and institution_value are known, so holdings '
+    'with missing data neither inflate gains (NULL cost_basis) nor create phantom losses (NULL value). '
+    'Zero when no holdings have both values populated.';
 
 COMMENT ON COLUMN portfolio_snapshots.total_gain_loss_pct IS
-    'total_gain_loss / total_cost_basis * 100. NULL when total_cost_basis = 0 to avoid division-by-zero.';
+    'total_gain_loss / known_basis_cost * 100, where known_basis_cost is SUM(cost_basis) over the '
+    'same both-non-null FILTER set. NULL when known_basis_cost = 0 to avoid division-by-zero.';
 
 -- =============================================================================
 -- Step 2: Unique index — one snapshot per (user, UTC day)

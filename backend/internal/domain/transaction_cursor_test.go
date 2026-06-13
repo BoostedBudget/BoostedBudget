@@ -255,3 +255,24 @@ func TestTransactionCursor_DecodeNilUUID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing id")
 }
+
+// TestTransactionCursor_DecodeInvalidSrc tests that a V:2 cursor with an invalid Src
+// returns an error. Only "", "banking", and "investment" are valid values.
+// This locks the R7-C fix that prevents tampered/malformed cursors from silently
+// falling through to the banking branch in the unified-feed keyset.
+func TestTransactionCursor_DecodeInvalidSrc(t *testing.T) {
+	id := uuid.New()
+	m := map[string]interface{}{
+		"v":   2,
+		"k":   "date",
+		"d":   "desc",
+		"id":  id.String(),
+		"src": "tampered-source",
+		"inc": true,
+	}
+	encoded := encodeCursorMap(t, m)
+
+	_, err := DecodeTransactionCursor(encoded)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid src")
+}

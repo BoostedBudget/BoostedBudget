@@ -73,8 +73,10 @@ type GetTransactionsInput struct {
 
 	// Investment activity — Issue #138.
 	// IncludeInvestmentActivity merges investment_transactions into the response feed.
-	// Requires sort_by=date; returns 400 otherwise.
-	IncludeInvestmentActivity string `query:"include_investment_activity" doc:"Merge investment transactions into feed (true/false, default false). Requires sort_by=date."`
+	// Default: true (unified feed). When omitted on a non-date sort the flag silently
+	// degrades to false (graceful degradation — existing non-date-sort clients are
+	// unaffected). An explicit "true" on a non-date sort returns 400.
+	IncludeInvestmentActivity string `query:"include_investment_activity" doc:"Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge."`
 
 	// ActivityTypes filters investment activity by normalized trade type when
 	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, fee, cash, other.
@@ -383,12 +385,19 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 	}
 
 	// Investment activity filter — Issue #138.
+	// Default is true (unified feed). When explicitly set, parse the bool; an invalid
+	// value returns 400. When omitted on a non-date sort, silently degrade to false
+	// so existing non-date-sort clients never receive a 400 due to the default flip.
+	// An explicit "true" + non-date sort is handled by the service (ErrInvestmentMergeRequiresDateSort → 400).
 	if input.IncludeInvestmentActivity != "" {
 		incl, parseErr := strconv.ParseBool(input.IncludeInvestmentActivity)
 		if parseErr != nil {
 			return nil, huma.Error400BadRequest("Invalid include_investment_activity parameter (expected true or false)")
 		}
 		filters.IncludeInvestmentActivity = incl
+	} else if filters.SortBy == "date" || filters.SortBy == "" {
+		// Param omitted — default true for date sort. Non-date sorts degrade to false (zero value).
+		filters.IncludeInvestmentActivity = true
 	}
 
 	// Activity type filter (comma-separated normalized trade types)

@@ -11470,12 +11470,12 @@ paths:
               - asc
               - desc
             type: string
-        - description: Merge investment transactions into feed (true/false, default false). Requires sort_by=date.
+        - description: Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.
           explode: false
           in: query
           name: include_investment_activity
           schema:
-            description: Merge investment transactions into feed (true/false, default false). Requires sort_by=date.
+            description: Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.
             type: string
         - description: "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."
           explode: false

@@ -39,6 +39,14 @@ var validCursorDirections = map[string]bool{
 	"desc": true,
 }
 
+// validCursorSrcs lists the allowed Src values for V:2 unified-feed cursors.
+// Empty string is valid (V:1 cursors or first-page cursors that haven't set Src yet).
+var validCursorSrcs = map[string]bool{
+	"":           true, // V:1 or pre-first-page
+	"banking":    true,
+	"investment": true,
+}
+
 // TransactionCursor encodes the position for keyset (cursor) pagination.
 // Use EncodeTransactionCursor / DecodeTransactionCursor for serialization.
 // The cursor is opaque to the client — always treat it as a black box.
@@ -101,6 +109,9 @@ func DecodeTransactionCursor(s string) (*TransactionCursor, error) {
 	}
 	if c.ID == uuid.Nil {
 		return nil, fmt.Errorf("cursor: missing id")
+	}
+	if !validCursorSrcs[c.Src] {
+		return nil, fmt.Errorf("cursor: invalid src %q (must be banking or investment)", c.Src)
 	}
 	if c.SV != nil {
 		switch c.K {
