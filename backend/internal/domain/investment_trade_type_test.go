@@ -152,3 +152,24 @@ func TestIncomeSubtypes_IncludesReinvested(t *testing.T) {
 	assert.Contains(t, IncomeSubtypes, "dividend")
 	assert.Contains(t, IncomeSubtypes, "interest")
 }
+
+// TestTradeTypePartition_TransferRoundTrip verifies that the display and filter
+// buckets agree for Plaid type="transfer": NormalizeTradeType maps it to TradeTypeOther,
+// and TradeTypeToSQLPredicate([TradeTypeOther]) does NOT exclude transfer rows via a
+// stray 'transfer' entry in the NOT IN list. Without this, activity_types=other would
+// silently drop all transfer rows — they display as "other" but are unreachable by filter.
+func TestTradeTypePartition_TransferRoundTrip(t *testing.T) {
+	// Display side: transfer → "other"
+	assert.Equal(t, TradeTypeOther, NormalizeTradeType("transfer", nil),
+		"transfer rows must display as 'other'")
+
+	// Filter side: activity_types=other must match transfer rows.
+	// The other bucket emits a NOT IN clause — 'transfer' must NOT be in that list.
+	clause, args := TradeTypeToSQLPredicate([]string{TradeTypeOther}, "it")
+	assert.NotEmpty(t, clause)
+	assert.Nil(t, args, "other bucket binds no args")
+	assert.Contains(t, clause, "it.type NOT IN",
+		"other predicate must use NOT IN to exclude known types")
+	assert.NotContains(t, clause, "'transfer'",
+		"other filter must not exclude transfer rows — they display as 'other' and must be reachable via activity_types=other")
+}
