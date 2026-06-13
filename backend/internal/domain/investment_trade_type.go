@@ -186,8 +186,9 @@ func TradeTypeToSQLPredicate(activityTypes []string, tableAlias string) (string,
 				args = append(args, s)
 			}
 		case TradeTypeOther:
-			// Everything that is not buy/sell/cash/fee
-			parts = append(parts, fmt.Sprintf("(%s NOT IN ('buy', 'sell', 'cash', 'fee', 'transfer'))", col("type")))
+			// Everything that is not buy/sell/cash/fee (including transfer, which Plaid emits
+			// for cash movements and which NormalizeTradeType maps to TradeTypeOther for display).
+			parts = append(parts, fmt.Sprintf("(%s NOT IN ('buy', 'sell', 'cash', 'fee'))", col("type")))
 		}
 	}
 
