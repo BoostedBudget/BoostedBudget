@@ -108,7 +108,23 @@ fi
 printf '\n'
 
 # =========================================================================
-# 3. Backend + frontend tests (test-fast: ~2 min)
+# 3. MCP generated artifacts (spec-index.json / facade.ts must be committed)
+# =========================================================================
+printf 'MCP Artifacts:\n'
+
+if command -v bun &>/dev/null; then
+  run_check "check:artifacts-committed (spec-index/facade in sync)" \
+    "$PROJECT_ROOT/apps/mcp-server" \
+    "bun run check:artifacts-committed" || true
+else
+  printf '  %-50s⚠️  (bun not installed)\n' "check:artifacts-committed"
+  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
+fi
+
+printf '\n'
+
+# =========================================================================
+# 4. Backend + frontend tests (test-fast: ~2 min)
 # =========================================================================
 printf 'Tests:\n'
 
