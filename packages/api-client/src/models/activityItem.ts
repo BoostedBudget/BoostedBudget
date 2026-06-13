@@ -40,6 +40,7 @@ export interface ActivityItem {
   authorized_date?: string;
   category_override_kind?: string;
   custom_category_override_display?: string;
+  custom_category_override_id?: string;
   data_source?: string;
   date: string;
   effective_category_name?: string;
@@ -61,9 +62,11 @@ export interface ActivityItem {
   pfc_confidence_level?: string;
   pfc_detailed?: string;
   pfc_detailed_display?: string;
+  pfc_detailed_override?: string;
   pfc_detailed_override_display?: string;
   pfc_primary?: string;
   pfc_primary_display?: string;
+  pfc_primary_override?: string;
   pfc_primary_override_display?: string;
   reviewed?: boolean;
   reviewed_at?: string;
