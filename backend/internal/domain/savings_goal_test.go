@@ -460,3 +460,240 @@ func TestSavingsGoal_JSONMarshaling(t *testing.T) {
 func timePtr(t time.Time) *time.Time {
 	return &t
 }
+
+func float64PtrSG(f float64) *float64 { return &f }
+
+// TestSavingsGoal_Validate_ProgressBasis tests progress_basis validation rules (Issue #1300).
+func TestSavingsGoal_Validate_ProgressBasis(t *testing.T) {
+	base := func() SavingsGoal {
+		return SavingsGoal{
+			UserID:       "user-123",
+			Name:         "House Down Payment",
+			TargetAmount: 50000.00,
+			CurrencyCode: "USD",
+			AccountID:    "account-abc",
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*SavingsGoal)
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "default manual basis is valid",
+			mutate:  func(sg *SavingsGoal) { sg.ProgressBasis = "manual" },
+			wantErr: false,
+		},
+		{
+			name:    "contributions basis is valid",
+			mutate:  func(sg *SavingsGoal) { sg.ProgressBasis = "contributions" },
+			wantErr: false,
+		},
+		{
+			name:    "balance basis requires account_id (already set)",
+			mutate:  func(sg *SavingsGoal) { sg.ProgressBasis = "balance" },
+			wantErr: false,
+		},
+		{
+			name: "balance basis without account_id is invalid",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "balance"
+				sg.AccountID = ""
+			},
+			wantErr: true,
+			errMsg:  "account_id is required",
+		},
+		{
+			name: "account_percentage basis requires account_percentage",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "account_percentage"
+				// no AccountPercentage set
+			},
+			wantErr: true,
+			errMsg:  "account_percentage is required when progress_basis is account_percentage",
+		},
+		{
+			name: "account_percentage basis with valid percentage",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "account_percentage"
+				sg.AccountPercentage = float64PtrSG(0.4)
+			},
+			wantErr: false,
+		},
+		{
+			name: "account_percentage must be > 0",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "account_percentage"
+				sg.AccountPercentage = float64PtrSG(0.0)
+			},
+			wantErr: true,
+			errMsg:  "account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)",
+		},
+		{
+			name: "account_percentage must be <= 1",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "account_percentage"
+				sg.AccountPercentage = float64PtrSG(1.5)
+			},
+			wantErr: true,
+			errMsg:  "account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)",
+		},
+		{
+			name: "account_percentage basis requires account_id",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "account_percentage"
+				sg.AccountPercentage = float64PtrSG(0.5)
+				sg.AccountID = ""
+			},
+			wantErr: true,
+			errMsg:  "account_id is required",
+		},
+		{
+			name: "invalid progress_basis value",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "bogus_basis"
+			},
+			wantErr: true,
+			errMsg:  "progress_basis must be one of: manual, contributions, balance, account_percentage",
+		},
+		{
+			name: "account_percentage set without account_percentage basis is invalid",
+			mutate: func(sg *SavingsGoal) {
+				sg.ProgressBasis = "manual"
+				sg.AccountPercentage = float64PtrSG(0.3)
+			},
+			wantErr: true,
+			errMsg:  "account_percentage must only be set when progress_basis is account_percentage",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sg := base()
+			tt.mutate(&sg)
+			err := sg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
+
+// TestSavingsGoalContribution_Validate tests the contribution validation rules (Issue #1300).
+func TestSavingsGoalContribution_Validate(t *testing.T) {
+	validTxnID := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	tests := []struct {
+		name    string
+		contrib SavingsGoalContribution
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid manual contribution",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        100.00,
+				Source:        "manual",
+				Status:        "confirmed",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid confirmed_transfer contribution with transaction",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				TransactionID: &validTxnID,
+				Amount:        250.00,
+				Source:        "confirmed_transfer",
+				Status:        "proposed",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid boost_match contribution",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				TransactionID: &validTxnID,
+				Amount:        500.00,
+				Source:        "boost_match",
+				Status:        "confirmed",
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing savings_goal_id",
+			contrib: SavingsGoalContribution{
+				Amount: 100.00,
+				Source: "manual",
+				Status: "confirmed",
+			},
+			wantErr: true,
+			errMsg:  "savings_goal_id is required",
+		},
+		{
+			name: "zero amount",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        0,
+				Source:        "manual",
+				Status:        "confirmed",
+			},
+			wantErr: true,
+			errMsg:  "amount must be positive",
+		},
+		{
+			name: "negative amount",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        -50.00,
+				Source:        "manual",
+				Status:        "confirmed",
+			},
+			wantErr: true,
+			errMsg:  "amount must be positive",
+		},
+		{
+			name: "invalid source",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        100.00,
+				Source:        "random_inflow",
+				Status:        "confirmed",
+			},
+			wantErr: true,
+			errMsg:  "source must be one of: manual, confirmed_transfer, boost_match",
+		},
+		{
+			name: "invalid status",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        100.00,
+				Source:        "manual",
+				Status:        "unknown",
+			},
+			wantErr: true,
+			errMsg:  "status must be one of: proposed, confirmed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.contrib.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
