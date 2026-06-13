@@ -193,6 +193,50 @@ func TestInvestmentService_GetPortfolioSummary_NoCostBasis(t *testing.T) {
 	assert.Nil(t, summary.TotalGainLossPct, "TotalGainLossPct must be nil when cost_basis=0")
 }
 
+// TestInvestmentService_GetPortfolioSummary_NullValueKnownBasis verifies that a holding
+// with cost_basis set but institution_value NULL does NOT inflate (or deflate) the gain/loss.
+// Scenario: A(value=1000, basis=800) + B(value=nil, basis=500).
+// Expected: TotalGainLoss = 200 (knownBasis pair only), NOT -300 (phantom loss). — Round-6 R6-1 RED
+func TestInvestmentService_GetPortfolioSummary_NullValueKnownBasis(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	ctx := context.Background()
+	userID := "user-nullval"
+
+	holdings := []domain.Holding{
+		// A: both non-nil → contributes to knownBasisValue + knownBasisCost
+		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(1000.0), ptr64(800.0), nil),
+		// B: institution_value nil, cost_basis set → must NOT produce phantom loss
+		makeTestHolding("h2", userID, "acct-1", "sec-2", nil, ptr64(500.0), nil),
+	}
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(nil, nil)
+
+	summary, err := svc.GetPortfolioSummary(ctx, userID)
+
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	// TotalValue: only A contributes (B has nil institution_value)
+	assert.InDelta(t, 1000.0, summary.TotalValue, 0.01, "TotalValue must only sum non-nil institution_value")
+	// TotalCostBasis: both A and B contribute (all non-nil cost_basis, mirrors snapshot Upsert)
+	assert.InDelta(t, 1300.0, summary.TotalCostBasis, 0.01, "TotalCostBasis must sum all non-nil cost_basis")
+	// TotalGainLoss: ONLY over both-non-nil pair (A: 1000-800=200). NOT -300 (1000-1300 phantom loss).
+	assert.InDelta(t, 200.0, summary.TotalGainLoss, 0.01, "TotalGainLoss must NOT be a phantom loss (-300)")
+	// TotalGainLossPct: 200/800 * 100 = 25.0% (denominator is knownBasisCost=800, not totalCostBasis=1300)
+	require.NotNil(t, summary.TotalGainLossPct, "TotalGainLossPct must be non-nil when any known-basis holding exists")
+	assert.InDelta(t, 25.0, *summary.TotalGainLossPct, 0.01, "pct = 200/800*100 = 25%, not -23% (phantom loss pct)")
+
+	assert.Equal(t, 2, summary.HoldingsCount)
+	holdingRepo.AssertExpectations(t)
+	snapshotRepo.AssertExpectations(t)
+}
+
 func TestInvestmentService_GetPortfolioHistory_MapsToDTOs(t *testing.T) {
 	holdingRepo := new(MockHoldingRepository)
 	snapshotRepo := new(MockPortfolioSnapshotRepository)

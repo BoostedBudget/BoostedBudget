@@ -256,6 +256,52 @@ func TestInvestmentHandler_GetInvestmentTransactions_LastPage(t *testing.T) {
 	assert.Nil(t, out.Body.NextCursor)
 }
 
+// ── Round-6 R6-3: account_id UUID validation → 400 ───────────────────────────
+
+// TestInvestmentHandler_GetHoldings_InvalidAccountID verifies that a malformed
+// account_id produces a 400 Bad Request, not a 500. — Round-6 R6-3 RED→GREEN
+func TestInvestmentHandler_GetHoldings_InvalidAccountID(t *testing.T) {
+	handler := NewInvestmentHandler(&mockInvestmentService{}, &mockInvestmentAnalyticsService{})
+
+	input := &GetHoldingsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		AccountID:          "not-a-uuid",
+	}
+
+	_, err := handler.GetHoldings(context.Background(), input)
+
+	require.Error(t, err, "malformed account_id must return an error")
+	// Huma 400 errors implement the huma.StatusError interface
+	var statusErr interface{ GetStatus() int }
+	if errors.As(err, &statusErr) {
+		assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(), "account_id validation must return 400 not 500")
+	} else {
+		t.Errorf("expected a huma status error, got %T: %v", err, err)
+	}
+}
+
+// TestInvestmentHandler_GetInvestmentTransactions_InvalidAccountID verifies that a
+// malformed account_id produces a 400 Bad Request, not a 500. — Round-6 R6-3 RED→GREEN
+func TestInvestmentHandler_GetInvestmentTransactions_InvalidAccountID(t *testing.T) {
+	handler := NewInvestmentHandler(&mockInvestmentService{}, &mockInvestmentAnalyticsService{})
+
+	input := &GetInvestmentTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		AccountID:             "not-a-uuid",
+	}
+
+	_, err := handler.GetInvestmentTransactions(context.Background(), input)
+
+	require.Error(t, err, "malformed account_id must return an error")
+	var statusErr interface{ GetStatus() int }
+	if errors.As(err, &statusErr) {
+		assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus(), "account_id validation must return 400 not 500")
+	} else {
+		t.Errorf("expected a huma status error, got %T: %v", err, err)
+	}
+}
+
 // ============================================================================
 // GetPortfolioAllocationBreakdown
 // ============================================================================

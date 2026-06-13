@@ -239,6 +239,53 @@ func TestInvestment_UnrealizedGainLoss_NullBasis_Integration(t *testing.T) {
 	assert.InDelta(t, 25.0, *result.TotalUnrealizedGainLossPct, 0.01, "pct = 400/1600*100 = 25%")
 }
 
+// TestInvestment_UnrealizedGainLoss_NullInstitutionValue_Integration proves that
+// UnrealizedGainLoss excludes holdings with cost_basis SET but institution_value NULL
+// from gain/loss figures. Such a holding must NOT become a phantom loss. — Round-6 R6-2 RED→GREEN
+func TestInvestment_UnrealizedGainLoss_NullInstitutionValue_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-nullvalue")
+
+	sec2 := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO securities (id, plaid_security_id, name) VALUES ($1, $2, 'BOND')`,
+		sec2, "r62-sec2-"+sec2.String())
+	require.NoError(t, err)
+
+	// Holding A: both non-nil → contributes fully to gain/loss (value=2000, basis=1600 → gain=400)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value, cost_basis)
+		VALUES ($1, $2, $3, $4, 10, 2000.00, 1600.00)
+	`, uuid.New(), userID, accountID, secID)
+	require.NoError(t, err)
+
+	// Holding B: cost_basis SET, institution_value NULL → must NOT become phantom loss
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis)
+		VALUES ($1, $2, $3, $4, 5, 500.00)
+	`, uuid.New(), userID, accountID, sec2)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	result, err := repo.UnrealizedGainLoss(ctx, userID.String())
+	require.NoError(t, err)
+
+	// TotalValue: only A contributes (B has NULL institution_value)
+	assert.InDelta(t, 2000.0, result.TotalValue, 0.01, "TotalValue must only sum non-nil institution_value")
+	// TotalCostBasis: only A's cost_basis (known-basis pair, FILTER semantics)
+	assert.InDelta(t, 1600.0, result.TotalCostBasis, 0.01, "TotalCostBasis must only count known-basis pairs")
+	// gain = A only: 2000-1600 = 400, NOT 2000-(1600+500) = -100 phantom loss
+	assert.InDelta(t, 400.0, result.TotalUnrealizedGainLoss, 0.01,
+		"gain/loss must NOT be phantom-loss due to NULL institution_value holding")
+	require.NotNil(t, result.TotalUnrealizedGainLossPct)
+	assert.InDelta(t, 25.0, *result.TotalUnrealizedGainLossPct, 0.01, "pct = 400/1600*100 = 25%")
+}
+
 // ── GAP E: unified UNION page boundary — cross-source same-date ──────────────
 
 // TestInvestment_UnifiedFeed_PageBoundary_Integration proves that the unified
