@@ -243,6 +243,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('createSavingsGoal'),
   write('updateSavingsGoal', { idempotent: true }),
   write('deleteSavingsGoal', { destructive: true }),
+  // #1300 M20: contribution ledger
+  read('listSavingsGoalContributions'),
+  write('logSavingsGoalContribution'),
+  write('confirmSavingsGoalContribution', { idempotent: true }),
+  write('deleteSavingsGoalContribution', { destructive: true }),
 
   // ── Subscription ─────────────────────────────────────────────────────────
   read('get-current-subscription'),
