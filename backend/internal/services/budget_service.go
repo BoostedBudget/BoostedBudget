@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -171,26 +172,21 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	for _, catReq := range req.Categories {
 		if catReq.CategoryKind == "savings" && catReq.SavingsGoalID != nil {
 			if s.goalOwnershipChecker == nil {
-				s.logger.Warn("savings category pre-validated in CreateBudget without ownership check wired — potential IDOR risk",
-					slog.String("savings_goal_id", *catReq.SavingsGoalID),
-					slog.String("user_id", userID),
-				)
-			} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *catReq.SavingsGoalID, userID); err != nil {
+				// R5-1: fail closed — every path that calls CreateBudget must wire the
+				// checker (HTTP path via SetGoalOwnershipChecker at startup; MCP path via
+				// handler.SetGoalOwnershipChecker on the per-tx service). A nil checker
+				// here indicates a mis-wired path, so we reject rather than silently allow.
+				return nil, fmt.Errorf("ownership checker not configured: cannot validate savings_goal_id %s", *catReq.SavingsGoalID)
+			}
+			if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *catReq.SavingsGoalID, userID); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	// Save to database (only reached after all categories pass ownership validation).
-	if err := s.budgetRepo.Create(ctx, budget); err != nil {
-		s.logger.Error("failed to create budget",
-			slog.String("user_id", userID),
-			slog.String("error", err.Error()),
-		)
-		return nil, err
-	}
-
-	// Create categories if provided (ownership already verified above).
+	// R5-2: validate every category before persisting (matches AddCategory / UpdateCategory behaviour).
+	// R5-3: build all categories in memory first so CreateWithCategories can persist them atomically.
+	var categories []*domain.BudgetCategory
 	for _, catReq := range req.Categories {
 		category := &domain.BudgetCategory{
 			ID:               uuid.New().String(),
@@ -207,15 +203,26 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			Tags:             catReq.Tags,
 			MatchLogic:       catReq.MatchLogic,
 		}
-
-		if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
-			s.logger.Error("failed to create budget category",
-				slog.String("budget_id", budget.ID),
-				slog.String("error", err.Error()),
-			)
+		// R5-2: gate on domain invariants before any write.
+		if err := category.Validate(); err != nil {
 			return nil, err
 		}
+		categories = append(categories, category)
+	}
 
+	// R5-3: persist budget + user-provided categories atomically in a single transaction.
+	// If any category INSERT fails the budget INSERT is rolled back too (no orphaned budget).
+	// Best-effort carry-forward categories are outside this tx (Plan flag B — intentional).
+	if err := s.budgetRepo.CreateWithCategories(ctx, budget, categories); err != nil {
+		s.logger.Error("failed to create budget",
+			slog.String("user_id", userID),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	// Mirror the in-memory category structs onto budget.Categories (repo may mutate them, e.g. set CreatedAt).
+	for _, category := range categories {
 		budget.Categories = append(budget.Categories, *category)
 	}
 
@@ -519,11 +526,10 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 	// IDOR check for savings: verify the goal belongs to the user (Issue #1300, Codex C1)
 	if req.CategoryKind == "savings" && req.SavingsGoalID != nil {
 		if s.goalOwnershipChecker == nil {
-			s.logger.Warn("savings category created without ownership check wired — potential IDOR risk",
-				slog.String("savings_goal_id", *req.SavingsGoalID),
-				slog.String("user_id", userID),
-			)
-		} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *req.SavingsGoalID, userID); err != nil {
+			// Fail closed: a mis-wired service must never silently allow cross-user goal links.
+			return nil, fmt.Errorf("ownership checker not configured: cannot validate savings_goal_id %s", *req.SavingsGoalID)
+		}
+		if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *req.SavingsGoalID, userID); err != nil {
 			return nil, err
 		}
 	}
