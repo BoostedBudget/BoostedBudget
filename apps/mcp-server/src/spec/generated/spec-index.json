@@ -2637,6 +2637,19 @@
       "description": "Retrieves all active (not completed) savings goals for the authenticated user."
     },
     {
+      "operationId": "getSavingsProgressSummary",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/progress-summary",
+      "summary": "Get savings progress summary",
+      "tags": [
+        "Savings Goals",
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11)."
+    },
+    {
       "operationId": "getSavingsGoal",
       "method": "GET",
       "path": "/api/v1/savings-goals/{id}",

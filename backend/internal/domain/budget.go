@@ -368,6 +368,11 @@ type BudgetCategory struct {
 	CustomParentID         *string `json:"custom_parent_id,omitempty" db:"-"`
 	CustomParentPFCPrimary *string `json:"custom_parent_pfc_primary,omitempty" db:"-"`
 
+	// SavingsGoalName is the display name of the linked savings goal, populated
+	// via a JOIN when categories are loaded (Issue #1300). Not stored in the
+	// budget_categories table — sourced from savings_goals.name on read.
+	SavingsGoalName *string `json:"savings_goal_name,omitempty" db:"-"`
+
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags" db:"-"`
 	MatchLogic MatchLogic `json:"match_logic" db:"match_logic"`

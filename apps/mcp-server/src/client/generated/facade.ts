@@ -361,6 +361,10 @@ export function createApiClient(mutator: FetchMutator) {
       getActiveSavingsGoals(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/active', method: 'GET', signal })
       },
+      /** GET /api/v1/savings-goals/progress-summary */
+      getSavingsProgressSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-goals/progress-summary', method: 'GET', signal })
+      },
       /** GET /api/v1/savings-goals/{id} */
       getSavingsGoal(id: string, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/savings-goals/${id}`, method: 'GET', signal })

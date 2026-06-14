@@ -197,8 +197,10 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 		}
 		defer rollbackMCPAuditTx(ctx, tx)
 
-		// CreateBudget only uses budgetRepo; other service deps (customCategoryRepo, plaidCategoryRepo)
-		// are not called during a create and can be left as-is from the outer service.
+		// txBudgetService runs inside the idempotency transaction. goalRepo (savings carry-forward)
+		// is intentionally omitted here: carry-forward is best-effort and must NOT run inside the
+		// transaction (Issue #1300 plan flag B). MCP-created budgets pick up savings categories
+		// on the next sync via BackfillManagedCategories.
 		txBudgetRepo := repository.NewBudgetRepository(tx)
 		txBudgetService := services.NewBudgetService(txBudgetRepo, nil, nil, slog.Default())
 

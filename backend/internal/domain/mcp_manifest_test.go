@@ -311,3 +311,17 @@ func TestMCPManifest_Issue138InvestmentOps(t *testing.T) {
 		}
 	}
 }
+
+// TestMCPManifest_Issue1300_SavingsProgressEntry verifies the getSavingsProgressSummary
+// analytics operation is registered as MCPClassRead (Issue #1300, Codex C11).
+func TestMCPManifest_Issue1300_SavingsProgressEntry(t *testing.T) {
+	const opID = "getSavingsProgressSummary"
+
+	class, found := domain.MCPOperationManifest[opID]
+	if !found {
+		t.Fatalf("MCPOperationManifest missing entry for %q (Issue #1300 Codex C11)", opID)
+	}
+	if class != domain.MCPClassRead {
+		t.Errorf("MCPOperationManifest[%q] = %q, want MCPClassRead (Issue #1300)", opID, class)
+	}
+}
