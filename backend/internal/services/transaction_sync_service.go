@@ -65,6 +65,14 @@ type TransactionSyncService interface {
 		progressUpdater SyncGoalProgressUpdater,
 		categoryBackfiller SyncManagedCategoryBackfiller,
 	)
+
+	// SetSavingsDetectionServices wires in the D6 source-b proposed-contribution detection
+	// services. All parameters are optional (nil = skip). Issue #1300 M18 RG1.
+	SetSavingsDetectionServices(
+		goalReader SyncContributionsBasisGoalReader,
+		proposedUpserter SyncProposedContributionUpserter,
+		inflowRepo repository.TransactionRepository,
+	)
 }
 
 // =============================================================================
@@ -90,6 +98,19 @@ type SyncManagedCategoryBackfiller interface {
 	BackfillManagedCategories(ctx context.Context, userID string) error
 }
 
+// SyncContributionsBasisGoalReader fetches active savings goals that use
+// progress_basis='contributions' so the sync can detect transfer-ins and
+// create proposed contributions (M18 / D6 source-b).
+type SyncContributionsBasisGoalReader interface {
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+}
+
+// SyncProposedContributionUpserter creates or updates a proposed contribution row
+// linked to a detected transfer-in (M18 / D6 source-b).
+type SyncProposedContributionUpserter interface {
+	UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error
+}
+
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
 	logger                    *slog.Logger
@@ -107,9 +128,13 @@ type transactionSyncService struct {
 	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
 	transferCorrelationSvc    TransferCorrelationService    // Issue #972: Correlate inflows against pending transfer suggestions
 	// Issue #1300 G2: savings progress wiring (all optional; nil = skip)
-	savingsContribCleaner   SyncContributionCleaner   // cleans managed contrib rows before txn removal
-	savingsProgressUpdater  SyncGoalProgressUpdater   // recomputes goal progress after sync
-	savingsCategoryBackfill SyncManagedCategoryBackfiller // backfills missing savings categories
+	savingsContribCleaner      SyncContributionCleaner          // cleans managed contrib rows before txn removal
+	savingsProgressUpdater     SyncGoalProgressUpdater          // recomputes goal progress after sync
+	savingsCategoryBackfill    SyncManagedCategoryBackfiller    // backfills missing savings categories
+	// Issue #1300 M18: proposed contribution detection (D6 source-b)
+	savingsGoalReader          SyncContributionsBasisGoalReader // fetches contributions-basis goals
+	savingsProposedUpserter    SyncProposedContributionUpserter // upserts proposed rows from detected inflows
+	savingsInflowRepo          repository.TransactionRepository  // shared — GetInflowTransactionsForAccount
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -165,6 +190,18 @@ func (s *transactionSyncService) SetSavingsProgressServices(
 	s.savingsContribCleaner = contribCleaner
 	s.savingsProgressUpdater = progressUpdater
 	s.savingsCategoryBackfill = categoryBackfiller
+}
+
+// SetSavingsDetectionServices wires in D6 source-b proposed-contribution detection.
+// All parameters are optional (nil = skip). Issue #1300 M18 RG1.
+func (s *transactionSyncService) SetSavingsDetectionServices(
+	goalReader SyncContributionsBasisGoalReader,
+	proposedUpserter SyncProposedContributionUpserter,
+	inflowRepo repository.TransactionRepository,
+) {
+	s.savingsGoalReader = goalReader
+	s.savingsProposedUpserter = proposedUpserter
+	s.savingsInflowRepo = inflowRepo
 }
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
@@ -408,11 +445,21 @@ func (s *transactionSyncService) SyncTransactions(
 	}
 
 	// ========================================================================
-	// Issue #1300 G2: Savings progress reconciliation (ordered BEFORE budget recalc)
-	// Ordering: reconcile managed contributions → RecomputeUser → BackfillManagedCategories
-	// → RecalculateBudgetAmounts (which reads savings "spent" from the ledger)
-	// → CorrelateForUser.  All steps non-fatal.
+	// Issue #1300 G2 / M18 (RG1): Savings progress reconciliation (ordered BEFORE budget recalc)
+	// Ordering: detect proposed contributions (D6 source-b) → RecomputeUser
+	// → BackfillManagedCategories → RecalculateBudgetAmounts → CorrelateForUser.
+	// All steps non-fatal.
 	// ========================================================================
+
+	// Step 8a (M18 / D6 source-b): For each active contributions-basis goal, detect recent
+	// transfer-ins to the linked account and upsert proposed contribution rows.
+	// Proposed rows don't count toward progress until the user confirms them.
+	if s.savingsGoalReader != nil && s.savingsProposedUpserter != nil && s.savingsInflowRepo != nil {
+		if err := s.detectAndUpsertProposedContributions(ctx, linkedItem.UserID); err != nil {
+			s.logger.Warn("savings proposed-contribution detection failed (non-fatal)",
+				"user_id", linkedItem.UserID, "error", err)
+		}
+	}
 
 	// Recompute all active savings goals for this user (balance/contributions/account_percentage).
 	if s.savingsProgressUpdater != nil {
@@ -731,6 +778,49 @@ func (s *transactionSyncService) processModifiedTransactions(
 	}
 
 	s.logger.Info("updated modified transactions", "updated", successCount, "skipped", skippedCount)
+	return nil
+}
+
+// detectAndUpsertProposedContributions creates proposed contribution rows for every
+// posted transfer-in detected on the linked account for all active contributions-basis
+// goals owned by userID. Called BEFORE RecomputeUser so that the ledger is up-to-date
+// before progress is computed. Non-fatal: individual upsert failures are logged and skipped.
+// Implements D6 source-b (Issue #1300 M18 / RG1).
+func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx context.Context, userID string) error {
+	goals, err := s.savingsGoalReader.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("detectAndUpsertProposedContributions: get active goals: %w", err)
+	}
+
+	// Only contributions-basis goals need inflow detection.
+	const lookbackDays = 37 // same window as transfer correlation
+	start := time.Now().AddDate(0, 0, -lookbackDays)
+	end := time.Now()
+
+	for _, goal := range goals {
+		if goal.ProgressBasis != domain.ProgressBasisContributions {
+			continue
+		}
+		if goal.AccountID == "" {
+			continue
+		}
+
+		inflows, err := s.savingsInflowRepo.GetInflowTransactionsForAccount(ctx, userID, goal.AccountID, start, end)
+		if err != nil {
+			s.logger.Warn("detectAndUpsertProposedContributions: failed to get inflows (skipping goal)",
+				"goal_id", goal.ID, "account_id", goal.AccountID, "error", err)
+			continue
+		}
+
+		for _, inflow := range inflows {
+			if err := s.savingsProposedUpserter.UpsertProposedFromTransaction(
+				ctx, userID, goal.ID, inflow.ID, inflow.Magnitude,
+			); err != nil {
+				s.logger.Warn("detectAndUpsertProposedContributions: upsert proposed contribution failed (skipping txn)",
+					"goal_id", goal.ID, "txn_id", inflow.ID, "magnitude", inflow.Magnitude, "error", err)
+			}
+		}
+	}
 	return nil
 }
 

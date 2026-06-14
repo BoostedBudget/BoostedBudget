@@ -36,7 +36,7 @@ func (m *mockSavingsProgressGoalRepo) MarkCompleted(ctx context.Context, goalID 
 
 type mockSavingsProgressContribRepo struct{ mock.Mock }
 
-func (m *mockSavingsProgressContribRepo) SumConfirmedByGoal(ctx context.Context, goalID string) (float64, error) {
+func (m *mockSavingsProgressContribRepo) SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error) {
 	args := m.Called(ctx, goalID)
 	return args.Get(0).(float64), args.Error(1)
 }

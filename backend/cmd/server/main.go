@@ -807,6 +807,14 @@ func main() {
 				if phClient != nil {
 					transferCorrelationService.SetAnalytics(phClient)
 				}
+				// Issue #1300 M19: Wire D6 source-c boost-match → confirmed contribution
+				// savingsGoalRepo.GetActiveByUserID satisfies CorrelationGoalResolver
+				// savingsContribRepo.UpsertFromTransaction satisfies CorrelationConfirmedContributionUpserter
+				transferCorrelationService.SetBoostMatchContributionServices(
+					savingsGoalRepo,    // CorrelationGoalResolver: GetActiveByUserID
+					savingsContribRepo, // CorrelationConfirmedContributionUpserter: UpsertFromTransaction
+				)
+				appLogger.Info("Boost-match contribution services wired into transfer correlation (M19 D6 source-c)")
 				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
 				appLogger.Info("Transfer correlation service wired into transaction sync")
 
@@ -819,6 +827,18 @@ func main() {
 					budgetService,           // SyncManagedCategoryBackfiller: BackfillManagedCategories
 				)
 				appLogger.Info("Savings progress services wired into transaction sync")
+
+				// Issue #1300 M18: Wire D6 source-b proposed-contribution detection into sync
+				// ordering: detectAndUpsertProposedContributions → RecomputeUser
+				// savingsGoalRepo implements SyncContributionsBasisGoalReader (GetActiveByUserID)
+				// savingsContribRepo implements SyncProposedContributionUpserter (UpsertProposedFromTransaction)
+				// transactionRepo implements GetInflowTransactionsForAccount (37-day window)
+				transactionSyncService.SetSavingsDetectionServices(
+					savingsGoalRepo,    // SyncContributionsBasisGoalReader: GetActiveByUserID
+					savingsContribRepo, // SyncProposedContributionUpserter: UpsertProposedFromTransaction
+					transactionRepo,    // TransactionRepository: GetInflowTransactionsForAccount
+				)
+				appLogger.Info("Savings detection services wired into transaction sync (M18 D6 source-b)")
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
@@ -1474,6 +1494,14 @@ func main() {
 		})
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		appLogger.Info("Huma savings goal routes registered")
+
+		// Issue #1300 M20: Register contribution API routes (D6 source-a manual log + confirm + delete)
+		humaContributionHandler := operations.NewContributionHandler(
+			savingsContribRepo,     // SavingsContributionRepository
+			savingsProgressService, // ContributionProgressRecomputer: RecomputeUser
+		)
+		operations.RegisterContributionRoutes(humaAPI, humaContributionHandler)
+		appLogger.Info("Huma savings goal contribution routes registered (M20 D6 source-a)")
 
 		// Register Huma boost routes (Issue #37: Boost Scheduler)
 		humaBoostHandler := operations.NewBoostHandler(boostService, boostSchedulerManager)

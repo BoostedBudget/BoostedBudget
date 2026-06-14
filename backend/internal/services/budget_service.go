@@ -115,8 +115,21 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		reconcileExpectedIncome = *req.ExpectedIncome
 	}
 
-	// Create budget from request
+	// Inherit series_id from ancestor if from_budget_id is set, else start own series (Issue #1300 M22/RG3)
 	newID := uuid.New().String()
+	seriesID := newID
+	if req.FromBudgetID != nil {
+		ancestor, err := s.budgetRepo.GetByID(ctx, *req.FromBudgetID)
+		if err != nil {
+			return nil, err
+		}
+		if ancestor.UserID != userID {
+			return nil, domain.ErrBudgetNotFound
+		}
+		seriesID = ancestor.SeriesID
+	}
+
+	// Create budget from request
 	budget := &domain.Budget{
 		ID:             newID,
 		UserID:         userID,
@@ -134,17 +147,14 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		// Envelope budgeting fields (Issue #491)
 		IncomeAmount:  req.IncomeAmount,
 		IncomeSources: req.IncomeSources,
-		// series_id: standalone budgets form their own series (Issue #1300 G5).
-		// A future "roll forward" feature will allow inheriting a parent series_id.
-		SeriesID: newID,
+		// Series groups recurring budget periods; inherited from ancestor or set to own ID (Issue #1300 G5/M22).
+		SeriesID: seriesID,
 	}
 
-	// Default currency if not provided
 	if budget.CurrencyCode == "" {
 		budget.CurrencyCode = "USD"
 	}
 
-	// Validate
 	if err := budget.Validate(); err != nil {
 		s.logger.Warn("budget validation failed",
 			slog.String("user_id", userID),
@@ -191,8 +201,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		budget.Categories = append(budget.Categories, *category)
 	}
 
-	// Carry-forward savings categories for all active goals (Issue #1300).
-	// Best-effort: fan-out is NOT in the budget-insert transaction; unique index no-ops dupes.
+	// Carry-forward savings categories (best-effort, unique index no-ops dupes — Issue #1300)
 	if s.goalRepo != nil {
 		goals, err := s.goalRepo.GetActiveByUserID(ctx, userID)
 		if err != nil {
@@ -489,11 +498,7 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 	// Categories may not exist yet (e.g., user-created) or may be added
 	// dynamically, so we allow flexible category definitions.
 
-	// Ownership check for savings categories: verify the submitted savings_goal_id
-	// belongs to the authenticated user before we persist. This prevents IDOR access
-	// where a user could link another user's savings goal into their budget (Issue #1300, Codex C1).
-	// goalOwnershipChecker is wired via SetGoalOwnershipChecker in main.go; the nil guard exists
-	// only for test stubs that omit optional deps — in production it is always set.
+	// IDOR check for savings: verify the goal belongs to the user (Issue #1300, Codex C1)
 	if req.CategoryKind == "savings" && req.SavingsGoalID != nil {
 		if s.goalOwnershipChecker == nil {
 			s.logger.Warn("savings category created without ownership check wired — potential IDOR risk",
@@ -642,9 +647,7 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 		return domain.ErrBudgetCategoryNotFound
 	}
 
-	// Delete the category first. Only write the tombstone after a confirmed deletion so
-	// that a transient DB error on the delete does not leave an orphan tombstone that
-	// would permanently block carry-forward / backfill for this series (Issue #1300, Codex C6).
+	// Delete first, only tombstone after confirmed deletion to avoid orphan tombstones (Codex C6)
 	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID); err != nil {
 		s.logger.Error("failed to delete budget category",
 			slog.String("category_id", categoryID),
@@ -653,15 +656,10 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 		return err
 	}
 
-	// Category deleted successfully. Now write the tombstone for auto-created savings
-	// categories so the carry-forward / backfill path does NOT recreate the category.
-	// Key the tombstone on series_id so it persists across all budget periods in the series.
-	// Non-fatal: a tombstone failure is logged but does not un-delete the category. In the
-	// worst case, BackfillManagedCategories will attempt to recreate the category on the next
-	// sync and the unique index will reject it — no silent data corruption.
+	// Write tombstone keyed on series_id (non-fatal if fails; unique index prevents dupes)
 	if foundCat.AutoCreated && foundCat.CategoryKind == "savings" && foundCat.SavingsGoalID != nil {
 		if err := s.budgetRepo.InsertGoalDetach(ctx, budget.SeriesID, budgetID, *foundCat.SavingsGoalID); err != nil {
-			s.logger.Warn("failed to write goal detach tombstone (category already deleted)",
+			s.logger.Warn("failed to write detach tombstone (category already deleted)",
 				slog.String("budget_id", budgetID),
 				slog.String("series_id", budget.SeriesID),
 				slog.String("goal_id", *foundCat.SavingsGoalID),
@@ -731,9 +729,8 @@ func (s *budgetService) SetGoalOwnershipChecker(r GoalOwnershipChecker) {
 	s.goalOwnershipChecker = r
 }
 
-// BackfillManagedCategories creates missing managed savings categories for all active goals
-// across all active budgets, skipping tombstoned (budget, goal) pairs and pairs that
-// already have a savings category. Idempotent — safe to call on every sync. Issue #1300, Codex C7.
+// BackfillManagedCategories creates missing managed savings categories for active goals
+// across active budgets, skipping tombstoned pairs and existing categories (idempotent, Codex C7).
 func (s *budgetService) BackfillManagedCategories(ctx context.Context, userID string) error {
 	if s.goalRepo == nil {
 		return nil

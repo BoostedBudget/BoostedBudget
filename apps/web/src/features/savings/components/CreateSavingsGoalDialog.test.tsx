@@ -1,5 +1,4 @@
-// Uses preloaded API mocks from bunfig.toml — do NOT add mock.module() for
-// savings-goals or accounts here; those are centralized in src/test/mocks/.
+// API mocks are centralized in src/test/mocks/; see bunfig.toml
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import React from 'react'
@@ -20,10 +19,17 @@ mock.module('../goalTemplates', () => ({
   },
 }))
 
+// Analytics mocks (must be before component import)
+const mockTrackEvent = mock(() => {})
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateSavingsGoalDialog } from './CreateSavingsGoalDialog'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
 const mockAccounts = [
   { id: 'acc-1', name: 'Checking', type: 'depository', mask: '1234', institution_name: 'Test Bank' },
@@ -55,6 +61,7 @@ describe('CreateSavingsGoalDialog', () => {
     mockUseGetAccounts.mockClear()
     mockOnCancel.mockClear()
     mockOnGoalCreated.mockClear()
+    mockTrackEvent.mockClear()
     mockUseCreateSavingsGoal.mockReturnValue({
       mutateAsync: mockCreateSavingsGoalMutateAsync,
       isPending: false,
@@ -842,6 +849,45 @@ describe('CreateSavingsGoalDialog', () => {
       fireEvent.submit(form!)
 
       expect(await screen.findByText('Failed to create goal')).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1300 RG5: CreateSavingsGoalDialog must fire SAVINGS_GOAL_PROGRESS_BASIS_CHANGED
+  describe('Analytics', () => {
+    it('fires SAVINGS_GOAL_PROGRESS_BASIS_CHANGED when progress_basis select changes', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'contributions' } })
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          ANALYTICS_EVENTS.SAVINGS_GOAL_PROGRESS_BASIS_CHANGED,
+          expect.any(Object)
+        )
+      })
+    })
+
+    it('fires SAVINGS_GOAL_PROGRESS_BASIS_CHANGED each time basis changes', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'contributions' } })
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'manual' } })
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledTimes(2)
+      })
     })
   })
 })

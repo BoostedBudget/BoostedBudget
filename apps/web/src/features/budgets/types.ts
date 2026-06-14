@@ -1,6 +1,6 @@
-import { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { formatPFCEnum } from '@/shared/categories/formatPfc';
 import type { Transaction } from '../transactions/types';
+import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 export type { MatchLogic } from '@boostedbudget/shared-types/matching';
 
 export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
@@ -110,6 +110,8 @@ export interface CreateBudgetRequest {
   income_amount?: number;
   income_sources?: IncomeSource[];
   expected_income?: number;
+  /** Inherit series_id from this budget (Issue #1300 M22). */
+  from_budget_id?: string;
 }
 
 export interface UpdateBudgetRequest {

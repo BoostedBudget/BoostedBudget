@@ -55,6 +55,10 @@ func (m *MockTransactionSyncService) SetSavingsProgressServices(
 	m.Called(contribCleaner, progressUpdater, categoryBackfiller)
 }
 
+// SetSavingsDetectionServices satisfies the TransactionSyncService interface (Issue #1300 M18 RG1).
+func (m *MockTransactionSyncService) SetSavingsDetectionServices(_ services.SyncContributionsBasisGoalReader, _ services.SyncProposedContributionUpserter, _ repository.TransactionRepository) {
+}
+
 // MockLinkedItemRepository mocks the LinkedItemRepository interface
 type MockLinkedItemRepository struct {
 	mock.Mock

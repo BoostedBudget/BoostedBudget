@@ -3729,3 +3729,342 @@ func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
 	mockCleaner.AssertExpectations(t)
 	mockTransactionRepo.AssertExpectations(t)
 }
+
+// ============================================================================
+// Issue #1300 M18 — D6 source-b: Sync detects transfer-ins → proposed contributions
+// ============================================================================
+
+// MockSyncContributionsBasisGoalReader is a testify mock for SyncContributionsBasisGoalReader.
+type MockSyncContributionsBasisGoalReader struct {
+	mock.Mock
+}
+
+func (m *MockSyncContributionsBasisGoalReader) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
+}
+
+// MockSyncProposedContributionUpserter is a testify mock for SyncProposedContributionUpserter.
+type MockSyncProposedContributionUpserter struct {
+	mock.Mock
+}
+
+func (m *MockSyncProposedContributionUpserter) UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error {
+	args := m.Called(ctx, userID, goalID, transactionID, magnitude)
+	return args.Error(0)
+}
+
+// TestSyncTransactions_ProposedContributionsCreatedForTransferIn verifies that after a sync,
+// for each active contributions-basis goal with a linked account that has a posted inflow,
+// a proposed contribution row is upserted (D6 source-b, Issue #1300 M18 / RG1).
+// Requirements:
+//   - Called BEFORE RecomputeUser
+//   - Uses magnitude = ABS(txn.amount) (always positive, from GetInflowTransactionsForAccount)
+//   - Non-fatal: sync still returns success even when upserter errors
+//   - Does NOT create rows for manual/balance-basis goals
+func TestSyncTransactions_ProposedContributionsCreatedForTransferIn(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockProgressUpdater := new(MockSyncGoalProgressUpdater)
+	mockGoalReader := new(MockSyncContributionsBasisGoalReader)
+	mockProposedUpserter := new(MockSyncProposedContributionUpserter)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(nil, mockProgressUpdater, nil)
+	svc.SetSavingsDetectionServices(mockGoalReader, mockProposedUpserter, mockTransactionRepo)
+
+	ctx := context.Background()
+	cursor1 := "c1"
+	userID := "user-detect-1"
+	accountID := "acct-savings-1"
+	goalID := "goal-contrib-1"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-detect-1",
+		UserID: userID,
+		Cursor: &cursor1,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "c2",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	// Goal reader returns one contributions-basis goal linked to accountID
+	contributionsGoal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		AccountID:     accountID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	mockGoalReader.On("GetActiveByUserID", ctx, userID).Return([]*domain.SavingsGoal{contributionsGoal}, nil)
+
+	// Inflow repo returns one transfer-in with magnitude 250.00
+	txnID := "txn-inflow-1"
+	inflows := []*domain.SavingsInflowTransaction{
+		{ID: txnID, Magnitude: 250.00, Date: "2026-06-14"},
+	}
+	mockTransactionRepo.On("GetInflowTransactionsForAccount", ctx, userID, accountID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return(inflows, nil)
+
+	// UpsertProposedFromTransaction is called with the exact inflow magnitude
+	mockProposedUpserter.On("UpsertProposedFromTransaction", ctx, userID, goalID, txnID, 250.00).Return(nil)
+
+	// RecomputeUser is called after detection (savings progress still runs)
+	mockProgressUpdater.On("RecomputeUser", ctx, userID).Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockGoalReader.AssertExpectations(t)
+	mockProposedUpserter.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+	mockProgressUpdater.AssertExpectations(t)
+}
+
+// TestSyncTransactions_ProposedContributionsSkipsNonContributionsBasisGoals verifies that
+// goals with progress_basis != 'contributions' are skipped during inflow detection (M18).
+func TestSyncTransactions_ProposedContributionsSkipsNonContributionsBasisGoals(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockGoalReader := new(MockSyncContributionsBasisGoalReader)
+	mockProposedUpserter := new(MockSyncProposedContributionUpserter)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsDetectionServices(mockGoalReader, mockProposedUpserter, mockTransactionRepo)
+
+	ctx := context.Background()
+	cursorSkip := "c1"
+	userID := "user-skip-basis"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-skip-basis",
+		UserID: userID,
+		Cursor: &cursorSkip,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	// Return a manual-basis and a balance-basis goal — neither should trigger inflow detection
+	goals := []*domain.SavingsGoal{
+		{ID: "goal-manual", UserID: userID, AccountID: "acct-1", ProgressBasis: domain.ProgressBasisManual},
+		{ID: "goal-balance", UserID: userID, AccountID: "acct-2", ProgressBasis: domain.ProgressBasisBalance},
+	}
+	mockGoalReader.On("GetActiveByUserID", ctx, userID).Return(goals, nil)
+
+	// GetInflowTransactionsForAccount must NOT be called for non-contributions goals
+	// UpsertProposedFromTransaction must NOT be called
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockGoalReader.AssertExpectations(t)
+	// These must not be called: assert zero calls via NotCalled
+	mockProposedUpserter.AssertNotCalled(t, "UpsertProposedFromTransaction")
+	mockTransactionRepo.AssertNotCalled(t, "GetInflowTransactionsForAccount")
+}
+
+// TestSyncTransactions_ProposedContributionsSkipsGoalWithNoAccountID verifies that
+// contributions-basis goals without a linked account_id are silently skipped (M18).
+func TestSyncTransactions_ProposedContributionsSkipsGoalWithNoAccountID(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockGoalReader := new(MockSyncContributionsBasisGoalReader)
+	mockProposedUpserter := new(MockSyncProposedContributionUpserter)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsDetectionServices(mockGoalReader, mockProposedUpserter, mockTransactionRepo)
+
+	ctx := context.Background()
+	cursorNoAcct := "c1"
+	userID := "user-no-acct"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-no-acct",
+		UserID: userID,
+		Cursor: &cursorNoAcct,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	// Contributions-basis goal but no AccountID — detection must be skipped
+	goals := []*domain.SavingsGoal{
+		{ID: "goal-no-acct", UserID: userID, AccountID: "", ProgressBasis: domain.ProgressBasisContributions},
+	}
+	mockGoalReader.On("GetActiveByUserID", ctx, userID).Return(goals, nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockGoalReader.AssertExpectations(t)
+	mockProposedUpserter.AssertNotCalled(t, "UpsertProposedFromTransaction")
+	mockTransactionRepo.AssertNotCalled(t, "GetInflowTransactionsForAccount")
+}
+
+// TestSyncTransactions_ProposedContributionUpsertErrorIsNonFatal verifies that a failure
+// in UpsertProposedFromTransaction for one txn does not abort the sync (M18 non-fatal per-txn).
+func TestSyncTransactions_ProposedContributionUpsertErrorIsNonFatal(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockProgressUpdater := new(MockSyncGoalProgressUpdater)
+	mockGoalReader := new(MockSyncContributionsBasisGoalReader)
+	mockProposedUpserter := new(MockSyncProposedContributionUpserter)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(nil, mockProgressUpdater, nil)
+	svc.SetSavingsDetectionServices(mockGoalReader, mockProposedUpserter, mockTransactionRepo)
+
+	ctx := context.Background()
+	cursorUE := "c1"
+	userID := "user-upsert-err"
+	accountID := "acct-upsert-err"
+	goalID := "goal-upsert-err"
+
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-upsert-err",
+		UserID: userID,
+		Cursor: &cursorUE,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	goals := []*domain.SavingsGoal{
+		{ID: goalID, UserID: userID, AccountID: accountID, ProgressBasis: domain.ProgressBasisContributions},
+	}
+	mockGoalReader.On("GetActiveByUserID", ctx, userID).Return(goals, nil)
+
+	inflows := []*domain.SavingsInflowTransaction{
+		{ID: "txn-fail-1", Magnitude: 100.00, Date: "2026-06-14"},
+		{ID: "txn-ok-1", Magnitude: 200.00, Date: "2026-06-14"},
+	}
+	mockTransactionRepo.On("GetInflowTransactionsForAccount", ctx, userID, accountID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+		Return(inflows, nil)
+
+	// First txn fails to upsert — second should still be attempted
+	mockProposedUpserter.On("UpsertProposedFromTransaction", ctx, userID, goalID, "txn-fail-1", 100.00).
+		Return(errors.New("db error"))
+	mockProposedUpserter.On("UpsertProposedFromTransaction", ctx, userID, goalID, "txn-ok-1", 200.00).
+		Return(nil)
+
+	// RecomputeUser still runs after the non-fatal upsert errors
+	mockProgressUpdater.On("RecomputeUser", ctx, userID).Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err) // non-fatal
+	assert.NotNil(t, result)
+	mockGoalReader.AssertExpectations(t)
+	mockProposedUpserter.AssertExpectations(t)
+	mockProgressUpdater.AssertExpectations(t)
+}
+
+// TestSyncTransactions_ProposedContributionsNilSafeWhenNotWired verifies that
+// sync proceeds normally when SetSavingsDetectionServices has not been called (M18 nil-safe).
+func TestSyncTransactions_ProposedContributionsNilSafeWhenNotWired(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	// No SetSavingsDetectionServices call — all three fields are nil
+
+	ctx := context.Background()
+	cursorNilSafe := "c1"
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-detect-nil",
+		UserID: "user-detect-nil",
+		Cursor: &cursorNilSafe,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}

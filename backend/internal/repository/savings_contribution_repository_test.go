@@ -302,13 +302,15 @@ func TestSavingsContributionRepository_SumConfirmedByGoal(t *testing.T) {
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
-		WithArgs(goalID).
+	// Query now JOINs savings_goals for userID scoping (RG2 / M17).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(c.amount), 0)`)).
+		WithArgs(goalID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(1250.50))
 
-	total, err := repo.SumConfirmedByGoal(ctx, goalID)
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
 
 	require.NoError(t, err)
 	assert.InDelta(t, 1250.50, total, 0.001)
@@ -322,13 +324,14 @@ func TestSavingsContributionRepository_SumConfirmedByGoal_NoContributions(t *tes
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
-		WithArgs(goalID).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(c.amount), 0)`)).
+		WithArgs(goalID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(0.0))
 
-	total, err := repo.SumConfirmedByGoal(ctx, goalID)
+	total, err := repo.SumConfirmedByGoal(ctx, userID, goalID)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, total)
@@ -341,15 +344,17 @@ func TestSavingsContributionRepository_SumConfirmedByGoalInPeriod(t *testing.T) 
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
-		WithArgs(goalID, start, end).
+	// Query now JOINs savings_goals for userID scoping (RG2 / M17).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(c.amount), 0)`)).
+		WithArgs(goalID, userID, start, end).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(750.00))
 
-	total, err := repo.SumConfirmedByGoalInPeriod(ctx, goalID, start, end)
+	total, err := repo.SumConfirmedByGoalInPeriod(ctx, userID, goalID, start, end)
 
 	require.NoError(t, err)
 	assert.InDelta(t, 750.00, total, 0.001)
@@ -357,11 +362,13 @@ func TestSavingsContributionRepository_SumConfirmedByGoalInPeriod(t *testing.T) 
 }
 
 // TestSavingsContributionRepository_ListByGoal tests listing contributions.
+// M20: userID param added to enforce ownership scoping (Codex C1).
 func TestSavingsContributionRepository_ListByGoal(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	txnID1 := uuid.New().String()
 	now := time.Now()
@@ -377,10 +384,10 @@ func TestSavingsContributionRepository_ListByGoal(t *testing.T) {
 		)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
-		WithArgs(goalID).
+		WithArgs(goalID, userID).
 		WillReturnRows(rows)
 
-	contribs, err := repo.ListByGoal(ctx, goalID)
+	contribs, err := repo.ListByGoal(ctx, userID, goalID)
 
 	require.NoError(t, err)
 	require.Len(t, contribs, 2)
@@ -392,18 +399,20 @@ func TestSavingsContributionRepository_ListByGoal(t *testing.T) {
 }
 
 // TestSavingsContributionRepository_ListByGoal_Empty tests that an empty result returns an empty slice.
+// M20: userID param added to enforce ownership scoping.
 func TestSavingsContributionRepository_ListByGoal_Empty(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
-		WithArgs(goalID).
+		WithArgs(goalID, userID).
 		WillReturnRows(pgxmock.NewRows(contributionColumns))
 
-	contribs, err := repo.ListByGoal(ctx, goalID)
+	contribs, err := repo.ListByGoal(ctx, userID, goalID)
 
 	require.NoError(t, err)
 	assert.Empty(t, contribs)

@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dialog';
 import { useCreateSavingsGoal } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals';
 import { useActiveAccounts } from '@/features/accounts/hooks';
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent';
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events';
 import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates';
 import type { GoalTemplate } from '../goalTemplates';
 import type { Account } from '../../accounts/types';
@@ -74,6 +76,7 @@ export function CreateSavingsGoalDialog({
     isLoading: accountsLoading,
   } = useActiveAccounts();
 
+  const trackEvent = useTrackEvent();
   const createSavingsGoalMutation = useCreateSavingsGoal();
 
   // Issue #1109: useActiveAccounts excludes replaced accounts; also filter by depository type
@@ -105,8 +108,11 @@ export function CreateSavingsGoalDialog({
       if (errors[name as keyof FormErrors]) {
         setErrors((prev) => ({ ...prev, [name]: undefined }));
       }
+      if (name === 'progress_basis') {
+        trackEvent(ANALYTICS_EVENTS.SAVINGS_GOAL_PROGRESS_BASIS_CHANGED, { new_basis: value });
+      }
     },
-    [errors]
+    [errors, trackEvent]
   );
 
   const validate = useCallback((): boolean => {
@@ -146,7 +152,6 @@ export function CreateSavingsGoalDialog({
       }
 
       try {
-        // Include user_account_id so the goal remains valid after future re-links (Issue #1109).
         const selectedAccount = accounts.find((acc) => acc.id === formData.account_id)
         const request: CreateSavingsGoalRequest = {
           name: formData.name.trim(),
@@ -155,11 +160,10 @@ export function CreateSavingsGoalDialog({
           account_id: formData.account_id,
           user_account_id: selectedAccount?.user_account_id ?? undefined,
           deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
-          // Issue #1300 gap G1: include basis fields so non-manual modes work end-to-end.
           progress_basis: formData.progress_basis !== 'manual' ? formData.progress_basis : undefined,
           account_percentage:
             formData.progress_basis === 'account_percentage' && formData.account_percentage
-              ? parseFloat(formData.account_percentage) / 100 // UI shows 0-100%; API expects 0-1
+              ? parseFloat(formData.account_percentage) / 100
               : undefined,
         };
 

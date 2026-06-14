@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -41,6 +42,10 @@ func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ se
 
 // SetSavingsProgressServices satisfies the TransactionSyncService interface (Issue #1300: G2).
 func (m *MockTransactionSyncServiceForWorker) SetSavingsProgressServices(_ services.SyncContributionCleaner, _ services.SyncGoalProgressUpdater, _ services.SyncManagedCategoryBackfiller) {
+}
+
+// SetSavingsDetectionServices satisfies the TransactionSyncService interface (Issue #1300 M18 RG1).
+func (m *MockTransactionSyncServiceForWorker) SetSavingsDetectionServices(_ services.SyncContributionsBasisGoalReader, _ services.SyncProposedContributionUpserter, _ repository.TransactionRepository) {
 }
 
 // MockItemErrorServiceForWorker for testing

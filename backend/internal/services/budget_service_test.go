@@ -978,6 +978,96 @@ func TestBudgetService_CreateBudget_RejectsZeroAmount(t *testing.T) {
 	assert.Contains(t, err.Error(), "amount must be positive")
 }
 
+// M22 — from_budget_id → inherited series_id (Issue #1300 RG3)
+
+// TestBudgetService_CreateBudget_StandaloneSeriesID verifies standalone budget gets series_id == id
+func TestBudgetService_CreateBudget_StandaloneSeriesID(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := createTestCreateBudgetRequest()
+	// FromBudgetID is nil (standalone)
+
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, budget.ID, budget.SeriesID, "standalone budget must be its own series")
+	// GetByID must NOT be called when FromBudgetID is nil.
+	mockBudgetRepo.AssertNotCalled(t, "GetByID", mock.Anything, mock.Anything)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_InheritsSeriesIDFromAncestor verifies budget inherits ancestor series_id
+func TestBudgetService_CreateBudget_InheritsSeriesIDFromAncestor(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	ancestorID := "ancestor-budget-id"
+	ancestorSeriesID := "series-abc-123"
+
+	ancestor := createTestBudgetForService(userID)
+	ancestor.ID = ancestorID
+	ancestor.SeriesID = ancestorSeriesID
+
+	fromBudgetID := ancestorID
+	req := createTestCreateBudgetRequest()
+	req.FromBudgetID = &fromBudgetID
+
+	mockBudgetRepo.On("GetByID", ctx, ancestorID).Return(ancestor, nil)
+	mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, budget)
+	assert.Equal(t, ancestorSeriesID, budget.SeriesID, "budget must inherit ancestor's series_id")
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// TestBudgetService_CreateBudget_CrossUserFromBudgetIDRejected verifies cross-user from_budget_id is rejected
+func TestBudgetService_CreateBudget_CrossUserFromBudgetIDRejected(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	otherUserID := "other-user-456"
+	otherBudgetID := "other-user-budget-id"
+
+	otherBudget := createTestBudgetForService(otherUserID) // different user
+	otherBudget.ID = otherBudgetID
+
+	fromBudgetID := otherBudgetID
+	req := createTestCreateBudgetRequest()
+	req.FromBudgetID = &fromBudgetID
+
+	mockBudgetRepo.On("GetByID", ctx, otherBudgetID).Return(otherBudget, nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+
+	assert.ErrorIs(t, err, domain.ErrBudgetNotFound, "cross-user from_budget_id must return ErrBudgetNotFound")
+	assert.Nil(t, budget)
+	// Create must NOT be called.
+	mockBudgetRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
 func TestBudgetService_UpdateBudget_ExpectedIncomeUpdates(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
@@ -1039,12 +1129,9 @@ func TestBudgetService_UpdateBudget_AmountFallback(t *testing.T) {
 	mockBudgetRepo.AssertExpectations(t)
 }
 
-// ============================================================================
 // PFC Display Enrichment Tests
-// ============================================================================
 
-// TestBudgetService_GetBudget_PopulatesPFCDisplay asserts that GetBudget enriches
-// BudgetCategory PFC display names before returning.
+// TestBudgetService_GetBudget_PopulatesPFCDisplay asserts GetBudget enriches PFC display names
 func TestBudgetService_GetBudget_PopulatesPFCDisplay(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
@@ -1073,8 +1160,7 @@ func TestBudgetService_GetBudget_PopulatesPFCDisplay(t *testing.T) {
 	mockBudgetRepo.AssertExpectations(t)
 }
 
-// TestBudgetService_AddCategory_PopulatesPFCDisplay asserts that AddCategory enriches
-// the returned BudgetCategory with PFC display names.
+// TestBudgetService_AddCategory_PopulatesPFCDisplay asserts AddCategory enriches PFC display names
 func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
@@ -1107,9 +1193,7 @@ func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
 
 // strPtr helper is defined in rule_application_service_test.go
 
-// =============================================================================
 // MockActiveSavingsGoalRepo — narrow interface mock for carry-forward / backfill
-// =============================================================================
 
 type MockActiveSavingsGoalRepo struct {
 	mock.Mock
@@ -1123,9 +1207,7 @@ func (m *MockActiveSavingsGoalRepo) GetActiveByUserID(ctx context.Context, userI
 	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
 }
 
-// =============================================================================
 // CreateBudget carry-forward tests (Issue #1300)
-// =============================================================================
 
 func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T) {
 	t.Run("creates savings category for each non-tombstoned active goal", func(t *testing.T) {
@@ -1253,9 +1335,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 	})
 }
 
-// =============================================================================
 // DeleteCategory tombstone tests (Issue #1300, Codex C6)
-// =============================================================================
 
 func TestBudgetService_DeleteCategory_AutoCreatedSavings_WritesTombstone(t *testing.T) {
 	ctx := context.Background()
@@ -1328,9 +1408,7 @@ func TestBudgetService_DeleteCategory_ManualSavings_NoTombstone(t *testing.T) {
 	mockBudgetRepo.AssertExpectations(t)
 }
 
-// =============================================================================
 // BackfillManagedCategories tests (Issue #1300, Codex C7)
-// =============================================================================
 
 func TestBudgetService_BackfillManagedCategories(t *testing.T) {
 	t.Run("creates missing savings categories for active goals x active budgets", func(t *testing.T) {
@@ -1466,12 +1544,7 @@ func TestBudgetService_BackfillManagedCategories(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// M15 (Issue #1300 G5): Budget series_id — detach persists across series periods
-// =============================================================================
-// These tests verify that the detach tombstone is keyed on series_id so that
-// deleting a savings category in period A prevents the goal from reappearing
-// in period B when both budgets share the same series_id.
+// M15 (Issue #1300 G5): detach persists across series periods (keyed on series_id, not budget_id)
 
 func TestBudgetService_DeleteCategory_DetachTombstoneKeyedBySeries(t *testing.T) {
 	t.Run("tombstone uses budget.SeriesID not budget.ID", func(t *testing.T) {
@@ -1621,9 +1694,7 @@ func TestBudgetService_CarryForward_DetachPersistsAcrossSeriesPeriods(t *testing
 	})
 }
 
-// =============================================================================
 // MockGoalOwnershipChecker — narrow interface mock for IDOR protection (Issue #1300, Codex C1)
-// =============================================================================
 
 type MockGoalOwnershipChecker struct {
 	mock.Mock
@@ -1637,9 +1708,7 @@ func (m *MockGoalOwnershipChecker) GetByIDForUser(ctx context.Context, id, userI
 	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
-// =============================================================================
 // AddCategory — savings kind tests (Issue #1300, Codex C1)
-// =============================================================================
 
 func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 	goalID := "goal-abc"

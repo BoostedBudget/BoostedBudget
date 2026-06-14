@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
-import { useCreateBudget } from '@boostedbudget/api-client/endpoints/budgets/budgets';
+import { useCreateBudget, useGetBudgets } from '@boostedbudget/api-client/endpoints/budgets/budgets';
 import { useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary';
 import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags';
@@ -42,6 +42,8 @@ interface FormData {
   start_date: string;
   end_date: string;
   income_sources: IncomeSource[];
+  /** ID of an existing budget whose series_id this budget should inherit (Issue #1300 M22). */
+  from_budget_id: string;
 }
 
 interface FormErrors {
@@ -78,6 +80,7 @@ const initialFormData: FormData = {
   start_date: getDefaultStartDate(),
   end_date: '',
   income_sources: [],
+  from_budget_id: '',
 };
 
 export function CreateBudgetDialog({
@@ -92,6 +95,7 @@ export function CreateBudgetDialog({
   const [trackingOpen, setTrackingOpen] = useState(false);
 
   const createBudgetMutation = useCreateBudget();
+  const { data: existingBudgets } = useGetBudgets({ query: { enabled: isOpen } });
   const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories({
     query: { enabled: isOpen },
   });
@@ -176,6 +180,8 @@ export function CreateBudgetDialog({
           expected_income: incomeValue,
           amount: incomeValue,
           income_sources: formData.income_sources.length > 0 ? formData.income_sources : undefined,
+          // M22: inherit series_id from selected ancestor budget (optional)
+          from_budget_id: formData.from_budget_id || undefined,
         };
 
         const newBudget = await createBudgetMutation.mutateAsync({
@@ -225,9 +231,7 @@ export function CreateBudgetDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Section: Basics */}
           <div className="space-y-4">
-            {/* Name */}
             <div>
               <label htmlFor="name" className="block text-sm font-medium text-foreground">
                 Name
@@ -249,7 +253,6 @@ export function CreateBudgetDialog({
               )}
             </div>
 
-            {/* Description */}
             <div>
               <label htmlFor="description" className="block text-sm font-medium text-foreground">
                 Description
@@ -265,7 +268,6 @@ export function CreateBudgetDialog({
               />
             </div>
 
-            {/* Period */}
             <div>
               <label htmlFor="period" className="block text-sm font-medium text-foreground">
                 Period
@@ -285,7 +287,6 @@ export function CreateBudgetDialog({
               </select>
             </div>
 
-            {/* Start Date */}
             <div>
               <label htmlFor="start_date" className="block text-sm font-medium text-foreground">
                 Start Date
@@ -300,7 +301,6 @@ export function CreateBudgetDialog({
               />
             </div>
 
-            {/* End Date — only for custom period */}
             {formData.period === 'custom' && (
               <div>
                 <label htmlFor="end_date" className="block text-sm font-medium text-foreground">
@@ -325,7 +325,6 @@ export function CreateBudgetDialog({
             )}
           </div>
 
-          {/* Section: Expected Income */}
           <div>
             <label htmlFor="expectedIncome" className="block text-sm font-medium text-foreground">
               Expected Income
@@ -358,7 +357,30 @@ export function CreateBudgetDialog({
             )}
           </div>
 
-          {/* Section: Track actual income (optional, collapsed by default) */}
+          {existingBudgets && existingBudgets.length > 0 && (
+            <div>
+              <label htmlFor="from_budget_id" className="block text-sm font-medium text-foreground">
+                Based on existing budget
+                <span className="ml-1.5 text-xs font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <select
+                id="from_budget_id"
+                name="from_budget_id"
+                value={formData.from_budget_id}
+                onChange={handleInputChange}
+                className="w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+              >
+                <option value="">— None —</option>
+                {(existingBudgets as Budget[]).map((b) => (
+                  <option key={b.id} value={b.id} data-ph-mask>{b.name}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Savings goals you removed from the selected budget will stay removed in this one.
+              </p>
+            </div>
+          )}
+
           <div className="border border-border rounded-lg overflow-hidden">
             <button
               type="button"
@@ -391,12 +413,10 @@ export function CreateBudgetDialog({
             )}
           </div>
 
-          {/* API Error */}
           {apiError && (
             <Alert variant="destructive">{apiError}</Alert>
           )}
 
-          {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
             <Button variant="outline" type="button" onClick={onCancel}>
               Cancel

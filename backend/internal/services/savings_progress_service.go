@@ -27,7 +27,8 @@ type SavingsProgressGoalRepo interface {
 // SavingsProgressContribRepo is the minimal interface for reading contribution totals.
 type SavingsProgressContribRepo interface {
 	// SumConfirmedByGoal returns the sum of confirmed contributions for progress_basis="contributions".
-	SumConfirmedByGoal(ctx context.Context, goalID string) (float64, error)
+	// userID is required for ownership scoping (RG2 / M17 — Codex C1).
+	SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error)
 }
 
 // SavingsProgressAccountRepo is the minimal interface for reading account balances.
@@ -97,7 +98,7 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 
 	switch basis {
 	case domain.ProgressBasisContributions:
-		sum, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.ID)
+		sum, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.UserID, goal.ID)
 		if err != nil {
 			return fmt.Errorf("savings_progress: sum contributions for goal %s: %w", goal.ID, err)
 		}
@@ -221,7 +222,7 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 
 	for _, goal := range goals {
 		// Always fetch confirmed contributions (Codex C11 — show even for non-contributions bases).
-		confirmedTotal, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.ID)
+		confirmedTotal, err := s.contribRepo.SumConfirmedByGoal(ctx, goal.UserID, goal.ID)
 		if err != nil {
 			s.logger.Warn("progress_summary: failed to sum contributions",
 				slog.String("goal_id", goal.ID),

@@ -183,6 +183,30 @@ func (c *SavingsGoalContribution) Validate() error {
 	return nil
 }
 
+// LogContributionRequest is the body for POST /savings-goals/{goalID}/contributions.
+// Creates a manually entered, confirmed contribution (D6 source-a / M20 / Issue #1300).
+type LogContributionRequest struct {
+	// Amount is the contribution amount (must be positive).
+	Amount float64 `json:"amount" required:"true"`
+	// OccurredOn is the date the contribution occurred (YYYY-MM-DD).
+	OccurredOn string `json:"occurred_on" required:"true"`
+	// TransactionID optionally links to an existing transaction (must belong to the user).
+	TransactionID *string `json:"transaction_id,omitempty"`
+	// Notes is an optional user note (stored in source field as "manual").
+	Notes *string `json:"notes,omitempty"`
+}
+
+// Validate checks LogContributionRequest fields.
+func (r *LogContributionRequest) Validate() error {
+	if r.Amount <= 0 {
+		return errors.New("amount must be positive")
+	}
+	if r.OccurredOn == "" {
+		return errors.New("occurred_on is required")
+	}
+	return nil
+}
+
 // Progress returns the progress percentage toward the goal (0-100+).
 func (sg *SavingsGoal) Progress() float64 {
 	if sg.TargetAmount == 0 {
@@ -410,4 +434,6 @@ var (
 	// ErrContributionOverAllocated is returned when adding a contribution would exceed
 	// the transaction's total amount (Codex C2 — allocation-cap enforcement).
 	ErrContributionOverAllocated = errors.New("contribution amount exceeds transaction's remaining capacity")
+	// ErrContributionAlreadyConfirmed is returned when attempting to confirm an already-confirmed row.
+	ErrContributionAlreadyConfirmed = errors.New("contribution is already confirmed")
 )
