@@ -1475,10 +1475,11 @@ func main() {
 
 		// Register Huma budget routes (Issue #559: Huma migration)
 		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService, operations.BudgetHandlerDeps{
-			IdempotencyRepo: humaIdempotencyRepo,
-			DB:              db,
-			MCPAuditRepo:    humaMCPAuditRepo,
-			MCPWorkerSecret: cfg.MCPWorkerSecret,
+			IdempotencyRepo:      humaIdempotencyRepo,
+			DB:                   db,
+			MCPAuditRepo:         humaMCPAuditRepo,
+			MCPWorkerSecret:      cfg.MCPWorkerSecret,
+			GoalOwnershipChecker: savingsGoalRepo, // R5-1: ensures MCP CreateBudget validates savings_goal_id ownership
 		})
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")

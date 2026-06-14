@@ -72,6 +72,15 @@ type BudgetRepository interface {
 	DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error
 	// GetDetachedGoalIDsForSeries returns all savings_goal_ids tombstoned for a series.
 	GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error)
+
+	// CreateWithCategories atomically creates a budget and its user-provided categories in a
+	// single transaction. If any category INSERT fails the budget INSERT is rolled back too —
+	// no orphaned budget rows are left behind (R5-3). Best-effort carry-forward categories
+	// are intentionally outside this call (they use CreateCategory individually).
+	//
+	// When r.db is already a pgx.Tx (e.g. the MCP transactional path), db.Begin() creates a
+	// savepoint so the call composes safely with an outer transaction.
+	CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -1178,4 +1187,32 @@ func (r *budgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seri
 		goalIDs = append(goalIDs, id)
 	}
 	return goalIDs, rows.Err()
+}
+
+// CreateWithCategories atomically inserts a budget and all its user-provided categories.
+// If any category INSERT fails the budget INSERT is rolled back; no orphaned budget rows
+// are left behind (R5-3 / Codex C1 / Issue #1300).
+//
+// When r.db is already a pgx.Tx (e.g. the MCP transactional path in budget.go), db.Begin()
+// opens a savepoint so this call composes safely with an outer transaction.
+func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	txRepo := &budgetRepository{db: tx}
+
+	if err := txRepo.Create(ctx, budget); err != nil {
+		return err
+	}
+
+	for _, cat := range categories {
+		if err := txRepo.CreateCategory(ctx, cat); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
