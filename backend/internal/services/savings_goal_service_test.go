@@ -1055,8 +1055,8 @@ type MockGoalBasisSwitchContribRepo struct {
 	mock.Mock
 }
 
-func (m *MockGoalBasisSwitchContribRepo) Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error {
-	args := m.Called(ctx, contrib)
+func (m *MockGoalBasisSwitchContribRepo) Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, userID, contrib)
 	return args.Error(0)
 }
 
@@ -1115,7 +1115,7 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
 	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// manual → contributions: a seed contribution must be inserted with Amount = priorAmount.
-	mockContribRepo.On("Insert", ctx, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+	mockContribRepo.On("Insert", ctx, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
 		return c.SavingsGoalID == goalID &&
 			c.Amount == priorAmount &&
 			c.Source == "manual" &&
@@ -1256,7 +1256,7 @@ func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
 	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
 	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 	// Seed fails — UpdateGoal must still succeed (non-fatal, Codex C10).
-	mockContribRepo.On("Insert", ctx, mock.AnythingOfType("*domain.SavingsGoalContribution")).
+	mockContribRepo.On("Insert", ctx, userID, mock.AnythingOfType("*domain.SavingsGoalContribution")).
 		Return(errors.New("db: foreign key violation"))
 	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
 	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)

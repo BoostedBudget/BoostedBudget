@@ -44,6 +44,7 @@ func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	contrib := &domain.SavingsGoalContribution{
 		SavingsGoalID: goalID,
@@ -53,6 +54,9 @@ func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 		OccurredOn:    "2024-01-15",
 	}
 
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			pgxmock.AnyArg(), // id
@@ -68,7 +72,7 @@ func TestSavingsContributionRepository_Insert_Basic(t *testing.T) {
 			pgxmock.AnyArg(), // updated_at
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	err := repo.Insert(ctx, contrib)
+	err := repo.Insert(ctx, userID, contrib)
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, contrib.ID, "ID should be generated")
@@ -81,16 +85,21 @@ func TestSavingsContributionRepository_Insert_IDPreserved(t *testing.T) {
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	existingID := uuid.New().String()
+	goalID := uuid.New().String()
 	contrib := &domain.SavingsGoalContribution{
 		ID:            existingID,
-		SavingsGoalID: uuid.New().String(),
+		SavingsGoalID: goalID,
 		Amount:        100.00,
 		Source:        "manual",
 		Status:        "confirmed",
 		OccurredOn:    "2024-02-01",
 	}
 
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			existingID, // pre-set ID must be preserved
@@ -106,7 +115,7 @@ func TestSavingsContributionRepository_Insert_IDPreserved(t *testing.T) {
 			pgxmock.AnyArg(),
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	err := repo.Insert(ctx, contrib)
+	err := repo.Insert(ctx, userID, contrib)
 	require.NoError(t, err)
 	assert.Equal(t, existingID, contrib.ID)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -118,14 +127,19 @@ func TestSavingsContributionRepository_Insert_DefaultStatusConfirmed(t *testing.
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
 	contrib := &domain.SavingsGoalContribution{
-		SavingsGoalID: uuid.New().String(),
+		SavingsGoalID: goalID,
 		Amount:        250.00,
 		Source:        "manual",
 		// Status intentionally left empty → should default to "confirmed"
 		OccurredOn: "2024-03-01",
 	}
 
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
 		WithArgs(
 			pgxmock.AnyArg(),
@@ -141,7 +155,7 @@ func TestSavingsContributionRepository_Insert_DefaultStatusConfirmed(t *testing.
 			pgxmock.AnyArg(),
 		).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-	err := repo.Insert(ctx, contrib)
+	err := repo.Insert(ctx, userID, contrib)
 	require.NoError(t, err)
 	assert.Equal(t, "confirmed", contrib.Status)
 	assert.NoError(t, mock.ExpectationsWereMet())

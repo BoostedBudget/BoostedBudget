@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -27,8 +28,8 @@ type mockSavingsContributionRepo struct {
 	mock.Mock
 }
 
-func (m *mockSavingsContributionRepo) Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error {
-	args := m.Called(ctx, contrib)
+func (m *mockSavingsContributionRepo) Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, userID, contrib)
 	return args.Error(0)
 }
 
@@ -203,7 +204,7 @@ func TestLogContribution_Success(t *testing.T) {
 	progress := new(mockContributionProgressRecomputer)
 	handler := NewContributionHandler(contribRepo, progress)
 
-	contribRepo.On("Insert", mock.Anything, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+	contribRepo.On("Insert", mock.Anything, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
 		return c.SavingsGoalID == goalID &&
 			c.Amount == 500.00 &&
 			c.Source == "manual" &&
@@ -233,6 +234,40 @@ func TestLogContribution_Success(t *testing.T) {
 	assert.Equal(t, "confirmed", output.Body.Status)
 	contribRepo.AssertExpectations(t)
 	progress.AssertExpectations(t)
+}
+
+// TestLogContribution_CrossUserGoal_Returns404 verifies that logging a contribution against
+// a goal owned by a different user returns 404, not 500 (IDOR guard / Codex C1).
+// The repo-level Insert rejects cross-user goals by checking ownership before inserting.
+func TestLogContribution_CrossUserGoal_Returns404(t *testing.T) {
+	goalID := "goal-other-user"
+	userID := "user-attacker"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil)
+
+	// The repo Insert will verify goal ownership and reject with ErrSavingsGoalNotFound.
+	contribRepo.On("Insert", mock.Anything, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+		return c.SavingsGoalID == goalID
+	})).Return(domain.ErrSavingsGoalNotFound)
+
+	ctx := context.Background()
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:     100.00,
+			OccurredOn: "2026-06-14",
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.Error(t, err)
+	// Must surface as 404, not 500.
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma status error, got %T", err)
+	assert.Equal(t, http.StatusNotFound, humaErr.GetStatus())
+	contribRepo.AssertExpectations(t)
 }
 
 // TestLogContribution_InvalidAmount_Returns422 verifies that non-positive amounts are rejected.

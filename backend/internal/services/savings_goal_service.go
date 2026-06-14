@@ -43,7 +43,7 @@ type GoalProgressRecomputer interface {
 //   - ArchiveByGoal: clears managed_by_reconciliation on all rows when switching away from
 //     "contributions" so the reconciler stops managing them (they become historical records).
 type GoalBasisSwitchContribRepo interface {
-	Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error
+	Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error
 	ArchiveByGoal(ctx context.Context, goalID string) error
 }
 
@@ -435,7 +435,7 @@ func (s *savingsGoalService) handleBasisSwitch(
 				ConfirmedByUser:         true,
 				OccurredOn:              time.Now().Format("2006-01-02"),
 			}
-			if err := s.basisSwitchRepo.Insert(ctx, seed); err != nil {
+			if err := s.basisSwitchRepo.Insert(ctx, userID, seed); err != nil {
 				s.logger.Warn("basis-switch seed contribution failed (non-fatal)",
 					slog.String("goal_id", goalID),
 					slog.String("user_id", userID),
