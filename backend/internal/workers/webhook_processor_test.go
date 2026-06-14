@@ -39,6 +39,10 @@ func (m *MockTransactionSyncServiceForWorker) SyncTransactions(ctx context.Conte
 // SetTransferCorrelationService satisfies the TransactionSyncService interface (Issue #972: B4).
 func (m *MockTransactionSyncServiceForWorker) SetTransferCorrelationService(_ services.TransferCorrelationService) {}
 
+// SetSavingsProgressServices satisfies the TransactionSyncService interface (Issue #1300: G2).
+func (m *MockTransactionSyncServiceForWorker) SetSavingsProgressServices(_ services.SyncContributionCleaner, _ services.SyncGoalProgressUpdater, _ services.SyncManagedCategoryBackfiller) {
+}
+
 // MockItemErrorServiceForWorker for testing
 type MockItemErrorServiceForWorker struct {
 	mock.Mock

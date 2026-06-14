@@ -313,6 +313,23 @@ type CreateSavingsGoalRequest struct {
 	CurrencyCode  string     `json:"currency_code,omitempty"`
 	AccountID     string     `json:"account_id" validate:"required,uuid"`
 	Deadline      *time.Time `json:"deadline,omitempty"`
+	// ProgressBasis controls how current_amount is derived (Issue #1300).
+	// Defaults to "manual" if empty. Valid: manual|contributions|balance|account_percentage.
+	ProgressBasis string `json:"progress_basis,omitempty"`
+	// AccountPercentage is required (0 < x ≤ 1) when ProgressBasis is "account_percentage".
+	AccountPercentage *float64 `json:"account_percentage,omitempty"`
+}
+
+// Validate checks progress-basis discriminator rules for the create request.
+// Basic field validation (required, max-length, gt=0) is still enforced via struct tags
+// on the domain.SavingsGoal constructed from this request; this method only covers
+// the cross-field basis rules that tags cannot express.
+func (r *CreateSavingsGoalRequest) Validate() error {
+	basis := r.ProgressBasis
+	if basis == "" {
+		basis = ProgressBasisManual
+	}
+	return validateProgressBasisRequest(basis, r.AccountPercentage, r.AccountID)
 }
 
 // UpdateSavingsGoalRequest represents the request to update a savings goal.
@@ -323,6 +340,54 @@ type UpdateSavingsGoalRequest struct {
 	CurrentAmount *float64   `json:"current_amount,omitempty" validate:"omitempty,gte=0"`
 	AccountID     *string    `json:"account_id,omitempty" validate:"omitempty,uuid"`
 	Deadline      *time.Time `json:"deadline,omitempty"`
+	// ProgressBasis changes the derivation mode for current_amount (Issue #1300).
+	// When nil, the existing basis is preserved.
+	ProgressBasis *string `json:"progress_basis,omitempty"`
+	// AccountPercentage is required (0 < x ≤ 1) when ProgressBasis is "account_percentage".
+	AccountPercentage *float64 `json:"account_percentage,omitempty"`
+}
+
+// Validate checks progress-basis discriminator rules for the update request.
+// Only applies cross-field checks when ProgressBasis is explicitly set.
+func (r *UpdateSavingsGoalRequest) Validate() error {
+	if r.ProgressBasis == nil {
+		// No basis change — nothing cross-field to validate at DTO level.
+		return nil
+	}
+	basis := *r.ProgressBasis
+	accountID := ""
+	if r.AccountID != nil {
+		accountID = *r.AccountID
+	}
+	// accountID may still be "" here (not changing account) — the full discriminator
+	// check happens in SavingsGoal.Validate() after the service applies all field updates.
+	// Here we only reject obviously invalid basis values and the pct discriminator.
+	return validateProgressBasisRequest(basis, r.AccountPercentage, accountID)
+}
+
+// validateProgressBasisRequest is the shared cross-field validator for progress_basis
+// used by both create and update request DTOs.
+func validateProgressBasisRequest(basis string, accountPercentage *float64, accountID string) error {
+	switch basis {
+	case ProgressBasisManual, ProgressBasisContributions:
+		if accountPercentage != nil {
+			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+		}
+	case ProgressBasisBalance:
+		if accountPercentage != nil {
+			return errors.New("account_percentage must only be set when progress_basis is account_percentage")
+		}
+	case ProgressBasisAccountPercentage:
+		if accountPercentage == nil {
+			return errors.New("account_percentage is required when progress_basis is account_percentage")
+		}
+		if *accountPercentage <= 0 || *accountPercentage > 1 {
+			return errors.New("account_percentage must be between 0 and 1 (exclusive 0, inclusive 1)")
+		}
+	default:
+		return errors.New("progress_basis must be one of: manual, contributions, balance, account_percentage")
+	}
+	return nil
 }
 
 // SavingsInflowTransaction is a lightweight projection returned by

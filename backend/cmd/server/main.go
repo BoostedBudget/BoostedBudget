@@ -429,6 +429,14 @@ func main() {
 		// belongs to the authenticated user before persisting (Codex C1).
 		budgetService.SetGoalOwnershipChecker(savingsGoalRepo)
 		savingsGoalService.SetBudgetRepo(budgetRepo)
+		// Issue #1300 M13: Wire progress recomputer so CreateGoal initialises
+		// current_amount per progress_basis immediately after goal creation.
+		savingsGoalService.SetProgressService(savingsProgressService)
+		// Issue #1300 M14: Wire contribution repo + analytics for basis-switch semantics.
+		savingsGoalService.SetBasisSwitchContribRepo(savingsContribRepo)
+		if phClient != nil {
+			savingsGoalService.SetAnalytics(phClient)
+		}
 
 		// Issue #138: Investment read services — DB-only, no Plaid dependency.
 		// Initialized here (outside the Plaid block) so investment route handlers
@@ -801,6 +809,16 @@ func main() {
 				}
 				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
 				appLogger.Info("Transfer correlation service wired into transaction sync")
+
+				// Issue #1300 M12: Wire savings progress reconciliation into transaction sync
+				// ordering: DeleteManaged (for removed txns) → RecomputeUser → BackfillManagedCategories
+				// → RecalculateBudgetAmounts (which reads savings "spent" from the ledger)
+				transactionSyncService.SetSavingsProgressServices(
+					savingsContribRepo,      // SyncContributionCleaner: DeleteManagedForTransaction
+					savingsProgressService,  // SyncGoalProgressUpdater: RecomputeUser
+					budgetService,           // SyncManagedCategoryBackfiller: BackfillManagedCategories
+				)
+				appLogger.Info("Savings progress services wired into transaction sync")
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications

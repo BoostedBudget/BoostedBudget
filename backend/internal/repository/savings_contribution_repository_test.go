@@ -148,12 +148,13 @@ func TestSavingsContributionRepository_Insert_DefaultStatusConfirmed(t *testing.
 }
 
 // TestSavingsContributionRepository_UpsertFromTransaction_Success tests the happy path
-// including the transaction-level lock and capacity check (Codex C2).
+// including ownership pre-checks, transaction-level lock, and capacity check (Codex C1/C2).
 func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	txnID := uuid.New().String()
 	txnAmount := 1000.00
@@ -161,9 +162,14 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 
 	mock.ExpectBegin()
 
-	// Step 1: lock query returns transaction magnitude.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 FOR UPDATE`)).
-		WithArgs(txnID).
+	// Step 0: goal ownership check passes.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Step 1: lock query returns transaction magnitude (with user_id check).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
 
 	// Step 2: capacity query — nothing allocated elsewhere yet.
@@ -178,30 +184,37 @@ func TestSavingsContributionRepository_UpsertFromTransaction_Success(t *testing.
 
 	mock.ExpectCommit()
 
-	err := repo.UpsertFromTransaction(ctx, goalID, txnID, contribAmount, "confirmed_transfer")
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, contribAmount, "confirmed_transfer")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound tests
-// that ErrContributionNotFound is returned when the transaction row does not exist.
+// that ErrContributionNotFound is returned when the transaction row does not exist for the user.
 func TestSavingsContributionRepository_UpsertFromTransaction_TransactionNotFound(t *testing.T) {
 	mock, repo := setupContributionMockDB(t)
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	txnID := uuid.New().String()
 
 	mock.ExpectBegin()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 FOR UPDATE`)).
-		WithArgs(txnID).
+	// Step 0: goal ownership check passes.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Step 1: lock fails — transaction not found for this user.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
 		WillReturnError(pgx.ErrNoRows)
 
 	mock.ExpectRollback()
 
-	err := repo.UpsertFromTransaction(ctx, goalID, txnID, 200.00, "confirmed_transfer")
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 200.00, "confirmed_transfer")
 	assert.ErrorIs(t, err, domain.ErrContributionNotFound)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -214,17 +227,23 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OverAllocated(t *te
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	txnID := uuid.New().String()
 
 	mock.ExpectBegin()
 
-	// Transaction magnitude is 500.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 FOR UPDATE`)).
-		WithArgs(txnID).
+	// Step 0: goal ownership check passes.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Step 1: transaction magnitude is 500.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
-	// Already 450 allocated to other goals.
+	// Step 2: already 450 allocated to other goals.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
 		WithArgs(txnID, goalID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(450.0))
@@ -232,7 +251,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OverAllocated(t *te
 	mock.ExpectRollback()
 
 	// Attempt to allocate 100 — only 50 remaining capacity.
-	err := repo.UpsertFromTransaction(ctx, goalID, txnID, 100.00, "confirmed_transfer")
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 100.00, "confirmed_transfer")
 	assert.ErrorIs(t, err, domain.ErrContributionOverAllocated)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -244,15 +263,23 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ExactCapacity(t *te
 	defer mock.Close()
 
 	ctx := context.Background()
+	userID := uuid.New().String()
 	goalID := uuid.New().String()
 	txnID := uuid.New().String()
 
 	mock.ExpectBegin()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 FOR UPDATE`)).
-		WithArgs(txnID).
+	// Step 0: goal ownership check passes.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Step 1: transaction lock with user_id check.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(500.0))
 
+	// Step 2: 300 allocated elsewhere → 200 remaining.
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
 		WithArgs(txnID, goalID).
 		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(300.0))
@@ -264,7 +291,7 @@ func TestSavingsContributionRepository_UpsertFromTransaction_ExactCapacity(t *te
 	mock.ExpectCommit()
 
 	// Exactly 200 remaining — should succeed.
-	err := repo.UpsertFromTransaction(ctx, goalID, txnID, 200.0, "confirmed_transfer")
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 200.0, "confirmed_transfer")
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -457,4 +484,108 @@ func TestSavingsContributionRepository_ArchiveByGoal_NoManagedRows(t *testing.T)
 
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ============================================================================
+// M13 (Issue #1300): Ownership guard in UpsertFromTransaction (G7 / Codex C1)
+// These tests drive the new userID parameter on UpsertFromTransaction.
+// The query order changes: goal ownership check FIRST (SELECT from savings_goals),
+// then the transaction lock; cross-user attempts are rejected with domain errors.
+// ============================================================================
+
+// TestSavingsContributionRepository_UpsertFromTransaction_CrossUserGoalRejected verifies
+// that attempting to contribute to a goal owned by a different user returns ErrSavingsGoalNotFound.
+func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserGoalRejected(t *testing.T) {
+	mockDB, repo := setupContributionMockDB(t)
+	defer mockDB.Close()
+
+	ctx := context.Background()
+	callerUserID := uuid.New().String() // different user from goal owner
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+
+	mockDB.ExpectBegin()
+
+	// Goal ownership check: goal does NOT belong to callerUserID → ErrNoRows.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, callerUserID).
+		WillReturnError(pgx.ErrNoRows)
+
+	mockDB.ExpectRollback()
+
+	err := repo.UpsertFromTransaction(ctx, callerUserID, goalID, txnID, 100.0, "confirmed_transfer")
+	assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_UpsertFromTransaction_CrossUserTransactionRejected verifies
+// that contributing from a transaction owned by a different user returns ErrContributionNotFound.
+func TestSavingsContributionRepository_UpsertFromTransaction_CrossUserTransactionRejected(t *testing.T) {
+	mockDB, repo := setupContributionMockDB(t)
+	defer mockDB.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String() // transaction belongs to a different user
+
+	mockDB.ExpectBegin()
+
+	// Goal ownership check passes (goal belongs to userID).
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Transaction lock fails: transaction.user_id != userID → ErrNoRows.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
+		WillReturnError(pgx.ErrNoRows)
+
+	mockDB.ExpectRollback()
+
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, 100.0, "confirmed_transfer")
+	assert.ErrorIs(t, err, domain.ErrContributionNotFound)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSuccess verifies
+// the happy path with the new userID parameter and ownership pre-checks.
+func TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSuccess(t *testing.T) {
+	mockDB, repo := setupContributionMockDB(t)
+	defer mockDB.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+	txnAmount := 500.0
+	contribAmount := 250.0
+
+	mockDB.ExpectBegin()
+
+	// Goal ownership check passes.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// Transaction lock — now requires user_id check.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`)).
+		WithArgs(txnID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"abs"}).AddRow(txnAmount))
+
+	// Capacity check — nothing allocated elsewhere.
+	mockDB.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(SUM(amount), 0)`)).
+		WithArgs(txnID, goalID).
+		WillReturnRows(pgxmock.NewRows([]string{"coalesce"}).AddRow(0.0))
+
+	// Upsert.
+	mockDB.ExpectExec(regexp.QuoteMeta(`INSERT INTO savings_goal_contributions`)).
+		WithArgs(goalID, txnID, contribAmount, "confirmed_transfer", pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	mockDB.ExpectCommit()
+
+	err := repo.UpsertFromTransaction(ctx, userID, goalID, txnID, contribAmount, "confirmed_transfer")
+	require.NoError(t, err)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }

@@ -2198,6 +2198,9 @@ components:
           type: string
         account_id:
           type: string
+        account_percentage:
+          format: double
+          type: number
         currency_code:
           type: string
         current_amount:
@@ -2209,6 +2212,8 @@ components:
         description:
           type: string
         name:
+          type: string
+        progress_basis:
           type: string
         target_amount:
           format: double
@@ -5986,6 +5991,9 @@ components:
           type: string
         account_id:
           type: string
+        account_percentage:
+          format: double
+          type: number
         current_amount:
           format: double
           type: number
@@ -5995,6 +6003,8 @@ components:
         description:
           type: string
         name:
+          type: string
+        progress_basis:
           type: string
         target_amount:
           format: double

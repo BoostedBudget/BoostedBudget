@@ -905,3 +905,78 @@ func TestRecalculateBudget_SavingsCategory_WithoutCalc_FallsBackToStandard(t *te
 	mockSpentCalc.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
+
+// TestRecalculateBudget_SavingsCategory_TotalSpentAndEventPayload is the Flag A regression
+// guard (Issue #1300 / M16). It verifies that:
+//  1. When a savings category has confirmed contributions (from the ledger), the contribution
+//     amount counts as real envelope money in Budget.TotalSpent().
+//  2. The budget_updated event payload's EventDataKeyTotalSpent reflects this value so that
+//     automation rules (e.g. budget.percent_used) fire correctly on savings-containing budgets.
+func TestRecalculateBudget_SavingsCategory_TotalSpentAndEventPayload(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockSavingsCalc := new(MockSavingsContributionSpentCalc)
+	mockEvent := new(MockEventTriggerProcessor)
+
+	svc := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+	svc.SetSavingsSpentCalc(mockSavingsCalc)
+	svc.SetEventProcessor(mockEvent)
+
+	goalID := "goal-flag-a"
+	budget := &domain.Budget{
+		ID:     "budget-flag-a",
+		UserID: "user-flag-a",
+		Period: domain.BudgetPeriodMonthly,
+		Amount: 1000.0,
+	}
+
+	goalIDPtr := goalID
+	savingsCategory := domain.BudgetCategory{
+		ID:              "cat-savings-flag-a",
+		BudgetID:        budget.ID,
+		CategoryKind:    "savings",
+		SavingsGoalID:   &goalIDPtr,
+		AllocatedAmount: 400.0,
+	}
+
+	mockRepo.On("GetCategoriesByBudgetID", ctx, budget.ID).Return([]domain.BudgetCategory{savingsCategory}, nil)
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.Anything, mock.Anything).Return(1000.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, budget.ID, 1000.0).Return(nil)
+
+	// Savings category gets 300.0 from the contribution ledger.
+	mockSavingsCalc.On("SumConfirmedByGoalInPeriod", ctx, goalID, mock.Anything, mock.Anything).Return(300.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, savingsCategory.ID, 300.0).Return(nil)
+
+	// Capture the budget_updated event data.
+	var capturedEventData map[string]interface{}
+	mockEvent.On("ProcessEventTrigger", ctx, budget.UserID, domain.EventBudgetUpdated, mock.AnythingOfType("map[string]interface {}")).
+		Run(func(args mock.Arguments) {
+			capturedEventData = args.Get(3).(map[string]interface{})
+		}).
+		Return(nil)
+
+	err := svc.RecalculateBudget(ctx, budget)
+
+	require.NoError(t, err)
+	mockSavingsCalc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockEvent.AssertExpectations(t)
+
+	// Flag A: savings contributions must count as real envelope money in TotalSpent.
+	require.NotNil(t, capturedEventData, "budget_updated event must have been fired")
+	totalSpent, ok := capturedEventData[domain.EventDataKeyTotalSpent].(float64)
+	require.True(t, ok, "budget_updated payload must include total_spent as float64")
+	assert.Equal(t, 300.0, totalSpent,
+		"budget.total_spent in budget_updated must reflect the savings category's contribution-driven spend")
+
+	// The per-category data in the event must also reflect the savings spend.
+	catMap, ok := capturedEventData[domain.EventDataKeyCategories].(map[string]map[string]float64)
+	require.True(t, ok, "budget_updated payload must include categories map")
+	require.Contains(t, catMap, savingsCategory.ID)
+	assert.Equal(t, 300.0, catMap[savingsCategory.ID]["spent"],
+		"savings category's per-category spent in budget_updated must equal contribution-driven amount")
+}

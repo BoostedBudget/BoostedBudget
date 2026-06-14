@@ -116,8 +116,9 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	}
 
 	// Create budget from request
+	newID := uuid.New().String()
 	budget := &domain.Budget{
-		ID:             uuid.New().String(),
+		ID:             newID,
 		UserID:         userID,
 		Name:           req.Name,
 		Description:    req.Description,
@@ -133,6 +134,9 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		// Envelope budgeting fields (Issue #491)
 		IncomeAmount:  req.IncomeAmount,
 		IncomeSources: req.IncomeSources,
+		// series_id: standalone budgets form their own series (Issue #1300 G5).
+		// A future "roll forward" feature will allow inheriting a parent series_id.
+		SeriesID: newID,
 	}
 
 	// Default currency if not provided
@@ -198,10 +202,11 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			)
 		} else {
 			for _, goal := range goals {
-				detached, err := s.budgetRepo.IsGoalDetachedForBudget(ctx, budget.ID, goal.ID)
+				detached, err := s.budgetRepo.IsGoalDetachedForSeries(ctx, budget.SeriesID, goal.ID)
 				if err != nil {
 					s.logger.Warn("carry-forward: failed to check tombstone",
 						slog.String("budget_id", budget.ID),
+						slog.String("series_id", budget.SeriesID),
 						slog.String("goal_id", goal.ID),
 						slog.String("error", err.Error()),
 					)
@@ -637,26 +642,32 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 		return domain.ErrBudgetCategoryNotFound
 	}
 
-	// If deleting an auto-created savings category, write a tombstone so the
-	// carry-forward / backfill path does NOT recreate it (Issue #1300, Codex C6).
-	if foundCat.AutoCreated && foundCat.CategoryKind == "savings" && foundCat.SavingsGoalID != nil {
-		if err := s.budgetRepo.InsertGoalDetach(ctx, budgetID, *foundCat.SavingsGoalID); err != nil {
-			s.logger.Warn("failed to write goal detach tombstone",
-				slog.String("budget_id", budgetID),
-				slog.String("goal_id", *foundCat.SavingsGoalID),
-				slog.String("error", err.Error()),
-			)
-			// Non-fatal: the category is still deleted; tombstone failure is logged.
-		}
-	}
-
-	// Delete the category
+	// Delete the category first. Only write the tombstone after a confirmed deletion so
+	// that a transient DB error on the delete does not leave an orphan tombstone that
+	// would permanently block carry-forward / backfill for this series (Issue #1300, Codex C6).
 	if err := s.budgetRepo.DeleteCategory(ctx, categoryID, budgetID); err != nil {
 		s.logger.Error("failed to delete budget category",
 			slog.String("category_id", categoryID),
 			slog.String("error", err.Error()),
 		)
 		return err
+	}
+
+	// Category deleted successfully. Now write the tombstone for auto-created savings
+	// categories so the carry-forward / backfill path does NOT recreate the category.
+	// Key the tombstone on series_id so it persists across all budget periods in the series.
+	// Non-fatal: a tombstone failure is logged but does not un-delete the category. In the
+	// worst case, BackfillManagedCategories will attempt to recreate the category on the next
+	// sync and the unique index will reject it — no silent data corruption.
+	if foundCat.AutoCreated && foundCat.CategoryKind == "savings" && foundCat.SavingsGoalID != nil {
+		if err := s.budgetRepo.InsertGoalDetach(ctx, budget.SeriesID, budgetID, *foundCat.SavingsGoalID); err != nil {
+			s.logger.Warn("failed to write goal detach tombstone (category already deleted)",
+				slog.String("budget_id", budgetID),
+				slog.String("series_id", budget.SeriesID),
+				slog.String("goal_id", *foundCat.SavingsGoalID),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	s.logger.Info("budget category deleted",
@@ -753,10 +764,11 @@ func (s *budgetService) BackfillManagedCategories(ctx context.Context, userID st
 				continue
 			}
 
-			detached, err := s.budgetRepo.IsGoalDetachedForBudget(ctx, budget.ID, goal.ID)
+			detached, err := s.budgetRepo.IsGoalDetachedForSeries(ctx, budget.SeriesID, goal.ID)
 			if err != nil {
 				s.logger.Error("backfill: failed to check tombstone",
 					slog.String("budget_id", budget.ID),
+					slog.String("series_id", budget.SeriesID),
 					slog.String("goal_id", goal.ID),
 					slog.String("error", err.Error()),
 				)

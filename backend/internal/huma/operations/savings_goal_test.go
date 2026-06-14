@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,12 @@ func (m *mockSavingsGoalService) DeleteGoal(ctx context.Context, userID, goalID 
 }
 
 func (m *mockSavingsGoalService) SetBudgetRepo(_ services.GoalAutoCreateBudgetRepo) {}
+
+func (m *mockSavingsGoalService) SetProgressService(_ services.GoalProgressRecomputer) {}
+
+func (m *mockSavingsGoalService) SetBasisSwitchContribRepo(_ services.GoalBasisSwitchContribRepo) {}
+
+func (m *mockSavingsGoalService) SetAnalytics(_ phclient.Analytics) {}
 
 // mockSavingsProgressService is a mock implementation of services.SavingsProgressService.
 type mockSavingsProgressService struct {

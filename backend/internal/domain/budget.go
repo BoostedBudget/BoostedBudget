@@ -127,6 +127,12 @@ type Budget struct {
 	// IncomeAmount remains for backward compatibility and tracks actual income received.
 	ExpectedIncome float64 `json:"expected_income" db:"expected_income"`
 
+	// SeriesID groups recurring budget periods together (Issue #1300 G5 / migration 000098).
+	// When a budget is standalone it is its own series (SeriesID == ID). When a budget is
+	// created as a continuation of a prior period, SeriesID is inherited from the ancestor
+	// so savings-goal detach tombstones persist across the whole series rather than per-period.
+	SeriesID string `json:"series_id" db:"series_id"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
 }

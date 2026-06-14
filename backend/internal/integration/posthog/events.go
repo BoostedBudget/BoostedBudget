@@ -45,6 +45,9 @@ const (
 	EventTransferSuggestionMatched   = "transfer_suggestion_matched"
 	EventTransferSuggestionValidated = "transfer_suggestion_validated"
 
+	// Savings goal events (Issue #1300)
+	EventSavingsGoalProgressBasisChanged = "savings_goal_progress_basis_changed"
+
 	// Job events
 	EventDeadLetterCreated = "dead_letter_created"
 

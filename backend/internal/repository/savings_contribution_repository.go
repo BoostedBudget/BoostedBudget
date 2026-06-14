@@ -19,12 +19,16 @@ type SavingsContributionRepository interface {
 	Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error
 
 	// UpsertFromTransaction inserts or updates a contribution linked to a transaction.
+	// userID is required: both the savings goal and the transaction must belong to
+	// userID or the call is rejected (Codex C1 / G7 ownership guard).
 	// Race-safe: locks the transaction row (SELECT … FOR UPDATE), checks that
 	// the new amount does not exceed the transaction's remaining allocation capacity
 	// across all goals (Codex C2), then inserts on the partial unique key
 	// (transaction_id, savings_goal_id) with idempotent upsert semantics.
+	// Returns ErrSavingsGoalNotFound if goalID does not belong to userID.
+	// Returns ErrContributionNotFound if transactionID does not belong to userID.
 	// Returns ErrContributionOverAllocated if the transaction would be over-allocated.
-	UpsertFromTransaction(ctx context.Context, goalID, transactionID string, amount float64, source string) error
+	UpsertFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, source string) error
 
 	// SumConfirmedByGoal returns the sum of all confirmed contributions for a goal.
 	// Used by RecomputeGoal when progress_basis = "contributions".
@@ -100,12 +104,13 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, contrib *dom
 }
 
 // UpsertFromTransaction inserts or updates a transaction-linked contribution.
+// Verifies that both the goal and the transaction belong to userID (Codex C1 / G7).
 // Acquires a row-level lock on the transaction to prevent concurrent over-allocation
 // (Codex C2). Uses ON CONFLICT on the partial unique index
 // (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL.
 func (r *savingsContributionRepository) UpsertFromTransaction(
 	ctx context.Context,
-	goalID, transactionID string,
+	userID, goalID, transactionID string,
 	amount float64,
 	source string,
 ) error {
@@ -119,12 +124,22 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		}
 	}()
 
-	// Step 1: Lock the transaction row and get its magnitude.
-	var txnMagnitude float64
-	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 FOR UPDATE`
-	if err = tx.QueryRow(ctx, lockQuery, transactionID).Scan(&txnMagnitude); err != nil {
+	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
+	var dummy int
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
 		if err == pgx.ErrNoRows {
-			return domain.ErrContributionNotFound
+			err = domain.ErrSavingsGoalNotFound
+		}
+		return err
+	}
+
+	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
+	var txnMagnitude float64
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
+		if err == pgx.ErrNoRows {
+			err = domain.ErrContributionNotFound
 		}
 		return err
 	}

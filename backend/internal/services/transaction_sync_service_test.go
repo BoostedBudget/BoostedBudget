@@ -3414,3 +3414,318 @@ func TestProcessAddedTransactions_MonitorForMatchesReceivesAllTransactions(t *te
 	mockTransactionRepo.AssertExpectations(t)
 	mockMonitor.AssertExpectations(t)
 }
+
+// =============================================================================
+// Issue #1300 Gap G2 — M12: Wire sync → contribution reconciliation → RecomputeUser
+// =============================================================================
+
+// MockSyncContributionCleaner is a testify mock for SyncContributionCleaner.
+type MockSyncContributionCleaner struct {
+	mock.Mock
+}
+
+func (m *MockSyncContributionCleaner) DeleteManagedForTransaction(ctx context.Context, transactionID string) error {
+	args := m.Called(ctx, transactionID)
+	return args.Error(0)
+}
+
+// MockSyncGoalProgressUpdater is a testify mock for SyncGoalProgressUpdater.
+type MockSyncGoalProgressUpdater struct {
+	mock.Mock
+}
+
+func (m *MockSyncGoalProgressUpdater) RecomputeUser(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+// MockSyncManagedCategoryBackfiller is a testify mock for SyncManagedCategoryBackfiller.
+type MockSyncManagedCategoryBackfiller struct {
+	mock.Mock
+}
+
+func (m *MockSyncManagedCategoryBackfiller) BackfillManagedCategories(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+// TestSyncTransactions_SavingsRecomputeUserCalledAfterSync verifies that
+// RecomputeUser is called on the user after a successful sync (Issue #1300 G2).
+func TestSyncTransactions_SavingsRecomputeUserCalledAfterSync(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockProgressUpdater := new(MockSyncGoalProgressUpdater)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(nil, mockProgressUpdater, nil)
+
+	ctx := context.Background()
+	cursor1 := "c1"
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-recompute-1",
+		UserID: "user-recompute-1",
+		Cursor: &cursor1,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added:      []plaid.Transaction{},
+		Modified:   []plaid.Transaction{},
+		Removed:    []plaid.RemovedTransaction{},
+		NextCursor: "c2",
+		HasMore:    false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockProgressUpdater.On("RecomputeUser", ctx, "user-recompute-1").Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockProgressUpdater.AssertExpectations(t)
+}
+
+// TestSyncTransactions_SavingsBackfillCalledAfterRecompute verifies that
+// BackfillManagedCategories is called after a successful sync (Issue #1300 G3).
+func TestSyncTransactions_SavingsBackfillCalledAfterRecompute(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockBackfill := new(MockSyncManagedCategoryBackfiller)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(nil, nil, mockBackfill)
+
+	ctx := context.Background()
+	cursor1b := "c1"
+	linkedItem := &domain.LinkedItem{
+		ID:     "li-backfill-1",
+		UserID: "user-backfill-1",
+		Cursor: &cursor1b,
+	}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	mockBackfill.On("BackfillManagedCategories", ctx, "user-backfill-1").Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockBackfill.AssertExpectations(t)
+}
+
+// TestSyncTransactions_SavingsRecomputeErrorDoesNotFailSync verifies that
+// a RecomputeUser error is non-fatal: sync succeeds (Issue #1300 G2).
+func TestSyncTransactions_SavingsRecomputeErrorDoesNotFailSync(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockProgressUpdater := new(MockSyncGoalProgressUpdater)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(nil, mockProgressUpdater, nil)
+
+	ctx := context.Background()
+	cursorNF := "c1"
+	linkedItem := &domain.LinkedItem{ID: "li-nonfatal", UserID: "user-nonfatal", Cursor: &cursorNF}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+	// RecomputeUser errors — sync must still succeed
+	mockProgressUpdater.On("RecomputeUser", ctx, "user-nonfatal").Return(errors.New("db connection lost"))
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err) // non-fatal
+	assert.NotNil(t, result)
+	mockProgressUpdater.AssertExpectations(t)
+}
+
+// TestSyncTransactions_SavingsNilSafeWhenNotWired verifies that sync works
+// normally when savings services are not wired (Issue #1300 G2 nil-safe).
+func TestSyncTransactions_SavingsNilSafeWhenNotWired(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	// No SetSavingsProgressServices call — all nil
+
+	ctx := context.Background()
+	cursorNS := "c1"
+	linkedItem := &domain.LinkedItem{ID: "li-nilsafe", UserID: "user-nilsafe", Cursor: &cursorNS}
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{}, NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+// TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval verifies that
+// DeleteManagedForTransaction is called (with the internal txn ID) before removing
+// a transaction, preventing phantom progress (Codex C4, Issue #1300 G2).
+func TestSyncTransactions_DeleteManagedContribsBeforeTransactionRemoval(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockCleaner := new(MockSyncContributionCleaner)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(mockCleaner, nil, nil)
+
+	ctx := context.Background()
+	cursorR1 := "c1"
+	linkedItem := &domain.LinkedItem{ID: "li-remove-1", UserID: "user-remove-1", Cursor: &cursorR1}
+
+	plaidExtID := "plaid-txn-ext-1"
+	internalTxnID := "internal-uuid-for-txn"
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{
+			{TransactionId: &plaidExtID},
+		},
+		NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	// GetByExternalID returns the internal transaction (for contribution cleanup)
+	internalTxn := &domain.Transaction{ID: internalTxnID}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1").
+		Return(internalTxn, nil)
+
+	// DeleteManagedForTransaction is called with the internal UUID
+	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(nil)
+
+	// DeleteByExternalID is called after the contribution cleanup
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-1").
+		Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockCleaner.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}
+
+// TestSyncTransactions_DeleteManagedContribNonFatalOnError verifies that
+// DeleteManagedForTransaction errors don't abort the removal (Codex C4, non-fatal).
+func TestSyncTransactions_DeleteManagedContribNonFatalOnError(t *testing.T) {
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	mockTransactionRepo := new(MockTransactionRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockPlaidService := new(MockPlaidService)
+	mockCleaner := new(MockSyncContributionCleaner)
+
+	svc := NewTransactionSyncService(
+		nil,
+		mockLinkedItemRepo,
+		mockTransactionRepo,
+		mockAccountRepo,
+		nil, nil,
+		mockPlaidService,
+		nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSavingsProgressServices(mockCleaner, nil, nil)
+
+	ctx := context.Background()
+	cursorRNF := "c1"
+	linkedItem := &domain.LinkedItem{ID: "li-remove-nf", UserID: "user-remove-nf", Cursor: &cursorRNF}
+
+	plaidExtID := "plaid-txn-ext-nf"
+	internalTxnID := "internal-uuid-nf"
+
+	plaidResp := &plaid.TransactionsSyncResponse{
+		Added: []plaid.Transaction{}, Modified: []plaid.Transaction{},
+		Removed: []plaid.RemovedTransaction{{TransactionId: &plaidExtID}},
+		NextCursor: "c2", HasMore: false,
+	}
+	mockPlaidService.On("TransactionsSync", ctx, "", "c1", 0).Return(plaidResp, nil)
+	mockLinkedItemRepo.On("UpdateCursor", ctx, linkedItem.ID, "c2").Return(nil)
+	mockAccountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{}, nil)
+
+	internalTxn := &domain.Transaction{ID: internalTxnID}
+	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
+		Return(internalTxn, nil)
+	// DeleteManagedForTransaction errors — removal must still proceed
+	mockCleaner.On("DeleteManagedForTransaction", ctx, internalTxnID).Return(errors.New("db error"))
+	// Transaction delete still happens despite contribution cleanup error
+	mockTransactionRepo.On("DeleteByExternalID", ctx, domain.SourcePlaid, plaidExtID, "user-remove-nf").
+		Return(nil)
+
+	result, err := svc.SyncTransactions(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	mockCleaner.AssertExpectations(t)
+	mockTransactionRepo.AssertExpectations(t)
+}

@@ -17,7 +17,8 @@ import { useActiveAccounts } from '@/features/accounts/hooks';
 import { GOAL_TEMPLATES, calculateDeadlineFromTemplate } from '../goalTemplates';
 import type { GoalTemplate } from '../goalTemplates';
 import type { Account } from '../../accounts/types';
-import type { SavingsGoal, CreateSavingsGoalRequest } from '../types';
+import type { SavingsGoal, CreateSavingsGoalRequest, ProgressBasis } from '../types';
+import { PROGRESS_BASIS_LABELS } from '../types';
 import { TextField, NumberField, DateField, SelectField } from './form';
 
 export interface CreateSavingsGoalDialogProps {
@@ -32,12 +33,15 @@ interface FormData {
   target_amount: string;
   account_id: string;
   deadline: string;
+  progress_basis: ProgressBasis;
+  account_percentage: string;
 }
 
 interface FormErrors {
   name?: string;
   target_amount?: string;
   account_id?: string;
+  account_percentage?: string;
 }
 
 function todayLocalDate(): string {
@@ -51,6 +55,8 @@ const initialFormData: FormData = {
   target_amount: '',
   account_id: '',
   deadline: '',
+  progress_basis: 'manual',
+  account_percentage: '',
 };
 
 export function CreateSavingsGoalDialog({
@@ -119,6 +125,13 @@ export function CreateSavingsGoalDialog({
       newErrors.account_id = 'Please select an account';
     }
 
+    if (formData.progress_basis === 'account_percentage') {
+      const pct = parseFloat(formData.account_percentage);
+      if (isNaN(pct) || pct <= 0 || pct > 100) {
+        newErrors.account_percentage = 'Enter a percentage between 0 and 100 (exclusive)';
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }, [formData]);
@@ -142,6 +155,12 @@ export function CreateSavingsGoalDialog({
           account_id: formData.account_id,
           user_account_id: selectedAccount?.user_account_id ?? undefined,
           deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
+          // Issue #1300 gap G1: include basis fields so non-manual modes work end-to-end.
+          progress_basis: formData.progress_basis !== 'manual' ? formData.progress_basis : undefined,
+          account_percentage:
+            formData.progress_basis === 'account_percentage' && formData.account_percentage
+              ? parseFloat(formData.account_percentage) / 100 // UI shows 0-100%; API expects 0-1
+              : undefined,
         };
 
         const newGoal = await createSavingsGoalMutation.mutateAsync({ data: request });
@@ -277,6 +296,47 @@ export function CreateSavingsGoalDialog({
             onChange={handleInputChange}
             min={todayLocalDate()}
           />
+
+          {/* Issue #1300 gap G1: progress tracking basis */}
+          <SelectField
+            name="progress_basis"
+            label="Progress Tracking"
+            value={formData.progress_basis}
+            onChange={handleInputChange}
+          >
+            {(Object.entries(PROGRESS_BASIS_LABELS) as [ProgressBasis, string][]).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </SelectField>
+
+          {formData.progress_basis === 'account_percentage' && (
+            <div>
+              <label htmlFor="account_percentage" className="block text-sm font-medium text-foreground">
+                Account % (e.g. 50 for 50%)
+              </label>
+              <div className="relative">
+                <input
+                  type="number"
+                  id="account_percentage"
+                  name="account_percentage"
+                  value={formData.account_percentage}
+                  onChange={handleInputChange}
+                  placeholder="e.g. 50"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  className={cn(
+                    'w-full py-[0.625rem] px-3 mt-1 border border-input rounded-lg text-sm bg-card text-foreground transition-[border-color,box-shadow] focus:outline-none focus:border-primary focus:ring-2 focus:ring-ring placeholder:text-muted-foreground pr-8',
+                    errors.account_percentage && 'border-destructive focus:border-destructive'
+                  )}
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm pointer-events-none">%</span>
+              </div>
+              {errors.account_percentage && (
+                <p className="mt-1 text-sm text-destructive">{errors.account_percentage}</p>
+              )}
+            </div>
+          )}
 
           {apiError && (
             <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
