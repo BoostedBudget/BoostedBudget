@@ -840,7 +840,22 @@ func TestSavingsGoalContribution_Validate(t *testing.T) {
 				Status:        "unknown",
 			},
 			wantErr: true,
-			errMsg:  "status must be one of: proposed, confirmed",
+			// R4-4: error message now lists rejected too.
+			errMsg: "status must be one of: proposed, confirmed, rejected",
+		},
+		// R4-4: 'rejected' is a valid status (sticky tombstone per R3-7 / migration 000099).
+		// Before the fix, Validate() incorrectly rejects it because validStatuses only had
+		// proposed+confirmed — inconsistent with the migration and the reject API.
+		// Rejected rows always originate from sync (source='confirmed_transfer'), never manual.
+		{
+			name: "valid rejected contribution (R4-4)",
+			contrib: SavingsGoalContribution{
+				SavingsGoalID: "goal-123",
+				Amount:        100.00,
+				Source:        "confirmed_transfer",
+				Status:        "rejected",
+			},
+			wantErr: false,
 		},
 	}
 

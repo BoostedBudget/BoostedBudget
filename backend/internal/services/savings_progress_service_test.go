@@ -460,6 +460,56 @@ func TestSavingsProgress_RecomputeUser_GetActiveGoalsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "get active goals")
 }
 
+// ─── RecomputeGoalByID — R4-T2 ────────────────────────────────────────────────
+
+// TestSavingsProgress_RecomputeGoalByID_CompletedGoal_UpdatesAmountKeepsCompletedAt verifies
+// that RecomputeGoalByID (R3-2) recomputes current_amount on a goal that is ALREADY
+// completed, while leaving completed_at sticky (Codex C5).
+//
+// Context: RecomputeUser loads goals via GetActiveByUserID which excludes completed goals.
+// R3-2 introduced RecomputeGoalByID to use GetByIDForUser so that writes (log/confirm/
+// delete) on completed goals still update current_amount. The completion itself is
+// handled at the DB layer (MarkCompleted uses CASE WHEN completed_at IS NULL so it is
+// idempotent) and the service calls MarkCompleted whenever amount >= target regardless
+// of prior completion state.
+//
+// RED: would fail if the handler still called RecomputeUser (completed goal excluded).
+// GREEN: passes because RecomputeGoalByID → GetByIDForUser → RecomputeGoal updates amount.
+func TestSavingsProgress_RecomputeGoalByID_CompletedGoal_UpdatesAmountKeepsCompletedAt(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+	// Build a completed contributions-basis goal (current == target → was completed).
+	completedGoal := makeGoal("g-done", "u1", "acc1", domain.ProgressBasisContributions, 1000, 1000)
+	completedGoal.IsCompleted = true
+	completedAt := time.Now().Add(-24 * time.Hour) // completed yesterday
+	completedGoal.CompletedAt = &completedAt
+
+	// GetByIDForUser must be called (not GetActiveByUserID) — that's the R3-2 fix.
+	goalRepo.On("GetByIDForUser", mock.Anything, "g-done", "u1").Return(completedGoal, nil)
+
+	// Suppose a new confirmed contribution pushes amount to 1200.
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g-done").Return(1200.00, nil)
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g-done", 1200.00, mock.Anything, (*time.Time)(nil)).Return(nil)
+	// MarkCompleted is called because 1200 >= 1000; DB layer (CASE WHEN completed_at IS NULL)
+	// keeps completed_at sticky — this validates the service's sticky-completion call chain.
+	goalRepo.On("MarkCompleted", mock.Anything, "g-done").Return(nil)
+
+	err := svc.RecomputeGoalByID(context.Background(), "u1", "g-done")
+
+	require.NoError(t, err)
+	// Amount was updated.
+	goalRepo.AssertCalled(t, "UpdateCurrentAmount", mock.Anything, "g-done", 1200.00, mock.Anything, (*time.Time)(nil))
+	// MarkCompleted was called (amount >= target); DB stickiness preserves the original completed_at.
+	goalRepo.AssertCalled(t, "MarkCompleted", mock.Anything, "g-done")
+	// GetByIDForUser was used, not GetActiveByUserID (which would exclude the completed goal).
+	goalRepo.AssertCalled(t, "GetByIDForUser", mock.Anything, "g-done", "u1")
+	goalRepo.AssertNotCalled(t, "GetActiveByUserID")
+	contribRepo.AssertExpectations(t)
+}
+
 // =============================================================================
 // GetProgressSummary tests (Issue #1300 Codex C11)
 // =============================================================================

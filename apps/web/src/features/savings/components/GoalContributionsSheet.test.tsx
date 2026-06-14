@@ -66,6 +66,20 @@ const mockConfirmed: SavingsGoalContribution = {
   updated_at: '2026-06-08T00:00:00Z',
 }
 
+// R4-2: rejected tombstone — should NOT appear in the sheet UI.
+const mockRejected: SavingsGoalContribution = {
+  id: 'c-rejected-1',
+  savings_goal_id: 'goal-1',
+  amount: 300,
+  source: 'sync',
+  status: 'rejected',
+  confirmed_by_user: false,
+  managed_by_reconciliation: true,
+  occurred_on: '2026-06-05',
+  created_at: '2026-06-05T00:00:00Z',
+  updated_at: '2026-06-05T00:00:00Z',
+}
+
 describe('GoalContributionsSheet', () => {
   const goalId = 'goal-1'
   const goalName = 'Vacation Fund'
@@ -226,6 +240,80 @@ describe('GoalContributionsSheet', () => {
         />
       )
       expect(screen.getByRole('button', { name: /log contribution/i })).toBeInTheDocument()
+    })
+
+    // R4-2: rejected tombstones must not be rendered (the component's own header doc says
+    // "Rejected contributions are not shown"). Without the fix, status='rejected' rows
+    // fall through the `isProposed` check (not 'proposed') → rendered as "Confirmed".
+    it('R4-2: does not render a rejected tombstone row', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockProposed, mockConfirmed, mockRejected],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      // The $300 rejected amount must NOT appear in the UI.
+      expect(screen.queryByText(/\$300\.00/)).not.toBeInTheDocument()
+    })
+
+    it('R4-2: rejected tombstone is not labeled Confirmed', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockRejected],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      // With only a rejected contribution, the sheet should show empty state, not a "Confirmed" badge.
+      expect(screen.queryByText(/confirmed/i)).not.toBeInTheDocument()
+      // It should show the empty state message instead.
+      expect(screen.getByText(/no contributions/i)).toBeInTheDocument()
+    })
+
+    it('R4-2: proposed and confirmed rows still render correctly when rejected row also present', () => {
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [mockProposed, mockConfirmed, mockRejected],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      // proposed and confirmed still appear
+      expect(screen.getByText(/\$150\.00/)).toBeInTheDocument()
+      expect(screen.getByText(/\$250\.00/)).toBeInTheDocument()
+      // rejected row amount is hidden
+      expect(screen.queryByText(/\$300\.00/)).not.toBeInTheDocument()
     })
   })
 

@@ -1838,8 +1838,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 
 // TestBudgetService_CreateBudget_SavingsCategory_IDOR verifies that CreateBudget
 // rejects categories whose SavingsGoalID belongs to another user (R3-4 / Codex C1).
-// Previously CreateBudget used a plain CreateCategory call with no ownership check,
-// unlike AddCategory which already had the check.
+// R4-3: IDOR check now runs BEFORE budgetRepo.Create so no orphaned budget is persisted.
 func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 	userID := "user-creator"
 	otherUserGoalID := "goal-other-user"
@@ -1875,13 +1874,14 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 			},
 		}
 
-		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
-		// CreateCategory must NOT be called when IDOR check fails.
+		// R4-3: budgetRepo.Create must NOT be called — IDOR check runs before persist.
+		// (R3-4 original only asserted CreateCategory not called; R4-3 tightens to Create too.)
 
 		_, err := svc.CreateBudget(ctx, userID, req)
 
 		require.Error(t, err, "cross-user goal in CreateBudget must return an error")
 		assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
+		mockBudgetRepo.AssertNotCalled(t, "Create")
 		mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
 		mockChecker.AssertExpectations(t)
 	})

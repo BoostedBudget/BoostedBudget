@@ -81,6 +81,19 @@ type SavingsContributionRepository interface {
 	// reconciler no longer modifies them. Used when switching progress_basis away from
 	// "contributions" — rows become historical records (Codex C10 basis-switch semantics).
 	ArchiveByGoal(ctx context.Context, goalID string) error
+
+	// InsertManualFromTransaction inserts (or updates) a user-initiated contribution that
+	// is linked to a specific transaction. Keeps manual semantics: managed_by_reconciliation=false,
+	// confirmed_by_user=true, source='manual', occurred_on=caller's date.
+	//
+	// This is the R4-1 fix for the defect where R3-1 routed txn-linked manual logs through
+	// UpsertFromTransaction, which hardcodes reconciler metadata (managed=true, today's date)
+	// and returns no row — violating C3 (reconciler owns) and D6 (user-entered rows are faithful).
+	//
+	// Race-safe: same BEGIN+goal-ownership+SELECT ABS(amount)…FOR UPDATE+capacity-recompute
+	// as UpsertFromTransaction (Codex C2), then upserts with manual metadata and RETURNING the row.
+	// Returns ErrSavingsGoalNotFound, ErrContributionNotFound, or ErrContributionOverAllocated.
+	InsertManualFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, occurredOn string) (*domain.SavingsGoalContribution, error)
 }
 
 // contributionSelectCols is the canonical column list for contribution rows.
@@ -243,6 +256,115 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		return err
 	}
 	return nil
+}
+
+// InsertManualFromTransaction inserts or updates a user-initiated contribution linked to
+// a transaction (D6 source-a, txn-linked variant — R4-1 fix).
+// Unlike UpsertFromTransaction (auto-derivation/boost paths), this method preserves manual
+// semantics: managed_by_reconciliation=false, confirmed_by_user=true, source='manual',
+// occurred_on=caller-supplied date (not CURRENT_DATE). Returns the persisted row.
+// Race-safe: acquires a row-level lock on the transaction (SELECT ABS(amount) … FOR UPDATE)
+// and checks capacity before upsert (Codex C2). Uses the same partial unique index conflict
+// target as UpsertFromTransaction so re-logging the same (txn, goal) is idempotent.
+func (r *savingsContributionRepository) InsertManualFromTransaction(
+	ctx context.Context,
+	userID, goalID, transactionID string,
+	amount float64,
+	occurredOn string,
+) (*domain.SavingsGoalContribution, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Step 0: Verify goal ownership (Codex C1 / G7 ownership guard).
+	var dummy int
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	if err = tx.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
+		if err == pgx.ErrNoRows {
+			err = domain.ErrSavingsGoalNotFound
+		}
+		return nil, err
+	}
+
+	// Step 1: Lock the transaction row, verify ownership, and get its magnitude.
+	var txnMagnitude float64
+	lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+	if err = tx.QueryRow(ctx, lockQuery, transactionID, userID).Scan(&txnMagnitude); err != nil {
+		if err == pgx.ErrNoRows {
+			err = domain.ErrContributionNotFound
+		}
+		return nil, err
+	}
+
+	// Step 2: Compute remaining capacity = |txn.amount| - SUM(confirmed, excluding this goal).
+	var allocatedElsewhere float64
+	capQuery := `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM savings_goal_contributions
+		WHERE transaction_id = $1
+		  AND status = 'confirmed'
+		  AND savings_goal_id != $2
+	`
+	if err = tx.QueryRow(ctx, capQuery, transactionID, goalID).Scan(&allocatedElsewhere); err != nil {
+		return nil, err
+	}
+
+	remaining := txnMagnitude - allocatedElsewhere
+	if amount > remaining {
+		err = domain.ErrContributionOverAllocated
+		return nil, err
+	}
+
+	// Step 3: Upsert with manual semantics and RETURNING the persisted row.
+	// managed_by_reconciliation=false, confirmed_by_user=true, source='manual', occurred_on=$4.
+	// ON CONFLICT: only promote rows that are still in 'proposed' status (e.g. a sync-detected
+	// proposed row that the user is now manually confirming with an explicit amount/date).
+	// Rows already in 'confirmed' status (boost_match, sync-confirmed, or a prior manual log)
+	// and 'rejected' tombstones are NOT overwritten — the WHERE predicate makes the DO UPDATE
+	// a no-op, which causes RETURNING to return NULL; the handler will return ErrContributionNotFound
+	// in that case. This guards against silent source/metadata corruption (Codex R4-1 follow-up).
+	now := time.Now()
+	upsertQuery := `
+		INSERT INTO savings_goal_contributions (
+			id, savings_goal_id, transaction_id, amount, source, status,
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
+		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5)
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		DO UPDATE SET
+			amount                    = EXCLUDED.amount,
+			source                    = 'manual',
+			status                    = 'confirmed',
+			managed_by_reconciliation = false,
+			confirmed_by_user         = true,
+			occurred_on               = EXCLUDED.occurred_on,
+			updated_at                = EXCLUDED.updated_at
+		WHERE savings_goal_contributions.status = 'proposed'
+		RETURNING ` + contributionSelectCols
+
+	row := tx.QueryRow(ctx, upsertQuery, goalID, transactionID, amount, occurredOn, now)
+	contrib, scanErr := scanContribution(row)
+	if scanErr != nil {
+		// ErrNoRows means the ON CONFLICT DO UPDATE WHERE status='proposed' predicate was false:
+		// a confirmed or rejected row already holds this (transaction_id, savings_goal_id) slot.
+		// Return ErrContributionAlreadyConfirmed so the handler can surface a 422 rather than 500.
+		if scanErr == pgx.ErrNoRows {
+			err = domain.ErrContributionAlreadyConfirmed
+		} else {
+			err = scanErr
+		}
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return contrib, nil
 }
 
 // UpsertProposedFromTransaction inserts or updates a proposed (status='proposed'),
