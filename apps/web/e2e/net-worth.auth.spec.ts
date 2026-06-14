@@ -196,14 +196,15 @@ test.describe('Net Worth Page — Core Rendering', () => {
 
   test('renders the page heading', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { level: 1, name: /net worth/i })).toBeVisible()
+    // Net Worth is embedded in InsightsPage — inner h1 is hidden; verify the active tab instead
+    await expect(page.getByRole('tab', { name: /net worth/i })).toBeVisible()
   })
 
   test('renders the history chart with non-flat data', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
     const chart = page.getByTestId('net-worth-history-chart')
     await expect(chart).toBeVisible()
@@ -224,7 +225,7 @@ test.describe('Net Worth Page — Core Rendering', () => {
 
   test('Institution column header is visible in the Breakdown section', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
     const institutionHeaders = page.getByRole('columnheader', { name: /institution/i })
     await expect(institutionHeaders.first()).toBeVisible()
@@ -242,7 +243,7 @@ test.describe('Net Worth Page — Percent ≤ 100% regression', () => {
 
   test('no breakdown percent cell exceeds 100%', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
 
     const cells = page.locator('[data-testid^="breakdown-percent-"]')
@@ -270,7 +271,7 @@ test.describe('Net Worth Page — Institution column', () => {
 
   test('shows institution name for each row (no ••••mask suffix)', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
 
     // Institution names should appear as row cells
@@ -284,7 +285,7 @@ test.describe('Net Worth Page — Institution column', () => {
 
   test('rows with same account name are distinguishable by institution', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth')
+    await page.goto('/insights?tab=net-worth')
     await page.waitForLoadState('networkidle')
 
     // Both Chase and Citibank have "Plaid Checking" — both should render.
@@ -307,7 +308,7 @@ test.describe('Net Worth Page — Institution filter', () => {
 
   test('URL deep-link with ?institution=Chase shows only Chase rows', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth?institution=Chase')
+    await page.goto('/insights?tab=net-worth&institution=Chase')
     await page.waitForLoadState('networkidle')
 
     // Chase rows should be visible
@@ -321,7 +322,7 @@ test.describe('Net Worth Page — Institution filter', () => {
 
   test('URL persists after reload when institution filter is set', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth?institution=Citibank')
+    await page.goto('/insights?tab=net-worth&institution=Citibank')
     await page.waitForLoadState('networkidle')
 
     await expect(page).toHaveURL(/institution=Citibank/)
@@ -339,7 +340,7 @@ test.describe('Net Worth Page — Balance sort', () => {
 
   test('URL deep-link with ?sort=balance:asc puts lowest balance first in assets', async ({ page }) => {
     await mockNetWorthDependencies(page)
-    await page.goto('/net-worth?sort=balance:asc')
+    await page.goto('/insights?tab=net-worth&sort=balance:asc')
     await page.waitForLoadState('networkidle')
 
     // With sort=balance:asc the $110 Checking rows should appear before the $43,200 Money Market row
