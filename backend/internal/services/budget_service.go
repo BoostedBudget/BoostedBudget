@@ -19,6 +19,20 @@ type PlaidCategoryGetter interface {
 	GetDistinctPlaidCategories(ctx context.Context, userID string) ([]string, error)
 }
 
+// ActiveGoalRepo is a minimal interface for fetching active savings goals.
+// BudgetService uses this to carry-forward savings categories on budget creation (Issue #1300).
+type ActiveGoalRepo interface {
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+}
+
+// GoalOwnershipChecker is a minimal interface for verifying savings goal ownership.
+// BudgetService uses this to reject savings categories whose savings_goal_id doesn't
+// belong to the requesting user — prevents IDOR access to another user's goals
+// (Issue #1300, Codex C1).
+type GoalOwnershipChecker interface {
+	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
+}
+
 // BudgetService defines the interface for budget business logic.
 type BudgetService interface {
 	// Budget CRUD
@@ -37,6 +51,23 @@ type BudgetService interface {
 
 	// Available categories (merged list of custom + Plaid)
 	GetAvailableCategories(ctx context.Context, userID string) ([]string, error)
+
+	// SetGoalRepo wires the optional active-goal repository for carry-forward and backfill.
+	// When set, CreateBudget carries forward savings categories for all active goals
+	// and BackfillManagedCategories becomes functional. Issue #1300.
+	SetGoalRepo(r ActiveGoalRepo)
+
+	// SetGoalOwnershipChecker wires the optional ownership checker used by AddCategory to
+	// validate that a submitted savings_goal_id belongs to the authenticated user.
+	// When set, AddCategory rejects savings categories pointing to another user's goal.
+	// Issue #1300, Codex C1 (IDOR protection).
+	SetGoalOwnershipChecker(r GoalOwnershipChecker)
+
+	// BackfillManagedCategories creates missing managed savings categories for all
+	// active goals across all active budgets, skipping tombstoned (budget, goal) pairs.
+	// Idempotent — the unique index no-ops on duplicates. Called on sync and as an
+	// admin/maintenance repair command. Issue #1300, Codex C7.
+	BackfillManagedCategories(ctx context.Context, userID string) error
 }
 
 // budgetService implements BudgetService
@@ -45,6 +76,13 @@ type budgetService struct {
 	customCategoryRepo repository.CustomCategoryRepository
 	plaidCategoryRepo  PlaidCategoryGetter
 	logger             *slog.Logger
+	// goalRepo is optional; when set, CreateBudget carries forward savings categories
+	// for active goals and BackfillManagedCategories is functional (Issue #1300).
+	goalRepo ActiveGoalRepo
+	// goalOwnershipChecker is optional; when set, AddCategory verifies that the
+	// savings_goal_id in a savings-kind request belongs to the authenticated user
+	// before persisting (IDOR protection — Issue #1300, Codex C1).
+	goalOwnershipChecker GoalOwnershipChecker
 }
 
 // NewBudgetService creates a new BudgetService instance.
@@ -129,6 +167,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			PFCPrimary:       catReq.PFCPrimary,
 			PFCDetailed:      catReq.PFCDetailed,
 			CustomCategoryID: catReq.CustomCategoryID,
+			SavingsGoalID:    catReq.SavingsGoalID, // Issue #1300: savings bucket linkage
 			AllocatedAmount:  catReq.AllocatedAmount,
 			SpentAmount:      0,
 			CreatedAt:        time.Now(),
@@ -146,6 +185,56 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		}
 
 		budget.Categories = append(budget.Categories, *category)
+	}
+
+	// Carry-forward savings categories for all active goals (Issue #1300).
+	// Best-effort: fan-out is NOT in the budget-insert transaction; unique index no-ops dupes.
+	if s.goalRepo != nil {
+		goals, err := s.goalRepo.GetActiveByUserID(ctx, userID)
+		if err != nil {
+			s.logger.Warn("failed to fetch active goals for carry-forward",
+				slog.String("budget_id", budget.ID),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			for _, goal := range goals {
+				detached, err := s.budgetRepo.IsGoalDetachedForBudget(ctx, budget.ID, goal.ID)
+				if err != nil {
+					s.logger.Warn("carry-forward: failed to check tombstone",
+						slog.String("budget_id", budget.ID),
+						slog.String("goal_id", goal.ID),
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+				if detached {
+					continue
+				}
+
+				savingsCat := &domain.BudgetCategory{
+					ID:              uuid.New().String(),
+					BudgetID:        budget.ID,
+					CategoryKind:    "savings",
+					SavingsGoalID:   &goal.ID,
+					AllocatedAmount: 0,
+					AutoCreated:     true,
+					ManagedByGoalID: &goal.ID,
+					CreatedAt:       time.Now(),
+					UpdatedAt:       time.Now(),
+				}
+
+				if err := s.budgetRepo.CreateCategory(ctx, savingsCat); err != nil {
+					s.logger.Warn("carry-forward: failed to create savings category",
+						slog.String("budget_id", budget.ID),
+						slog.String("goal_id", goal.ID),
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+
+				budget.Categories = append(budget.Categories, *savingsCat)
+			}
+		}
 	}
 
 	s.logger.Info("budget created",
@@ -395,6 +484,22 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 	// Categories may not exist yet (e.g., user-created) or may be added
 	// dynamically, so we allow flexible category definitions.
 
+	// Ownership check for savings categories: verify the submitted savings_goal_id
+	// belongs to the authenticated user before we persist. This prevents IDOR access
+	// where a user could link another user's savings goal into their budget (Issue #1300, Codex C1).
+	// goalOwnershipChecker is wired via SetGoalOwnershipChecker in main.go; the nil guard exists
+	// only for test stubs that omit optional deps — in production it is always set.
+	if req.CategoryKind == "savings" && req.SavingsGoalID != nil {
+		if s.goalOwnershipChecker == nil {
+			s.logger.Warn("savings category created without ownership check wired — potential IDOR risk",
+				slog.String("savings_goal_id", *req.SavingsGoalID),
+				slog.String("user_id", userID),
+			)
+		} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *req.SavingsGoalID, userID); err != nil {
+			return nil, err
+		}
+	}
+
 	// Create the category
 	category := &domain.BudgetCategory{
 		ID:               uuid.New().String(),
@@ -403,6 +508,7 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		PFCPrimary:       req.PFCPrimary,
 		PFCDetailed:      req.PFCDetailed,
 		CustomCategoryID: req.CustomCategoryID,
+		SavingsGoalID:    req.SavingsGoalID, // Issue #1300: savings bucket linkage (Codex C1)
 		AllocatedAmount:  req.AllocatedAmount,
 		SpentAmount:      0,
 		CreatedAt:        time.Now(),
@@ -518,17 +624,30 @@ func (s *budgetService) DeleteCategory(ctx context.Context, userID, budgetID, ca
 		return domain.ErrBudgetNotFound
 	}
 
-	// Verify category exists in budget
-	found := false
-	for _, cat := range budget.Categories {
-		if cat.ID == categoryID {
-			found = true
+	// Verify category exists in budget; capture it for tombstone logic.
+	var foundCat *domain.BudgetCategory
+	for i := range budget.Categories {
+		if budget.Categories[i].ID == categoryID {
+			foundCat = &budget.Categories[i]
 			break
 		}
 	}
 
-	if !found {
+	if foundCat == nil {
 		return domain.ErrBudgetCategoryNotFound
+	}
+
+	// If deleting an auto-created savings category, write a tombstone so the
+	// carry-forward / backfill path does NOT recreate it (Issue #1300, Codex C6).
+	if foundCat.AutoCreated && foundCat.CategoryKind == "savings" && foundCat.SavingsGoalID != nil {
+		if err := s.budgetRepo.InsertGoalDetach(ctx, budgetID, *foundCat.SavingsGoalID); err != nil {
+			s.logger.Warn("failed to write goal detach tombstone",
+				slog.String("budget_id", budgetID),
+				slog.String("goal_id", *foundCat.SavingsGoalID),
+				slog.String("error", err.Error()),
+			)
+			// Non-fatal: the category is still deleted; tombstone failure is logged.
+		}
 	}
 
 	// Delete the category
@@ -587,6 +706,89 @@ func (s *budgetService) GetAvailableCategories(ctx context.Context, userID strin
 
 	sort.Strings(result)
 	return result, nil
+}
+
+// SetGoalRepo wires the optional active-goal repository for carry-forward and backfill.
+func (s *budgetService) SetGoalRepo(r ActiveGoalRepo) {
+	s.goalRepo = r
+}
+
+// SetGoalOwnershipChecker wires the optional ownership checker used by AddCategory to
+// validate that a submitted savings_goal_id belongs to the authenticated user.
+// Issue #1300, Codex C1.
+func (s *budgetService) SetGoalOwnershipChecker(r GoalOwnershipChecker) {
+	s.goalOwnershipChecker = r
+}
+
+// BackfillManagedCategories creates missing managed savings categories for all active goals
+// across all active budgets, skipping tombstoned (budget, goal) pairs and pairs that
+// already have a savings category. Idempotent — safe to call on every sync. Issue #1300, Codex C7.
+func (s *budgetService) BackfillManagedCategories(ctx context.Context, userID string) error {
+	if s.goalRepo == nil {
+		return nil
+	}
+
+	budgets, err := s.budgetRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	goals, err := s.goalRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	for _, budget := range budgets {
+		// Build a set of goal IDs already covered by a savings category in this budget.
+		coveredGoalIDs := make(map[string]struct{})
+		for _, cat := range budget.Categories {
+			if cat.CategoryKind == "savings" && cat.SavingsGoalID != nil {
+				coveredGoalIDs[*cat.SavingsGoalID] = struct{}{}
+			}
+		}
+
+		for _, goal := range goals {
+			if _, covered := coveredGoalIDs[goal.ID]; covered {
+				// Already exists — skip.
+				continue
+			}
+
+			detached, err := s.budgetRepo.IsGoalDetachedForBudget(ctx, budget.ID, goal.ID)
+			if err != nil {
+				s.logger.Error("backfill: failed to check tombstone",
+					slog.String("budget_id", budget.ID),
+					slog.String("goal_id", goal.ID),
+					slog.String("error", err.Error()),
+				)
+				continue
+			}
+			if detached {
+				continue
+			}
+
+			category := &domain.BudgetCategory{
+				ID:              uuid.New().String(),
+				BudgetID:        budget.ID,
+				CategoryKind:    "savings",
+				SavingsGoalID:   &goal.ID,
+				AllocatedAmount: 0,
+				AutoCreated:     true,
+				ManagedByGoalID: &goal.ID,
+				CreatedAt:       time.Now(),
+				UpdatedAt:       time.Now(),
+			}
+
+			if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
+				s.logger.Error("backfill: failed to create savings category",
+					slog.String("budget_id", budget.ID),
+					slog.String("goal_id", goal.ID),
+					slog.String("error", err.Error()),
+				)
+			}
+		}
+	}
+
+	return nil
 }
 
 // enrichBudgetPFCDisplay populates PFC display names on all BudgetCategories and

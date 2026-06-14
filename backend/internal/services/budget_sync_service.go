@@ -33,6 +33,15 @@ type BudgetSpentCalculator interface {
 	CalculateCategorySpent(ctx context.Context, userID string, category *domain.BudgetCategory, startDate, endDate time.Time) (float64, error)
 }
 
+// SavingsContributionSpentCalc is a minimal interface for computing a savings
+// category's "spent" amount from the confirmed contribution ledger (Issue #1300).
+// Follows the narrow-interface pattern: BudgetSyncService only needs this one method.
+type SavingsContributionSpentCalc interface {
+	// SumConfirmedByGoalInPeriod returns the sum of confirmed contributions within
+	// [start, end] for a given goal — used as the savings category's spent amount.
+	SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error)
+}
+
 // EventTriggerProcessor is a minimal interface for processing automation rule events.
 // This is an optional dependency - if not set, no automation rules will be triggered.
 // Issue #35: Rules Engine Core - budget_updated event integration.
@@ -58,6 +67,11 @@ type BudgetSyncService interface {
 	// If not set, no automation rules will be triggered on budget updates.
 	// Issue #35: Rules Engine Core - enables budget_updated events.
 	SetEventProcessor(processor EventTriggerProcessor)
+
+	// SetSavingsSpentCalc wires the optional savings contribution calculator.
+	// When set, savings-kind categories derive spent from the confirmed contribution
+	// ledger instead of the generic transaction-matching path (Issue #1300).
+	SetSavingsSpentCalc(calc SavingsContributionSpentCalc)
 }
 
 // budgetSyncService implements BudgetSyncService
@@ -66,7 +80,8 @@ type budgetSyncService struct {
 	incomeService   BudgetIncomeCalculator
 	categoryService BudgetSpentCalculator
 	logger          *slog.Logger
-	eventProcessor  EventTriggerProcessor // Optional: triggers automation rules on budget updates
+	eventProcessor  EventTriggerProcessor        // Optional: triggers automation rules on budget updates
+	savingsSpent    SavingsContributionSpentCalc  // Optional: computes savings category spent from ledger (#1300)
 }
 
 // NewBudgetSyncService creates a new BudgetSyncService instance.
@@ -87,6 +102,13 @@ func NewBudgetSyncService(
 // SetEventProcessor sets the optional event processor for triggering automation rules.
 func (s *budgetSyncService) SetEventProcessor(processor EventTriggerProcessor) {
 	s.eventProcessor = processor
+}
+
+// SetSavingsSpentCalc wires the optional savings contribution calculator.
+// When set, savings-kind categories use the contribution ledger for their spent amount
+// instead of the generic transaction-matching path (Issue #1300).
+func (s *budgetSyncService) SetSavingsSpentCalc(calc SavingsContributionSpentCalc) {
+	s.savingsSpent = calc
 }
 
 // RecalculateBudgetAmounts recalculates income and spent amounts for all active budgets.
@@ -131,23 +153,42 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 	}
 
 	// Step 3: Calculate and update spent amount for each category.
+	// Savings categories (#1300): spent = confirmed contributions in period (from ledger).
+	// PFC/custom categories: spent = matching transactions (original path, unchanged).
 	for i := range categories {
-		spentAmount, err := s.categoryService.CalculateCategorySpent(
-			ctx, budget.UserID, &categories[i], startDate, endDate)
-		if err != nil {
-			// Log but continue - one category failure shouldn't stop others
-			s.logger.Error("failed to calculate category spent",
-				"categoryID", categories[i].ID,
-				"budgetID", budget.ID,
-				"error", err)
-			continue
+		var spentAmount float64
+		cat := &categories[i]
+
+		if cat.CategoryKind == "savings" && cat.SavingsGoalID != nil && s.savingsSpent != nil {
+			// Savings branch: derive spent from the contribution ledger.
+			spentAmount, err = s.savingsSpent.SumConfirmedByGoalInPeriod(
+				ctx, *cat.SavingsGoalID, startDate, endDate)
+			if err != nil {
+				s.logger.Error("failed to calculate savings category spent",
+					"categoryID", cat.ID,
+					"goalID", *cat.SavingsGoalID,
+					"budgetID", budget.ID,
+					"error", err)
+				continue
+			}
+		} else {
+			// Standard branch: transaction-matching path.
+			spentAmount, err = s.categoryService.CalculateCategorySpent(
+				ctx, budget.UserID, cat, startDate, endDate)
+			if err != nil {
+				s.logger.Error("failed to calculate category spent",
+					"categoryID", cat.ID,
+					"budgetID", budget.ID,
+					"error", err)
+				continue
+			}
 		}
 
 		categories[i].SpentAmount = spentAmount
 
-		if err := s.budgetRepo.UpdateCategorySpentAmount(ctx, categories[i].ID, spentAmount); err != nil {
+		if err := s.budgetRepo.UpdateCategorySpentAmount(ctx, cat.ID, spentAmount); err != nil {
 			s.logger.Error("failed to update category spent amount",
-				"categoryID", categories[i].ID,
+				"categoryID", cat.ID,
 				"budgetID", budget.ID,
 				"error", err)
 			continue

@@ -205,6 +205,14 @@ func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context
 	return args.Get(0).([]*domain.Transaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error) {
+	args := m.Called(ctx, userID, accountID, start, end)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsInflowTransaction), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)

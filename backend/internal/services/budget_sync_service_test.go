@@ -799,3 +799,109 @@ func TestRecalculateBudget_PercentUsedMatchesPeriodEnd(t *testing.T) {
 	mockSpentCalc.AssertExpectations(t)
 	mockEvent.AssertExpectations(t)
 }
+
+// ─── Savings category spent branch (Issue #1300) ────────────────────────────
+
+// MockSavingsContributionSpentCalc is a mock for SavingsContributionSpentCalc.
+type MockSavingsContributionSpentCalc struct {
+	mock.Mock
+}
+
+func (m *MockSavingsContributionSpentCalc) SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error) {
+	args := m.Called(ctx, goalID, start, end)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+// TestRecalculateBudget_SavingsCategory_UsesContributionLedger verifies that
+// a savings-kind category derives its spent amount from the contribution ledger
+// (SumConfirmedByGoalInPeriod), NOT from the standard transaction-matching path
+// (Plan flag A — savings counts as real envelope money; Issue #1300).
+func TestRecalculateBudget_SavingsCategory_UsesContributionLedger(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+	mockSavingsCalc := new(MockSavingsContributionSpentCalc)
+
+	svc := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+	svc.SetSavingsSpentCalc(mockSavingsCalc)
+
+	goalID := "goal-abc"
+	budget := &domain.Budget{
+		ID:     "budget-1",
+		UserID: "user-1",
+		Period: domain.BudgetPeriodMonthly,
+		Amount: 1000.0,
+	}
+
+	goalIDPtr := goalID
+	savingsCategory := domain.BudgetCategory{
+		ID:            "cat-savings",
+		BudgetID:      budget.ID,
+		CategoryKind:  "savings",
+		SavingsGoalID: &goalIDPtr,
+	}
+
+	mockRepo.On("GetCategoriesByBudgetID", ctx, budget.ID).Return([]domain.BudgetCategory{savingsCategory}, nil)
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.Anything, mock.Anything).Return(0.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, budget.ID, 0.0).Return(nil)
+
+	// Savings calc returns 300 for the goal's confirmed contributions.
+	mockSavingsCalc.On("SumConfirmedByGoalInPeriod", ctx, goalID, mock.Anything, mock.Anything).Return(300.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, savingsCategory.ID, 300.0).Return(nil)
+
+	err := svc.RecalculateBudget(ctx, budget)
+
+	require.NoError(t, err)
+	// The standard spent calculator should NOT be called for a savings category.
+	mockSpentCalc.AssertNotCalled(t, "CalculateCategorySpent")
+	mockSavingsCalc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestRecalculateBudget_SavingsCategory_WithoutCalc_FallsBackToStandard verifies
+// that a savings category falls back to the standard spent calculator when no
+// SavingsContributionSpentCalc is wired (graceful degradation / backward compat).
+func TestRecalculateBudget_SavingsCategory_WithoutCalc_FallsBackToStandard(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	mockRepo := new(MockBudgetSyncRepository)
+	mockIncomeCalc := new(MockBudgetIncomeCalculator)
+	mockSpentCalc := new(MockBudgetSpentCalculator)
+
+	// No SetSavingsSpentCalc wired.
+	svc := NewBudgetSyncService(mockRepo, mockIncomeCalc, mockSpentCalc, logger)
+
+	goalID := "goal-xyz"
+	budget := &domain.Budget{
+		ID:     "budget-2",
+		UserID: "user-2",
+		Period: domain.BudgetPeriodMonthly,
+		Amount: 1000.0,
+	}
+
+	goalIDPtr := goalID
+	savingsCategory := domain.BudgetCategory{
+		ID:            "cat-savings-2",
+		BudgetID:      budget.ID,
+		CategoryKind:  "savings",
+		SavingsGoalID: &goalIDPtr,
+	}
+
+	mockRepo.On("GetCategoriesByBudgetID", ctx, budget.ID).Return([]domain.BudgetCategory{savingsCategory}, nil)
+	mockIncomeCalc.On("CalculateBudgetIncome", ctx, budget, mock.Anything, mock.Anything).Return(0.0, nil)
+	mockRepo.On("UpdateBudgetIncome", ctx, budget.ID, 0.0).Return(nil)
+
+	// Falls back to standard path.
+	mockSpentCalc.On("CalculateCategorySpent", ctx, budget.UserID, &savingsCategory, mock.Anything, mock.Anything).Return(150.0, nil)
+	mockRepo.On("UpdateCategorySpentAmount", ctx, savingsCategory.ID, 150.0).Return(nil)
+
+	err := svc.RecalculateBudget(ctx, budget)
+
+	require.NoError(t, err)
+	mockSpentCalc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}

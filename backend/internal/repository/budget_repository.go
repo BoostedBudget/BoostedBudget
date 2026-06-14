@@ -58,6 +58,19 @@ type BudgetRepository interface {
 	// Missing users are not included in the map; callers should default to "UTC" for absent keys.
 	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
 	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
+
+	// Savings goal category detach tombstone operations (Issue #1300).
+	// These track user-intent to detach a savings goal from a budget so auto-create
+	// and carry-forward skip that (budget_id, goal_id) pair until the user re-links.
+
+	// IsGoalDetachedForBudget returns true when a tombstone exists for the (budgetID, goalID) pair.
+	IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error)
+	// InsertGoalDetach writes a tombstone preventing future auto-create for the pair.
+	InsertGoalDetach(ctx context.Context, budgetID, goalID string) error
+	// DeleteGoalDetach clears the tombstone when the user manually re-links a goal.
+	DeleteGoalDetach(ctx context.Context, budgetID, goalID string) error
+	// GetDetachedGoalIDsForBudget returns all goal IDs tombstoned for a given budget.
+	GetDetachedGoalIDsForBudget(ctx context.Context, budgetID string) ([]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -486,8 +499,9 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		INSERT INTO budget_categories (
 			id, budget_id, category_kind, pfc_primary, pfc_detailed, custom_category_id,
 			allocated_amount, spent_amount, created_at, updated_at,
-			tags, match_logic
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			tags, match_logic,
+			savings_goal_id, auto_created, managed_by_goal_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -503,6 +517,9 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		category.UpdatedAt,
 		tagsJSON,
 		matchLogic,
+		category.SavingsGoalID,   // $13: nullable FK to savings_goals (Issue #1300)
+		category.AutoCreated,      // $14: bool — auto-created by savings goal linkage
+		category.ManagedByGoalID,  // $15: nullable FK — which goal manages this category
 	)
 
 	return err
@@ -510,15 +527,19 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 
 // GetCategoriesByBudgetID retrieves all categories for a budget.
 func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	// Issue #1203: join the referenced custom category to surface its parent linkage
-	// (parent_id / parent_pfc_primary) so budget totals can exclude sub-allocations.
+	// Issue #1203: join custom_categories for parent linkage (sub-allocation detection).
+	// Issue #1300: join savings_goals for display name so the API returns savings_goal_name
+	// and the frontend never shows a raw UUID as the category label.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary
+			cc.parent_id, cc.parent_pfc_primary,
+			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
+			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
 		WHERE bc.budget_id = $1
 		ORDER BY bc.created_at ASC
 	`
@@ -549,6 +570,10 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.SavingsGoalID,
+			&bc.AutoCreated,
+			&bc.ManagedByGoalID,
+			&bc.SavingsGoalName, // populated from LEFT JOIN savings_goals (Issue #1300)
 		)
 		if err != nil {
 			return nil, err
@@ -577,13 +602,17 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 		return map[string][]domain.BudgetCategory{}, nil
 	}
 
+	// Issue #1300: join savings_goals for display name (same as GetCategoriesByBudgetID).
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary
+			cc.parent_id, cc.parent_pfc_primary,
+			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
+			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
 		WHERE bc.budget_id = ANY($1)
 		ORDER BY bc.budget_id ASC, bc.created_at ASC
 	`
@@ -614,6 +643,10 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.SavingsGoalID,
+			&bc.AutoCreated,
+			&bc.ManagedByGoalID,
+			&bc.SavingsGoalName, // populated from LEFT JOIN savings_goals (Issue #1300)
 		)
 		if err != nil {
 			return nil, err
@@ -1044,7 +1077,6 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 	`
 	var bc domain.BudgetCategory
 	var tagsJSON []byte
-	var matchLogicJSON []byte
 
 	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(
 		&bc.ID,
@@ -1058,7 +1090,7 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		&bc.CreatedAt,
 		&bc.UpdatedAt,
 		&tagsJSON,
-		&matchLogicJSON,
+		&bc.MatchLogic,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1067,4 +1099,69 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		return nil, err
 	}
 	return &bc, nil
+}
+
+// =============================================================================
+// Savings goal category detach tombstone operations (Issue #1300, Codex C6)
+// =============================================================================
+
+// IsGoalDetachedForBudget returns true when a (budget_id, savings_goal_id) tombstone exists.
+func (r *budgetRepository) IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM savings_goal_category_detach
+			WHERE budget_id = $1 AND savings_goal_id = $2
+		)
+	`
+	var exists bool
+	if err := r.db.QueryRow(ctx, query, budgetID, goalID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// InsertGoalDetach writes a tombstone for the (budget_id, savings_goal_id) pair.
+// Idempotent: ON CONFLICT DO NOTHING.
+func (r *budgetRepository) InsertGoalDetach(ctx context.Context, budgetID, goalID string) error {
+	query := `
+		INSERT INTO savings_goal_category_detach (budget_id, savings_goal_id)
+		VALUES ($1, $2)
+		ON CONFLICT (budget_id, savings_goal_id) DO NOTHING
+	`
+	_, err := r.db.Exec(ctx, query, budgetID, goalID)
+	return err
+}
+
+// DeleteGoalDetach clears the tombstone when the user manually re-links a goal.
+func (r *budgetRepository) DeleteGoalDetach(ctx context.Context, budgetID, goalID string) error {
+	query := `
+		DELETE FROM savings_goal_category_detach
+		WHERE budget_id = $1 AND savings_goal_id = $2
+	`
+	_, err := r.db.Exec(ctx, query, budgetID, goalID)
+	return err
+}
+
+// GetDetachedGoalIDsForBudget returns all savings_goal_ids tombstoned for a given budget.
+func (r *budgetRepository) GetDetachedGoalIDsForBudget(ctx context.Context, budgetID string) ([]string, error) {
+	query := `
+		SELECT savings_goal_id::text
+		FROM savings_goal_category_detach
+		WHERE budget_id = $1
+	`
+	rows, err := r.db.Query(ctx, query, budgetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goalIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		goalIDs = append(goalIDs, id)
+	}
+	return goalIDs, rows.Err()
 }
