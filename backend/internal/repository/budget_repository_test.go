@@ -157,11 +157,13 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			0.00,   // expected_income (Issue #1048)
 		))
 
-	// Mock the categories query (PFC v2: category_kind + discriminated union fields)
+	// Mock the categories query (PFC v2: category_kind + discriminated union fields + savings #1300)
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
 		"parent_id", "parent_pfc_primary",
+		"savings_goal_id", "auto_created", "managed_by_goal_id",
+		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
 
 	pfcPrimary := "FOOD_AND_DRINK"
@@ -182,6 +184,10 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			"category_only", // match_logic
 			nil,             // parent_id (custom join)
 			nil,             // parent_pfc_primary (custom join)
+			nil,             // savings_goal_id (#1300)
+			false,           // auto_created
+			nil,             // managed_by_goal_id
+			nil,             // savings_goal_name (JOIN — nil for pfc category)
 		))
 
 	budget, err := repo.GetByID(ctx, budgetID)
@@ -464,18 +470,21 @@ func TestBudgetRepository_CreateCategory(t *testing.T) {
 	category := createTestBudgetCategory(budgetID)
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO budget_categories`)).WithArgs(
-		pgxmock.AnyArg(),         // id
-		category.BudgetID,        // budget_id
-		category.CategoryKind,    // category_kind
-		category.PFCPrimary,      // pfc_primary
-		category.PFCDetailed,     // pfc_detailed
+		pgxmock.AnyArg(),          // id
+		category.BudgetID,         // budget_id
+		category.CategoryKind,     // category_kind
+		category.PFCPrimary,       // pfc_primary
+		category.PFCDetailed,      // pfc_detailed
 		category.CustomCategoryID, // custom_category_id
-		category.AllocatedAmount, // allocated_amount
-		category.SpentAmount,     // spent_amount
-		pgxmock.AnyArg(),         // created_at
-		pgxmock.AnyArg(),         // updated_at
-		pgxmock.AnyArg(),         // tags JSON
-		pgxmock.AnyArg(),         // match_logic
+		category.AllocatedAmount,  // allocated_amount
+		category.SpentAmount,      // spent_amount
+		pgxmock.AnyArg(),          // created_at
+		pgxmock.AnyArg(),          // updated_at
+		pgxmock.AnyArg(),          // tags JSON
+		pgxmock.AnyArg(),          // match_logic
+		category.SavingsGoalID,    // savings_goal_id (#1300)
+		category.AutoCreated,      // auto_created
+		category.ManagedByGoalID,  // managed_by_goal_id
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.CreateCategory(ctx, category)
@@ -499,6 +508,8 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
 		"parent_id", "parent_pfc_primary",
+		"savings_goal_id", "auto_created", "managed_by_goal_id",
+		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
 
 	pfcPrimary := "FOOD_AND_DRINK"
@@ -519,8 +530,12 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				now,
 				`[]`,
 				"category_only",
-				nil, // parent_id
-				nil, // parent_pfc_primary
+				nil,   // parent_id
+				nil,   // parent_pfc_primary
+				nil,   // savings_goal_id
+				false, // auto_created
+				nil,   // managed_by_goal_id
+				nil,   // savings_goal_name
 			).
 			AddRow(
 				uuid.New().String(),
@@ -535,8 +550,12 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				now,
 				`[]`,
 				"category_only",
-				nil, // parent_id
-				nil, // parent_pfc_primary
+				nil,   // parent_id
+				nil,   // parent_pfc_primary
+				nil,   // savings_goal_id
+				false, // auto_created
+				nil,   // managed_by_goal_id
+				nil,   // savings_goal_name
 			))
 
 	categories, err := repo.GetCategoriesByBudgetID(ctx, budgetID)
@@ -1216,10 +1235,13 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 			500.00, // expected_income (#1048)
 		))
 
-	// Mock categories query (PFC v2 columns)
+	// Mock categories query (PFC v2 columns + savings #1300)
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
+		"parent_id", "parent_pfc_primary",
+		"savings_goal_id", "auto_created", "managed_by_goal_id",
+		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).
@@ -1528,5 +1550,138 @@ func TestBudgetRepository_GetTimezonesByUserIDs(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, result)
 		assert.NoError(t, mock.ExpectationsWereMet()) // no DB calls expected
+	})
+}
+
+// =============================================================================
+// Savings goal category detach tombstone tests (Issue #1300, Codex C6)
+// =============================================================================
+
+func TestBudgetRepository_IsGoalDetachedForBudget(t *testing.T) {
+	t.Run("returns true when tombstone exists", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectQuery(`SELECT EXISTS`).
+			WithArgs("budget-1", "goal-1").
+			WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+
+		found, err := repo.IsGoalDetachedForBudget(ctx, "budget-1", "goal-1")
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns false when no tombstone exists", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectQuery(`SELECT EXISTS`).
+			WithArgs("budget-1", "goal-2").
+			WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
+
+		found, err := repo.IsGoalDetachedForBudget(ctx, "budget-1", "goal-2")
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestBudgetRepository_InsertGoalDetach(t *testing.T) {
+	t.Run("inserts tombstone successfully", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectExec(`INSERT INTO savings_goal_category_detach`).
+			WithArgs("budget-1", "goal-1").
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+		err := repo.InsertGoalDetach(ctx, "budget-1", "goal-1")
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("idempotent on conflict", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		// ON CONFLICT DO NOTHING returns 0 rows affected; no error
+		mock.ExpectExec(`INSERT INTO savings_goal_category_detach`).
+			WithArgs("budget-1", "goal-1").
+			WillReturnResult(pgxmock.NewResult("INSERT", 0))
+
+		err := repo.InsertGoalDetach(ctx, "budget-1", "goal-1")
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestBudgetRepository_DeleteGoalDetach(t *testing.T) {
+	t.Run("deletes tombstone successfully", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectExec(`DELETE FROM savings_goal_category_detach`).
+			WithArgs("budget-1", "goal-1").
+			WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+		err := repo.DeleteGoalDetach(ctx, "budget-1", "goal-1")
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("no error when tombstone does not exist", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectExec(`DELETE FROM savings_goal_category_detach`).
+			WithArgs("budget-1", "goal-99").
+			WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+		err := repo.DeleteGoalDetach(ctx, "budget-1", "goal-99")
+		require.NoError(t, err)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestBudgetRepository_GetDetachedGoalIDsForBudget(t *testing.T) {
+	t.Run("returns all detached goal IDs", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		rows := pgxmock.NewRows([]string{"savings_goal_id"}).
+			AddRow("goal-1").
+			AddRow("goal-2")
+
+		mock.ExpectQuery(`SELECT savings_goal_id`).
+			WithArgs("budget-1").
+			WillReturnRows(rows)
+
+		ids, err := repo.GetDetachedGoalIDsForBudget(ctx, "budget-1")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"goal-1", "goal-2"}, ids)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns empty slice when no detachments exist", func(t *testing.T) {
+		mock, repo := setupBudgetMockDB(t)
+		defer mock.Close()
+		ctx := context.Background()
+
+		mock.ExpectQuery(`SELECT savings_goal_id`).
+			WithArgs("budget-no-detach").
+			WillReturnRows(pgxmock.NewRows([]string{"savings_goal_id"}))
+
+		ids, err := repo.GetDetachedGoalIDsForBudget(ctx, "budget-no-detach")
+		require.NoError(t, err)
+		assert.Empty(t, ids)
+		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }

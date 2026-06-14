@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -85,8 +86,8 @@ func (m *MockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountI
 	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
 }
 
-func (m *MockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64) error {
-	args := m.Called(ctx, goalID, currentAmount)
+func (m *MockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
+	args := m.Called(ctx, goalID, currentAmount, lastCalculatedAt, balanceAsOf)
 	return args.Error(0)
 }
 
@@ -678,4 +679,131 @@ func TestSavingsGoalService_UpdateGoal_ClearsUserAccountIDWhenNewAccountHasNone(
 
 	mockGoalRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// MockGoalAutoCreateBudgetRepo — narrow interface mock for auto-create fan-out
+// =============================================================================
+
+type MockGoalAutoCreateBudgetRepo struct {
+	mock.Mock
+}
+
+func (m *MockGoalAutoCreateBudgetRepo) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Budget), args.Error(1)
+}
+
+func (m *MockGoalAutoCreateBudgetRepo) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	args := m.Called(ctx, category)
+	return args.Error(0)
+}
+
+func (m *MockGoalAutoCreateBudgetRepo) IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error) {
+	args := m.Called(ctx, budgetID, goalID)
+	return args.Bool(0), args.Error(1)
+}
+
+// =============================================================================
+// CreateGoal auto-create tests (Issue #1300)
+// =============================================================================
+
+func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T) {
+	t.Run("creates savings category in each active non-tombstoned budget", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockGoalRepo := new(MockSavingsGoalRepository)
+		mockAccountRepo := new(MockAccountRepository)
+		mockBudgetRepo := new(MockGoalAutoCreateBudgetRepo)
+
+		service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+		service.SetBudgetRepo(mockBudgetRepo)
+
+		req := createTestCreateSavingsGoalRequest()
+		account := createTestAccountForGoal(userID)
+
+		budgetID := "budget-1"
+		activeBudgets := []*domain.Budget{
+			{ID: budgetID, UserID: userID, IsActive: true},
+		}
+
+		mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+		mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
+		// No tombstone for the new goal
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
+		// CreateCategory called with savings kind + auto_created
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.CategoryKind == "savings" && c.AutoCreated && c.BudgetID == budgetID
+		})).Return(nil)
+
+		goal, err := service.CreateGoal(ctx, userID, req)
+
+		require.NoError(t, err)
+		assert.NotNil(t, goal)
+		mockGoalRepo.AssertExpectations(t)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+
+	t.Run("no auto-create when budgetRepo not set (backward compatible)", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockGoalRepo := new(MockSavingsGoalRepository)
+		mockAccountRepo := new(MockAccountRepository)
+
+		service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+		// No SetBudgetRepo call
+
+		req := createTestCreateSavingsGoalRequest()
+		account := createTestAccountForGoal(userID)
+
+		mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+		mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+		goal, err := service.CreateGoal(ctx, userID, req)
+
+		require.NoError(t, err)
+		assert.NotNil(t, goal)
+		mockGoalRepo.AssertExpectations(t)
+	})
+
+	t.Run("goal create succeeds even if auto-create category fails (best-effort)", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockGoalRepo := new(MockSavingsGoalRepository)
+		mockAccountRepo := new(MockAccountRepository)
+		mockBudgetRepo := new(MockGoalAutoCreateBudgetRepo)
+
+		service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+		service.SetBudgetRepo(mockBudgetRepo)
+
+		req := createTestCreateSavingsGoalRequest()
+		account := createTestAccountForGoal(userID)
+
+		budgetID := "budget-fail"
+		activeBudgets := []*domain.Budget{
+			{ID: budgetID, UserID: userID, IsActive: true},
+		}
+
+		mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+		mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
+		// CreateCategory fails — goal creation must still succeed
+		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(
+			errors.New("db: unique constraint violation"),
+		)
+
+		goal, err := service.CreateGoal(ctx, userID, req)
+
+		require.NoError(t, err, "goal creation must succeed even if category fan-out fails")
+		assert.NotNil(t, goal)
+		mockGoalRepo.AssertExpectations(t)
+	})
 }

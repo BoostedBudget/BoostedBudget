@@ -27,9 +27,12 @@ type SavingsGoalRepository interface {
 	Delete(ctx context.Context, id, userID string) error
 	CountByUserID(ctx context.Context, userID string) (int, error)
 
-	// Balance sync operations (Issue #452)
+	// Balance sync operations (Issue #452, extended by #1300 for multi-basis progress)
 	GetByAccountID(ctx context.Context, accountID string) ([]*domain.SavingsGoal, error)
-	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64) error
+	// UpdateCurrentAmount stores the recomputed current_amount and records the recompute timestamp.
+	// balanceAsOf is non-nil when the basis reads account balance (balance / account_percentage).
+	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
+	// MarkCompleted sets is_completed and completed_at — sticky: only updates completed_at if not already set (Codex C5).
 	MarkCompleted(ctx context.Context, goalID string) error
 }
 
@@ -42,6 +45,15 @@ type savingsGoalRepository struct {
 func NewSavingsGoalRepository(db DB) SavingsGoalRepository {
 	return &savingsGoalRepository{db: db}
 }
+
+// goalSelectCols is the canonical SELECT list for savings goals to avoid duplication.
+// Includes progress tracking columns added in Issue #1300.
+const goalSelectCols = `
+	id, user_id, name, description, target_amount, current_amount,
+	currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
+	created_at, updated_at,
+	progress_basis, account_percentage, last_calculated_at, balance_as_of
+`
 
 // Create creates a new savings goal in the database.
 func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.SavingsGoal) error {
@@ -57,12 +69,17 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 		goal.CurrencyCode = "USD"
 	}
 
+	if goal.ProgressBasis == "" {
+		goal.ProgressBasis = domain.ProgressBasisManual
+	}
+
 	query := `
 		INSERT INTO savings_goals (
 			id, user_id, name, description, target_amount, current_amount,
 			currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			created_at, updated_at,
+			progress_basis, account_percentage, last_calculated_at, balance_as_of
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	_, err := r.db.Exec(ctx, query,
@@ -80,6 +97,10 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 		goal.CompletedAt,
 		goal.CreatedAt,
 		goal.UpdatedAt,
+		goal.ProgressBasis,
+		goal.AccountPercentage,
+		goal.LastCalculatedAt,
+		goal.BalanceAsOf,
 	)
 
 	if err != nil {
@@ -92,13 +113,6 @@ func (r *savingsGoalRepository) Create(ctx context.Context, goal *domain.Savings
 
 	return nil
 }
-
-// goalSelectCols is the canonical SELECT list for savings goals to avoid duplication
-const goalSelectCols = `
-	id, user_id, name, description, target_amount, current_amount,
-	currency_code, account_id, user_account_id, deadline, is_completed, completed_at,
-	created_at, updated_at
-`
 
 // GetByID retrieves a savings goal by its ID.
 func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain.SavingsGoal, error) {
@@ -119,6 +133,10 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 		&goal.CompletedAt,
 		&goal.CreatedAt,
 		&goal.UpdatedAt,
+		&goal.ProgressBasis,
+		&goal.AccountPercentage,
+		&goal.LastCalculatedAt,
+		&goal.BalanceAsOf,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -151,6 +169,10 @@ func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID s
 		&goal.CompletedAt,
 		&goal.CreatedAt,
 		&goal.UpdatedAt,
+		&goal.ProgressBasis,
+		&goal.AccountPercentage,
+		&goal.LastCalculatedAt,
+		&goal.BalanceAsOf,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrSavingsGoalNotFound
@@ -192,6 +214,10 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 		&goal.CompletedAt,
 		&goal.CreatedAt,
 		&goal.UpdatedAt,
+		&goal.ProgressBasis,
+		&goal.AccountPercentage,
+		&goal.LastCalculatedAt,
+		&goal.BalanceAsOf,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -208,12 +234,18 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.SavingsGoal) error {
 	goal.UpdatedAt = time.Now()
 
+	if goal.ProgressBasis == "" {
+		goal.ProgressBasis = domain.ProgressBasisManual
+	}
+
 	query := `
 		UPDATE savings_goals
 		SET name = $1, description = $2, target_amount = $3, current_amount = $4,
 			currency_code = $5, account_id = $6, deadline = $7, is_completed = $8,
-			completed_at = $9, updated_at = $10, user_account_id = $11
-		WHERE id = $12 AND user_id = $13
+			completed_at = $9, updated_at = $10, user_account_id = $11,
+			progress_basis = $12, account_percentage = $13, last_calculated_at = $14,
+			balance_as_of = $15
+		WHERE id = $16 AND user_id = $17
 	`
 
 	ct, err := r.db.Exec(ctx, query,
@@ -228,6 +260,10 @@ func (r *savingsGoalRepository) Update(ctx context.Context, goal *domain.Savings
 		goal.CompletedAt,
 		goal.UpdatedAt,
 		goal.UserAccountID,
+		goal.ProgressBasis,
+		goal.AccountPercentage,
+		goal.LastCalculatedAt,
+		goal.BalanceAsOf,
 		goal.ID,
 		goal.UserID,
 	)
@@ -313,6 +349,10 @@ func (r *savingsGoalRepository) scanGoals(ctx context.Context, query string, arg
 			&goal.CompletedAt,
 			&goal.CreatedAt,
 			&goal.UpdatedAt,
+			&goal.ProgressBasis,
+			&goal.AccountPercentage,
+			&goal.LastCalculatedAt,
+			&goal.BalanceAsOf,
 		); err != nil {
 			return nil, err
 		}
@@ -329,16 +369,17 @@ func (r *savingsGoalRepository) scanGoals(ctx context.Context, query string, arg
 	return goals, nil
 }
 
-// UpdateCurrentAmount updates the current_amount for a savings goal.
-// This is used by the balance sync service (Issue #452).
-func (r *savingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64) error {
+// UpdateCurrentAmount stores the recomputed current_amount and records the recompute timestamp.
+// balanceAsOf is non-nil when the basis reads account balance (balance / account_percentage).
+// This is used by the savings progress service (Issue #452, extended by #1300).
+func (r *savingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
 	query := `
 		UPDATE savings_goals
-		SET current_amount = $1, updated_at = NOW()
-		WHERE id = $2
+		SET current_amount = $1, last_calculated_at = $2, balance_as_of = $3, updated_at = NOW()
+		WHERE id = $4
 	`
 
-	ct, err := r.db.Exec(ctx, query, currentAmount, goalID)
+	ct, err := r.db.Exec(ctx, query, currentAmount, lastCalculatedAt, balanceAsOf, goalID)
 	if err != nil {
 		return err
 	}
@@ -351,13 +392,17 @@ func (r *savingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID 
 }
 
 // MarkCompleted marks a savings goal as completed.
+// completed_at is sticky: it is only set if not already set (Codex C5).
 // This is called when the current amount reaches the target amount.
 func (r *savingsGoalRepository) MarkCompleted(ctx context.Context, goalID string) error {
 	now := time.Now()
 
+	// completed_at is only written if NULL (sticky once set).
 	query := `
 		UPDATE savings_goals
-		SET is_completed = true, completed_at = $1, updated_at = $1
+		SET is_completed = true,
+		    completed_at = CASE WHEN completed_at IS NULL THEN $1 ELSE completed_at END,
+		    updated_at = $1
 		WHERE id = $2
 	`
 

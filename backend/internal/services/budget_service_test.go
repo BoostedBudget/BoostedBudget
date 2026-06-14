@@ -163,6 +163,30 @@ func (m *MockBudgetRepository) GetCategoryByIDAndUser(ctx context.Context, categ
 	return args.Get(0).(*domain.BudgetCategory), args.Error(1)
 }
 
+// Savings goal category detach tombstone stubs (Issue #1300, Codex C6).
+func (m *MockBudgetRepository) IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error) {
+	args := m.Called(ctx, budgetID, goalID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockBudgetRepository) InsertGoalDetach(ctx context.Context, budgetID, goalID string) error {
+	args := m.Called(ctx, budgetID, goalID)
+	return args.Error(0)
+}
+
+func (m *MockBudgetRepository) DeleteGoalDetach(ctx context.Context, budgetID, goalID string) error {
+	args := m.Called(ctx, budgetID, goalID)
+	return args.Error(0)
+}
+
+func (m *MockBudgetRepository) GetDetachedGoalIDsForBudget(ctx context.Context, budgetID string) ([]string, error) {
+	args := m.Called(ctx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // MockTransactionRepositoryForBudget is a minimal mock for transaction repository
 // Only mocking methods needed by BudgetService
 type MockTransactionRepositoryForBudget struct {
@@ -1080,3 +1104,499 @@ func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
 }
 
 // strPtr helper is defined in rule_application_service_test.go
+
+// =============================================================================
+// MockActiveSavingsGoalRepo — narrow interface mock for carry-forward / backfill
+// =============================================================================
+
+type MockActiveSavingsGoalRepo struct {
+	mock.Mock
+}
+
+func (m *MockActiveSavingsGoalRepo) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
+}
+
+// =============================================================================
+// CreateBudget carry-forward tests (Issue #1300)
+// =============================================================================
+
+func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T) {
+	t.Run("creates savings category for each non-tombstoned active goal", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		mockGoalRepo := new(MockActiveSavingsGoalRepo)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		svc.SetGoalRepo(mockGoalRepo)
+
+		req := &domain.CreateBudgetRequest{
+			Name:         "Monthly Budget",
+			Period:       domain.BudgetPeriodMonthly,
+			Amount:       3000.00,
+			CurrencyCode: "USD",
+			StartDate:    time.Now(),
+		}
+
+		goalID1 := "goal-1"
+		goalID2 := "goal-2"
+
+		activeGoals := []*domain.SavingsGoal{
+			{ID: goalID1, UserID: userID, Name: "Vacation"},
+			{ID: goalID2, UserID: userID, Name: "Emergency Fund"},
+		}
+
+		// Budget Create + GetActiveByUserID for goals
+		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+		mockGoalRepo.On("GetActiveByUserID", ctx, userID).Return(activeGoals, nil)
+		// No tombstones for the new budget
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, mock.AnythingOfType("string"), goalID1).Return(false, nil)
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, mock.AnythingOfType("string"), goalID2).Return(false, nil)
+		// CreateCategory called once per goal (savings kind)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.CategoryKind == "savings" && c.AutoCreated && c.SavingsGoalID != nil && *c.SavingsGoalID == goalID1
+		})).Return(nil)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.CategoryKind == "savings" && c.AutoCreated && c.SavingsGoalID != nil && *c.SavingsGoalID == goalID2
+		})).Return(nil)
+
+		budget, err := svc.CreateBudget(ctx, userID, req)
+
+		require.NoError(t, err)
+		assert.NotNil(t, budget)
+		mockBudgetRepo.AssertExpectations(t)
+		mockGoalRepo.AssertExpectations(t)
+	})
+
+	t.Run("skips tombstoned goal during carry-forward", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		mockGoalRepo := new(MockActiveSavingsGoalRepo)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		svc.SetGoalRepo(mockGoalRepo)
+
+		req := &domain.CreateBudgetRequest{
+			Name:         "Monthly Budget",
+			Period:       domain.BudgetPeriodMonthly,
+			Amount:       3000.00,
+			CurrencyCode: "USD",
+			StartDate:    time.Now(),
+		}
+
+		goalID1 := "goal-1"
+		goalIDTombstoned := "goal-tombstoned"
+
+		activeGoals := []*domain.SavingsGoal{
+			{ID: goalID1, UserID: userID, Name: "Vacation"},
+			{ID: goalIDTombstoned, UserID: userID, Name: "Old Goal"},
+		}
+
+		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+		mockGoalRepo.On("GetActiveByUserID", ctx, userID).Return(activeGoals, nil)
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, mock.AnythingOfType("string"), goalID1).Return(false, nil)
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, mock.AnythingOfType("string"), goalIDTombstoned).Return(true, nil)
+		// Only goalID1 gets a category; tombstoned goal is skipped
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.CategoryKind == "savings" && *c.SavingsGoalID == goalID1
+		})).Return(nil)
+
+		budget, err := svc.CreateBudget(ctx, userID, req)
+
+		require.NoError(t, err)
+		assert.NotNil(t, budget)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+
+	t.Run("no carry-forward when goalRepo not set (backward compatible)", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		// No SetGoalRepo call
+
+		req := &domain.CreateBudgetRequest{
+			Name:         "Monthly Budget",
+			Period:       domain.BudgetPeriodMonthly,
+			Amount:       3000.00,
+			CurrencyCode: "USD",
+			StartDate:    time.Now(),
+		}
+
+		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+		// CreateCategory should NOT be called for savings (no goals fetched)
+
+		budget, err := svc.CreateBudget(ctx, userID, req)
+
+		require.NoError(t, err)
+		assert.NotNil(t, budget)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+}
+
+// =============================================================================
+// DeleteCategory tombstone tests (Issue #1300, Codex C6)
+// =============================================================================
+
+func TestBudgetService_DeleteCategory_AutoCreatedSavings_WritesTombstone(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	categoryID := "cat-savings-1"
+	goalID := "goal-1"
+
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	savingsCat := domain.BudgetCategory{
+		ID:           categoryID,
+		BudgetID:     budgetID,
+		CategoryKind: "savings",
+		SavingsGoalID: func() *string { s := goalID; return &s }(),
+		AutoCreated:  true,
+	}
+	budget := createTestBudgetForService(userID)
+	budget.ID = budgetID
+	budget.Categories = []domain.BudgetCategory{savingsCat}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(budget, nil)
+	mockBudgetRepo.On("InsertGoalDetach", ctx, budgetID, goalID).Return(nil)
+	mockBudgetRepo.On("DeleteCategory", ctx, categoryID, budgetID).Return(nil)
+
+	err := svc.DeleteCategory(ctx, userID, budgetID, categoryID)
+
+	require.NoError(t, err)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+func TestBudgetService_DeleteCategory_ManualSavings_NoTombstone(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+	categoryID := "cat-savings-manual"
+	goalID := "goal-1"
+
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	// manual savings category (AutoCreated = false)
+	savingsCat := domain.BudgetCategory{
+		ID:           categoryID,
+		BudgetID:     budgetID,
+		CategoryKind: "savings",
+		SavingsGoalID: func() *string { s := goalID; return &s }(),
+		AutoCreated:  false, // user-created, no tombstone
+	}
+	budget := createTestBudgetForService(userID)
+	budget.ID = budgetID
+	budget.Categories = []domain.BudgetCategory{savingsCat}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(budget, nil)
+	mockBudgetRepo.On("DeleteCategory", ctx, categoryID, budgetID).Return(nil)
+	// InsertGoalDetach must NOT be called for manual categories
+
+	err := svc.DeleteCategory(ctx, userID, budgetID, categoryID)
+
+	require.NoError(t, err)
+	mockBudgetRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// BackfillManagedCategories tests (Issue #1300, Codex C7)
+// =============================================================================
+
+func TestBudgetService_BackfillManagedCategories(t *testing.T) {
+	t.Run("creates missing savings categories for active goals x active budgets", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		mockGoalRepo := new(MockActiveSavingsGoalRepo)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		svc.SetGoalRepo(mockGoalRepo)
+
+		budgetID := "budget-1"
+		goalID := "goal-1"
+
+		activeBudgets := []*domain.Budget{
+			{ID: budgetID, UserID: userID, IsActive: true, Categories: []domain.BudgetCategory{}},
+		}
+		activeGoals := []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID, Name: "Vacation"},
+		}
+
+		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
+		mockGoalRepo.On("GetActiveByUserID", ctx, userID).Return(activeGoals, nil)
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, goalID).Return(false, nil)
+		// Missing category → CreateCategory called
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.CategoryKind == "savings" && c.AutoCreated &&
+				c.SavingsGoalID != nil && *c.SavingsGoalID == goalID &&
+				c.BudgetID == budgetID
+		})).Return(nil)
+
+		err := svc.BackfillManagedCategories(ctx, userID)
+
+		require.NoError(t, err)
+		mockBudgetRepo.AssertExpectations(t)
+		mockGoalRepo.AssertExpectations(t)
+	})
+
+	t.Run("skips already-existing savings categories (idempotent)", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		mockGoalRepo := new(MockActiveSavingsGoalRepo)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		svc.SetGoalRepo(mockGoalRepo)
+
+		budgetID := "budget-1"
+		goalID := "goal-1"
+
+		// Budget already has a savings category for this goal
+		existingCat := domain.BudgetCategory{
+			ID:           "cat-existing",
+			BudgetID:     budgetID,
+			CategoryKind: "savings",
+			SavingsGoalID: func() *string { s := goalID; return &s }(),
+		}
+		activeBudgets := []*domain.Budget{
+			{ID: budgetID, UserID: userID, IsActive: true, Categories: []domain.BudgetCategory{existingCat}},
+		}
+		activeGoals := []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID, Name: "Vacation"},
+		}
+
+		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
+		mockGoalRepo.On("GetActiveByUserID", ctx, userID).Return(activeGoals, nil)
+		// IsGoalDetachedForBudget must NOT be called (existing category found first)
+		// CreateCategory must NOT be called
+
+		err := svc.BackfillManagedCategories(ctx, userID)
+
+		require.NoError(t, err)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+
+	t.Run("skips tombstoned (budget, goal) pairs", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		mockGoalRepo := new(MockActiveSavingsGoalRepo)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		svc.SetGoalRepo(mockGoalRepo)
+
+		budgetID := "budget-1"
+		goalID := "goal-1"
+
+		activeBudgets := []*domain.Budget{
+			{ID: budgetID, UserID: userID, IsActive: true, Categories: []domain.BudgetCategory{}},
+		}
+		activeGoals := []*domain.SavingsGoal{
+			{ID: goalID, UserID: userID, Name: "Old Goal"},
+		}
+
+		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
+		mockGoalRepo.On("GetActiveByUserID", ctx, userID).Return(activeGoals, nil)
+		// Tombstone exists → skip
+		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, goalID).Return(true, nil)
+		// CreateCategory must NOT be called
+
+		err := svc.BackfillManagedCategories(ctx, userID)
+
+		require.NoError(t, err)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+
+	t.Run("no-op when goalRepo not set", func(t *testing.T) {
+		ctx := context.Background()
+		userID := "user-123"
+
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		// No SetGoalRepo call
+
+		err := svc.BackfillManagedCategories(ctx, userID)
+
+		require.NoError(t, err)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+}
+
+// =============================================================================
+// MockGoalOwnershipChecker — narrow interface mock for IDOR protection (Issue #1300, Codex C1)
+// =============================================================================
+
+type MockGoalOwnershipChecker struct {
+	mock.Mock
+}
+
+func (m *MockGoalOwnershipChecker) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
+}
+
+// =============================================================================
+// AddCategory — savings kind tests (Issue #1300, Codex C1)
+// =============================================================================
+
+func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
+	goalID := "goal-abc"
+	budgetID := "budget-123"
+	userID := "user-123"
+
+	makeService := func() (*budgetService, *MockBudgetRepository) {
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		return svc.(*budgetService), mockBudgetRepo
+	}
+
+	t.Run("copies SavingsGoalID into created category", func(t *testing.T) {
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+		existingBudget := createTestBudgetForService(userID)
+
+		req := &domain.CreateBudgetCategoryRequest{
+			CategoryKind:    "savings",
+			SavingsGoalID:   &goalID,
+			AllocatedAmount: 100.00,
+		}
+
+		mockChecker := new(MockGoalOwnershipChecker)
+		mockChecker.On("GetByIDForUser", ctx, goalID, userID).Return(&domain.SavingsGoal{ID: goalID, UserID: userID, Name: "Emergency Fund"}, nil)
+		svc.SetGoalOwnershipChecker(mockChecker)
+
+		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+		category, err := svc.AddCategory(ctx, userID, budgetID, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, category)
+		require.NotNil(t, category.SavingsGoalID, "SavingsGoalID must be set on returned category")
+		assert.Equal(t, goalID, *category.SavingsGoalID)
+		mockBudgetRepo.AssertExpectations(t)
+		mockChecker.AssertExpectations(t)
+	})
+
+	t.Run("rejects savings category when goal does not belong to user (IDOR)", func(t *testing.T) {
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+		existingBudget := createTestBudgetForService(userID)
+
+		req := &domain.CreateBudgetCategoryRequest{
+			CategoryKind:    "savings",
+			SavingsGoalID:   &goalID,
+			AllocatedAmount: 100.00,
+		}
+
+		mockChecker := new(MockGoalOwnershipChecker)
+		mockChecker.On("GetByIDForUser", ctx, goalID, userID).Return(nil, domain.ErrSavingsGoalNotFound)
+		svc.SetGoalOwnershipChecker(mockChecker)
+
+		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+		// CreateCategory must NOT be called
+
+		_, err := svc.AddCategory(ctx, userID, budgetID, req)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
+		mockBudgetRepo.AssertExpectations(t)
+		mockChecker.AssertExpectations(t)
+	})
+
+	t.Run("succeeds with valid ownership", func(t *testing.T) {
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+		existingBudget := createTestBudgetForService(userID)
+
+		req := &domain.CreateBudgetCategoryRequest{
+			CategoryKind:    "savings",
+			SavingsGoalID:   &goalID,
+			AllocatedAmount: 200.00,
+		}
+
+		mockChecker := new(MockGoalOwnershipChecker)
+		mockChecker.On("GetByIDForUser", ctx, goalID, userID).Return(&domain.SavingsGoal{ID: goalID, UserID: userID, Name: "Vacation"}, nil)
+		svc.SetGoalOwnershipChecker(mockChecker)
+
+		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+		category, err := svc.AddCategory(ctx, userID, budgetID, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, category)
+		assert.Equal(t, "savings", category.CategoryKind)
+		assert.Equal(t, 200.00, category.AllocatedAmount)
+		mockBudgetRepo.AssertExpectations(t)
+		mockChecker.AssertExpectations(t)
+	})
+
+	t.Run("skips ownership check when no checker configured", func(t *testing.T) {
+		// When goalOwnershipChecker is nil (optional), AddCategory must not panic
+		// and must still copy SavingsGoalID into the struct.
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+		existingBudget := createTestBudgetForService(userID)
+		// No SetGoalOwnershipChecker call
+
+		req := &domain.CreateBudgetCategoryRequest{
+			CategoryKind:    "savings",
+			SavingsGoalID:   &goalID,
+			AllocatedAmount: 50.00,
+		}
+
+		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+
+		category, err := svc.AddCategory(ctx, userID, budgetID, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, category)
+		require.NotNil(t, category.SavingsGoalID)
+		assert.Equal(t, goalID, *category.SavingsGoalID)
+		mockBudgetRepo.AssertExpectations(t)
+	})
+}
