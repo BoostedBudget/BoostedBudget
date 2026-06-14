@@ -56,9 +56,6 @@ const ReviewInboxPage = lazy(() =>
 const DashboardPage = lazy(() =>
   import('./features/dashboard/components/DashboardPage').then(m => ({ default: m.DashboardPage }))
 )
-const BudgetsPage = lazy(() =>
-  import('./features/budgets').then(m => ({ default: m.BudgetsPage }))
-)
 const BudgetDetailPage = lazy(() =>
   import('./features/budgets').then(m => ({ default: m.BudgetDetailPage }))
 )
@@ -74,14 +71,11 @@ const BoostDetailPage = lazy(() =>
 const BoostBuilder = lazy(() =>
   import('./features/boosts').then(m => ({ default: m.BoostBuilder }))
 )
-const SpendingReportsPage = lazy(() =>
-  import('./features/reports').then(m => ({ default: m.SpendingReportsPage }))
+const PlanningPage = lazy(() =>
+  import('./features/planning').then(m => ({ default: m.PlanningPage }))
 )
-const NetWorthPage = lazy(() =>
-  import('./features/net-worth').then(m => ({ default: m.NetWorthPage }))
-)
-const SavingsPage = lazy(() =>
-  import('./features/savings').then(m => ({ default: m.SavingsPage }))
+const InsightsPage = lazy(() =>
+  import('./features/insights').then(m => ({ default: m.InsightsPage }))
 )
 const PrivacyPolicy = lazy(() =>
   import('./legal/PrivacyPolicy').then(m => ({ default: m.PrivacyPolicy }))
@@ -288,49 +282,31 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            {/* Issue #1300: /reports and /net-worth redirect to /insights?tab= */}
+            <Route path="/reports" element={<Navigate to="/insights?tab=spending" replace />} />
+            <Route path="/net-worth" element={<Navigate to="/insights?tab=net-worth" replace />} />
             <Route
-              path="/reports"
+              path="/insights"
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
-                      <SpendingReportsPage />
+                      <InsightsPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
               }
             />
+            {/* Issue #1300: /savings and /budgets redirect to /planning?tab= */}
+            <Route path="/savings" element={<Navigate to="/planning?tab=savings" replace />} />
+            <Route path="/budgets" element={<Navigate to="/planning?tab=budgets" replace />} />
             <Route
-              path="/net-worth"
+              path="/planning"
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
-                      <NetWorthPage />
-                    </Suspense>
-                  </PremiumRoute>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/savings"
-              element={
-                <ProtectedRoute>
-                  <PremiumRoute>
-                    <Suspense fallback={<PageSkeleton />}>
-                      <SavingsPage />
-                    </Suspense>
-                  </PremiumRoute>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/budgets"
-              element={
-                <ProtectedRoute>
-                  <PremiumRoute>
-                    <Suspense fallback={<PageSkeleton />}>
-                      <BudgetsPage />
+                      <PlanningPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>

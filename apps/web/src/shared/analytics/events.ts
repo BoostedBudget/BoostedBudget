@@ -132,10 +132,19 @@ export const ANALYTICS_EVENTS = {
   REVIEW_UNDO: 'review_undo',
   REVIEW_ALL_CAUGHT_UP: 'review_all_caught_up',
 
-  // Boosts (#1267)
+  // Boosts (#1267, #1300)
   BOOSTS_PAGE_VIEWED: 'boosts_page_viewed',
   BOOSTS_TAB_CHANGED: 'boosts_tab_changed',
   BOOSTS_FILTER_CHANGED: 'boosts_filter_changed',
+  BOOSTS_CREATE_CLICKED: 'boosts_create_clicked', // #1300: always-visible header button
+
+  // Planning tab (#1300)
+  PLANNING_PAGE_VIEWED: 'planning_page_viewed',
+  PLANNING_TAB_CHANGED: 'planning_tab_changed',
+
+  // Insights tab (#1300)
+  INSIGHTS_PAGE_VIEWED: 'insights_page_viewed',
+  INSIGHTS_TAB_CHANGED: 'insights_tab_changed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',

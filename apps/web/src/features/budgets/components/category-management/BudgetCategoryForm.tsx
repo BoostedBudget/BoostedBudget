@@ -1,10 +1,7 @@
 /**
  * BudgetCategoryForm
- * Issue #497: Budget Category Manager + Match Config UI
- * Issue #1073: Updated for PFC v2 canonical schema
- * Issue #1200: Replace flat category select with hierarchical picker
- *
  * Modal dialog for creating and editing budget categories with match configuration.
+ * Supports PFC categories, custom categories, and savings goal linking.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -29,6 +26,7 @@ import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOption
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
+import { SavingsGoalSelect } from './SavingsGoalSelect';
 
 export interface BudgetCategoryFormProps {
   isOpen: boolean;
@@ -37,8 +35,7 @@ export interface BudgetCategoryFormProps {
   mode: 'create' | 'edit';
   initialData?: BudgetCategory;
   /**
-   * @deprecated No longer used — PFC picker fetches its own data; custom categories
-   * are fetched via useGetUserCategories(). Kept for backward compatibility with callers.
+   * Deprecated: PFC picker fetches its own data; custom categories via useGetUserCategories().
    */
   availableCategories?: string[][];
   availableTags: UserTag[];
@@ -54,6 +51,7 @@ interface FormData {
   pfc_primary: string;
   pfc_detailed: string;
   custom_category_id: string;
+  savings_goal_id: string; // #1300: savings bucket linkage
   allocated_amount: string;
   tags: string[];
   match_logic: MatchLogic;
@@ -70,6 +68,7 @@ const initialFormData: FormData = {
   pfc_primary: '',
   pfc_detailed: '',
   custom_category_id: '',
+  savings_goal_id: '',
   allocated_amount: '',
   tags: [],
   match_logic: DEFAULT_MATCH_LOGIC,
@@ -98,12 +97,12 @@ export function BudgetCategoryForm({
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
-         
         setFormData({
           category_kind: initialData.category_kind || 'pfc',
           pfc_primary: initialData.pfc_primary || '',
           pfc_detailed: initialData.pfc_detailed || '',
           custom_category_id: initialData.custom_category_id || '',
+          savings_goal_id: initialData.savings_goal_id || '',
           allocated_amount: initialData.allocated_amount.toString(),
           tags: initialData.tags || [],
           match_logic: initialData.match_logic || DEFAULT_MATCH_LOGIC,
@@ -155,15 +154,21 @@ export function BudgetCategoryForm({
     return groups;
   }, [userCategories]);
 
-  const showTagPicker = formData.match_logic !== 'category_only';
+  const isEditMode = mode === 'edit';
+  const isSavingsKind = formData.category_kind === 'savings';
+  const showTagPicker = !isSavingsKind && formData.match_logic !== 'category_only';
 
-  const hasCategory = formData.category_kind === 'pfc'
-    ? !!formData.pfc_primary
-    : !!formData.custom_category_id;
+  const hasCategory =
+    formData.category_kind === 'pfc'
+      ? !!formData.pfc_primary
+      : formData.category_kind === 'savings'
+        ? !!formData.savings_goal_id
+        : !!formData.custom_category_id;
 
   const previewEnabled = useMemo(() => {
-    return isOpen && hasCategory && !!budgetStartDate && !!budgetEndDate;
-  }, [isOpen, hasCategory, budgetStartDate, budgetEndDate]);
+    // Savings categories don't match transactions — skip preview
+    return isOpen && hasCategory && !isSavingsKind && !!budgetStartDate && !!budgetEndDate;
+  }, [isOpen, hasCategory, isSavingsKind, budgetStartDate, budgetEndDate]);
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
     formData.category_kind,
@@ -198,13 +203,20 @@ export function BudgetCategoryForm({
   );
 
   const handleCategoryKindChange = useCallback(
-    (kind: 'pfc' | 'custom') => {
+    (kind: 'pfc' | 'custom' | 'savings') => {
       setFormData((prev) => ({
         ...prev,
         category_kind: kind,
-        ...(kind === 'pfc'
-          ? { custom_category_id: '' }
-          : { pfc_primary: '', pfc_detailed: '' }),
+        // Clear fields that don't apply to the selected kind
+        ...(kind === 'pfc' && { custom_category_id: '', savings_goal_id: '' }),
+        ...(kind === 'custom' && { pfc_primary: '', pfc_detailed: '', savings_goal_id: '' }),
+        ...(kind === 'savings' && {
+          pfc_primary: '',
+          pfc_detailed: '',
+          custom_category_id: '',
+          tags: [],
+          match_logic: DEFAULT_MATCH_LOGIC,
+        }),
       }));
       clearCategoryError();
     },
@@ -319,6 +331,7 @@ export function BudgetCategoryForm({
             pfc_primary: formData.pfc_primary || undefined,
             pfc_detailed: formData.pfc_detailed || undefined,
             custom_category_id: formData.custom_category_id || undefined,
+            savings_goal_id: formData.savings_goal_id || undefined,
             allocated_amount: amount,
             tags: formData.tags.length > 0 ? formData.tags : undefined,
             match_logic: formData.match_logic,
@@ -343,16 +356,13 @@ export function BudgetCategoryForm({
     [formData, mode, validate, onSubmit, onClose]
   );
 
-  const isEditMode = mode === 'edit';
-  const dialogTitle = isEditMode ? 'Edit Category' : 'Add Category';
-  const submitButtonText = isEditMode ? 'Save' : 'Add';
 
   const inputBase = 'w-full py-2.5 px-3 text-sm border border-input rounded-lg bg-card text-foreground transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-primary focus:ring-[3px] focus:ring-ring/15 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed';
   const inputError = 'border-destructive focus:ring-destructive/15';
 
   // PFC primary and detailed display labels
-  const pfcPrimaryLabel = formData.pfc_primary && formatPFCPrimary(formData.pfc_primary);
-  const pfcDetailedLabel = formData.pfc_detailed && (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed);
+  const pfcPrimaryLabel = formData.pfc_primary ? formatPFCPrimary(formData.pfc_primary) : null;
+  const pfcDetailedLabel = formData.pfc_detailed ? (getDetailedLabel(formData.pfc_detailed) ?? formData.pfc_detailed) : null;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -364,7 +374,7 @@ export function BudgetCategoryForm({
       >
         <DialogHeader className="flex flex-row items-center justify-between mb-6">
           <DialogTitle className="text-xl font-semibold text-foreground">
-            {dialogTitle}
+            {mode === 'edit' ? 'Edit Category' : 'Add Category'}
           </DialogTitle>
           <button
             type="button"
@@ -412,6 +422,19 @@ export function BudgetCategoryForm({
                   Custom Categories
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => handleCategoryKindChange('savings')}
+                className={cn(
+                  'flex-1 px-3 py-1.5 text-sm font-medium transition-colors border-l border-border',
+                  formData.category_kind === 'savings'
+                    ? 'bg-success text-success-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                )}
+                disabled={isEditMode}
+              >
+                Savings Goal
+              </button>
             </div>
 
             {/* PFC section: hierarchical tree picker */}
@@ -460,6 +483,20 @@ export function BudgetCategoryForm({
               </select>
             )}
 
+            {/* Savings section: goal picker */}
+            {formData.category_kind === 'savings' && (
+              <SavingsGoalSelect
+                id="savings-goal"
+                value={formData.savings_goal_id}
+                onChange={(goalId) => {
+                  setFormData((prev) => ({ ...prev, savings_goal_id: goalId }));
+                  clearCategoryError();
+                }}
+                disabled={isEditMode}
+                className={cn(errors.category && inputError)}
+              />
+            )}
+
             {errors.category && (
               <p className="mt-1 text-sm text-destructive">
                 {errors.category}
@@ -497,12 +534,14 @@ export function BudgetCategoryForm({
             )}
           </div>
 
-          {/* Match Logic Config */}
-          <CategoryMatchConfig
-            value={formData.match_logic}
-            onChange={handleMatchLogicChange}
-            disabled={isSubmitting}
-          />
+          {/* Match Logic Config — hidden for savings (not transaction-based) */}
+          {!isSavingsKind && (
+            <CategoryMatchConfig
+              value={formData.match_logic}
+              onChange={handleMatchLogicChange}
+              disabled={isSubmitting}
+            />
+          )}
 
           {/* Tags Field */}
           {showTagPicker && (
@@ -593,7 +632,7 @@ export function BudgetCategoryForm({
               Cancel
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Saving...' : submitButtonText}
+              {isSubmitting ? 'Saving...' : (mode === 'edit' ? 'Save' : 'Add')}
             </Button>
           </div>
         </form>

@@ -118,16 +118,28 @@ export function BudgetCategoryManager({
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
+  // Separate savings buckets from spending categories (#1300)
+  const { spendingCategories, savingsCategories } = useMemo(
+    () => ({
+      spendingCategories: categories.filter((c) => c.category_kind !== 'savings'),
+      savingsCategories: categories.filter((c) => c.category_kind === 'savings'),
+    }),
+    [categories]
+  );
+
   // Grouped hierarchy for visual layout (custom categories nest under PFC parents when possible)
   const groups = useMemo(
-    () => groupBudgetCategoriesByPrimary(categories, customCategoryMap),
-    [categories, customCategoryMap]
+    () => groupBudgetCategoriesByPrimary(spendingCategories, customCategoryMap),
+    [spendingCategories, customCategoryMap]
   );
 
   // Flat order of all categories in render order — for keyboard navigation
   const flatOrder = useMemo(
-    () => groups.flatMap(({ group, children }) => (group ? [group, ...children] : children)),
-    [groups]
+    () => [
+      ...groups.flatMap(({ group, children }) => (group ? [group, ...children] : children)),
+      ...savingsCategories,
+    ],
+    [groups, savingsCategories]
   );
 
   // Handlers for form dialog
@@ -241,43 +253,42 @@ export function BudgetCategoryManager({
   // Display label for a budget category (custom name or PFC label), used as the parent
   // label on earmarked sub-allocation children (#1203).
   const categoryDisplayLabel = useCallback(
-    (category: BudgetCategory): string =>
-      category.category_kind === 'custom' && category.custom_category_id
-        ? (getCustomCategoryName(category.custom_category_id) ?? formatBudgetCategoryLabel(category))
-        : formatBudgetCategoryLabel(category),
+    (category: BudgetCategory): string => {
+      if (category.category_kind === 'custom' && category.custom_category_id) {
+        return getCustomCategoryName(category.custom_category_id) || formatBudgetCategoryLabel(category);
+      }
+      return formatBudgetCategoryLabel(category);
+    },
     [getCustomCategoryName]
   );
 
   const renderCategoryItem = useCallback(
     (
       category: BudgetCategory,
-      variant: 'standalone' | 'parent' | 'child',
+      variant: 'standalone' | 'parent' | 'child' | 'savings',
       flatIndex: number,
       parentLabel?: string
-    ) => {
-      const customCategoryName = getCustomCategoryName(category.custom_category_id);
-      return (
-        <div
-          key={category.id}
-          role="listitem"
-          tabIndex={0}
-          onKeyDown={(e) => handleKeyDown(e, category)}
-          ref={(el) => {
-            categoryRefs.current[flatIndex] = el;
-          }}
-        >
-          <BudgetCategoryCard
-            category={category}
-            variant={variant}
-            customCategoryName={customCategoryName}
-            parentLabel={variant === 'child' ? parentLabel : undefined}
-            onEdit={() => handleOpenEditForm(category)}
-            onDelete={() => handleOpenDeleteDialog(category)}
-            disabled={disabled}
-          />
-        </div>
-      );
-    },
+    ) => (
+      <div
+        key={category.id}
+        role="listitem"
+        tabIndex={0}
+        onKeyDown={(e) => handleKeyDown(e, category)}
+        ref={(el) => {
+          categoryRefs.current[flatIndex] = el;
+        }}
+      >
+        <BudgetCategoryCard
+          category={category}
+          variant={variant}
+          customCategoryName={getCustomCategoryName(category.custom_category_id)}
+          parentLabel={variant === 'child' ? parentLabel : undefined}
+          onEdit={() => handleOpenEditForm(category)}
+          onDelete={() => handleOpenDeleteDialog(category)}
+          disabled={disabled}
+        />
+      </div>
+    ),
     [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, getCustomCategoryName]
   );
 
@@ -336,29 +347,48 @@ export function BudgetCategoryManager({
 
       {/* Categories list or empty state */}
       {hasCategories ? (
-        <div className="flex flex-col gap-4" role="list">
-          {groups.map(({ group, children }) => {
-            const hasChildren = children.length > 0;
-            const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
+        <div className="flex flex-col gap-6">
+          {/* Spending categories */}
+          {groups.length > 0 && (
+            <div className="flex flex-col gap-4" role="list">
+              {groups.map(({ group, children }) => {
+                const hasChildren = children.length > 0;
+                const groupKey = group?.id ?? `orphan-${children[0]?.id}`;
 
-            if (!group) {
-              return children.map((child) =>
-                renderCategoryItem(child, 'standalone', flatOrder.findIndex(c => c.id === child.id))
-              );
-            }
+                if (!group) {
+                  return children.map((child) =>
+                    renderCategoryItem(child, 'standalone', flatOrder.findIndex(c => c.id === child.id))
+                  );
+                }
 
-            const parentVariant = hasChildren ? 'parent' : 'standalone';
-            const parentIdx = flatOrder.findIndex(c => c.id === group.id);
-            return (
-              <div key={groupKey}>
-                {renderCategoryItem(group, parentVariant, parentIdx)}
-                {children.map((child) => {
-                  const childIdx = flatOrder.findIndex(c => c.id === child.id);
-                  return renderCategoryItem(child, 'child', childIdx, categoryDisplayLabel(group));
-                })}
+                const parentVariant = hasChildren ? 'parent' : 'standalone';
+                const parentIdx = flatOrder.findIndex(c => c.id === group.id);
+                return (
+                  <div key={groupKey}>
+                    {renderCategoryItem(group, parentVariant, parentIdx)}
+                    {children.map((child) => {
+                      const childIdx = flatOrder.findIndex(c => c.id === child.id);
+                      return renderCategoryItem(child, 'child', childIdx, categoryDisplayLabel(group));
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Savings buckets (#1300) */}
+          {savingsCategories.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Savings Buckets
+              </h3>
+              <div className="flex flex-col gap-3" role="list">
+                {savingsCategories.map((cat) =>
+                  renderCategoryItem(cat, 'savings', flatOrder.findIndex(c => c.id === cat.id))
+                )}
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       ) : (
         <EmptyState
