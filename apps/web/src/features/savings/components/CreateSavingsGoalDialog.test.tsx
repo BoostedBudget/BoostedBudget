@@ -625,6 +625,169 @@ describe('CreateSavingsGoalDialog', () => {
     })
   })
 
+  describe('Progress Tracking basis (Issue #1300 G1)', () => {
+    it('renders a Progress Tracking selector defaulting to Manual', () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      const select = screen.getByLabelText('Progress Tracking') as HTMLSelectElement
+      expect(select).toBeInTheDocument()
+      expect(select.value).toBe('manual')
+    })
+
+    it('does not show account_percentage input when basis is manual', () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      expect(screen.queryByLabelText(/Account %/)).not.toBeInTheDocument()
+    })
+
+    it('shows account_percentage input when basis is account_percentage', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+
+      expect(await screen.findByLabelText(/Account %/)).toBeInTheDocument()
+    })
+
+    it('hides account_percentage input when basis switches back from account_percentage', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      const select = screen.getByLabelText('Progress Tracking')
+      fireEvent.change(select, { target: { value: 'account_percentage' } })
+      expect(screen.getByLabelText(/Account %/)).toBeInTheDocument()
+
+      fireEvent.change(select, { target: { value: 'manual' } })
+      expect(screen.queryByLabelText(/Account %/)).not.toBeInTheDocument()
+    })
+
+    it('shows validation error when account_percentage is missing for account_percentage basis', async () => {
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      expect(await screen.findByText('Enter a percentage between 0 and 100 (exclusive)')).toBeInTheDocument()
+    })
+
+    it('submits progress_basis=contributions and omits account_percentage', async () => {
+      const newGoal = { id: 'goal-1', name: 'Test Goal', target_amount: 1000 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '1000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'contributions' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.progress_basis).toBe('contributions')
+        expect(callArg.data.account_percentage).toBeUndefined()
+      })
+    })
+
+    it('submits account_percentage divided by 100 for account_percentage basis', async () => {
+      const newGoal = { id: 'goal-pct', name: 'Split Goal', target_amount: 2000 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Split Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '2000' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+
+      const pctInput = await screen.findByLabelText(/Account %/)
+      fireEvent.change(pctInput, { target: { value: '60' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.progress_basis).toBe('account_percentage')
+        expect(callArg.data.account_percentage).toBeCloseTo(0.6)
+      })
+    })
+
+    it('omits progress_basis from request when basis is manual (default)', async () => {
+      const newGoal = { id: 'goal-manual', name: 'Manual Goal', target_amount: 500 }
+      mockCreateSavingsGoalMutateAsync.mockResolvedValueOnce(newGoal)
+
+      renderWithQueryClient(
+        <CreateSavingsGoalDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onGoalCreated={mockOnGoalCreated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Manual Goal' } })
+      fireEvent.change(screen.getByLabelText('Target Amount'), { target: { value: '500' } })
+      fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockCreateSavingsGoalMutateAsync.mock.calls[0][0]
+        // manual basis is omitted (API defaults to manual)
+        expect(callArg.data.progress_basis).toBeUndefined()
+        expect(callArg.data.account_percentage).toBeUndefined()
+      })
+    })
+  })
+
   describe('Edge Cases', () => {
     it('should include description and deadline when provided', async () => {
       const newGoal = { id: 'goal-1', name: 'Test', target_amount: 500 }

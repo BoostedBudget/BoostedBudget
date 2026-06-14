@@ -682,6 +682,151 @@ func TestSavingsGoalService_UpdateGoal_ClearsUserAccountIDWhenNewAccountHasNone(
 }
 
 // =============================================================================
+// M11 Tests — progress_basis/account_percentage settable through the API (Issue #1300 gap G1)
+// =============================================================================
+
+// TestSavingsGoalService_CreateGoal_SetsProgressBasis verifies that CreateGoal maps
+// ProgressBasis and AccountPercentage from the request onto the saved goal (gap G1).
+func TestSavingsGoalService_CreateGoal_SetsProgressBasis(t *testing.T) {
+	pct := 0.4
+
+	tests := []struct {
+		name              string
+		basis             string
+		accountPercentage *float64
+		wantBasis         string
+		wantPct           *float64
+	}{
+		{
+			name:      "contributions basis persisted",
+			basis:     "contributions",
+			wantBasis: "contributions",
+			wantPct:   nil,
+		},
+		{
+			name:      "balance basis persisted",
+			basis:     "balance",
+			wantBasis: "balance",
+			wantPct:   nil,
+		},
+		{
+			name:              "account_percentage basis + pct persisted",
+			basis:             "account_percentage",
+			accountPercentage: &pct,
+			wantBasis:         "account_percentage",
+			wantPct:           &pct,
+		},
+		{
+			name:      "empty basis defaults to manual",
+			basis:     "",
+			wantBasis: "manual",
+			wantPct:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGoalRepo := new(MockSavingsGoalRepository)
+			mockAccountRepo := new(MockAccountRepository)
+			service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+			ctx := context.Background()
+			userID := "user-123"
+
+			req := createTestCreateSavingsGoalRequest()
+			req.ProgressBasis = tt.basis
+			req.AccountPercentage = tt.accountPercentage
+
+			mockAccountRepo.On("GetByUserID", ctx, userID).Return(
+				[]domain.Account{createTestAccountForGoal(userID)}, nil)
+			mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+				Run(func(args mock.Arguments) {
+					saved := args.Get(1).(*domain.SavingsGoal)
+					assert.Equal(t, tt.wantBasis, saved.ProgressBasis,
+						"ProgressBasis should be mapped from request")
+					if tt.wantPct == nil {
+						assert.Nil(t, saved.AccountPercentage, "AccountPercentage should be nil")
+					} else {
+						assert.NotNil(t, saved.AccountPercentage)
+						assert.InDelta(t, *tt.wantPct, *saved.AccountPercentage, 1e-9)
+					}
+				}).Return(nil)
+
+			goal, err := service.CreateGoal(ctx, userID, req)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBasis, goal.ProgressBasis)
+			mockGoalRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestSavingsGoalService_UpdateGoal_SetsProgressBasis verifies that UpdateGoal maps
+// ProgressBasis and AccountPercentage changes onto the goal (gap G1).
+func TestSavingsGoalService_UpdateGoal_SetsProgressBasis(t *testing.T) {
+	pct := 0.6
+	newBasis := "contributions"
+	pctBasis := "account_percentage"
+
+	tests := []struct {
+		name      string
+		req       domain.UpdateSavingsGoalRequest
+		wantBasis string
+		wantPct   *float64
+	}{
+		{
+			name:      "switch to contributions clears account_percentage",
+			req:       domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis},
+			wantBasis: "contributions",
+			wantPct:   nil,
+		},
+		{
+			name: "switch to account_percentage sets pct",
+			req: domain.UpdateSavingsGoalRequest{
+				ProgressBasis:    &pctBasis,
+				AccountPercentage: &pct,
+			},
+			wantBasis: "account_percentage",
+			wantPct:   &pct,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockGoalRepo := new(MockSavingsGoalRepository)
+			mockAccountRepo := new(MockAccountRepository)
+			service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+
+			ctx := context.Background()
+			userID := "user-123"
+			goalID := "goal-123"
+
+			existingGoal := createTestSavingsGoal(userID)
+			existingGoal.ProgressBasis = "manual"
+
+			mockGoalRepo.On("GetByID", ctx, goalID).Return(existingGoal, nil)
+			mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+				Run(func(args mock.Arguments) {
+					saved := args.Get(1).(*domain.SavingsGoal)
+					assert.Equal(t, tt.wantBasis, saved.ProgressBasis)
+					if tt.wantPct == nil {
+						assert.Nil(t, saved.AccountPercentage)
+					} else {
+						require.NotNil(t, saved.AccountPercentage)
+						assert.InDelta(t, *tt.wantPct, *saved.AccountPercentage, 1e-9)
+					}
+				}).Return(nil)
+
+			goal, err := service.UpdateGoal(ctx, userID, goalID, &tt.req)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBasis, goal.ProgressBasis)
+			mockGoalRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// =============================================================================
 // MockGoalAutoCreateBudgetRepo — narrow interface mock for auto-create fan-out
 // =============================================================================
 
@@ -702,8 +847,8 @@ func (m *MockGoalAutoCreateBudgetRepo) CreateCategory(ctx context.Context, categ
 	return args.Error(0)
 }
 
-func (m *MockGoalAutoCreateBudgetRepo) IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error) {
-	args := m.Called(ctx, budgetID, goalID)
+func (m *MockGoalAutoCreateBudgetRepo) IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error) {
+	args := m.Called(ctx, seriesID, goalID)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -728,14 +873,15 @@ func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T
 
 		budgetID := "budget-1"
 		activeBudgets := []*domain.Budget{
-			{ID: budgetID, UserID: userID, IsActive: true},
+			// SeriesID == ID for a standalone budget (its own series).
+			{ID: budgetID, SeriesID: budgetID, UserID: userID, IsActive: true},
 		}
 
 		mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
 		mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
-		// No tombstone for the new goal
-		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
+		// No tombstone for the new goal (keyed on series_id = budgetID for standalone budgets).
+		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
 		// CreateCategory called with savings kind + auto_created
 		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated && c.BudgetID == budgetID
@@ -788,13 +934,13 @@ func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T
 
 		budgetID := "budget-fail"
 		activeBudgets := []*domain.Budget{
-			{ID: budgetID, UserID: userID, IsActive: true},
+			{ID: budgetID, SeriesID: budgetID, UserID: userID, IsActive: true},
 		}
 
 		mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
 		mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
 		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
-		mockBudgetRepo.On("IsGoalDetachedForBudget", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
+		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
 		// CreateCategory fails — goal creation must still succeed
 		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(
 			errors.New("db: unique constraint violation"),
@@ -806,4 +952,317 @@ func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T
 		assert.NotNil(t, goal)
 		mockGoalRepo.AssertExpectations(t)
 	})
+}
+
+// ============================================================================
+// M13 (Issue #1300): RecomputeGoal after CreateGoal (G3)
+// ============================================================================
+
+// MockGoalProgressRecomputer is a mock for the GoalProgressRecomputer interface.
+type MockGoalProgressRecomputer struct {
+	mock.Mock
+}
+
+func (m *MockGoalProgressRecomputer) RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error {
+	args := m.Called(ctx, goal)
+	return args.Error(0)
+}
+
+func TestSavingsGoalService_CreateGoal_TriggersRecomputeGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-recompute"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+
+	req := createTestCreateSavingsGoalRequest()
+	account := createTestAccountForGoal(userID)
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// RecomputeGoal must be called with the created goal.
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, goal)
+	mockGoalRepo.AssertExpectations(t)
+	mockProgress.AssertExpectations(t) // verifies RecomputeGoal was called
+}
+
+func TestSavingsGoalService_CreateGoal_RecomputeGoalErrorIsNonFatal(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-recompute-fail"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+
+	req := createTestCreateSavingsGoalRequest()
+	account := createTestAccountForGoal(userID)
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// RecomputeGoal fails — CreateGoal must still succeed (non-fatal).
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).
+		Return(errors.New("recompute: db connection lost"))
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err, "CreateGoal must succeed even when RecomputeGoal errors")
+	assert.NotNil(t, goal)
+	mockProgress.AssertExpectations(t)
+}
+
+func TestSavingsGoalService_CreateGoal_NoProgressService_NoOp(t *testing.T) {
+	// Verify that when no progress service is wired, CreateGoal still succeeds.
+	ctx := context.Background()
+	userID := "user-no-progress"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	// Intentionally do NOT call SetProgressService.
+
+	req := createTestCreateSavingsGoalRequest()
+	account := createTestAccountForGoal(userID)
+
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{account}, nil)
+	mockGoalRepo.On("Create", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.CreateGoal(ctx, userID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, goal)
+}
+
+// ============================================================================
+// M14 (Issue #1300): Basis-switch semantics in UpdateGoal (G4 / Codex C10)
+// ============================================================================
+
+// MockGoalBasisSwitchContribRepo mocks the narrow interface for basis-switch
+// contribution operations (seed + archive).
+type MockGoalBasisSwitchContribRepo struct {
+	mock.Mock
+}
+
+func (m *MockGoalBasisSwitchContribRepo) Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error {
+	args := m.Called(ctx, contrib)
+	return args.Error(0)
+}
+
+func (m *MockGoalBasisSwitchContribRepo) ArchiveByGoal(ctx context.Context, goalID string) error {
+	args := m.Called(ctx, goalID)
+	return args.Error(0)
+}
+
+// MockAnalytics mocks the phclient.Analytics interface for test assertions.
+type MockAnalytics struct {
+	mock.Mock
+}
+
+func (m *MockAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *MockAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *MockAnalytics) Close() {
+	m.Called()
+}
+
+func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-basis-switch"
+	goalID := "goal-basis"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+	mockAnalytics := new(MockAnalytics)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+	service.SetAnalytics(mockAnalytics)
+
+	priorAmount := 750.0
+	existing := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "Vacation",
+		TargetAmount:  5000.0,
+		CurrentAmount: priorAmount,
+		CurrencyCode:  "USD",
+		AccountID:     "account-savings",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newBasis := domain.ProgressBasisContributions
+	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// manual → contributions: a seed contribution must be inserted with Amount = priorAmount.
+	mockContribRepo.On("Insert", ctx, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+		return c.SavingsGoalID == goalID &&
+			c.Amount == priorAmount &&
+			c.Source == "manual" &&
+			c.Status == "confirmed" &&
+			!c.ManagedByReconciliation &&
+			c.ConfirmedByUser
+	})).Return(nil)
+	// Analytics event fired for basis change.
+	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
+	// RecomputeGoal triggered after basis switch.
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, goal)
+	assert.Equal(t, domain.ProgressBasisContributions, goal.ProgressBasis)
+	mockContribRepo.AssertExpectations(t)
+	mockAnalytics.AssertExpectations(t)
+	mockProgress.AssertExpectations(t)
+}
+
+func TestUpdateGoal_ContributionsToBalance_ArchivesContributions(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-basis-archive"
+	goalID := "goal-archive"
+	accountID := "account-savings"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+	mockAnalytics := new(MockAnalytics)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+	service.SetAnalytics(mockAnalytics)
+
+	existing := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "House",
+		TargetAmount:  50000.0,
+		CurrentAmount: 12000.0,
+		CurrencyCode:  "USD",
+		AccountID:     accountID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	newBasis := domain.ProgressBasisBalance
+	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// contributions → balance: contributions archived (managed_by_reconciliation cleared).
+	mockContribRepo.On("ArchiveByGoal", ctx, goalID).Return(nil)
+	// Analytics event fired for basis change.
+	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
+	// RecomputeGoal triggered.
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, goal)
+	assert.Equal(t, domain.ProgressBasisBalance, goal.ProgressBasis)
+	mockContribRepo.AssertExpectations(t)
+	mockAnalytics.AssertExpectations(t)
+	mockProgress.AssertExpectations(t)
+}
+
+func TestUpdateGoal_NoBasisChange_NoSeedNoArchive(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-no-basis-change"
+	goalID := "goal-stable"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+
+	existing := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "Emergency Fund",
+		TargetAmount:  10000.0,
+		CurrentAmount: 3000.0,
+		CurrencyCode:  "USD",
+		AccountID:     "account-efund",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newName := "Emergency Fund 2"
+	req := &domain.UpdateSavingsGoalRequest{Name: &newName}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// No basis change → Insert and ArchiveByGoal must NOT be called.
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	require.NoError(t, err)
+	assert.NotNil(t, goal)
+	mockContribRepo.AssertNotCalled(t, "Insert")
+	mockContribRepo.AssertNotCalled(t, "ArchiveByGoal")
+}
+
+func TestUpdateGoal_BasisSwitch_SeedErrorIsNonFatal(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-seed-fail"
+	goalID := "goal-seed-fail"
+
+	mockGoalRepo := new(MockSavingsGoalRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockProgress := new(MockGoalProgressRecomputer)
+	mockContribRepo := new(MockGoalBasisSwitchContribRepo)
+	mockAnalytics := new(MockAnalytics)
+
+	service := NewSavingsGoalService(mockGoalRepo, mockAccountRepo, testLogger())
+	service.SetProgressService(mockProgress)
+	service.SetBasisSwitchContribRepo(mockContribRepo)
+	service.SetAnalytics(mockAnalytics)
+
+	existing := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		Name:          "Travel",
+		TargetAmount:  2000.0,
+		CurrentAmount: 500.0,
+		CurrencyCode:  "USD",
+		AccountID:     "account-travel",
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	newBasis := domain.ProgressBasisContributions
+	req := &domain.UpdateSavingsGoalRequest{ProgressBasis: &newBasis}
+
+	mockGoalRepo.On("GetByID", ctx, goalID).Return(existing, nil)
+	mockGoalRepo.On("Update", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+	// Seed fails — UpdateGoal must still succeed (non-fatal, Codex C10).
+	mockContribRepo.On("Insert", ctx, mock.AnythingOfType("*domain.SavingsGoalContribution")).
+		Return(errors.New("db: foreign key violation"))
+	mockAnalytics.On("Capture", userID, "savings_goal_progress_basis_changed", mock.Anything).Return()
+	mockProgress.On("RecomputeGoal", ctx, mock.AnythingOfType("*domain.SavingsGoal")).Return(nil)
+
+	goal, err := service.UpdateGoal(ctx, userID, goalID, req)
+
+	require.NoError(t, err, "UpdateGoal must succeed even when seed contribution insert fails")
+	assert.NotNil(t, goal)
 }

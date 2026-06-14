@@ -59,18 +59,19 @@ type BudgetRepository interface {
 	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
 	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
 
-	// Savings goal category detach tombstone operations (Issue #1300).
-	// These track user-intent to detach a savings goal from a budget so auto-create
-	// and carry-forward skip that (budget_id, goal_id) pair until the user re-links.
+	// Savings goal category detach tombstone operations (Issue #1300, G5 — migration 000098).
+	// Since migration 000098 the tombstone is keyed by (series_id, savings_goal_id) so a
+	// user's detach intent persists across all budget periods that share the same series.
 
-	// IsGoalDetachedForBudget returns true when a tombstone exists for the (budgetID, goalID) pair.
-	IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error)
-	// InsertGoalDetach writes a tombstone preventing future auto-create for the pair.
-	InsertGoalDetach(ctx context.Context, budgetID, goalID string) error
-	// DeleteGoalDetach clears the tombstone when the user manually re-links a goal.
-	DeleteGoalDetach(ctx context.Context, budgetID, goalID string) error
-	// GetDetachedGoalIDsForBudget returns all goal IDs tombstoned for a given budget.
-	GetDetachedGoalIDsForBudget(ctx context.Context, budgetID string) ([]string, error)
+	// IsGoalDetachedForSeries returns true when a tombstone exists for (seriesID, goalID).
+	IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error)
+	// InsertGoalDetach writes a tombstone keyed on (seriesID, goalID). budgetID is stored
+	// as a nullable audit-trail field indicating which period triggered the detach.
+	InsertGoalDetach(ctx context.Context, seriesID, budgetID, goalID string) error
+	// DeleteGoalDetach clears the tombstone for (seriesID, goalID) (user re-linked the goal).
+	DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error
+	// GetDetachedGoalIDsForSeries returns all savings_goal_ids tombstoned for a series.
+	GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -124,12 +125,17 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		budget.ExpectedIncome = budget.Amount
 	}
 
+	// series_id defaults to own id for standalone budgets (Issue #1300 G5).
+	if budget.SeriesID == "" {
+		budget.SeriesID = budget.ID
+	}
+
 	query := `
 		INSERT INTO budgets (
 			id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			income_amount, income_sources, expected_income, series_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -148,6 +154,7 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		budget.IncomeAmount,
 		incomeSourcesJSON,
 		budget.ExpectedIncome,
+		budget.SeriesID,
 	)
 
 	if err != nil {
@@ -166,7 +173,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE id = $1
 	`
@@ -189,6 +196,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
 		&budget.ExpectedIncome,
+		&budget.SeriesID,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -220,7 +228,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -252,6 +260,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -279,7 +288,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1 AND is_active = true
 		ORDER BY created_at DESC
@@ -311,6 +320,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -338,7 +348,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1 AND name = $2
 	`
@@ -361,6 +371,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
 		&budget.ExpectedIncome,
+		&budget.SeriesID,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -973,7 +984,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE is_active = true
 		ORDER BY id ASC
@@ -1006,6 +1017,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -1102,54 +1114,56 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 }
 
 // =============================================================================
-// Savings goal category detach tombstone operations (Issue #1300, Codex C6)
+// Savings goal category detach tombstone operations (Issue #1300, G5 — migration 000098)
+// All methods now key on series_id so detach intent persists across budget periods.
 // =============================================================================
 
-// IsGoalDetachedForBudget returns true when a (budget_id, savings_goal_id) tombstone exists.
-func (r *budgetRepository) IsGoalDetachedForBudget(ctx context.Context, budgetID, goalID string) (bool, error) {
+// IsGoalDetachedForSeries returns true when a (series_id, savings_goal_id) tombstone exists.
+func (r *budgetRepository) IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error) {
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM savings_goal_category_detach
-			WHERE budget_id = $1 AND savings_goal_id = $2
+			WHERE series_id = $1 AND savings_goal_id = $2
 		)
 	`
 	var exists bool
-	if err := r.db.QueryRow(ctx, query, budgetID, goalID).Scan(&exists); err != nil {
+	if err := r.db.QueryRow(ctx, query, seriesID, goalID).Scan(&exists); err != nil {
 		return false, err
 	}
 	return exists, nil
 }
 
-// InsertGoalDetach writes a tombstone for the (budget_id, savings_goal_id) pair.
-// Idempotent: ON CONFLICT DO NOTHING.
-func (r *budgetRepository) InsertGoalDetach(ctx context.Context, budgetID, goalID string) error {
+// InsertGoalDetach writes a tombstone keyed on (series_id, savings_goal_id).
+// budgetID is stored as a nullable audit-trail column.
+// Idempotent: ON CONFLICT (series_id, savings_goal_id) DO NOTHING.
+func (r *budgetRepository) InsertGoalDetach(ctx context.Context, seriesID, budgetID, goalID string) error {
 	query := `
-		INSERT INTO savings_goal_category_detach (budget_id, savings_goal_id)
-		VALUES ($1, $2)
-		ON CONFLICT (budget_id, savings_goal_id) DO NOTHING
+		INSERT INTO savings_goal_category_detach (series_id, budget_id, savings_goal_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (series_id, savings_goal_id) DO NOTHING
 	`
-	_, err := r.db.Exec(ctx, query, budgetID, goalID)
+	_, err := r.db.Exec(ctx, query, seriesID, budgetID, goalID)
 	return err
 }
 
-// DeleteGoalDetach clears the tombstone when the user manually re-links a goal.
-func (r *budgetRepository) DeleteGoalDetach(ctx context.Context, budgetID, goalID string) error {
+// DeleteGoalDetach clears the tombstone for (series_id, savings_goal_id).
+func (r *budgetRepository) DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error {
 	query := `
 		DELETE FROM savings_goal_category_detach
-		WHERE budget_id = $1 AND savings_goal_id = $2
+		WHERE series_id = $1 AND savings_goal_id = $2
 	`
-	_, err := r.db.Exec(ctx, query, budgetID, goalID)
+	_, err := r.db.Exec(ctx, query, seriesID, goalID)
 	return err
 }
 
-// GetDetachedGoalIDsForBudget returns all savings_goal_ids tombstoned for a given budget.
-func (r *budgetRepository) GetDetachedGoalIDsForBudget(ctx context.Context, budgetID string) ([]string, error) {
+// GetDetachedGoalIDsForSeries returns all savings_goal_ids tombstoned for a given series.
+func (r *budgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error) {
 	query := `
 		SELECT savings_goal_id::text
 		FROM savings_goal_category_detach
-		WHERE budget_id = $1
+		WHERE series_id = $1
 	`
-	rows, err := r.db.Query(ctx, query, budgetID)
+	rows, err := r.db.Query(ctx, query, seriesID)
 	if err != nil {
 		return nil, err
 	}

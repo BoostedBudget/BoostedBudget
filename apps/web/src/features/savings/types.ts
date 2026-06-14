@@ -6,6 +6,16 @@
  * Extracted from features/budgets/types.ts.
  */
 
+/** Valid progress_basis values (Issue #1300). */
+export type ProgressBasis = 'manual' | 'contributions' | 'balance' | 'account_percentage';
+
+export const PROGRESS_BASIS_LABELS: Record<ProgressBasis, string> = {
+  manual: 'Manual',
+  contributions: 'Confirmed Contributions',
+  balance: 'Account Balance',
+  account_percentage: 'Account % Split',
+};
+
 export interface SavingsGoal {
   id: string;
   user_id: string;
@@ -20,6 +30,10 @@ export interface SavingsGoal {
   completed_at?: string;
   created_at: string;
   updated_at: string;
+  /** How current_amount is derived (Issue #1300). Defaults to "manual". */
+  progress_basis?: ProgressBasis;
+  /** Required when progress_basis is "account_percentage" (0 < x ≤ 1). */
+  account_percentage?: number;
 }
 
 export interface CreateSavingsGoalRequest {
@@ -32,6 +46,10 @@ export interface CreateSavingsGoalRequest {
   /** Stable logical account ID — survives Plaid re-links (Issue #1109). */
   user_account_id?: string;
   deadline?: string;
+  /** How current_amount is derived (Issue #1300). Omit for default "manual". */
+  progress_basis?: ProgressBasis;
+  /** Required when progress_basis is "account_percentage". Range (0, 1]. */
+  account_percentage?: number;
 }
 
 export interface UpdateSavingsGoalRequest {
@@ -41,6 +59,10 @@ export interface UpdateSavingsGoalRequest {
   current_amount?: number;
   account_id?: string;
   deadline?: string;
+  /** Change the progress basis (Issue #1300). Omit to preserve existing basis. */
+  progress_basis?: ProgressBasis;
+  /** Required when progress_basis is "account_percentage". Range (0, 1]. */
+  account_percentage?: number;
 }
 
 export function computeSavingsProgress(goal: SavingsGoal): number {

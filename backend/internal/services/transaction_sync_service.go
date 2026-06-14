@@ -57,6 +57,37 @@ type TransactionSyncService interface {
 	// SetTransferCorrelationService wires in the TransferCorrelationService after construction.
 	// Issue #972: Savings transfer automation — B4 wiring.
 	SetTransferCorrelationService(svc TransferCorrelationService)
+
+	// SetSavingsProgressServices wires in the savings contribution/progress services after construction.
+	// All three parameters are optional (nil = skip that step). Issue #1300 G2.
+	SetSavingsProgressServices(
+		contribCleaner SyncContributionCleaner,
+		progressUpdater SyncGoalProgressUpdater,
+		categoryBackfiller SyncManagedCategoryBackfiller,
+	)
+}
+
+// =============================================================================
+// Issue #1300 G2: narrow consumer-defined interfaces for savings progress wiring.
+// Defined here (not in savings packages) to avoid import cycles.
+// =============================================================================
+
+// SyncContributionCleaner removes auto-derived contribution rows before a transaction
+// is hard-deleted, preventing phantom progress from orphaned rows (Codex C4).
+type SyncContributionCleaner interface {
+	DeleteManagedForTransaction(ctx context.Context, transactionID string) error
+}
+
+// SyncGoalProgressUpdater recomputes savings goal progress for a user after a sync
+// so that balance/contribution-based goals reflect fresh transaction data.
+type SyncGoalProgressUpdater interface {
+	RecomputeUser(ctx context.Context, userID string) error
+}
+
+// SyncManagedCategoryBackfiller creates any missing managed savings categories across
+// active budgets for active goals (idempotent self-healing, Codex C7).
+type SyncManagedCategoryBackfiller interface {
+	BackfillManagedCategories(ctx context.Context, userID string) error
 }
 
 // transactionSyncService implements TransactionSyncService
@@ -75,6 +106,10 @@ type transactionSyncService struct {
 	budgetSyncService         BudgetSyncService             // Issue #494: Sync budget amounts after transaction sync
 	transactionMonitorService TransactionMonitorService     // Issue #36: Auto-detect completed transfer suggestions
 	transferCorrelationSvc    TransferCorrelationService    // Issue #972: Correlate inflows against pending transfer suggestions
+	// Issue #1300 G2: savings progress wiring (all optional; nil = skip)
+	savingsContribCleaner   SyncContributionCleaner   // cleans managed contrib rows before txn removal
+	savingsProgressUpdater  SyncGoalProgressUpdater   // recomputes goal progress after sync
+	savingsCategoryBackfill SyncManagedCategoryBackfiller // backfills missing savings categories
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -118,6 +153,18 @@ func NewTransactionSyncService(
 // Issue #972: Savings transfer automation — B4 wiring.
 func (s *transactionSyncService) SetTransferCorrelationService(svc TransferCorrelationService) {
 	s.transferCorrelationSvc = svc
+}
+
+// SetSavingsProgressServices wires in the savings progress services.
+// All three parameters are optional (nil = skip that step). Issue #1300 G2.
+func (s *transactionSyncService) SetSavingsProgressServices(
+	contribCleaner SyncContributionCleaner,
+	progressUpdater SyncGoalProgressUpdater,
+	categoryBackfiller SyncManagedCategoryBackfiller,
+) {
+	s.savingsContribCleaner = contribCleaner
+	s.savingsProgressUpdater = progressUpdater
+	s.savingsCategoryBackfill = categoryBackfiller
 }
 
 // ProcessWebhook processes a single TRANSACTIONS webhook event
@@ -358,6 +405,27 @@ func (s *transactionSyncService) SyncTransactions(
 	if err := s.createBalanceSnapshots(ctx, linkedItem, accessToken); err != nil {
 		s.logger.Warn("failed to create balance snapshots", "item_id", linkedItem.ID, "error", err)
 		// Don't fail the entire sync - snapshots are non-critical
+	}
+
+	// ========================================================================
+	// Issue #1300 G2: Savings progress reconciliation (ordered BEFORE budget recalc)
+	// Ordering: reconcile managed contributions → RecomputeUser → BackfillManagedCategories
+	// → RecalculateBudgetAmounts (which reads savings "spent" from the ledger)
+	// → CorrelateForUser.  All steps non-fatal.
+	// ========================================================================
+
+	// Recompute all active savings goals for this user (balance/contributions/account_percentage).
+	if s.savingsProgressUpdater != nil {
+		if err := s.savingsProgressUpdater.RecomputeUser(ctx, linkedItem.UserID); err != nil {
+			s.logger.Warn("savings RecomputeUser failed (non-fatal)", "user_id", linkedItem.UserID, "error", err)
+		}
+	}
+
+	// Backfill any missing managed savings categories in active budgets (self-healing, Codex C7).
+	if s.savingsCategoryBackfill != nil {
+		if err := s.savingsCategoryBackfill.BackfillManagedCategories(ctx, linkedItem.UserID); err != nil {
+			s.logger.Warn("savings BackfillManagedCategories failed (non-fatal)", "user_id", linkedItem.UserID, "error", err)
+		}
 	}
 
 	// Issue #494: Sync budget amounts (non-blocking)
@@ -694,6 +762,19 @@ func (s *transactionSyncService) processRemovedTransactions(
 			s.logger.Warn("removed transaction has nil transaction_id, skipping")
 			skippedCount++
 			continue
+		}
+
+		// Issue #1300 G2 (Codex C4): clean up auto-derived contribution rows BEFORE
+		// hard-deleting the transaction so ON DELETE SET NULL doesn't orphan managed rows.
+		if s.savingsContribCleaner != nil {
+			// Look up internal UUID (encrypted external ID needs repo lookup)
+			if internalTxn, lookupErr := s.transactionRepo.GetByExternalID(ctx, domain.SourcePlaid, *removedTxn.TransactionId, linkedItem.UserID); lookupErr == nil {
+				if cleanErr := s.savingsContribCleaner.DeleteManagedForTransaction(ctx, internalTxn.ID); cleanErr != nil {
+					s.logger.Warn("failed to delete managed contributions before transaction removal (non-fatal)",
+						"transaction_id", *removedTxn.TransactionId, "error", cleanErr)
+				}
+			}
+			// If GetByExternalID fails (already deleted or not found), skip — nothing to clean.
 		}
 
 		// Delete transaction (hard delete)

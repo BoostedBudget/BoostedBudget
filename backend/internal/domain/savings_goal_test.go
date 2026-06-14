@@ -586,6 +586,167 @@ func TestSavingsGoal_Validate_ProgressBasis(t *testing.T) {
 	}
 }
 
+// TestCreateSavingsGoalRequest_ProgressBasis tests that the create DTO accepts and validates
+// progress_basis and account_percentage fields (Issue #1300 gap G1).
+func TestCreateSavingsGoalRequest_ProgressBasis(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     CreateSavingsGoalRequest
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "contributions basis accepted",
+			req: CreateSavingsGoalRequest{
+				Name:          "House Fund",
+				TargetAmount:  50000,
+				AccountID:     "account-abc",
+				ProgressBasis: "contributions",
+			},
+			wantErr: false,
+		},
+		{
+			name: "balance basis accepted",
+			req: CreateSavingsGoalRequest{
+				Name:          "House Fund",
+				TargetAmount:  50000,
+				AccountID:     "account-abc",
+				ProgressBasis: "balance",
+			},
+			wantErr: false,
+		},
+		{
+			name: "account_percentage basis with valid percentage accepted",
+			req: CreateSavingsGoalRequest{
+				Name:             "House Fund",
+				TargetAmount:     50000,
+				AccountID:        "account-abc",
+				ProgressBasis:    "account_percentage",
+				AccountPercentage: float64PtrSG(0.5),
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid basis rejected",
+			req: CreateSavingsGoalRequest{
+				Name:          "House Fund",
+				TargetAmount:  50000,
+				AccountID:     "account-abc",
+				ProgressBasis: "bogus",
+			},
+			wantErr: true,
+			errMsg:  "progress_basis must be one of",
+		},
+		{
+			name: "account_percentage without pct rejected",
+			req: CreateSavingsGoalRequest{
+				Name:          "House Fund",
+				TargetAmount:  50000,
+				AccountID:     "account-abc",
+				ProgressBasis: "account_percentage",
+			},
+			wantErr: true,
+			errMsg:  "account_percentage is required",
+		},
+		{
+			name: "percentage > 1 rejected",
+			req: CreateSavingsGoalRequest{
+				Name:             "House Fund",
+				TargetAmount:     50000,
+				AccountID:        "account-abc",
+				ProgressBasis:    "account_percentage",
+				AccountPercentage: float64PtrSG(1.5),
+			},
+			wantErr: true,
+			errMsg:  "account_percentage must be between 0 and 1",
+		},
+		{
+			name: "account_percentage on manual basis rejected",
+			req: CreateSavingsGoalRequest{
+				Name:             "House Fund",
+				TargetAmount:     50000,
+				AccountID:        "account-abc",
+				ProgressBasis:    "manual",
+				AccountPercentage: float64PtrSG(0.3),
+			},
+			wantErr: true,
+			errMsg:  "account_percentage must only be set when progress_basis is account_percentage",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
+
+// TestUpdateSavingsGoalRequest_ProgressBasis tests that the update DTO accepts and validates
+// progress_basis and account_percentage fields (Issue #1300 gap G1).
+func TestUpdateSavingsGoalRequest_ProgressBasis(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     UpdateSavingsGoalRequest
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "nil basis is valid (no change)",
+			req:     UpdateSavingsGoalRequest{},
+			wantErr: false,
+		},
+		{
+			name: "contributions basis accepted",
+			req:  UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("contributions")},
+			wantErr: false,
+		},
+		{
+			name: "account_percentage with pct accepted",
+			req: UpdateSavingsGoalRequest{
+				ProgressBasis:    strPtrSG("account_percentage"),
+				AccountPercentage: float64PtrSG(0.4),
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid basis rejected",
+			req:     UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("bogus")},
+			wantErr: true,
+			errMsg:  "progress_basis must be one of",
+		},
+		{
+			name:    "account_percentage without pct rejected",
+			req:     UpdateSavingsGoalRequest{ProgressBasis: strPtrSG("account_percentage")},
+			wantErr: true,
+			errMsg:  "account_percentage is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" {
+				if err == nil || !contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
+
+func strPtrSG(s string) *string { return &s }
+
 // TestSavingsGoalContribution_Validate tests the contribution validation rules (Issue #1300).
 func TestSavingsGoalContribution_Validate(t *testing.T) {
 	validTxnID := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"

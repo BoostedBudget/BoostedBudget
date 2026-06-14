@@ -91,13 +91,14 @@ export const ANALYTICS_EVENTS = {
   NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',
   NET_WORTH_RANGE_CHANGED: 'net_worth_range_changed',
 
-  // Savings Goals (#954)
+  // Savings Goals (#954, #1300)
   SAVINGS_PAGE_VIEWED: 'savings_page_viewed',
   SAVINGS_GOAL_CREATED: 'savings_goal_created',
   SAVINGS_GOAL_EDITED: 'savings_goal_edited',
   SAVINGS_GOAL_DELETED: 'savings_goal_deleted',
   SAVINGS_FILTER_CHANGED: 'savings_filter_changed',
   SAVINGS_SORT_CHANGED: 'savings_sort_changed',
+  SAVINGS_GOAL_PROGRESS_BASIS_CHANGED: 'savings_goal_progress_basis_changed', // #1300 G1
 
   ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
 
