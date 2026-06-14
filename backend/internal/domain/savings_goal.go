@@ -172,12 +172,16 @@ func (c *SavingsGoalContribution) Validate() error {
 		return errors.New("source must be one of: manual, confirmed_transfer, boost_match")
 	}
 
+	// R4-4: include 'rejected' — sticky tombstone status added by migration 000099 (R3-7).
+	// Before this fix, Validate() rejected 'rejected' rows, creating an inconsistency with
+	// the migration CHECK constraint and the /reject API endpoint.
 	validStatuses := map[string]bool{
 		"proposed":  true,
 		"confirmed": true,
+		"rejected":  true,
 	}
 	if !validStatuses[c.Status] {
-		return errors.New("status must be one of: proposed, confirmed")
+		return errors.New("status must be one of: proposed, confirmed, rejected")
 	}
 
 	return nil

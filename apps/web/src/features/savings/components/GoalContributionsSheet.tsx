@@ -190,6 +190,11 @@ export function GoalContributionsSheet({
     onContributionChanged()
   }, [refetch, onContributionChanged])
 
+  // R4-2: Exclude rejected tombstones from display. The row is retained server-side
+  // (R3-7) as a sticky tombstone so syncs don't re-propose the same transfer-in.
+  // Only proposed + confirmed rows are shown to the user.
+  const visibleContributions = (contributions ?? []).filter((c) => c.status !== 'rejected')
+
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
@@ -217,17 +222,17 @@ export function GoalContributionsSheet({
               </div>
             )}
 
-            {!isLoading && (!contributions || contributions.length === 0) && (
+            {!isLoading && visibleContributions.length === 0 && (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 No contributions yet. Use "Log contribution" to record one manually,
                 or sync a linked account to detect transfers.
               </p>
             )}
 
-            {!isLoading && contributions && contributions.length > 0 && (
+            {!isLoading && visibleContributions.length > 0 && (
               <ul className="divide-y-0" aria-label="Contributions list">
                 {/* Proposed first so users see them at top */}
-                {contributions
+                {visibleContributions
                   .slice()
                   .sort((a, b) => {
                     if (a.status === 'proposed' && b.status !== 'proposed') return -1

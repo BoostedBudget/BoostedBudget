@@ -154,15 +154,22 @@ func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogCon
 	var contrib *domain.SavingsGoalContribution
 
 	if input.Body.TransactionID != nil {
-		// R3-1 (C2): txn-linked → capacity-safe path (FOR UPDATE + cap check).
-		if err := h.contribRepo.UpsertFromTransaction(
+		// R4-1 (C2+C3): txn-linked manual log — use InsertManualFromTransaction which:
+		// - acquires FOR UPDATE + capacity check (C2, same as UpsertFromTransaction)
+		// - stores managed_by_reconciliation=false, confirmed_by_user=true, caller's occurred_on (C3/D6)
+		// - RETURNING the real persisted row (not a fabricated uuid)
+		// UpsertFromTransaction is intentionally NOT used here — it hardcodes reconciler
+		// metadata (managed=true, CURRENT_DATE) which is wrong for user-entered rows.
+		var err error
+		contrib, err = h.contribRepo.InsertManualFromTransaction(
 			ctx,
 			input.UserID,
 			input.GoalID,
 			*input.Body.TransactionID,
 			input.Body.Amount,
-			"manual",
-		); err != nil {
+			input.Body.OccurredOn,
+		)
+		if err != nil {
 			switch err {
 			case domain.ErrSavingsGoalNotFound:
 				return nil, huma.Error404NotFound("savings goal not found")
@@ -170,21 +177,13 @@ func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogCon
 				return nil, huma.Error404NotFound("transaction not found")
 			case domain.ErrContributionOverAllocated:
 				return nil, huma.Error422UnprocessableEntity("over-allocated", err)
+			case domain.ErrContributionAlreadyConfirmed:
+				// A confirmed or rejected contribution already occupies this (transaction, goal) slot.
+				// The ON CONFLICT WHERE status='proposed' guard prevents overwriting it (Codex R4-1 follow-up).
+				return nil, huma.Error422UnprocessableEntity("a contribution for this transaction already exists", err)
 			default:
 				return nil, humaerrors.LoggingMapError(ctx, err)
 			}
-		}
-		// Build a response struct representing the upserted row.
-		contrib = &domain.SavingsGoalContribution{
-			ID:                      uuid.New().String(),
-			SavingsGoalID:           input.GoalID,
-			TransactionID:           input.Body.TransactionID,
-			Amount:                  input.Body.Amount,
-			Source:                  "manual",
-			Status:                  "confirmed",
-			ManagedByReconciliation: false,
-			ConfirmedByUser:         true,
-			OccurredOn:              input.Body.OccurredOn,
 		}
 	} else {
 		// Un-linked manual log: no transaction capacity to consume → plain insert.

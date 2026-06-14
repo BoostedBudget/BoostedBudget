@@ -14,6 +14,8 @@ import {
   mockUseGetActiveSavingsGoals,
   mockSavingsGoalsRefetch,
   mockDeleteSavingsGoalMutateAsync,
+  mockUseListSavingsGoalContributions,
+  mockConfirmSavingsGoalContributionMutateAsync,
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -410,6 +412,78 @@ describe('SavingsPage', () => {
 
       expect(screen.queryByText('Edit Savings Goal')).toBeNull()
       expect(mockSavingsGoalsRefetch).not.toHaveBeenCalled()
+    })
+
+    // R4-T3: Prove the R3-5 wiring at the page level.
+    // SavingsPage passes onContributionChanged={() => void refetch()} → SavingsGoalsGrid →
+    // SavingsGoalCard → GoalContributionsSheet → handleChanged → onContributionChanged.
+    // After any contribution action, the page's goal-list refetch must fire.
+    it('R4-T3: contribution action in sheet triggers page goal-list refetch (R3-5 wiring)', async () => {
+      const user = userEvent.setup()
+
+      // contributions-basis goal — the "Contributions" button is only visible for this basis.
+      const contribGoal: SavingsGoal = {
+        ...baseGoal,
+        id: 'goal-contrib',
+        progress_basis: 'contributions',
+      }
+      mockUseGetSavingsGoals.mockReturnValue({
+        data: [contribGoal],
+        isLoading: false,
+        error: null,
+        refetch: mockSavingsGoalsRefetch,
+      })
+
+      // Sheet lists one proposed contribution → Confirm button is rendered.
+      mockUseListSavingsGoalContributions.mockReturnValue({
+        data: [
+          {
+            id: 'c-proposed-page-test',
+            savings_goal_id: 'goal-contrib',
+            amount: 100,
+            source: 'sync',
+            status: 'proposed',
+            confirmed_by_user: false,
+            managed_by_reconciliation: true,
+            occurred_on: '2026-06-10',
+            created_at: '2026-06-10T00:00:00Z',
+            updated_at: '2026-06-10T00:00:00Z',
+          },
+        ],
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve({})),
+      })
+
+      // Confirm mutation resolves successfully so the success path runs.
+      mockConfirmSavingsGoalContributionMutateAsync.mockResolvedValueOnce({
+        id: 'c-proposed-page-test',
+        savings_goal_id: 'goal-contrib',
+        amount: 100,
+        source: 'sync',
+        status: 'confirmed',
+        confirmed_by_user: true,
+        managed_by_reconciliation: true,
+        occurred_on: '2026-06-10',
+        created_at: '2026-06-10T00:00:00Z',
+        updated_at: '2026-06-10T00:00:00Z',
+      })
+
+      renderPage()
+
+      // Open the contributions sheet.
+      const viewContribButton = screen.getByRole('button', { name: /view contributions/i })
+      await user.click(viewContribButton)
+
+      // Confirm the proposed contribution.
+      const confirmButton = await screen.findByRole('button', { name: /confirm/i })
+      await user.click(confirmButton)
+
+      // Page-level refetch must fire: handleChanged → onContributionChanged →
+      // SavingsPage's `() => void refetch()` → mockSavingsGoalsRefetch.
+      await waitFor(() => {
+        expect(mockSavingsGoalsRefetch).toHaveBeenCalled()
+      })
     })
   })
 })

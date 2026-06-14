@@ -407,3 +407,81 @@ func TestSavingsContributionRepository_Integration_RejectedStatusConstraint(t *t
 	assert.Contains(t, err.Error(), "valid_contribution_status",
 		"error should mention the constraint name")
 }
+
+// =============================================================================
+// (e) Sticky reject tombstone — R3-7 / R4-T1
+// =============================================================================
+
+// TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResync is the
+// canonical proof of the R3-7 sticky-tombstone guarantee.
+//
+// It verifies that after a user rejects a proposed contribution:
+//   - Exactly one row exists with status='rejected' (the tombstone).
+//   - A subsequent call to UpsertProposedFromTransaction for the same
+//     (transaction_id, savings_goal_id) pair is a no-op — the tombstone is NOT
+//     overwritten to status='proposed', and no duplicate row is created.
+//
+// This behavior is enforced by the partial unique index on (transaction_id, savings_goal_id)
+// filtered WHERE transaction_id IS NOT NULL, combined with the ON CONFLICT … WHERE
+// status='proposed' predicate in UpsertProposedFromTransaction: if the conflict row has
+// status='rejected', the predicate is false and the DO UPDATE is skipped entirely.
+//
+// RED: fails before R3-7 (reject was a hard DELETE → re-upsert re-creates proposed row).
+// GREEN: passes after R3-7 (reject sets status='rejected'; re-upsert is a no-op).
+func TestSavingsContributionRepository_Integration_RejectTombstone_SurvivesResync(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+	// Plaid inflow convention: negative amount; ABS is used in capacity checks.
+	txnID := seedIntegrationTransaction(t, pool, userID, accountID, -100.0)
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	// Step 1: Simulate sync detecting a proposed contribution.
+	err := repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "initial UpsertProposedFromTransaction must succeed")
+
+	// Step 2: Fetch the contribution ID so we can call RejectContribution.
+	var contribID string
+	err = pool.QueryRow(ctx,
+		`SELECT id FROM savings_goal_contributions WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&contribID)
+	require.NoError(t, err, "proposed contribution must exist after upsert")
+
+	// Step 3: User rejects the proposed row.
+	_, err = repo.RejectContribution(ctx, userID, contribID)
+	require.NoError(t, err, "RejectContribution must succeed")
+
+	// Verify tombstone is in place.
+	var statusAfterReject string
+	err = pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID,
+	).Scan(&statusAfterReject)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", statusAfterReject, "row must have status='rejected' after RejectContribution")
+
+	// Step 4: Sync re-detects the same transfer-in — call UpsertProposedFromTransaction again.
+	// The tombstone's ON CONFLICT predicate (WHERE status='proposed') makes this a no-op.
+	err = repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, 100.0)
+	require.NoError(t, err, "re-upsert after reject must not error")
+
+	// Step 5: Assert exactly one row remains and it is still 'rejected'.
+	var rowCount int
+	var statusAfterResync string
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*), COALESCE(MAX(status), '')
+		   FROM savings_goal_contributions
+		  WHERE transaction_id = $1 AND savings_goal_id = $2`,
+		txnID, goalID,
+	).Scan(&rowCount, &statusAfterResync)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, rowCount,
+		"re-sync must not create a duplicate row; tombstone remains the only record")
+	assert.Equal(t, "rejected", statusAfterResync,
+		"tombstone status must remain 'rejected' after re-sync (R3-7 sticky guarantee)")
+}

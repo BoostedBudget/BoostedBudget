@@ -163,7 +163,25 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		return nil, err
 	}
 
-	// Save to database
+	// R4-3 (Codex C1 / IDOR): Pre-validate savings-goal ownership for ALL categories BEFORE
+	// persisting the budget. The R3-4 fix placed this check inside the per-category loop after
+	// budgetRepo.Create, so a failed IDOR check returned an error but left an orphaned budget
+	// row already committed. Moving it here makes the operation atomic: no budget is ever
+	// written if any category references another user's savings goal.
+	for _, catReq := range req.Categories {
+		if catReq.CategoryKind == "savings" && catReq.SavingsGoalID != nil {
+			if s.goalOwnershipChecker == nil {
+				s.logger.Warn("savings category pre-validated in CreateBudget without ownership check wired — potential IDOR risk",
+					slog.String("savings_goal_id", *catReq.SavingsGoalID),
+					slog.String("user_id", userID),
+				)
+			} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *catReq.SavingsGoalID, userID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Save to database (only reached after all categories pass ownership validation).
 	if err := s.budgetRepo.Create(ctx, budget); err != nil {
 		s.logger.Error("failed to create budget",
 			slog.String("user_id", userID),
@@ -172,22 +190,8 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		return nil, err
 	}
 
-	// Create categories if provided
+	// Create categories if provided (ownership already verified above).
 	for _, catReq := range req.Categories {
-		// R3-4 / Codex C1: IDOR — verify savings goal belongs to the requesting user.
-		// Mirrors the same check in AddCategory (line ~502). Without this, a caller
-		// could link another user's savings goal at budget-creation time.
-		if catReq.CategoryKind == "savings" && catReq.SavingsGoalID != nil {
-			if s.goalOwnershipChecker == nil {
-				s.logger.Warn("savings category created in CreateBudget without ownership check wired — potential IDOR risk",
-					slog.String("savings_goal_id", *catReq.SavingsGoalID),
-					slog.String("user_id", userID),
-				)
-			} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *catReq.SavingsGoalID, userID); err != nil {
-				return nil, err
-			}
-		}
-
 		category := &domain.BudgetCategory{
 			ID:               uuid.New().String(),
 			BudgetID:         budget.ID,

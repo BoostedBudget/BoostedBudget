@@ -38,6 +38,14 @@ func (m *mockSavingsContributionRepo) UpsertFromTransaction(ctx context.Context,
 	return args.Error(0)
 }
 
+func (m *mockSavingsContributionRepo) InsertManualFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, occurredOn string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, goalID, transactionID, amount, occurredOn)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
+}
+
 func (m *mockSavingsContributionRepo) SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error) {
 	args := m.Called(ctx, userID, goalID)
 	return args.Get(0).(float64), args.Error(1)
@@ -621,7 +629,8 @@ func TestLogContribution_BalanceBasis_Returns422(t *testing.T) {
 // =============================================================================
 
 // TestLogContribution_TxnLinked_OverAllocated_Returns422 verifies that when a manual
-// contribution includes a transaction_id, an over-allocation returns 422 (C2 / R3-1).
+// contribution includes a transaction_id, an over-allocation returns 422 (C2 / R3-1 / R4-1).
+// R4-1: uses InsertManualFromTransaction (not UpsertFromTransaction).
 func TestLogContribution_TxnLinked_OverAllocated_Returns422(t *testing.T) {
 	goalID := "goal-txn-overalloc"
 	userID := "user-txn-overalloc"
@@ -638,10 +647,9 @@ func TestLogContribution_TxnLinked_OverAllocated_Returns422(t *testing.T) {
 	}
 	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
 
-	// UpsertFromTransaction is called instead of Insert for txn-linked logs.
-	// It returns ErrContributionOverAllocated when the txn is maxed out.
-	contribRepo.On("UpsertFromTransaction", mock.Anything, userID, goalID, txnID, 999.00, "manual").
-		Return(domain.ErrContributionOverAllocated)
+	// R4-1: InsertManualFromTransaction (not UpsertFromTransaction) handles txn-linked manual logs.
+	contribRepo.On("InsertManualFromTransaction", mock.Anything, userID, goalID, txnID, 999.00, "2026-06-14").
+		Return(nil, domain.ErrContributionOverAllocated)
 
 	ctx := context.Background()
 	txnIDStr := txnID
@@ -662,13 +670,16 @@ func TestLogContribution_TxnLinked_OverAllocated_Returns422(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus(),
 		"over-allocated txn-linked manual log must return 422")
 	contribRepo.AssertNotCalled(t, "Insert")
+	contribRepo.AssertNotCalled(t, "UpsertFromTransaction")
 }
 
-// TestLogContribution_TxnLinked_Success uses UpsertFromTransaction (capacity-safe path).
+// TestLogContribution_TxnLinked_Success uses InsertManualFromTransaction (R4-1: capacity-safe,
+// manual semantics). Verifies the response returns the REAL persisted row ID (not a fabricated uuid).
 func TestLogContribution_TxnLinked_Success(t *testing.T) {
 	goalID := "goal-txn-ok"
 	userID := "user-txn-ok"
 	txnID := "txn-ok"
+	realRowID := "real-db-row-id"
 
 	contribRepo := new(mockSavingsContributionRepo)
 	progress := new(mockContributionProgressRecomputer)
@@ -680,9 +691,21 @@ func TestLogContribution_TxnLinked_Success(t *testing.T) {
 		UserID:        userID,
 		ProgressBasis: domain.ProgressBasisContributions,
 	}
+	// The repo returns the real persisted row (R4-1: not a fabricated uuid.New() struct).
+	persistedRow := &domain.SavingsGoalContribution{
+		ID:                      realRowID,
+		SavingsGoalID:           goalID,
+		Amount:                  100.00,
+		Source:                  "manual",
+		Status:                  "confirmed",
+		ManagedByReconciliation: false,
+		ConfirmedByUser:         true,
+		OccurredOn:              "2025-12-01",
+	}
 	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
-	contribRepo.On("UpsertFromTransaction", mock.Anything, userID, goalID, txnID, 100.00, "manual").
-		Return(nil)
+	// R4-1: InsertManualFromTransaction (not UpsertFromTransaction) for txn-linked manual logs.
+	contribRepo.On("InsertManualFromTransaction", mock.Anything, userID, goalID, txnID, 100.00, "2025-12-01").
+		Return(persistedRow, nil)
 	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
 	ctx := context.Background()
@@ -692,7 +715,7 @@ func TestLogContribution_TxnLinked_Success(t *testing.T) {
 		GoalID:             goalID,
 		Body: domain.LogContributionRequest{
 			Amount:        100.00,
-			OccurredOn:    "2026-06-14",
+			OccurredOn:    "2025-12-01",
 			TransactionID: &txnIDStr,
 		},
 	}
@@ -700,9 +723,60 @@ func TestLogContribution_TxnLinked_Success(t *testing.T) {
 	output, err := handler.LogContribution(ctx, input)
 	require.NoError(t, err)
 	require.NotNil(t, output)
+	// R4-1: ID must equal the real DB row ID, not a random uuid.
+	assert.Equal(t, realRowID, output.Body.ID, "response ID must be the real persisted row ID")
+	// R4-1: OccurredOn must equal the caller's date, not CURRENT_DATE.
+	assert.Equal(t, "2025-12-01", output.Body.OccurredOn, "OccurredOn must reflect the request date")
+	// R4-1 C3: managed_by_reconciliation must be false for manual rows.
+	assert.False(t, output.Body.ManagedByReconciliation, "manual log must not be reconciler-owned")
+	// R4-1: confirmed_by_user must be true.
+	assert.True(t, output.Body.ConfirmedByUser, "manual log must have confirmed_by_user=true")
 	contribRepo.AssertNotCalled(t, "Insert")
+	contribRepo.AssertNotCalled(t, "UpsertFromTransaction")
 	contribRepo.AssertExpectations(t)
 	progress.AssertExpectations(t)
+}
+
+// TestLogContribution_TxnLinked_AlreadyConfirmed_Returns422 verifies that when
+// InsertManualFromTransaction returns ErrContributionAlreadyConfirmed (the ON CONFLICT
+// WHERE status='proposed' predicate was false — an existing confirmed/rejected row
+// occupies the slot), the handler returns 422 rather than a 500. (Codex R4-1 follow-up)
+func TestLogContribution_TxnLinked_AlreadyConfirmed_Returns422(t *testing.T) {
+	goalID := "goal-already-confirmed"
+	userID := "user-already-confirmed"
+	txnID := "txn-already-confirmed"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+	contribRepo.On("InsertManualFromTransaction", mock.Anything, userID, goalID, txnID, 50.00, "2026-06-14").
+		Return(nil, domain.ErrContributionAlreadyConfirmed)
+
+	ctx := context.Background()
+	txnIDStr := txnID
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:        50.00,
+			OccurredOn:    "2026-06-14",
+			TransactionID: &txnIDStr,
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus(),
+		"already-confirmed slot must return 422, not 500")
 }
 
 // TestLogContribution_NoTxn_Success uses Insert (unlinked manual log — no capacity to consume).
