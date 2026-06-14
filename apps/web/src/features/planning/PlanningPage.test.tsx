@@ -1,29 +1,24 @@
 // Issue #1300: PlanningPage sub-tabs + URL state tests
+// API hooks are mocked via bunfig.toml preloads (budgets-api.ts, savings-goals-api.ts,
+// track-event.ts). Do NOT add mock.module() here — it leaks across test files in bun:test.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
-
-// Stub child pages and analytics (must come before imports that use them)
-mock.module('../budgets', () => ({
-  BudgetsPage: () => React.createElement('div', { 'data-testid': 'budgets-page' }, 'Budgets Content'),
-}))
-mock.module('../savings', () => ({
-  SavingsPage: () => React.createElement('div', { 'data-testid': 'savings-page' }, 'Savings Content'),
-}))
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: mock(() => mock(() => {})),
-}))
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { PlanningPage } from './PlanningPage'
 
 function renderPlanningPage(search = '') {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <MemoryRouter initialEntries={[`/planning${search}`]}>
-      <Routes>
-        <Route path="/planning" element={<PlanningPage />} />
-      </Routes>
-    </MemoryRouter>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[`/planning${search}`]}>
+        <Routes>
+          <Route path="/planning" element={<PlanningPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
   )
 }
 
@@ -37,14 +32,18 @@ describe('PlanningPage', () => {
     expect(screen.getByRole('heading', { name: /planning/i })).toBeDefined()
   })
 
-  it('defaults to Budgets tab and shows budgets content', () => {
+  it('defaults to Budgets tab', () => {
     renderPlanningPage()
-    expect(screen.getByTestId('budgets-page')).toBeDefined()
+    const tab = screen.getByRole('tab', { name: 'Budgets' })
+    expect(tab).toBeDefined()
+    expect(tab.getAttribute('data-state')).toBe('active')
   })
 
-  it('shows Savings content when ?tab=savings', () => {
+  it('activates Savings tab when ?tab=savings', () => {
     renderPlanningPage('?tab=savings')
-    expect(screen.getByTestId('savings-page')).toBeDefined()
+    const tab = screen.getByRole('tab', { name: 'Savings' })
+    expect(tab).toBeDefined()
+    expect(tab.getAttribute('data-state')).toBe('active')
   })
 
   it('renders both Budgets and Savings tab triggers', () => {

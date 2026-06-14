@@ -1,3 +1,6 @@
+// API hooks are mocked via bunfig.toml preloads (savings-goals-api.ts).
+// Do NOT add mock.module() for savings-goals here — it leaks across test files in bun:test.
+
 /**
  * SavingsGoalSelect Tests
  */
@@ -5,16 +8,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-
-const mockUseGetSavingsGoals = mock(() => ({
-  data: undefined,
-  isLoading: false,
-  isError: false,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useGetSavingsGoals: mockUseGetSavingsGoals,
-}))
+import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
 
 import { SavingsGoalSelect } from './SavingsGoalSelect'
 
