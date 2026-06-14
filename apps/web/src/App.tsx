@@ -29,6 +29,20 @@ import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { useLoginEnabled } from './shared/hooks'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
+// Redirect that forwards any extra query params from the old route to the new one.
+// e.g. /budgets?sort=name:asc → /planning?tab=budgets&sort=name:asc
+function ForwardSearch({ to }: { to: string }) {
+  const location = useLocation()
+  const [targetPath, targetQs] = to.split('?')
+  const targetParams = new URLSearchParams(targetQs ?? '')
+  const sourceParams = new URLSearchParams(location.search)
+  for (const [key, value] of sourceParams) {
+    if (!targetParams.has(key)) targetParams.set(key, value)
+  }
+  const qs = targetParams.toString()
+  return <Navigate to={qs ? `${targetPath}?${qs}` : targetPath} replace />
+}
+
 const ProfilePage = lazy(() =>
   import('./features/profile/ProfilePage').then(m => ({ default: m.ProfilePage }))
 )
@@ -282,9 +296,9 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            {/* Issue #1300: /reports and /net-worth redirect to /insights?tab= */}
-            <Route path="/reports" element={<Navigate to="/insights?tab=spending" replace />} />
-            <Route path="/net-worth" element={<Navigate to="/insights?tab=net-worth" replace />} />
+            {/* Issue #1300: /reports and /net-worth redirect to /insights?tab= (query params forwarded) */}
+            <Route path="/reports" element={<ForwardSearch to="/insights?tab=spending" />} />
+            <Route path="/net-worth" element={<ForwardSearch to="/insights?tab=net-worth" />} />
             <Route
               path="/insights"
               element={
@@ -297,9 +311,9 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            {/* Issue #1300: /savings and /budgets redirect to /planning?tab= */}
-            <Route path="/savings" element={<Navigate to="/planning?tab=savings" replace />} />
-            <Route path="/budgets" element={<Navigate to="/planning?tab=budgets" replace />} />
+            {/* Issue #1300: /savings and /budgets redirect to /planning?tab= (query params forwarded) */}
+            <Route path="/savings" element={<ForwardSearch to="/planning?tab=savings" />} />
+            <Route path="/budgets" element={<ForwardSearch to="/planning?tab=budgets" />} />
             <Route
               path="/planning"
               element={
