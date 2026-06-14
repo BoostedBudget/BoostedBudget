@@ -78,6 +78,7 @@ func TestBudgetRepository_Create(t *testing.T) {
 		budget.IncomeAmount,  // income_amount (Issue #491)
 		pgxmock.AnyArg(),     // income_sources JSON (Issue #491)
 		pgxmock.AnyArg(),     // expected_income (Issue #1048)
+		pgxmock.AnyArg(),     // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -111,6 +112,7 @@ func TestBudgetRepository_Create_DuplicateName(t *testing.T) {
 		pgxmock.AnyArg(), // income_amount (Issue #491)
 		pgxmock.AnyArg(), // income_sources JSON (Issue #491)
 		pgxmock.AnyArg(), // expected_income (Issue #1048)
+		pgxmock.AnyArg(), // series_id (#1300 G5)
 	).WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, budget)
@@ -130,11 +132,11 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 	now := time.Now()
 	desc := "Test budget"
 
-	// Mock the main budget query (Issue #491: added income_amount, income_sources; #1048: expected_income)
+	// Mock the main budget query (Issue #491: added income_amount, income_sources; #1048: expected_income; #1300 G5: series_id)
 	budgetColumns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -152,9 +154,10 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,   // income_amount (Issue #491)
-			`[]`,   // income_sources JSON (Issue #491)
-			0.00,   // expected_income (Issue #1048)
+			0.00,     // income_amount (Issue #491)
+			`[]`,     // income_sources JSON (Issue #491)
+			0.00,     // expected_income (Issue #1048)
+			budgetID, // series_id (#1300 G5: standalone budgets have series_id = id)
 		))
 
 	// Mock the categories query (PFC v2: category_kind + discriminated union fields + savings #1300)
@@ -230,21 +233,22 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 
-	// Helper for nullable strings
+	// Helpers for nullable strings
 	desc1, desc2 := "Desc 1", "Desc 2"
+	budget1ID, budget2ID := uuid.New().String(), uuid.New().String()
 
-	// Issue #491: added income_amount, income_sources; #1048: added expected_income
+	// Issue #491: added income_amount, income_sources; #1048: added expected_income; #1300 G5: series_id
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
 		WillReturnRows(pgxmock.NewRows(columns).
 			AddRow(
-				uuid.New().String(),
+				budget1ID,
 				userID,
 				"Budget 1",
 				&desc1, // Use pointer for nullable description
@@ -256,12 +260,13 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
-				0.00, // income_amount
-				`[]`, // income_sources
-				0.00, // expected_income (#1048)
+				0.00,      // income_amount
+				`[]`,      // income_sources
+				0.00,      // expected_income (#1048)
+				budget1ID, // series_id (#1300 G5)
 			).
 			AddRow(
-				uuid.New().String(),
+				budget2ID,
 				userID,
 				"Budget 2",
 				&desc2, // Use pointer for nullable description
@@ -273,9 +278,10 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
-				0.00, // income_amount
-				`[]`, // income_sources
-				0.00, // expected_income (#1048)
+				0.00,      // income_amount
+				`[]`,      // income_sources
+				0.00,      // expected_income (#1048)
+				budget2ID, // series_id (#1300 G5)
 			))
 
 	budgets, err := repo.GetByUserID(ctx, userID)
@@ -296,18 +302,19 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 
 	// Helper for nullable string
 	desc := "Desc"
+	activeBudgetID := uuid.New().String()
 
-	// Issue #491: added income_amount, income_sources; #1048: added expected_income
+	// Issue #491: added income_amount, income_sources; #1048: added expected_income; #1300 G5: series_id
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
 		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
+			activeBudgetID,
 			userID,
 			"Active Budget",
 			&desc, // Use pointer for nullable description
@@ -319,9 +326,10 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00, // income_amount
-			`[]`, // income_sources
-			0.00, // expected_income (#1048)
+			0.00,          // income_amount
+			`[]`,          // income_sources
+			0.00,          // expected_income (#1048)
+			activeBudgetID, // series_id (#1300 G5)
 		))
 
 	budgets, err := repo.GetActiveByUserID(ctx, userID)
@@ -1136,7 +1144,6 @@ func TestBudgetRepository_Create_IncludesExpectedIncome(t *testing.T) {
 	budget := createTestBudget(uuid.New().String())
 	budget.ExpectedIncome = 500.00 // mirrors Amount
 
-	// The INSERT must include expected_income as the 15th argument ($15).
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO budgets`)).WithArgs(
 		pgxmock.AnyArg(), // id
 		budget.UserID,
@@ -1153,6 +1160,7 @@ func TestBudgetRepository_Create_IncludesExpectedIncome(t *testing.T) {
 		budget.IncomeAmount,    // income_amount
 		pgxmock.AnyArg(),       // income_sources JSON
 		budget.ExpectedIncome,  // expected_income (#1048)
+		pgxmock.AnyArg(),       // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -1169,7 +1177,6 @@ func TestBudgetRepository_Create_DefaultsExpectedIncomeToAmount(t *testing.T) {
 
 	ctx := context.Background()
 	budget := createTestBudget(uuid.New().String())
-	// ExpectedIncome is 0; Create should mirror Amount (500.00)
 
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO budgets`)).WithArgs(
 		pgxmock.AnyArg(), // id
@@ -1187,6 +1194,7 @@ func TestBudgetRepository_Create_DefaultsExpectedIncomeToAmount(t *testing.T) {
 		budget.IncomeAmount,  // income_amount
 		pgxmock.AnyArg(),     // income_sources JSON
 		budget.Amount,        // expected_income defaults to Amount when 0 (#1048)
+		pgxmock.AnyArg(),     // series_id (#1300 G5)
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, budget)
@@ -1208,11 +1216,10 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 	now := time.Now()
 	desc := "Test budget"
 
-	// Include expected_income in the columns (#1048)
 	budgetColumns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -1230,9 +1237,10 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,   // income_amount
-			`[]`,   // income_sources JSON
-			500.00, // expected_income (#1048)
+			0.00,     // income_amount
+			`[]`,     // income_sources JSON
+			500.00,   // expected_income (#1048)
+			budgetID, // series_id (#1300 G5)
 		))
 
 	// Mock categories query (PFC v2 columns + savings #1300)
@@ -1241,7 +1249,7 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
 		"parent_id", "parent_pfc_primary",
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
-		"savings_goal_name", // JOIN savings_goals — Issue #1300
+		"savings_goal_name",
 	}
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(budgetID).
@@ -1265,18 +1273,18 @@ func TestBudgetRepository_GetByUserID_ReturnsExpectedIncome(t *testing.T) {
 	userID := uuid.New().String()
 	now := time.Now()
 	desc := "Desc"
+	byUserBudgetID := uuid.New().String()
 
-	// Include expected_income in the columns (#1048)
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
 		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
+			byUserBudgetID,
 			userID,
 			"Budget 1",
 			&desc,
@@ -1288,9 +1296,10 @@ func TestBudgetRepository_GetByUserID_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,   // income_amount
-			`[]`,   // income_sources
-			450.00, // expected_income (#1048)
+			0.00,         // income_amount
+			`[]`,         // income_sources
+			450.00,       // expected_income (#1048)
+			byUserBudgetID, // series_id (#1300 G5)
 		))
 
 	budgets, err := repo.GetByUserID(ctx, userID)
@@ -1311,18 +1320,18 @@ func TestBudgetRepository_GetActiveByUserID_ReturnsExpectedIncome(t *testing.T) 
 	userID := uuid.New().String()
 	now := time.Now()
 	desc := "Desc"
+	activeBudget2ID := uuid.New().String()
 
-	// Include expected_income in the columns (#1048)
 	columns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID).
 		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
+			activeBudget2ID,
 			userID,
 			"Active Budget",
 			&desc,
@@ -1334,9 +1343,10 @@ func TestBudgetRepository_GetActiveByUserID_ReturnsExpectedIncome(t *testing.T) 
 			true,
 			now,
 			now,
-			0.00,   // income_amount
-			`[]`,   // income_sources
-			500.00, // expected_income (#1048)
+			0.00,          // income_amount
+			`[]`,          // income_sources
+			500.00,        // expected_income (#1048)
+			activeBudget2ID, // series_id (#1300 G5)
 		))
 
 	budgets, err := repo.GetActiveByUserID(ctx, userID)
@@ -1450,18 +1460,18 @@ func TestBudgetRepository_GetByName_ReturnsExpectedIncome(t *testing.T) {
 	budgetName := "Groceries"
 	now := time.Now()
 	desc := "Monthly grocery budget"
+	byNameBudgetID := uuid.New().String()
 
-	// Include expected_income in the columns (#1048)
 	budgetColumns := []string{
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
-		"income_amount", "income_sources", "expected_income",
+		"income_amount", "income_sources", "expected_income", "series_id",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
 		WithArgs(userID, budgetName).
 		WillReturnRows(pgxmock.NewRows(budgetColumns).AddRow(
-			uuid.New().String(),
+			byNameBudgetID,
 			userID,
 			budgetName,
 			&desc,
@@ -1473,9 +1483,10 @@ func TestBudgetRepository_GetByName_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,   // income_amount
-			`[]`,   // income_sources JSON
-			500.00, // expected_income (#1048)
+			0.00,         // income_amount
+			`[]`,         // income_sources JSON
+			500.00,       // expected_income (#1048)
+			byNameBudgetID, // series_id (#1300 G5)
 		))
 
 	budget, err := repo.GetByName(ctx, userID, budgetName)
@@ -1554,20 +1565,21 @@ func TestBudgetRepository_GetTimezonesByUserIDs(t *testing.T) {
 }
 
 // =============================================================================
-// Savings goal category detach tombstone tests (Issue #1300, Codex C6)
+// Savings goal category detach tombstone tests (Issue #1300, Codex C6 / G5)
+// Since migration 000098 tombstones are keyed by (series_id, savings_goal_id).
 // =============================================================================
 
-func TestBudgetRepository_IsGoalDetachedForBudget(t *testing.T) {
+func TestBudgetRepository_IsGoalDetachedForSeries(t *testing.T) {
 	t.Run("returns true when tombstone exists", func(t *testing.T) {
 		mock, repo := setupBudgetMockDB(t)
 		defer mock.Close()
 		ctx := context.Background()
 
 		mock.ExpectQuery(`SELECT EXISTS`).
-			WithArgs("budget-1", "goal-1").
+			WithArgs("series-1", "goal-1").
 			WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
 
-		found, err := repo.IsGoalDetachedForBudget(ctx, "budget-1", "goal-1")
+		found, err := repo.IsGoalDetachedForSeries(ctx, "series-1", "goal-1")
 		require.NoError(t, err)
 		assert.True(t, found)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1579,10 +1591,10 @@ func TestBudgetRepository_IsGoalDetachedForBudget(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectQuery(`SELECT EXISTS`).
-			WithArgs("budget-1", "goal-2").
+			WithArgs("series-1", "goal-2").
 			WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))
 
-		found, err := repo.IsGoalDetachedForBudget(ctx, "budget-1", "goal-2")
+		found, err := repo.IsGoalDetachedForSeries(ctx, "series-1", "goal-2")
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1590,16 +1602,18 @@ func TestBudgetRepository_IsGoalDetachedForBudget(t *testing.T) {
 }
 
 func TestBudgetRepository_InsertGoalDetach(t *testing.T) {
-	t.Run("inserts tombstone successfully", func(t *testing.T) {
+	t.Run("inserts tombstone successfully (series_id, budget_id, goal_id)", func(t *testing.T) {
 		mock, repo := setupBudgetMockDB(t)
 		defer mock.Close()
 		ctx := context.Background()
 
+		// InsertGoalDetach(ctx, seriesID, budgetID, goalID) — 3 string args.
+		// For a standalone budget seriesID == budgetID.
 		mock.ExpectExec(`INSERT INTO savings_goal_category_detach`).
-			WithArgs("budget-1", "goal-1").
+			WithArgs("series-1", "budget-1", "goal-1").
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
-		err := repo.InsertGoalDetach(ctx, "budget-1", "goal-1")
+		err := repo.InsertGoalDetach(ctx, "series-1", "budget-1", "goal-1")
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1609,12 +1623,12 @@ func TestBudgetRepository_InsertGoalDetach(t *testing.T) {
 		defer mock.Close()
 		ctx := context.Background()
 
-		// ON CONFLICT DO NOTHING returns 0 rows affected; no error
+		// ON CONFLICT (series_id, savings_goal_id) DO NOTHING → 0 rows affected; no error.
 		mock.ExpectExec(`INSERT INTO savings_goal_category_detach`).
-			WithArgs("budget-1", "goal-1").
+			WithArgs("series-1", "budget-1", "goal-1").
 			WillReturnResult(pgxmock.NewResult("INSERT", 0))
 
-		err := repo.InsertGoalDetach(ctx, "budget-1", "goal-1")
+		err := repo.InsertGoalDetach(ctx, "series-1", "budget-1", "goal-1")
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1627,10 +1641,10 @@ func TestBudgetRepository_DeleteGoalDetach(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectExec(`DELETE FROM savings_goal_category_detach`).
-			WithArgs("budget-1", "goal-1").
+			WithArgs("series-1", "goal-1").
 			WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
-		err := repo.DeleteGoalDetach(ctx, "budget-1", "goal-1")
+		err := repo.DeleteGoalDetach(ctx, "series-1", "goal-1")
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -1641,17 +1655,17 @@ func TestBudgetRepository_DeleteGoalDetach(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectExec(`DELETE FROM savings_goal_category_detach`).
-			WithArgs("budget-1", "goal-99").
+			WithArgs("series-1", "goal-99").
 			WillReturnResult(pgxmock.NewResult("DELETE", 0))
 
-		err := repo.DeleteGoalDetach(ctx, "budget-1", "goal-99")
+		err := repo.DeleteGoalDetach(ctx, "series-1", "goal-99")
 		require.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
-func TestBudgetRepository_GetDetachedGoalIDsForBudget(t *testing.T) {
-	t.Run("returns all detached goal IDs", func(t *testing.T) {
+func TestBudgetRepository_GetDetachedGoalIDsForSeries(t *testing.T) {
+	t.Run("returns all detached goal IDs for a series", func(t *testing.T) {
 		mock, repo := setupBudgetMockDB(t)
 		defer mock.Close()
 		ctx := context.Background()
@@ -1661,10 +1675,10 @@ func TestBudgetRepository_GetDetachedGoalIDsForBudget(t *testing.T) {
 			AddRow("goal-2")
 
 		mock.ExpectQuery(`SELECT savings_goal_id`).
-			WithArgs("budget-1").
+			WithArgs("series-1").
 			WillReturnRows(rows)
 
-		ids, err := repo.GetDetachedGoalIDsForBudget(ctx, "budget-1")
+		ids, err := repo.GetDetachedGoalIDsForSeries(ctx, "series-1")
 		require.NoError(t, err)
 		assert.Equal(t, []string{"goal-1", "goal-2"}, ids)
 		assert.NoError(t, mock.ExpectationsWereMet())
@@ -1676,10 +1690,10 @@ func TestBudgetRepository_GetDetachedGoalIDsForBudget(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectQuery(`SELECT savings_goal_id`).
-			WithArgs("budget-no-detach").
+			WithArgs("series-no-detach").
 			WillReturnRows(pgxmock.NewRows([]string{"savings_goal_id"}))
 
-		ids, err := repo.GetDetachedGoalIDsForBudget(ctx, "budget-no-detach")
+		ids, err := repo.GetDetachedGoalIDsForSeries(ctx, "series-no-detach")
 		require.NoError(t, err)
 		assert.Empty(t, ids)
 		assert.NoError(t, mock.ExpectationsWereMet())
