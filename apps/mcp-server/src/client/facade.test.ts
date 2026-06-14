@@ -104,6 +104,8 @@ describe('createApiClient', () => {
     //               getInvestmentTransactions, getPortfolioAllocationBreakdown,
     //               getTopMovers, getInvestmentGainLossSummary, getInvestmentIncomeSummary
     // +1 from #1300: getSavingsGoalsProgressSummary
-    expect(count).toBe(111)
+    // +4 from #1300 M20: logSavingsGoalContribution, listSavingsGoalContributions,
+    //                    confirmSavingsGoalContribution, deleteSavingsGoalContribution
+    expect(count).toBe(115)
   })
 })
