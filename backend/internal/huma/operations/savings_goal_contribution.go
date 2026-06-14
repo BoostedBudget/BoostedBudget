@@ -117,9 +117,7 @@ func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogCon
 		OccurredOn:              input.Body.OccurredOn,
 	}
 
-	if err := h.contribRepo.Insert(ctx, contrib); err != nil {
-		// Check ownership: if the goal doesn't belong to the user the INSERT will fail
-		// because the FK constraint requires the goal to exist. Surface a 404.
+	if err := h.contribRepo.Insert(ctx, input.UserID, contrib); err != nil {
 		if err == domain.ErrSavingsGoalNotFound {
 			return nil, huma.Error404NotFound("savings goal not found")
 		}

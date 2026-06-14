@@ -15,8 +15,10 @@ import (
 // reconciliation service; user-entered/confirmed rows (managed_by_reconciliation = false)
 // are never touched by the reconciler (Codex C3).
 type SavingsContributionRepository interface {
-	// Insert inserts a new contribution row. ID is generated if empty.
-	Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error
+	// Insert inserts a new manually-logged contribution. ID is generated if empty.
+	// userID is required: the savings goal must belong to userID (Codex C1 / IDOR guard).
+	// If contrib.TransactionID is non-nil, the referenced transaction must also belong to userID.
+	Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error
 
 	// UpsertFromTransaction inserts or updates a contribution linked to a transaction.
 	// userID is required: both the savings goal and the transaction must belong to
@@ -91,9 +93,34 @@ func NewSavingsContributionRepository(db DB) SavingsContributionRepository {
 }
 
 // Insert inserts a new contribution row. ID is generated if empty.
-func (r *savingsContributionRepository) Insert(ctx context.Context, contrib *domain.SavingsGoalContribution) error {
+func (r *savingsContributionRepository) Insert(ctx context.Context, userID string, contrib *domain.SavingsGoalContribution) error {
 	if contrib.ID == "" {
 		contrib.ID = uuid.New().String()
+	}
+
+	// Verify goal ownership (Codex C1 / IDOR guard) — mirrors UpsertFromTransaction.
+	var dummy int
+	if err := r.db.QueryRow(ctx,
+		`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`,
+		contrib.SavingsGoalID, userID,
+	).Scan(&dummy); err != nil {
+		if err == pgx.ErrNoRows {
+			return domain.ErrSavingsGoalNotFound
+		}
+		return err
+	}
+
+	// Verify transaction ownership if an optional link was supplied.
+	if contrib.TransactionID != nil {
+		if err := r.db.QueryRow(ctx,
+			`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`,
+			*contrib.TransactionID, userID,
+		).Scan(&dummy); err != nil {
+			if err == pgx.ErrNoRows {
+				return domain.ErrContributionNotFound
+			}
+			return err
+		}
 	}
 
 	now := time.Now()
@@ -104,13 +131,11 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, contrib *dom
 		contrib.Status = "confirmed"
 	}
 
-	query := `
+	_, err := r.db.Exec(ctx, `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
 			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`
-	_, err := r.db.Exec(ctx, query,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		contrib.ID,
 		contrib.SavingsGoalID,
 		contrib.TransactionID,
