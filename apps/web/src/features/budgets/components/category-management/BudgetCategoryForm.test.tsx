@@ -1,7 +1,10 @@
+// API hooks are mocked via bunfig.toml preloads (categories-api.ts, savings-goals-api.ts).
+// Do NOT add mock.module() for those here — it leaks across test files in bun:test.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models'
+import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,
@@ -21,19 +24,6 @@ const mockUseGetUserCategories = mock(() => ({
 
 mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
   useGetUserCategories: mockUseGetUserCategories,
-}))
-
-// #1300: savings bucket — SavingsGoalSelect fetches goals
-const mockUseGetSavingsGoals = mock(() => ({
-  data: [
-    { id: 'goal-1', name: 'House Down Payment', target_amount: 50000, current_amount: 12000 },
-    { id: 'goal-2', name: 'Emergency Fund', target_amount: 10000, current_amount: 5000 },
-  ],
-  isLoading: false,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', () => ({
-  useGetSavingsGoals: mockUseGetSavingsGoals,
 }))
 
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
@@ -119,6 +109,11 @@ describe('BudgetCategoryForm', () => {
     ...overrides,
   })
 
+  const defaultSavingsGoals = [
+    { id: 'goal-1', name: 'House Down Payment', target_amount: 50000, current_amount: 12000 },
+    { id: 'goal-2', name: 'Emergency Fund', target_amount: 10000, current_amount: 5000 },
+  ]
+
   beforeEach(() => {
     mockOnClose.mockClear()
     mockOnSubmit.mockClear()
@@ -134,6 +129,10 @@ describe('BudgetCategoryForm', () => {
       data: defaultUserCategories,
       isLoading: false,
       error: null,
+    })
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: defaultSavingsGoals,
+      isLoading: false,
     })
   })
 

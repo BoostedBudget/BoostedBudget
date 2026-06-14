@@ -1,19 +1,10 @@
 // Issue #1300: InsightsPage sub-tabs + URL state tests
+// API hooks are mocked via bunfig.toml preloads (analytics-api.ts, net-worth-hooks.ts,
+// track-event.ts). Do NOT add mock.module() here — it leaks across test files in bun:test.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
-
-// Stub child pages and analytics (must come before imports that use them)
-mock.module('../reports', () => ({
-  SpendingReportsPage: () => React.createElement('div', { 'data-testid': 'spending-page' }, 'Spending Content'),
-}))
-mock.module('../net-worth', () => ({
-  NetWorthPage: () => React.createElement('div', { 'data-testid': 'net-worth-page' }, 'Net Worth Content'),
-}))
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: mock(() => mock(() => {})),
-}))
 
 import { InsightsPage } from './InsightsPage'
 
@@ -37,14 +28,18 @@ describe('InsightsPage', () => {
     expect(screen.getByRole('heading', { name: /insights/i })).toBeDefined()
   })
 
-  it('defaults to Spending tab and shows spending content', () => {
+  it('defaults to Spending tab', () => {
     renderInsightsPage()
-    expect(screen.getByTestId('spending-page')).toBeDefined()
+    const tab = screen.getByRole('tab', { name: 'Spending' })
+    expect(tab).toBeDefined()
+    expect(tab.getAttribute('data-state')).toBe('active')
   })
 
-  it('shows Net Worth content when ?tab=net-worth', () => {
+  it('activates Net Worth tab when ?tab=net-worth', () => {
     renderInsightsPage('?tab=net-worth')
-    expect(screen.getByTestId('net-worth-page')).toBeDefined()
+    const tab = screen.getByRole('tab', { name: 'Net Worth' })
+    expect(tab).toBeDefined()
+    expect(tab.getAttribute('data-state')).toBe('active')
   })
 
   it('renders both Spending and Net Worth tab triggers', () => {
