@@ -110,6 +110,14 @@ func (m *mockBudgetService) GetAvailableCategories(ctx context.Context, userID s
 	return m.categories, nil
 }
 
+func (m *mockBudgetService) SetGoalRepo(_ services.ActiveGoalRepo) {}
+
+func (m *mockBudgetService) SetGoalOwnershipChecker(_ services.GoalOwnershipChecker) {}
+
+func (m *mockBudgetService) BackfillManagedCategories(_ context.Context, _ string) error {
+	return nil
+}
+
 // mockBudgetSyncService is a mock implementation of services.BudgetSyncService
 type mockBudgetSyncService struct {
 	recalculateErr error
@@ -124,6 +132,10 @@ func (m *mockBudgetSyncService) RecalculateBudget(ctx context.Context, budget *d
 }
 
 func (m *mockBudgetSyncService) SetEventProcessor(processor services.EventTriggerProcessor) {
+	// No-op for mock
+}
+
+func (m *mockBudgetSyncService) SetSavingsSpentCalc(calc services.SavingsContributionSpentCalc) {
 	// No-op for mock
 }
 
@@ -180,6 +192,10 @@ func (m *mockTransactionRepoForBudget) GetByUserIDKeysetUnified(ctx context.Cont
 }
 
 func (m *mockTransactionRepoForBudget) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
+func (m *mockTransactionRepoForBudget) GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error) {
 	return nil, nil
 }
 

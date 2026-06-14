@@ -418,6 +418,18 @@ func main() {
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
 		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
 
+		// Issue #1300: Savings contribution repo + progress service.
+		// Created here so budget sync and goal services can share a single instance.
+		savingsContribRepo := repository.NewSavingsContributionRepository(db)
+		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, budgetLogger)
+
+		// Issue #1300: Cross-wire budget ↔ savings-goal services for carry-forward / auto-create.
+		budgetService.SetGoalRepo(savingsGoalRepo)
+		// Issue #1300: Wire IDOR ownership checker so AddCategory validates savings_goal_id
+		// belongs to the authenticated user before persisting (Codex C1).
+		budgetService.SetGoalOwnershipChecker(savingsGoalRepo)
+		savingsGoalService.SetBudgetRepo(budgetRepo)
+
 		// Issue #138: Investment read services — DB-only, no Plaid dependency.
 		// Initialized here (outside the Plaid block) so investment route handlers
 		// always have a non-nil service even when Plaid credentials are absent.
@@ -455,6 +467,8 @@ func main() {
 		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
 		// SetEventProcessor must be called after boostExecutionService is fully initialized.
 		budgetSyncService.SetEventProcessor(boostExecutionService)
+		// Issue #1300: Wire savings contribution ledger for savings-kind category spent amounts.
+		budgetSyncService.SetSavingsSpentCalc(savingsContribRepo)
 
 		// Issue #37: Boost Scheduler Manager with providers
 		boostSchedulerManager = workers.NewBoostSchedulerManager(appLogger)
@@ -1433,6 +1447,7 @@ func main() {
 
 		// Register Huma savings goal routes (Issue #559: Huma migration)
 		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService, operations.SavingsGoalHandlerDeps{
+			ProgressService: savingsProgressService,
 			IdempotencyRepo: humaIdempotencyRepo,
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,

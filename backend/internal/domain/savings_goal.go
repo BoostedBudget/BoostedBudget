@@ -200,6 +200,64 @@ func (sg *SavingsGoal) RemainingAmount() float64 {
 	return remaining
 }
 
+// =============================================================================
+// Issue #1300 / Codex C11 — Savings progress summary (MCP-callable analytics)
+// Explicit basis-aware fields prevent LLMs from misreading mixed-basis amounts.
+// =============================================================================
+
+// Freshness constants for balance-based progress bases.
+const (
+	FreshnessNotApplicable = "not_applicable" // manual / contributions
+	FreshnessFresh         = "fresh"          // balance_as_of within 24 h
+	FreshnessStale         = "stale"          // balance_as_of older than 24 h
+	FreshnessUnknown       = "unknown"        // balance_as_of not yet recorded
+)
+
+// ComputedFrom constants label the progress source for MCP consumers.
+const (
+	ComputedFromManual               = "manual"
+	ComputedFromConfirmedContribs    = "confirmed_contributions"
+	ComputedFromAccountBalance       = "account_balance"
+	ComputedFromAccountPercentage    = "account_percentage"
+)
+
+// SavingsGoalProgressItem contains basis-aware progress details for a single goal.
+// Designed for LLM/MCP consumption — all semantics are explicit (Codex C11).
+type SavingsGoalProgressItem struct {
+	GoalID      string `json:"goal_id"`
+	GoalName    string `json:"goal_name"`
+	AccountID   string `json:"account_id,omitempty"`
+	// Amounts
+	CurrentAmount float64 `json:"current_amount"`
+	TargetAmount  float64 `json:"target_amount"`
+	// Percent 0–100 (clamped)
+	PercentComplete float64 `json:"percent_complete"`
+	// Basis semantics — consumers MUST use these to interpret current_amount correctly
+	ProgressBasis string `json:"progress_basis"`  // manual|contributions|balance|account_percentage
+	ComputedFrom  string `json:"computed_from"`   // human-readable, see ComputedFrom* constants
+	// Always returned — even for non-contributions bases — so consumers can compare approaches
+	ConfirmedContributionsTotal float64 `json:"confirmed_contributions_total"`
+	// Balance-only fields (non-nil when basis = balance or account_percentage)
+	LinkedBalance     *float64   `json:"linked_balance,omitempty"`
+	BalanceAsOf       *time.Time `json:"balance_as_of,omitempty"`
+	Freshness         string     `json:"freshness"` // fresh|stale|unknown|not_applicable
+	AccountPercentage *float64   `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
+	// Completion
+	CompletedAt *time.Time `json:"completed_at,omitempty"` // sticky; nil until first completion
+	Deadline    *time.Time `json:"deadline,omitempty"`
+}
+
+// SavingsProgressSummary wraps per-goal progress with portfolio-level totals.
+type SavingsProgressSummary struct {
+	Goals []SavingsGoalProgressItem `json:"goals"`
+	// Portfolio totals (sum over all active goals)
+	TotalSaved             float64 `json:"total_saved"`
+	TotalTarget            float64 `json:"total_target"`
+	OverallPercentComplete float64 `json:"overall_percent_complete"` // 0–100
+	GoalCount              int     `json:"goal_count"`
+	CompletedGoalCount     int     `json:"completed_goal_count"`
+}
+
 // IsOnTrack returns true if the goal is on track to be completed by deadline.
 // Returns true if no deadline is set or if the goal is completed.
 func (sg *SavingsGoal) IsOnTrack() bool {
@@ -267,8 +325,24 @@ type UpdateSavingsGoalRequest struct {
 	Deadline      *time.Time `json:"deadline,omitempty"`
 }
 
+// SavingsInflowTransaction is a lightweight projection returned by
+// GetInflowTransactionsForAccount — only the fields needed by the savings progress
+// service are populated (Issue #1300, plan section 1D).
+// Magnitude is ABS(amount) — always positive (Codex C9 / #1303 sign-inversion guard).
+type SavingsInflowTransaction struct {
+	ID        string  `json:"id"`
+	Magnitude float64 `json:"magnitude"` // ABS(amount) — positive magnitude
+	Date      string  `json:"date"`      // YYYY-MM-DD
+}
+
 // SavingsGoal-related errors.
 var (
 	ErrSavingsGoalNotFound      = errors.New("savings goal not found")
 	ErrSavingsGoalAlreadyExists = errors.New("savings goal with this name already exists")
+
+	// ErrContributionNotFound is returned when a savings_goal_contribution is not found.
+	ErrContributionNotFound = errors.New("savings goal contribution not found")
+	// ErrContributionOverAllocated is returned when adding a contribution would exceed
+	// the transaction's total amount (Codex C2 — allocation-cap enforcement).
+	ErrContributionOverAllocated = errors.New("contribution amount exceeds transaction's remaining capacity")
 )

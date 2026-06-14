@@ -53,6 +53,7 @@ import type {
   CreateSavingsGoalRequest,
   ErrorModel,
   SavingsGoal,
+  SavingsProgressSummary,
   UpdateSavingsGoalRequest
 } from '../../models';
 
@@ -330,6 +331,99 @@ export function useGetActiveSavingsGoals<TData = Awaited<ReturnType<typeof getAc
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetActiveSavingsGoalsQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).
+ * @summary Get savings progress summary
+ */
+export const getSavingsProgressSummary = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsProgressSummary>(
+      {url: `/api/v1/savings-goals/progress-summary`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetSavingsProgressSummaryQueryKey = () => {
+    return [
+    `/api/v1/savings-goals/progress-summary`
+    ] as const;
+    }
+
+
+export const getGetSavingsProgressSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSavingsProgressSummaryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSavingsProgressSummary>>> = ({ signal }) => getSavingsProgressSummary(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetSavingsProgressSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getSavingsProgressSummary>>>
+export type GetSavingsProgressSummaryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get savings progress summary
+ */
+
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetSavingsProgressSummaryQueryOptions(options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

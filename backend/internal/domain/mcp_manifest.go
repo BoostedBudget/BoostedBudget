@@ -85,12 +85,13 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"markNotificationAsRead":     MCPClassWrite,
 	"markAllNotificationsAsRead": MCPClassWrite,
 	// Savings Goals
-	"getSavingsGoals":       MCPClassRead,
-	"getActiveSavingsGoals": MCPClassRead,
-	"getSavingsGoal":        MCPClassRead,
-	"createSavingsGoal":     MCPClassWrite,
-	"updateSavingsGoal":     MCPClassWrite,
-	"deleteSavingsGoal":     MCPClassWrite,
+	"getSavingsGoals":            MCPClassRead,
+	"getActiveSavingsGoals":      MCPClassRead,
+	"getSavingsGoal":             MCPClassRead,
+	"getSavingsProgressSummary":  MCPClassRead, // #1300: basis-aware analytics (Codex C11)
+	"createSavingsGoal":          MCPClassWrite,
+	"updateSavingsGoal":          MCPClassWrite,
+	"deleteSavingsGoal":          MCPClassWrite,
 	// Subscription — reads only; writes excluded
 	"get-current-subscription": MCPClassRead,
 	"getSubscriptionTiers":     MCPClassRead,
