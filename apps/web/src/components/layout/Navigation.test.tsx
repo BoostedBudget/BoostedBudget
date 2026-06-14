@@ -6,10 +6,11 @@ import { Navigation } from './Navigation'
 
 const ROUTES = [
   { name: /dashboard/i, href: '/dashboard' },
-  { name: /net worth/i, href: '/net-worth' },
   { name: /accounts/i, href: '/accounts' },
   { name: /transactions/i, href: '/transactions' },
-  { name: /budgets/i, href: '/budgets' },
+  { name: /planning/i, href: '/planning' },
+  { name: /insights/i, href: '/insights' },
+  { name: /boosts/i, href: '/boosts' },
   { name: /auto-cat/i, href: '/auto-categorization' },
 ]
 
