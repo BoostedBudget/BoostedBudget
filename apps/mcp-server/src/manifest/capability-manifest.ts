@@ -247,6 +247,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('listSavingsGoalContributions'),
   write('logSavingsGoalContribution'),
   write('confirmSavingsGoalContribution', { idempotent: true }),
+  write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
   write('deleteSavingsGoalContribution', { destructive: true }),
 
   // ── Subscription ─────────────────────────────────────────────────────────

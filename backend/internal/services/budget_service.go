@@ -174,6 +174,20 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 
 	// Create categories if provided
 	for _, catReq := range req.Categories {
+		// R3-4 / Codex C1: IDOR — verify savings goal belongs to the requesting user.
+		// Mirrors the same check in AddCategory (line ~502). Without this, a caller
+		// could link another user's savings goal at budget-creation time.
+		if catReq.CategoryKind == "savings" && catReq.SavingsGoalID != nil {
+			if s.goalOwnershipChecker == nil {
+				s.logger.Warn("savings category created in CreateBudget without ownership check wired — potential IDOR risk",
+					slog.String("savings_goal_id", *catReq.SavingsGoalID),
+					slog.String("user_id", userID),
+				)
+			} else if _, err := s.goalOwnershipChecker.GetByIDForUser(ctx, *catReq.SavingsGoalID, userID); err != nil {
+				return nil, err
+			}
+		}
+
 		category := &domain.BudgetCategory{
 			ID:               uuid.New().String(),
 			BudgetID:         budget.ID,

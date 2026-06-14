@@ -2752,6 +2752,35 @@
       ]
     },
     {
+      "operationId": "rejectSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}/reject",
+      "summary": "Reject a proposed savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "getSavingsGoal",
       "method": "GET",
       "path": "/api/v1/savings-goals/{id}",

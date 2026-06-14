@@ -6,8 +6,10 @@ import React from 'react'
 import {
   mockUseListSavingsGoalContributions,
   mockUseConfirmSavingsGoalContribution,
+  mockUseRejectSavingsGoalContribution,
   mockUseDeleteSavingsGoalContribution,
   mockConfirmSavingsGoalContributionMutateAsync,
+  mockRejectSavingsGoalContributionMutateAsync,
   mockDeleteSavingsGoalContributionMutateAsync,
 } from '@/test/mocks/savings-goals-api'
 
@@ -23,6 +25,7 @@ mock.module('@/shared/analytics/events', () => ({
     ...RealAnalyticsEvents.ANALYTICS_EVENTS,
     SAVINGS_CONTRIBUTIONS_VIEWED: 'savings_contributions_viewed',
     SAVINGS_CONTRIBUTION_CONFIRMED: 'savings_contribution_confirmed',
+    SAVINGS_CONTRIBUTION_REJECTED: 'savings_contribution_rejected', // R3-7
     SAVINGS_CONTRIBUTION_DELETED: 'savings_contribution_deleted',
   },
 }))
@@ -71,9 +74,11 @@ describe('GoalContributionsSheet', () => {
 
   beforeEach(() => {
     mockConfirmSavingsGoalContributionMutateAsync.mockClear()
+    mockRejectSavingsGoalContributionMutateAsync.mockClear()
     mockDeleteSavingsGoalContributionMutateAsync.mockClear()
     mockUseListSavingsGoalContributions.mockClear()
     mockUseConfirmSavingsGoalContribution.mockClear()
+    mockUseRejectSavingsGoalContribution.mockClear()
     mockUseDeleteSavingsGoalContribution.mockClear()
     mockTrackEvent.mockClear()
     mockOnOpenChange.mockClear()
@@ -87,6 +92,12 @@ describe('GoalContributionsSheet', () => {
     })
     mockUseConfirmSavingsGoalContribution.mockReturnValue({
       mutateAsync: mockConfirmSavingsGoalContributionMutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    })
+    mockUseRejectSavingsGoalContribution.mockReturnValue({ // R3-7
+      mutateAsync: mockRejectSavingsGoalContributionMutateAsync,
       isPending: false,
       isError: false,
       error: null,
@@ -126,7 +137,7 @@ describe('GoalContributionsSheet', () => {
       expect(screen.queryByText(/\$150\.00/)).not.toBeInTheDocument()
     })
 
-    it('renders proposed contributions with Confirm and Delete buttons', () => {
+    it('renders proposed contributions with Confirm and Reject buttons (R3-7)', () => {
       renderWithQueryClient(
         <GoalContributionsSheet
           goalId={goalId}
@@ -140,6 +151,11 @@ describe('GoalContributionsSheet', () => {
       expect(screen.getByText(/proposed/i)).toBeInTheDocument()
       // Confirm button for proposed row
       expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
+      // Reject button for proposed row (R3-7: not Delete)
+      expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument()
+      // Proposed rows should NOT have a Delete button (only confirmed rows do)
+      const deleteButtons = screen.queryAllByRole('button', { name: /delete/i })
+      expect(deleteButtons).toHaveLength(1) // only the confirmed row
     })
 
     it('renders confirmed contributions with amounts masked (data-ph-mask)', () => {
@@ -323,6 +339,59 @@ describe('GoalContributionsSheet', () => {
       await waitFor(() => {
         expect(mockTrackEvent).toHaveBeenCalledWith(
           'savings_contribution_deleted',
+          expect.any(Object)
+        )
+      })
+    })
+  })
+
+  describe('Reject action (R3-7)', () => {
+    it('calls reject mutation and onContributionChanged on Reject click', async () => {
+      mockRejectSavingsGoalContributionMutateAsync.mockResolvedValueOnce({
+        ...mockProposed, status: 'rejected',
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /reject/i }))
+
+      await waitFor(() => {
+        expect(mockRejectSavingsGoalContributionMutateAsync).toHaveBeenCalledWith({
+          goalID: goalId,
+          id: mockProposed.id,
+        })
+        expect(mockOnChange).toHaveBeenCalled()
+      })
+    })
+
+    it('fires SAVINGS_CONTRIBUTION_REJECTED analytics on reject', async () => {
+      mockRejectSavingsGoalContributionMutateAsync.mockResolvedValueOnce({
+        ...mockProposed, status: 'rejected',
+      })
+
+      renderWithQueryClient(
+        <GoalContributionsSheet
+          goalId={goalId}
+          goalName={goalName}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onContributionChanged={mockOnChange}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /reject/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          'savings_contribution_rejected',
           expect.any(Object)
         )
       })

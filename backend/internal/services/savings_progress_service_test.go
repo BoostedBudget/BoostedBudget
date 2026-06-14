@@ -26,6 +26,14 @@ func (m *mockSavingsProgressGoalRepo) GetActiveByUserID(ctx context.Context, use
 	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
 }
 
+func (m *mockSavingsProgressGoalRepo) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
+}
+
 func (m *mockSavingsProgressGoalRepo) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
 	return m.Called(ctx, goalID, currentAmount, lastCalculatedAt, balanceAsOf).Error(0)
 }

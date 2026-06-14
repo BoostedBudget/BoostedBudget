@@ -381,6 +381,10 @@ export function createApiClient(mutator: FetchMutator) {
       confirmSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/confirm`, method: 'POST', data, signal })
       },
+      /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/reject */
+      rejectSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/reject`, method: 'POST', data, signal })
+      },
       /** GET /api/v1/savings-goals/{id} */
       getSavingsGoal(id: string, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/savings-goals/${id}`, method: 'GET', signal })

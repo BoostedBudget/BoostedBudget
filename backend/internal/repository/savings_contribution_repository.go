@@ -62,6 +62,13 @@ type SavingsContributionRepository interface {
 	// Returns ErrContributionAlreadyConfirmed if the row is already confirmed.
 	ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
 
+	// RejectContribution sets a proposed contribution's status to 'rejected' (sticky tombstone).
+	// A rejected row persists in the table so that UpsertProposedFromTransaction's ON CONFLICT
+	// clause skips re-proposing the same (transaction_id, savings_goal_id) pair on future syncs
+	// (R3-7). Returns ErrContributionNotFound if id is not found or does not belong to userID.
+	// Returns ErrContributionNotProposed if the row is not in 'proposed' status.
+	RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
+
 	// DeleteContribution removes a contribution. userID is required for ownership verification.
 	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
 	DeleteContribution(ctx context.Context, userID, id string) error
@@ -268,7 +275,12 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 		return err
 	}
 
-	// Step 2: Upsert as proposed; do NOT downgrade a confirmed row back to proposed.
+	// Step 2: Upsert as proposed; do NOT downgrade a confirmed or rejected row.
+	// Codex C3 (R3-6): restrict the conflict update to rows the reconciler owns
+	// (managed_by_reconciliation = true) — manual rows with status='proposed'
+	// are left untouched even if they share the same (transaction_id, savings_goal_id) key.
+	// R3-7: rejected rows (tombstones) must also NOT be overwritten — the
+	// WHERE status='proposed' clause already excludes them.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
@@ -280,6 +292,7 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 			amount     = EXCLUDED.amount,
 			updated_at = EXCLUDED.updated_at
 		WHERE savings_goal_contributions.status = 'proposed'
+		  AND savings_goal_contributions.managed_by_reconciliation = true
 	`
 	_, err := r.db.Exec(ctx, upsertQuery, goalID, transactionID, magnitude, now)
 	return err
@@ -492,6 +505,49 @@ func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, 
 		return domain.ErrContributionNotFound
 	}
 	return nil
+}
+
+// RejectContribution sets a proposed contribution to 'rejected' status (sticky tombstone).
+// The row is retained so the partial-unique-index key (transaction_id, savings_goal_id)
+// blocks UpsertProposedFromTransaction from re-proposing the same transfer-in (R3-7).
+func (r *savingsContributionRepository) RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
+	// UPDATE … RETURNING so we can return the updated row and verify it was 'proposed'.
+	// Join through savings_goals to enforce ownership (Codex C1).
+	query := `
+		UPDATE savings_goal_contributions c
+		SET status = 'rejected', updated_at = NOW()
+		FROM savings_goals g
+		WHERE c.id = $1
+		  AND c.savings_goal_id = g.id
+		  AND g.user_id = $2
+		  AND c.status = 'proposed'
+		RETURNING ` + contributionSelectCols
+	contrib := &domain.SavingsGoalContribution{}
+	err := r.db.QueryRow(ctx, query, id, userID).Scan(
+		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
+		&contrib.Amount, &contrib.Source, &contrib.Status,
+		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
+		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Distinguish between not-found and non-proposed by checking existence.
+			var exists int
+			checkQuery := `
+				SELECT 1 FROM savings_goal_contributions c
+				JOIN savings_goals g ON g.id = c.savings_goal_id
+				WHERE c.id = $1 AND g.user_id = $2
+			`
+			if chkErr := r.db.QueryRow(ctx, checkQuery, id, userID).Scan(&exists); chkErr != nil {
+				// Row not found or wrong user.
+				return nil, domain.ErrContributionNotFound
+			}
+			// Row exists but status != 'proposed' (already confirmed or rejected).
+			return nil, domain.ErrContributionNotProposed
+		}
+		return nil, err
+	}
+	return contrib, nil
 }
 
 // DeleteManagedForTransaction removes all reconciler-owned contributions for a transaction.

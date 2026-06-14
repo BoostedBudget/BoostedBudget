@@ -722,6 +722,69 @@ export const useConfirmSavingsGoalContribution = <TError = ErrorType<ErrorModel>
       return useMutation(getConfirmSavingsGoalContributionMutationOptions(options), queryClient);
     }
     /**
+ * Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.
+ * @summary Reject a proposed savings goal contribution
+ */
+export const rejectSavingsGoalContribution = (
+    goalID: string,
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoalContribution>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions/${id}/reject`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+export const getRejectSavingsGoalContributionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext> => {
+
+const mutationKey = ['rejectSavingsGoalContribution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, {goalID: string;id: string}> = (props) => {
+          const {goalID,id} = props ?? {};
+
+          return  rejectSavingsGoalContribution(goalID,id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RejectSavingsGoalContributionMutationResult = NonNullable<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>>
+
+    export type RejectSavingsGoalContributionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Reject a proposed savings goal contribution
+ */
+export const useRejectSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof rejectSavingsGoalContribution>>,
+        TError,
+        {goalID: string;id: string},
+        TContext
+      > => {
+      return useMutation(getRejectSavingsGoalContributionMutationOptions(options), queryClient);
+    }
+    /**
  * Removes a savings goal from the user's collection.
  * @summary Delete savings goal
  */

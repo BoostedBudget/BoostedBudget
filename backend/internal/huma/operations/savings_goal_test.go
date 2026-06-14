@@ -84,6 +84,10 @@ func (m *mockSavingsProgressService) RecomputeGoal(_ context.Context, _ *domain.
 	return nil
 }
 
+func (m *mockSavingsProgressService) RecomputeGoalByID(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (m *mockSavingsProgressService) RecomputeUser(_ context.Context, _ string) error {
 	return nil
 }
