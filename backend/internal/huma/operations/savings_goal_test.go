@@ -463,6 +463,81 @@ func TestGetProgressSummary_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// =============================================================================
+// Issue #1300 RG6: huma-ops progress_basis pass-through assertion (M23)
+// =============================================================================
+
+// capturingSavingsGoalService wraps mockSavingsGoalService and records the last request
+// forwarded to CreateGoal, so tests can assert on what the handler passed through.
+type capturingSavingsGoalService struct {
+	mockSavingsGoalService
+	lastCreateReq *domain.CreateSavingsGoalRequest
+	lastUpdateReq *domain.UpdateSavingsGoalRequest
+}
+
+func (c *capturingSavingsGoalService) CreateGoal(_ context.Context, _ string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error) {
+	c.lastCreateReq = req
+	return c.goal, c.createErr
+}
+
+func (c *capturingSavingsGoalService) UpdateGoal(_ context.Context, _, _ string, req *domain.UpdateSavingsGoalRequest) (*domain.SavingsGoal, error) {
+	c.lastUpdateReq = req
+	return c.goal, c.updateErr
+}
+
+// TestCreateSavingsGoal_ProgressBasisPersistsToService verifies the huma handler
+// correctly forwards progress_basis from the request body to the service layer.
+func TestCreateSavingsGoal_ProgressBasisPersistsToService(t *testing.T) {
+	svc := &capturingSavingsGoalService{
+		mockSavingsGoalService: mockSavingsGoalService{goal: createTestSavingsGoal()},
+	}
+	handler := NewSavingsGoalHandler(svc)
+
+	input := &CreateSavingsGoalInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateSavingsGoalRequest{
+		Name:          "Savings Goal",
+		TargetAmount:  1000.00,
+		CurrencyCode:  "USD",
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+
+	output, err := handler.CreateGoal(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, svc.lastCreateReq, "handler must forward request to service")
+	assert.Equal(t, domain.ProgressBasisContributions, svc.lastCreateReq.ProgressBasis,
+		"handler must pass progress_basis from request body through to service")
+}
+
+// TestUpdateSavingsGoal_ProgressBasisPersistsToService verifies the huma handler
+// correctly forwards progress_basis from a PATCH request body to the service layer.
+func TestUpdateSavingsGoal_ProgressBasisPersistsToService(t *testing.T) {
+	svc := &capturingSavingsGoalService{
+		mockSavingsGoalService: mockSavingsGoalService{goal: createTestSavingsGoal()},
+	}
+	handler := NewSavingsGoalHandler(svc)
+
+	basis := domain.ProgressBasisBalance
+	input := &UpdateSavingsGoalInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "goal-123",
+	}
+	input.Body = domain.UpdateSavingsGoalRequest{
+		ProgressBasis: &basis,
+	}
+
+	output, err := handler.UpdateGoal(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, svc.lastUpdateReq, "handler must forward update request to service")
+	assert.Equal(t, &basis, svc.lastUpdateReq.ProgressBasis,
+		"handler must pass progress_basis from PATCH body through to service")
+}
+
 // TestProgressSummaryRouteRegistration verifies the route is registered and requires auth.
 func TestProgressSummaryRouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)

@@ -215,6 +215,93 @@ func TestSavingsContributionRepository_Integration_CrossUserOwnership(t *testing
 // (c) Inflow sign / magnitude — Issue #1300 §1D
 // =============================================================================
 
+// =============================================================================
+// (d) userID-scoped sum reads — RG2 / M17
+// =============================================================================
+
+// TestSavingsContributionRepository_Integration_SumConfirmedByGoal_UserScoped verifies
+// that SumConfirmedByGoal only sums contributions for a goal owned by the requesting user.
+// A cross-user query must return 0 (not another user's contributions).
+func TestSavingsContributionRepository_Integration_SumConfirmedByGoal_UserScoped(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userA := seedIntegrationUser(t, pool)
+	userB := seedIntegrationUser(t, pool)
+	accountA := seedIntegrationAccount(t, pool, userA)
+	accountB := seedIntegrationAccount(t, pool, userB)
+	goalA := seedIntegrationGoal(t, pool, userA, accountA)
+	_ = seedIntegrationGoal(t, pool, userB, accountB)
+
+	// Seed a confirmed contribution for goalA.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 500.0, 'manual', 'confirmed', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalA)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	repo := repository.NewSavingsContributionRepository(pool)
+
+	t.Run("correct owner sees sum", func(t *testing.T) {
+		total, err := repo.SumConfirmedByGoal(ctx, userA, goalA)
+		require.NoError(t, err)
+		assert.Equal(t, 500.0, total, "userA should see their own 500.0 contribution")
+	})
+
+	t.Run("wrong owner gets zero", func(t *testing.T) {
+		// userB is asking for goalA which it does not own → should return 0, not 500.
+		total, err := repo.SumConfirmedByGoal(ctx, userB, goalA)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, total, "userB must not see userA's contributions")
+	})
+}
+
+// TestSavingsContributionRepository_Integration_SumConfirmedByGoalInPeriod_UserScoped verifies
+// that SumConfirmedByGoalInPeriod only sums contributions for the requesting user.
+func TestSavingsContributionRepository_Integration_SumConfirmedByGoalInPeriod_UserScoped(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userA := seedIntegrationUser(t, pool)
+	userB := seedIntegrationUser(t, pool)
+	accountA := seedIntegrationAccount(t, pool, userA)
+	goalA := seedIntegrationGoal(t, pool, userA, accountA)
+
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, transaction_id, amount, source, status,
+			 managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, NULL, 300.0, 'manual', 'confirmed', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalA)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	repo := repository.NewSavingsContributionRepository(pool)
+	start := time.Now().AddDate(0, -1, 0)
+	end := time.Now().AddDate(0, 1, 0)
+
+	t.Run("correct owner sees period sum", func(t *testing.T) {
+		total, err := repo.SumConfirmedByGoalInPeriod(ctx, userA, goalA, start, end)
+		require.NoError(t, err)
+		assert.Equal(t, 300.0, total)
+	})
+
+	t.Run("wrong owner gets zero", func(t *testing.T) {
+		total, err := repo.SumConfirmedByGoalInPeriod(ctx, userB, goalA, start, end)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, total, "userB must not see userA's period contributions")
+	})
+}
+
 // TestTransactionRepository_Integration_InflowSignMagnitude verifies that
 // GetInflowTransactionsForAccount returns only inflow transactions (amount < 0 in
 // Plaid convention) and reports their magnitude as a POSITIVE value (ABS(amount)).

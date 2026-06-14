@@ -100,6 +100,12 @@ export const ANALYTICS_EVENTS = {
   SAVINGS_SORT_CHANGED: 'savings_sort_changed',
   SAVINGS_GOAL_PROGRESS_BASIS_CHANGED: 'savings_goal_progress_basis_changed', // #1300 G1
 
+  // Savings contributions (#1300 M21)
+  SAVINGS_CONTRIBUTIONS_VIEWED: 'savings_contributions_viewed',
+  SAVINGS_CONTRIBUTION_LOGGED: 'savings_contribution_logged',
+  SAVINGS_CONTRIBUTION_CONFIRMED: 'savings_contribution_confirmed',
+  SAVINGS_CONTRIBUTION_DELETED: 'savings_contribution_deleted',
+
   ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
 
   // DataTable column interactions

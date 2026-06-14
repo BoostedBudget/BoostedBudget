@@ -39,7 +39,8 @@ type BudgetSpentCalculator interface {
 type SavingsContributionSpentCalc interface {
 	// SumConfirmedByGoalInPeriod returns the sum of confirmed contributions within
 	// [start, end] for a given goal — used as the savings category's spent amount.
-	SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error)
+	// userID is required for ownership scoping (RG2 / M17 — Codex C1).
+	SumConfirmedByGoalInPeriod(ctx context.Context, userID, goalID string, start, end time.Time) (float64, error)
 }
 
 // EventTriggerProcessor is a minimal interface for processing automation rule events.
@@ -162,7 +163,7 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		if cat.CategoryKind == "savings" && cat.SavingsGoalID != nil && s.savingsSpent != nil {
 			// Savings branch: derive spent from the contribution ledger.
 			spentAmount, err = s.savingsSpent.SumConfirmedByGoalInPeriod(
-				ctx, *cat.SavingsGoalID, startDate, endDate)
+				ctx, budget.UserID, *cat.SavingsGoalID, startDate, endDate)
 			if err != nil {
 				s.logger.Error("failed to calculate savings category spent",
 					"categoryID", cat.ID,

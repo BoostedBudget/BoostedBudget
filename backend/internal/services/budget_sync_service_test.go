@@ -807,7 +807,7 @@ type MockSavingsContributionSpentCalc struct {
 	mock.Mock
 }
 
-func (m *MockSavingsContributionSpentCalc) SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error) {
+func (m *MockSavingsContributionSpentCalc) SumConfirmedByGoalInPeriod(ctx context.Context, userID, goalID string, start, end time.Time) (float64, error) {
 	args := m.Called(ctx, goalID, start, end)
 	return args.Get(0).(float64), args.Error(1)
 }

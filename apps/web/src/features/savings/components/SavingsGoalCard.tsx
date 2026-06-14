@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { computeSavingsProgress, computeSavingsRemaining } from '../types'
 import type { SavingsGoal } from '../types'
+import { GoalContributionsSheet } from './GoalContributionsSheet'
 
 export interface SavingsGoalCardProps {
   /** The savings goal to display */
@@ -12,6 +14,8 @@ export interface SavingsGoalCardProps {
   onDelete?: (goalId: string) => void;
   /** Callback when add funds is clicked */
   onAddFunds?: (goal: SavingsGoal) => void;
+  /** Callback when contributions change (refetch the goal list) */
+  onContributionChanged?: () => void;
 }
 
 function formatCurrency(amount: number, currencyCode: string): string {
@@ -32,10 +36,11 @@ function formatDate(dateString: string): string {
   return new Date(year, month - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsGoalCardProps) {
+export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContributionChanged }: SavingsGoalCardProps) {
   const progress = Math.round(computeSavingsProgress(goal))
   const remaining = computeSavingsRemaining(goal)
   const visualWidth = Math.min(progress, 100)
+  const [contributionsOpen, setContributionsOpen] = useState(false)
 
   return (
     <Card className="flex flex-col gap-4 transition-shadow hover:shadow-md">
@@ -86,7 +91,7 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
       </div>
 
       {(onEdit || onDelete || onAddFunds) && (
-        <div className="flex gap-2 mt-2 pt-4 border-t border-border">
+        <div className="flex gap-2 mt-2 pt-4 border-t border-border flex-wrap">
           {onAddFunds && !goal.is_completed && (
             <button
               className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground border border-primary rounded-md cursor-pointer hover:bg-primary/90 transition-colors"
@@ -116,6 +121,25 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds }: SavingsG
           )}
         </div>
       )}
+
+      {/* Contributions button — always shown when edit/delete actions are present (#1300 M21) */}
+      {(onEdit || onDelete) && (
+        <button
+          className="mt-1 text-xs font-medium text-primary hover:underline self-start"
+          onClick={() => setContributionsOpen(true)}
+          aria-label="View contributions"
+        >
+          Contributions
+        </button>
+      )}
+
+      <GoalContributionsSheet
+        goalId={goal.id}
+        goalName={goal.name}
+        open={contributionsOpen}
+        onOpenChange={setContributionsOpen}
+        onContributionChanged={() => onContributionChanged?.()}
+      />
     </Card>
   )
 }

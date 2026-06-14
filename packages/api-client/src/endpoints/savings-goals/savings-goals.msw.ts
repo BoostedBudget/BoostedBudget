@@ -45,6 +45,7 @@ import type {
 
 import type {
   SavingsGoal,
+  SavingsGoalContribution,
   SavingsProgressSummary
 } from '../../models';
 
@@ -56,6 +57,12 @@ export const getCreateSavingsGoalResponseMock = (overrideResponse: Partial<Extra
 export const getGetActiveSavingsGoalsResponseMock = (): SavingsGoal[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account: faker.helpers.arrayElement([{available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})}, undefined]), account_id: faker.string.alpha({length: {min: 10, max: 20}}), account_percentage: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), balance_as_of: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), completed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_amount: faker.number.float({fractionDigits: 2}), deadline: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), is_completed: faker.datatype.boolean(), last_calculated_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), progress_basis: faker.string.alpha({length: {min: 10, max: 20}}), target_amount: faker.number.float({fractionDigits: 2}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
 
 export const getGetSavingsProgressSummaryResponseMock = (overrideResponse: Partial<Extract<SavingsProgressSummary, object>> = {}): SavingsProgressSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), completed_goal_count: faker.number.int(), goal_count: faker.number.int(), goals: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), account_percentage: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), balance_as_of: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), completed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), computed_from: faker.string.alpha({length: {min: 10, max: 20}}), confirmed_contributions_total: faker.number.float({fractionDigits: 2}), current_amount: faker.number.float({fractionDigits: 2}), deadline: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), freshness: faker.string.alpha({length: {min: 10, max: 20}}), goal_id: faker.string.alpha({length: {min: 10, max: 20}}), goal_name: faker.string.alpha({length: {min: 10, max: 20}}), linked_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), percent_complete: faker.number.float({fractionDigits: 2}), progress_basis: faker.string.alpha({length: {min: 10, max: 20}}), target_amount: faker.number.float({fractionDigits: 2})})), null]), overall_percent_complete: faker.number.float({fractionDigits: 2}), total_saved: faker.number.float({fractionDigits: 2}), total_target: faker.number.float({fractionDigits: 2}), ...overrideResponse})
+
+export const getListSavingsGoalContributionsResponseMock = (): SavingsGoalContribution[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.number.float({fractionDigits: 2}), confirmed_by_user: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), managed_by_reconciliation: faker.datatype.boolean(), occurred_on: faker.string.alpha({length: {min: 10, max: 20}}), savings_goal_id: faker.string.alpha({length: {min: 10, max: 20}}), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'})))
+
+export const getLogSavingsGoalContributionResponseMock = (overrideResponse: Partial<Extract<SavingsGoalContribution, object>> = {}): SavingsGoalContribution => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.number.float({fractionDigits: 2}), confirmed_by_user: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), managed_by_reconciliation: faker.datatype.boolean(), occurred_on: faker.string.alpha({length: {min: 10, max: 20}}), savings_goal_id: faker.string.alpha({length: {min: 10, max: 20}}), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
+
+export const getConfirmSavingsGoalContributionResponseMock = (overrideResponse: Partial<Extract<SavingsGoalContribution, object>> = {}): SavingsGoalContribution => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.number.float({fractionDigits: 2}), confirmed_by_user: faker.datatype.boolean(), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), managed_by_reconciliation: faker.datatype.boolean(), occurred_on: faker.string.alpha({length: {min: 10, max: 20}}), savings_goal_id: faker.string.alpha({length: {min: 10, max: 20}}), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
 export const getGetSavingsGoalResponseMock = (overrideResponse: Partial<Extract<SavingsGoal, object>> = {}): SavingsGoal => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), account: faker.helpers.arrayElement([{available_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_balance: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), custom_color: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_emoji: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), custom_icon: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_order: faker.helpers.arrayElement([faker.number.int(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_hidden: faker.datatype.boolean(), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), mask: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), nickname: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), official_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), plaid_account_id: faker.string.alpha({length: {min: 10, max: 20}}), replaced_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), replaced_by_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subtype: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}})}, undefined]), account_id: faker.string.alpha({length: {min: 10, max: 20}}), account_percentage: faker.helpers.arrayElement([faker.number.float({fractionDigits: 2}), undefined]), balance_as_of: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), completed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', currency_code: faker.string.alpha({length: {min: 10, max: 20}}), current_amount: faker.number.float({fractionDigits: 2}), deadline: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), is_completed: faker.datatype.boolean(), last_calculated_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), name: faker.string.alpha({length: {min: 10, max: 20}}), progress_basis: faker.string.alpha({length: {min: 10, max: 20}}), target_amount: faker.number.float({fractionDigits: 2}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
@@ -110,6 +117,52 @@ export const getGetSavingsProgressSummaryMockHandler = (overrideResponse?: Savin
   }, options)
 }
 
+export const getListSavingsGoalContributionsMockHandler = (overrideResponse?: SavingsGoalContribution[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<SavingsGoalContribution[] | null> | SavingsGoalContribution[] | null), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/savings-goals/:goalID/contributions', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListSavingsGoalContributionsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getLogSavingsGoalContributionMockHandler = (overrideResponse?: SavingsGoalContribution | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<SavingsGoalContribution> | SavingsGoalContribution), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/savings-goals/:goalID/contributions', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getLogSavingsGoalContributionResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getDeleteSavingsGoalContributionMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/savings-goals/:goalID/contributions/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
+  if (typeof overrideResponse === 'function') {await overrideResponse(info); }
+
+    return new HttpResponse(null,
+      { status: 204
+      })
+  }, options)
+}
+
+export const getConfirmSavingsGoalContributionMockHandler = (overrideResponse?: SavingsGoalContribution | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<SavingsGoalContribution> | SavingsGoalContribution), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/savings-goals/:goalID/contributions/:id/confirm', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getConfirmSavingsGoalContributionResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getDeleteSavingsGoalMockHandler = (overrideResponse?: void | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<void> | void), options?: RequestHandlerOptions) => {
   return http.delete('*/api/v1/savings-goals/:id', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
   if (typeof overrideResponse === 'function') {await overrideResponse(info); }
@@ -148,6 +201,10 @@ export const getSavingsGoalsMock = () => [
   getCreateSavingsGoalMockHandler(),
   getGetActiveSavingsGoalsMockHandler(),
   getGetSavingsProgressSummaryMockHandler(),
+  getListSavingsGoalContributionsMockHandler(),
+  getLogSavingsGoalContributionMockHandler(),
+  getDeleteSavingsGoalContributionMockHandler(),
+  getConfirmSavingsGoalContributionMockHandler(),
   getDeleteSavingsGoalMockHandler(),
   getGetSavingsGoalMockHandler(),
   getUpdateSavingsGoalMockHandler()

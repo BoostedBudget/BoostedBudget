@@ -526,6 +526,11 @@ type CreateBudgetRequest struct {
 
 	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
 	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
+
+	// FromBudgetID, when set, causes the new budget to inherit the ancestor's SeriesID
+	// so savings-goal detach tombstones (keyed by series_id) persist across budget periods
+	// (Issue #1300 M22 / RG3). Must be a budget owned by the same user.
+	FromBudgetID *string `json:"from_budget_id,omitempty" validate:"omitempty,uuid"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.

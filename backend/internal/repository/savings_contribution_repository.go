@@ -32,14 +32,37 @@ type SavingsContributionRepository interface {
 
 	// SumConfirmedByGoal returns the sum of all confirmed contributions for a goal.
 	// Used by RecomputeGoal when progress_basis = "contributions".
-	SumConfirmedByGoal(ctx context.Context, goalID string) (float64, error)
+	// userID is required to enforce ownership scoping (RG2 / M17).
+	SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error)
 
 	// SumConfirmedByGoalInPeriod returns the confirmed contribution sum within a date range.
 	// Used by budget_sync_service to derive savings category "spent" for a period.
-	SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error)
+	// userID is required to enforce ownership scoping (RG2 / M17).
+	SumConfirmedByGoalInPeriod(ctx context.Context, userID, goalID string, start, end time.Time) (float64, error)
+
+	// UpsertProposedFromTransaction inserts or updates a managed_by_reconciliation=true,
+	// status='proposed' contribution linked to a transaction. Unlike UpsertFromTransaction,
+	// this call skips the allocation-cap check because proposed rows do NOT consume capacity
+	// until the user confirms them (M18 / D6 source-b).
+	// userID is required: both the savings goal and the transaction must belong to userID.
+	UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error
 
 	// ListByGoal returns all contributions for a goal ordered by occurred_on DESC.
-	ListByGoal(ctx context.Context, goalID string) ([]*domain.SavingsGoalContribution, error)
+	// userID is required to enforce ownership scoping (Codex C1 / M20 contribution API).
+	ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error)
+
+	// ConfirmContribution promotes a proposed contribution to confirmed status.
+	// userID is required for ownership verification (Codex C1).
+	// Race-safe: if the contribution references a transaction, locks the txn row and
+	// re-checks the allocation capacity before flipping status to 'confirmed' (Codex C2).
+	// Returns ErrContributionNotFound if id is not found or does not belong to userID.
+	// Returns ErrContributionOverAllocated if confirming would exceed the txn's capacity.
+	// Returns ErrContributionAlreadyConfirmed if the row is already confirmed.
+	ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error)
+
+	// DeleteContribution removes a contribution. userID is required for ownership verification.
+	// Returns ErrContributionNotFound if id does not exist or does not belong to userID.
+	DeleteContribution(ctx context.Context, userID, id string) error
 
 	// DeleteManagedForTransaction removes all managed_by_reconciliation rows for a transaction.
 	// Called before deleting a transaction to avoid phantom progress (Codex C4).
@@ -166,6 +189,8 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 
 	// Step 3: Upsert on the partial unique key.
 	now := time.Now()
+	// Step 3: Upsert as confirmed. Also promotes a pre-existing proposed row to confirmed
+	// so that a boost-match (M19) or user-confirm does not create a duplicate.
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
@@ -175,6 +200,7 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
 			source     = EXCLUDED.source,
+			status     = 'confirmed',
 			updated_at = EXCLUDED.updated_at
 	`
 	if _, err = tx.Exec(ctx, upsertQuery, goalID, transactionID, amount, source, now); err != nil {
@@ -187,32 +213,87 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 	return nil
 }
 
+// UpsertProposedFromTransaction inserts or updates a proposed (status='proposed'),
+// managed contribution from a detected transfer-in (D6 source-b / M18).
+// Proposed rows skip the allocation-cap gate — they don't consume capacity until confirmed.
+// Uses ON CONFLICT on the partial unique key so re-syncing the same txn is idempotent.
+// If a row already exists in 'confirmed' status it is NOT downgraded back to proposed.
+func (r *savingsContributionRepository) UpsertProposedFromTransaction(
+	ctx context.Context,
+	userID, goalID, transactionID string,
+	magnitude float64,
+) error {
+	// Step 0: Verify goal ownership.
+	var dummy int
+	goalCheckQuery := `SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`
+	if err := r.db.QueryRow(ctx, goalCheckQuery, goalID, userID).Scan(&dummy); err != nil {
+		if err == pgx.ErrNoRows {
+			return domain.ErrSavingsGoalNotFound
+		}
+		return err
+	}
+
+	// Step 1: Verify transaction ownership (no lock — proposed rows are best-effort).
+	var txnExists int
+	txnCheckQuery := `SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`
+	if err := r.db.QueryRow(ctx, txnCheckQuery, transactionID, userID).Scan(&txnExists); err != nil {
+		if err == pgx.ErrNoRows {
+			return domain.ErrContributionNotFound
+		}
+		return err
+	}
+
+	// Step 2: Upsert as proposed; do NOT downgrade a confirmed row back to proposed.
+	now := time.Now()
+	upsertQuery := `
+		INSERT INTO savings_goal_contributions (
+			id, savings_goal_id, transaction_id, amount, source, status,
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
+		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4)
+		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL
+		DO UPDATE SET
+			amount     = EXCLUDED.amount,
+			updated_at = EXCLUDED.updated_at
+		WHERE savings_goal_contributions.status = 'proposed'
+	`
+	_, err := r.db.Exec(ctx, upsertQuery, goalID, transactionID, magnitude, now)
+	return err
+}
+
 // SumConfirmedByGoal returns the sum of all confirmed contributions for a goal.
-func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, goalID string) (float64, error) {
+// userID is joined through savings_goals to enforce ownership scoping (RG2 / M17 — Codex C1).
+// A cross-user query returns 0, never another user's total.
+func (r *savingsContributionRepository) SumConfirmedByGoal(ctx context.Context, userID, goalID string) (float64, error) {
 	query := `
-		SELECT COALESCE(SUM(amount), 0)
-		FROM savings_goal_contributions
-		WHERE savings_goal_id = $1 AND status = 'confirmed'
+		SELECT COALESCE(SUM(c.amount), 0)
+		FROM savings_goal_contributions c
+		JOIN savings_goals g ON g.id = c.savings_goal_id
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		  AND c.status = 'confirmed'
 	`
 	var total float64
-	if err := r.db.QueryRow(ctx, query, goalID).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, query, goalID, userID).Scan(&total); err != nil {
 		return 0, err
 	}
 	return total, nil
 }
 
 // SumConfirmedByGoalInPeriod returns the confirmed contribution total within occurred_on range.
-func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.Context, goalID string, start, end time.Time) (float64, error) {
+// userID is joined through savings_goals to enforce ownership scoping (RG2 / M17 — Codex C1).
+func (r *savingsContributionRepository) SumConfirmedByGoalInPeriod(ctx context.Context, userID, goalID string, start, end time.Time) (float64, error) {
 	query := `
-		SELECT COALESCE(SUM(amount), 0)
-		FROM savings_goal_contributions
-		WHERE savings_goal_id = $1
-		  AND status = 'confirmed'
-		  AND occurred_on >= $2::date
-		  AND occurred_on <= $3::date
+		SELECT COALESCE(SUM(c.amount), 0)
+		FROM savings_goal_contributions c
+		JOIN savings_goals g ON g.id = c.savings_goal_id
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		  AND c.status = 'confirmed'
+		  AND c.occurred_on >= $3::date
+		  AND c.occurred_on <= $4::date
 	`
 	var total float64
-	if err := r.db.QueryRow(ctx, query, goalID, start, end).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, query, goalID, userID, start, end).Scan(&total); err != nil {
 		return 0, err
 	}
 	return total, nil
@@ -243,13 +324,16 @@ type scannable interface {
 }
 
 // ListByGoal returns all contributions for a goal ordered newest-first.
-func (r *savingsContributionRepository) ListByGoal(ctx context.Context, goalID string) ([]*domain.SavingsGoalContribution, error) {
+// userID is joined through savings_goals to enforce ownership scoping (Codex C1 / M20).
+func (r *savingsContributionRepository) ListByGoal(ctx context.Context, userID, goalID string) ([]*domain.SavingsGoalContribution, error) {
 	query := `SELECT ` + contributionSelectCols + `
-		FROM savings_goal_contributions
-		WHERE savings_goal_id = $1
-		ORDER BY occurred_on DESC, created_at DESC`
+		FROM savings_goal_contributions c
+		JOIN savings_goals g ON g.id = c.savings_goal_id
+		WHERE c.savings_goal_id = $1
+		  AND g.user_id = $2
+		ORDER BY c.occurred_on DESC, c.created_at DESC`
 
-	rows, err := r.db.Query(ctx, query, goalID)
+	rows, err := r.db.Query(ctx, query, goalID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +354,119 @@ func (r *savingsContributionRepository) ListByGoal(ctx context.Context, goalID s
 		return []*domain.SavingsGoalContribution{}, nil
 	}
 	return contribs, nil
+}
+
+// ConfirmContribution promotes a proposed contribution to confirmed status.
+// Acquires a row-level lock on the contribution, then (if txn-linked) re-checks
+// allocation capacity before flipping to 'confirmed' (Codex C2 / M20).
+func (r *savingsContributionRepository) ConfirmContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Step 0: Load + lock the contribution row; verify it belongs to userID via goal ownership.
+	fetchQuery := `
+		SELECT ` + contributionSelectCols + `
+		FROM savings_goal_contributions c
+		JOIN savings_goals g ON g.id = c.savings_goal_id
+		WHERE c.id = $1 AND g.user_id = $2
+		FOR UPDATE OF c
+	`
+	contrib := &domain.SavingsGoalContribution{}
+	var row = tx.QueryRow(ctx, fetchQuery, id, userID)
+	if scanErr := row.Scan(
+		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,
+		&contrib.Amount, &contrib.Source, &contrib.Status,
+		&contrib.ManagedByReconciliation, &contrib.ConfirmedByUser,
+		&contrib.OccurredOn, &contrib.CreatedAt, &contrib.UpdatedAt,
+	); scanErr != nil {
+		if scanErr == pgx.ErrNoRows {
+			err = domain.ErrContributionNotFound
+		} else {
+			err = scanErr
+		}
+		return nil, err
+	}
+
+	if contrib.Status == "confirmed" {
+		err = domain.ErrContributionAlreadyConfirmed
+		return nil, err
+	}
+
+	// Step 1: If transaction-linked, re-check allocation capacity (Codex C2).
+	if contrib.TransactionID != nil {
+		var txnMagnitude float64
+		lockQuery := `SELECT ABS(amount) FROM transactions WHERE id = $1 AND user_id = $2 FOR UPDATE`
+		if err = tx.QueryRow(ctx, lockQuery, *contrib.TransactionID, userID).Scan(&txnMagnitude); err != nil {
+			if err == pgx.ErrNoRows {
+				err = domain.ErrContributionNotFound
+			}
+			return nil, err
+		}
+
+		var allocatedElsewhere float64
+		capQuery := `
+			SELECT COALESCE(SUM(amount), 0)
+			FROM savings_goal_contributions
+			WHERE transaction_id = $1
+			  AND status = 'confirmed'
+			  AND savings_goal_id != $2
+		`
+		if err = tx.QueryRow(ctx, capQuery, *contrib.TransactionID, contrib.SavingsGoalID).Scan(&allocatedElsewhere); err != nil {
+			return nil, err
+		}
+
+		remaining := txnMagnitude - allocatedElsewhere
+		if contrib.Amount > remaining {
+			err = domain.ErrContributionOverAllocated
+			return nil, err
+		}
+	}
+
+	// Step 2: Flip status to confirmed, set confirmed_by_user=true.
+	now := time.Now()
+	updateQuery := `
+		UPDATE savings_goal_contributions
+		SET status = 'confirmed', confirmed_by_user = true, managed_by_reconciliation = false, updated_at = $1
+		WHERE id = $2
+		RETURNING ` + contributionSelectCols
+	updatedRow := tx.QueryRow(ctx, updateQuery, now, id)
+	updated, scanErr := scanContribution(updatedRow)
+	if scanErr != nil {
+		err = scanErr
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// DeleteContribution removes a contribution row owned by userID.
+// Returns ErrContributionNotFound if the row does not exist or is not owned by userID.
+func (r *savingsContributionRepository) DeleteContribution(ctx context.Context, userID, id string) error {
+	query := `
+		DELETE FROM savings_goal_contributions c
+		USING savings_goals g
+		WHERE c.id = $1
+		  AND c.savings_goal_id = g.id
+		  AND g.user_id = $2
+	`
+	result, err := r.db.Exec(ctx, query, id, userID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return domain.ErrContributionNotFound
+	}
+	return nil
 }
 
 // DeleteManagedForTransaction removes all reconciler-owned contributions for a transaction.

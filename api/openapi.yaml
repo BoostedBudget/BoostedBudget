@@ -2045,6 +2045,8 @@ components:
         expected_income:
           format: double
           type: number
+        from_budget_id:
+          type: string
         income_amount:
           format: double
           type: number
@@ -3416,6 +3418,29 @@ components:
         - expiration
         - request_id
       type: object
+    LogContributionRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/LogContributionRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        notes:
+          type: string
+        occurred_on:
+          type: string
+        transaction_id:
+          type: string
+      required:
+        - amount
+        - occurred_on
+      type: object
     MCPRecipe:
       additionalProperties: false
       properties:
@@ -4649,6 +4674,53 @@ components:
         - created_at
         - updated_at
         - progress_basis
+      type: object
+    SavingsGoalContribution:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsGoalContribution.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        confirmed_by_user:
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        managed_by_reconciliation:
+          type: boolean
+        occurred_on:
+          type: string
+        savings_goal_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        transaction_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - savings_goal_id
+        - amount
+        - source
+        - status
+        - managed_by_reconciliation
+        - confirmed_by_user
+        - occurred_on
+        - created_at
+        - updated_at
       type: object
     SavingsGoalProgressItem:
       additionalProperties: false
@@ -10991,6 +11063,149 @@ paths:
       tags:
         - Savings Goals
         - Analytics
+  /api/v1/savings-goals/{goalID}/contributions:
+    get:
+      description: Returns all confirmed and proposed contributions for a savings goal, newest first.
+      operationId: listSavingsGoalContributions
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SavingsGoalContribution"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List savings goal contributions
+      tags:
+        - Savings Goals
+        - Contributions
+    post:
+      description: Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+      operationId: logSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogContributionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Log a savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}:
+    delete:
+      description: Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.
+      operationId: deleteSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Delete a savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}/confirm:
+    post:
+      description: Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under a transaction-level lock before committing (Codex C2).
+      operationId: confirmSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Confirm a proposed savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
   /api/v1/savings-goals/{id}:
     delete:
       description: Removes a savings goal from the user's collection.
