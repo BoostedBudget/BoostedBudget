@@ -612,3 +612,123 @@ func TestSavingsContributionRepository_UpsertFromTransaction_OwnershipCheckSucce
 	require.NoError(t, err)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
+
+// =============================================================================
+// R3-6: C3 hardening — managed_by_reconciliation guard on proposed upsert
+// =============================================================================
+
+// =============================================================================
+// R3-7: RejectContribution — sticky tombstone
+// =============================================================================
+
+// TestSavingsContributionRepository_RejectContribution_Success verifies that
+// RejectContribution updates status to 'rejected' and returns the updated row.
+func TestSavingsContributionRepository_RejectContribution_Success(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	contribID := uuid.New().String()
+	goalID := uuid.New().String()
+
+	// The UPDATE … FROM savings_goals … RETURNING query.
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
+		WithArgs(contribID, userID).
+		WillReturnRows(pgxmock.NewRows(contributionColumns).
+			AddRow(contribID, goalID, nil, 100.0, "confirmed_transfer", "rejected",
+				true, false, "2026-06-14", time.Now(), time.Now()))
+
+	result, err := repo.RejectContribution(ctx, userID, contribID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "rejected", result.Status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_RejectContribution_NotFound verifies that
+// attempting to reject a non-existent or cross-user contribution returns ErrContributionNotFound.
+func TestSavingsContributionRepository_RejectContribution_NotFound(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	contribID := uuid.New().String()
+
+	// The UPDATE returns no rows (not found or wrong user).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
+		WithArgs(contribID, userID).
+		WillReturnError(pgx.ErrNoRows)
+
+	// The existence check also returns no rows.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goal_contributions c`)).
+		WithArgs(contribID, userID).
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.RejectContribution(ctx, userID, contribID)
+	assert.ErrorIs(t, err, domain.ErrContributionNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_RejectContribution_NotProposed verifies that
+// attempting to reject a confirmed/rejected row returns ErrContributionNotProposed.
+func TestSavingsContributionRepository_RejectContribution_NotProposed(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	contribID := uuid.New().String()
+
+	// The UPDATE returns no rows (status != 'proposed') but the row exists.
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE savings_goal_contributions c`)).
+		WithArgs(contribID, userID).
+		WillReturnError(pgx.ErrNoRows)
+
+	// Existence check finds the row (wrong status, but row exists for this user).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goal_contributions c`)).
+		WithArgs(contribID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	_, err := repo.RejectContribution(ctx, userID, contribID)
+	assert.ErrorIs(t, err, domain.ErrContributionNotProposed)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard verifies that
+// UpsertProposedFromTransaction only overwrites rows where managed_by_reconciliation = true
+// (Codex C3 defense-in-depth, R3-6). A non-managed proposed row (managed_by_reconciliation=false)
+// must NOT be mutated by the reconciler's upsert.
+//
+// Implementation: the ON CONFLICT DO UPDATE WHERE clause must include
+// `AND savings_goal_contributions.managed_by_reconciliation = true` so that the update
+// only fires for rows the reconciler owns, even if status='proposed'.
+func TestSavingsContributionRepository_UpsertProposedFromTransaction_C3Guard(t *testing.T) {
+	mock, repo := setupContributionMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	goalID := uuid.New().String()
+	txnID := uuid.New().String()
+	magnitude := 200.0
+
+	// Ownership checks pass.
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM savings_goals WHERE id = $1 AND user_id = $2`)).
+		WithArgs(goalID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT 1 FROM transactions WHERE id = $1 AND user_id = $2`)).
+		WithArgs(txnID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	// The INSERT ... ON CONFLICT ... DO UPDATE WHERE must include managed_by_reconciliation = true
+	// (C3 defense-in-depth). We match on the presence of this condition in the SQL.
+	mock.ExpectExec("managed_by_reconciliation = true").
+		WithArgs(goalID, txnID, magnitude, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	err := repo.UpsertProposedFromTransaction(ctx, userID, goalID, txnID, magnitude)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

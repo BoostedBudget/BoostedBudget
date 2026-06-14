@@ -436,4 +436,10 @@ var (
 	ErrContributionOverAllocated = errors.New("contribution amount exceeds transaction's remaining capacity")
 	// ErrContributionAlreadyConfirmed is returned when attempting to confirm an already-confirmed row.
 	ErrContributionAlreadyConfirmed = errors.New("contribution is already confirmed")
+	// ErrContributionBasisMismatch is returned when a manual contribution is submitted for a goal
+	// whose progress_basis is not "contributions" (Codex C8 — intake gating, R3-3).
+	ErrContributionBasisMismatch = errors.New("manual contributions require progress_basis='contributions'")
+	// ErrContributionNotProposed is returned when attempting to reject a contribution that is
+	// not in 'proposed' status (e.g., already confirmed or already rejected). (R3-7)
+	ErrContributionNotProposed = errors.New("only proposed contributions can be rejected")
 )

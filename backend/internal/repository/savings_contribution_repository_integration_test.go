@@ -344,3 +344,66 @@ func TestTransactionRepository_Integration_InflowSignMagnitude(t *testing.T) {
 	}
 	assert.True(t, found, "inflow transaction must appear in GetInflowTransactionsForAccount results")
 }
+
+// =============================================================================
+// (d) Migration 000099 — rejected status (R3-0 / R3-7)
+// =============================================================================
+
+// TestSavingsContributionRepository_Integration_RejectedStatus verifies that migration 000099
+// extended the valid_contribution_status CHECK constraint to include 'rejected'.
+//
+// RED: fails before 000099 runs (constraint only allows 'proposed','confirmed').
+// GREEN: passes after 000099 is applied.
+func TestSavingsContributionRepository_Integration_RejectedStatus(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+
+	// Insert a contribution with status='rejected' directly — this hits the CHECK constraint.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, amount, source, status, managed_by_reconciliation,
+			 confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, 50.0, 'manual', 'rejected', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalID)
+	require.NoError(t, err, "status='rejected' must be allowed by the CHECK constraint after migration 000099")
+
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM savings_goal_contributions WHERE id = $1`, contribID)
+	})
+
+	// Verify the row is readable and has the correct status.
+	var status string
+	err = pool.QueryRow(ctx,
+		`SELECT status FROM savings_goal_contributions WHERE id = $1`, contribID,
+	).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "rejected", status)
+}
+
+// TestSavingsContributionRepository_Integration_RejectedStatusConstraint verifies that
+// the CHECK constraint still rejects invalid status values after migration 000099.
+func TestSavingsContributionRepository_Integration_RejectedStatusConstraint(t *testing.T) {
+	pool := integrationDB(t)
+	ctx := context.Background()
+
+	userID := seedIntegrationUser(t, pool)
+	accountID := seedIntegrationAccount(t, pool, userID)
+	goalID := seedIntegrationGoal(t, pool, userID, accountID)
+
+	// 'bogus' should still be rejected.
+	contribID := uuid.New().String()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO savings_goal_contributions
+			(id, savings_goal_id, amount, source, status, managed_by_reconciliation,
+			 confirmed_by_user, occurred_on, created_at, updated_at)
+		VALUES ($1, $2, 50.0, 'manual', 'bogus', false, true, CURRENT_DATE, now(), now())
+	`, contribID, goalID)
+	require.Error(t, err, "status='bogus' must be rejected by the CHECK constraint")
+	assert.Contains(t, err.Error(), "valid_contribution_status",
+		"error should mention the constraint name")
+}

@@ -1831,3 +1831,95 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		mockBudgetRepo.AssertExpectations(t)
 	})
 }
+
+// =============================================================================
+// R3-4: CreateBudget savings category IDOR protection (Issue #1300, Codex C1)
+// =============================================================================
+
+// TestBudgetService_CreateBudget_SavingsCategory_IDOR verifies that CreateBudget
+// rejects categories whose SavingsGoalID belongs to another user (R3-4 / Codex C1).
+// Previously CreateBudget used a plain CreateCategory call with no ownership check,
+// unlike AddCategory which already had the check.
+func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
+	userID := "user-creator"
+	otherUserGoalID := "goal-other-user"
+
+	makeService := func() (*budgetService, *MockBudgetRepository) {
+		mockBudgetRepo := new(MockBudgetRepository)
+		mockCategoryRepo := new(MockCustomCategoryRepository)
+		mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+		svc := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+		return svc.(*budgetService), mockBudgetRepo
+	}
+
+	t.Run("rejects savings category with another user's goal (IDOR)", func(t *testing.T) {
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+
+		mockChecker := new(MockGoalOwnershipChecker)
+		mockChecker.On("GetByIDForUser", ctx, otherUserGoalID, userID).Return(nil, domain.ErrSavingsGoalNotFound)
+		svc.SetGoalOwnershipChecker(mockChecker)
+
+		req := &domain.CreateBudgetRequest{
+			Name:         "Budget With Savings",
+			Period:       domain.BudgetPeriodMonthly,
+			StartDate:    time.Now(),
+			Amount:       2000.00,
+			CurrencyCode: "USD",
+			Categories: []domain.CreateBudgetCategoryRequest{
+				{
+					CategoryKind:    "savings",
+					SavingsGoalID:   &otherUserGoalID,
+					AllocatedAmount: 500.00,
+				},
+			},
+		}
+
+		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+		// CreateCategory must NOT be called when IDOR check fails.
+
+		_, err := svc.CreateBudget(ctx, userID, req)
+
+		require.Error(t, err, "cross-user goal in CreateBudget must return an error")
+		assert.ErrorIs(t, err, domain.ErrSavingsGoalNotFound)
+		mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+		mockChecker.AssertExpectations(t)
+	})
+
+	t.Run("accepts savings category with own goal", func(t *testing.T) {
+		svc, mockBudgetRepo := makeService()
+		ctx := context.Background()
+		ownGoalID := "goal-own"
+
+		mockChecker := new(MockGoalOwnershipChecker)
+		mockChecker.On("GetByIDForUser", ctx, ownGoalID, userID).Return(&domain.SavingsGoal{ID: ownGoalID, UserID: userID}, nil)
+		svc.SetGoalOwnershipChecker(mockChecker)
+
+		req := &domain.CreateBudgetRequest{
+			Name:         "Budget With Own Savings",
+			Period:       domain.BudgetPeriodMonthly,
+			StartDate:    time.Now(),
+			Amount:       3000.00,
+			CurrencyCode: "USD",
+			Categories: []domain.CreateBudgetCategoryRequest{
+				{
+					CategoryKind:    "savings",
+					SavingsGoalID:   &ownGoalID,
+					AllocatedAmount: 800.00,
+				},
+			},
+		}
+
+		mockBudgetRepo.On("Create", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+			return c.SavingsGoalID != nil && *c.SavingsGoalID == ownGoalID
+		})).Return(nil)
+
+		budget, err := svc.CreateBudget(ctx, userID, req)
+
+		require.NoError(t, err)
+		require.NotNil(t, budget)
+		mockBudgetRepo.AssertExpectations(t)
+		mockChecker.AssertExpectations(t)
+	})
+}

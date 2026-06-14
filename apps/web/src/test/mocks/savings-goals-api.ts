@@ -17,6 +17,7 @@ export const mockDeleteSavingsGoalMutateAsync = mock(() => Promise.resolve(undef
 // Contribution mutation mocks
 export const mockLogSavingsGoalContributionMutateAsync = mock(() => Promise.resolve(null as any))
 export const mockConfirmSavingsGoalContributionMutateAsync = mock(() => Promise.resolve(null as any))
+export const mockRejectSavingsGoalContributionMutateAsync = mock(() => Promise.resolve(null as any)) // R3-7
 export const mockDeleteSavingsGoalContributionMutateAsync = mock(() => Promise.resolve(undefined))
 
 // Refetch mocks
@@ -95,6 +96,13 @@ export const mockUseConfirmSavingsGoalContribution = mock(() => ({
   error: null,
 }))
 
+export const mockUseRejectSavingsGoalContribution = mock(() => ({  // R3-7
+  mutateAsync: mockRejectSavingsGoalContributionMutateAsync,
+  isPending: false,
+  isError: false,
+  error: null,
+}))
+
 export const mockUseDeleteSavingsGoalContribution = mock(() => ({
   mutateAsync: mockDeleteSavingsGoalContributionMutateAsync,
   isPending: false,
@@ -117,5 +125,6 @@ mock.module('@boostedbudget/api-client/endpoints/savings-goals/savings-goals', (
   useListSavingsGoalContributions: mockUseListSavingsGoalContributions,
   useLogSavingsGoalContribution: mockUseLogSavingsGoalContribution,
   useConfirmSavingsGoalContribution: mockUseConfirmSavingsGoalContribution,
+  useRejectSavingsGoalContribution: mockUseRejectSavingsGoalContribution, // R3-7
   useDeleteSavingsGoalContribution: mockUseDeleteSavingsGoalContribution,
 }))

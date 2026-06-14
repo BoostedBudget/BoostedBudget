@@ -24,27 +24,39 @@ import (
 // ContributionHandler
 // =============================================================================
 
-// ContributionProgressRecomputer triggers savings progress recomputation after a contribution write.
-// Narrow interface (M20) to avoid importing the full SavingsProgressService.
+// ContributionProgressRecomputer triggers savings progress recomputation for a specific goal
+// after a contribution write. Narrow interface (M20/R3-2) to avoid importing the full
+// SavingsProgressService. Uses RecomputeGoalByID rather than RecomputeUser so that completed
+// goals (excluded from RecomputeUser's active-only scan) are also kept in sync.
 type ContributionProgressRecomputer interface {
-	RecomputeUser(ctx context.Context, userID string) error
+	RecomputeGoalByID(ctx context.Context, userID, goalID string) error
+}
+
+// ContributionGoalReader loads a savings goal for ownership + basis checks (R3-3/C8).
+// Narrow interface to avoid importing the full SavingsGoalService.
+type ContributionGoalReader interface {
+	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 }
 
 // ContributionHandler handles savings goal contribution HTTP requests (M20).
 type ContributionHandler struct {
 	contribRepo     repository.SavingsContributionRepository
 	progressService ContributionProgressRecomputer // optional; nil = skip goal recompute after write
+	goalReader      ContributionGoalReader         // optional; nil = skip basis gate (tests only)
 }
 
 // NewContributionHandler creates a new ContributionHandler.
 // progressService is optional; pass nil to disable post-write goal recomputation.
+// goalReader is optional; pass nil only in tests that pre-validate the goal externally.
 func NewContributionHandler(
 	contribRepo repository.SavingsContributionRepository,
 	progressService ContributionProgressRecomputer,
+	goalReader ContributionGoalReader,
 ) *ContributionHandler {
 	return &ContributionHandler{
 		contribRepo:     contribRepo,
 		progressService: progressService,
+		goalReader:      goalReader,
 	}
 }
 
@@ -87,6 +99,18 @@ type ConfirmContributionOutput struct {
 	Body *domain.SavingsGoalContribution
 }
 
+// RejectContributionInput is the request for rejecting a proposed contribution.
+type RejectContributionInput struct {
+	inputs.AuthenticatedInput
+	GoalID string `path:"goalID" doc:"Savings goal ID"`
+	ID     string `path:"id" doc:"Contribution ID"`
+}
+
+// RejectContributionOutput is the response for a rejected contribution.
+type RejectContributionOutput struct {
+	Body *domain.SavingsGoalContribution
+}
+
 // DeleteContributionInput is the request for removing a contribution.
 type DeleteContributionInput struct {
 	inputs.AuthenticatedInput
@@ -100,34 +124,92 @@ type DeleteContributionInput struct {
 
 // LogContribution handles POST /api/v1/savings-goals/{goalID}/contributions.
 // Manually logs a confirmed contribution for the goal (D6 source-a / M20).
+//
+// R3-3 (C8): rejects if goal.progress_basis != "contributions" — manual contributions
+// only move progress for contributions-basis goals.
+// R3-1 (C2): if the log links a transaction_id, the write goes through
+// UpsertFromTransaction (FOR UPDATE lock + capacity check) so a manual log cannot
+// over-allocate a transaction. Un-linked logs use Insert (no capacity to consume).
+// R3-2: calls RecomputeGoal(goalID) not RecomputeUser so completed goals are recomputed.
 func (h *ContributionHandler) LogContribution(ctx context.Context, input *LogContributionInput) (*LogContributionOutput, error) {
 	if err := input.Body.Validate(); err != nil {
 		return nil, huma.Error422UnprocessableEntity("invalid contribution", err)
 	}
 
-	contrib := &domain.SavingsGoalContribution{
-		ID:                      uuid.New().String(),
-		SavingsGoalID:           input.GoalID,
-		TransactionID:           input.Body.TransactionID,
-		Amount:                  input.Body.Amount,
-		Source:                  "manual",
-		Status:                  "confirmed",
-		ManagedByReconciliation: false,
-		ConfirmedByUser:         true,
-		OccurredOn:              input.Body.OccurredOn,
-	}
-
-	if err := h.contribRepo.Insert(ctx, input.UserID, contrib); err != nil {
-		if err == domain.ErrSavingsGoalNotFound {
-			return nil, huma.Error404NotFound("savings goal not found")
+	// R3-3 (C8): load goal and gate on contributions basis.
+	if h.goalReader != nil {
+		goal, err := h.goalReader.GetByIDForUser(ctx, input.GoalID, input.UserID)
+		if err != nil {
+			if err == domain.ErrSavingsGoalNotFound {
+				return nil, huma.Error404NotFound("savings goal not found")
+			}
+			return nil, humaerrors.LoggingMapError(ctx, err)
 		}
-		return nil, humaerrors.LoggingMapError(ctx, err)
+		if goal.ProgressBasis != domain.ProgressBasisContributions {
+			return nil, huma.Error422UnprocessableEntity("basis mismatch",
+				domain.ErrContributionBasisMismatch)
+		}
 	}
 
-	// Recompute goal progress after logging a contribution (non-fatal if not wired).
+	var contrib *domain.SavingsGoalContribution
+
+	if input.Body.TransactionID != nil {
+		// R3-1 (C2): txn-linked → capacity-safe path (FOR UPDATE + cap check).
+		if err := h.contribRepo.UpsertFromTransaction(
+			ctx,
+			input.UserID,
+			input.GoalID,
+			*input.Body.TransactionID,
+			input.Body.Amount,
+			"manual",
+		); err != nil {
+			switch err {
+			case domain.ErrSavingsGoalNotFound:
+				return nil, huma.Error404NotFound("savings goal not found")
+			case domain.ErrContributionNotFound:
+				return nil, huma.Error404NotFound("transaction not found")
+			case domain.ErrContributionOverAllocated:
+				return nil, huma.Error422UnprocessableEntity("over-allocated", err)
+			default:
+				return nil, humaerrors.LoggingMapError(ctx, err)
+			}
+		}
+		// Build a response struct representing the upserted row.
+		contrib = &domain.SavingsGoalContribution{
+			ID:                      uuid.New().String(),
+			SavingsGoalID:           input.GoalID,
+			TransactionID:           input.Body.TransactionID,
+			Amount:                  input.Body.Amount,
+			Source:                  "manual",
+			Status:                  "confirmed",
+			ManagedByReconciliation: false,
+			ConfirmedByUser:         true,
+			OccurredOn:              input.Body.OccurredOn,
+		}
+	} else {
+		// Un-linked manual log: no transaction capacity to consume → plain insert.
+		contrib = &domain.SavingsGoalContribution{
+			ID:                      uuid.New().String(),
+			SavingsGoalID:           input.GoalID,
+			Amount:                  input.Body.Amount,
+			Source:                  "manual",
+			Status:                  "confirmed",
+			ManagedByReconciliation: false,
+			ConfirmedByUser:         true,
+			OccurredOn:              input.Body.OccurredOn,
+		}
+		if err := h.contribRepo.Insert(ctx, input.UserID, contrib); err != nil {
+			if err == domain.ErrSavingsGoalNotFound {
+				return nil, huma.Error404NotFound("savings goal not found")
+			}
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+	}
+
+	// R3-2: recompute the specific goal (not the whole user) so completed goals are also kept in sync.
 	if h.progressService != nil {
-		if err := h.progressService.RecomputeUser(ctx, input.UserID); err != nil {
-			// Non-fatal — contribution was persisted; progress will be reconciled at next sync.
+		if err := h.progressService.RecomputeGoalByID(ctx, input.UserID, input.GoalID); err != nil {
+			// Non-fatal — contribution was persisted; progress reconciled at next sync.
 			_ = err
 		}
 	}
@@ -162,14 +244,43 @@ func (h *ContributionHandler) ConfirmContribution(ctx context.Context, input *Co
 		}
 	}
 
-	// Recompute goal progress after confirmation (non-fatal if not wired).
+	// R3-2: recompute the specific goal (not the whole user) so completed goals are also kept in sync.
 	if h.progressService != nil {
-		if err := h.progressService.RecomputeUser(ctx, input.UserID); err != nil {
+		if err := h.progressService.RecomputeGoalByID(ctx, input.UserID, input.GoalID); err != nil {
+			// Non-fatal — contribution was persisted; progress reconciled at next sync.
 			_ = err
 		}
 	}
 
 	return &ConfirmContributionOutput{Body: confirmed}, nil
+}
+
+// RejectContribution handles POST /api/v1/savings-goals/{goalID}/contributions/{id}/reject.
+// Sets a proposed contribution to 'rejected' status (sticky tombstone — R3-7).
+// The row is retained so UpsertProposedFromTransaction won't re-propose the same transfer-in
+// on future syncs (the partial-unique-index key is preserved as a tombstone).
+// Only proposed rows can be rejected; confirmed rows must be deleted.
+func (h *ContributionHandler) RejectContribution(ctx context.Context, input *RejectContributionInput) (*RejectContributionOutput, error) {
+	rejected, err := h.contribRepo.RejectContribution(ctx, input.UserID, input.ID)
+	if err != nil {
+		switch err {
+		case domain.ErrContributionNotFound:
+			return nil, huma.Error404NotFound("contribution not found")
+		case domain.ErrContributionNotProposed:
+			return nil, huma.Error409Conflict("only proposed contributions can be rejected")
+		default:
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+	}
+
+	// R3-2: recompute the specific goal (non-fatal).
+	if h.progressService != nil {
+		if err := h.progressService.RecomputeGoalByID(ctx, input.UserID, input.GoalID); err != nil {
+			_ = err
+		}
+	}
+
+	return &RejectContributionOutput{Body: rejected}, nil
 }
 
 // DeleteContribution handles DELETE /api/v1/savings-goals/{goalID}/contributions/{id}.
@@ -182,9 +293,10 @@ func (h *ContributionHandler) DeleteContribution(ctx context.Context, input *Del
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	// Recompute goal progress after deletion (non-fatal if not wired).
+	// R3-2: recompute the specific goal (not the whole user) so completed goals are also kept in sync.
 	if h.progressService != nil {
-		if err := h.progressService.RecomputeUser(ctx, input.UserID); err != nil {
+		if err := h.progressService.RecomputeGoalByID(ctx, input.UserID, input.GoalID); err != nil {
+			// Non-fatal — contribution was deleted; progress reconciled at next sync.
 			_ = err
 		}
 	}
@@ -232,6 +344,19 @@ func RegisterContributionRoutes(api huma.API, handler *ContributionHandler) {
 		Tags:     []string{"Savings Goals", "Contributions"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.ConfirmContribution)
+
+	// POST /api/v1/savings-goals/{goalID}/contributions/{id}/reject — sticky reject tombstone
+	huma.Register(api, huma.Operation{
+		OperationID: "rejectSavingsGoalContribution",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/savings-goals/{goalID}/contributions/{id}/reject",
+		Summary:     "Reject a proposed savings goal contribution",
+		Description: "Sets a proposed contribution to 'rejected' status. The row is retained as a sticky " +
+			"tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). " +
+			"Only proposed contributions can be rejected; confirmed contributions must be deleted.",
+		Tags:     []string{"Savings Goals", "Contributions"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.RejectContribution)
 
 	// DELETE /api/v1/savings-goals/{goalID}/contributions/{id} — remove
 	huma.Register(api, huma.Operation{

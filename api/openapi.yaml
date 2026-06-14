@@ -11206,6 +11206,44 @@ paths:
       tags:
         - Savings Goals
         - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}/reject:
+    post:
+      description: Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.
+      operationId: rejectSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Reject a proposed savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
   /api/v1/savings-goals/{id}:
     delete:
       description: Removes a savings goal from the user's collection.

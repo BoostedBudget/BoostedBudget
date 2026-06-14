@@ -69,6 +69,14 @@ func (m *mockSavingsContributionRepo) ConfirmContribution(ctx context.Context, u
 	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
 }
 
+func (m *mockSavingsContributionRepo) RejectContribution(ctx context.Context, userID, id string) (*domain.SavingsGoalContribution, error) {
+	args := m.Called(ctx, userID, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoalContribution), args.Error(1)
+}
+
 func (m *mockSavingsContributionRepo) DeleteContribution(ctx context.Context, userID, id string) error {
 	args := m.Called(ctx, userID, id)
 	return args.Error(0)
@@ -89,9 +97,22 @@ type mockContributionProgressRecomputer struct {
 	mock.Mock
 }
 
-func (m *mockContributionProgressRecomputer) RecomputeUser(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
+func (m *mockContributionProgressRecomputer) RecomputeGoalByID(ctx context.Context, userID, goalID string) error {
+	args := m.Called(ctx, userID, goalID)
 	return args.Error(0)
+}
+
+// mockSavingsGoalReader mocks ContributionGoalReader.
+type mockSavingsGoalReader struct {
+	mock.Mock
+}
+
+func (m *mockSavingsGoalReader) GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.SavingsGoal), args.Error(1)
 }
 
 // =============================================================================
@@ -122,7 +143,7 @@ func makeTestContribution(goalID string) *domain.SavingsGoalContribution {
 // and return 401 (no auth) rather than 404 (not registered).
 func TestContributionRouteRegistration(t *testing.T) {
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	_, api := humatest.New(t)
 	RegisterContributionRoutes(api, handler)
@@ -168,7 +189,7 @@ func TestListContributions_ReturnsGoalContributions(t *testing.T) {
 	userID := "user-list-1"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	contribs := []*domain.SavingsGoalContribution{
 		makeTestContribution(goalID),
@@ -202,7 +223,7 @@ func TestLogContribution_Success(t *testing.T) {
 
 	contribRepo := new(mockSavingsContributionRepo)
 	progress := new(mockContributionProgressRecomputer)
-	handler := NewContributionHandler(contribRepo, progress)
+	handler := NewContributionHandler(contribRepo, progress, nil)
 
 	contribRepo.On("Insert", mock.Anything, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
 		return c.SavingsGoalID == goalID &&
@@ -212,7 +233,7 @@ func TestLogContribution_Success(t *testing.T) {
 			c.ConfirmedByUser &&
 			!c.ManagedByReconciliation
 	})).Return(nil)
-	progress.On("RecomputeUser", mock.Anything, userID).Return(nil)
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
 	ctx := context.Background()
 	input := &LogContributionInput{
@@ -244,7 +265,7 @@ func TestLogContribution_CrossUserGoal_Returns404(t *testing.T) {
 	userID := "user-attacker"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	// The repo Insert will verify goal ownership and reject with ErrSavingsGoalNotFound.
 	contribRepo.On("Insert", mock.Anything, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
@@ -276,7 +297,7 @@ func TestLogContribution_InvalidAmount_Returns422(t *testing.T) {
 	userID := "user-invalid"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	ctx := context.Background()
 	input := &LogContributionInput{
@@ -307,7 +328,7 @@ func TestConfirmContribution_Success(t *testing.T) {
 
 	contribRepo := new(mockSavingsContributionRepo)
 	progress := new(mockContributionProgressRecomputer)
-	handler := NewContributionHandler(contribRepo, progress)
+	handler := NewContributionHandler(contribRepo, progress, nil)
 
 	confirmed := makeTestContribution(goalID)
 	confirmed.ID = contribID
@@ -316,7 +337,7 @@ func TestConfirmContribution_Success(t *testing.T) {
 
 	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
 		Return(confirmed, nil)
-	progress.On("RecomputeUser", mock.Anything, userID).Return(nil)
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
 	ctx := context.Background()
 	input := &ConfirmContributionInput{
@@ -341,7 +362,7 @@ func TestConfirmContribution_NotFound_Returns404(t *testing.T) {
 	contribID := "contrib-notfound"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
 		Return(nil, domain.ErrContributionNotFound)
@@ -364,7 +385,7 @@ func TestConfirmContribution_AlreadyConfirmed_Returns409(t *testing.T) {
 	contribID := "contrib-already"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
 		Return(nil, domain.ErrContributionAlreadyConfirmed)
@@ -387,7 +408,7 @@ func TestConfirmContribution_OverAllocated_Returns422(t *testing.T) {
 	contribID := "contrib-overalloc"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	contribRepo.On("ConfirmContribution", mock.Anything, userID, contribID).
 		Return(nil, domain.ErrContributionOverAllocated)
@@ -416,11 +437,11 @@ func TestDeleteContribution_Success(t *testing.T) {
 
 	contribRepo := new(mockSavingsContributionRepo)
 	progress := new(mockContributionProgressRecomputer)
-	handler := NewContributionHandler(contribRepo, progress)
+	handler := NewContributionHandler(contribRepo, progress, nil)
 
 	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
 		Return(nil)
-	progress.On("RecomputeUser", mock.Anything, userID).Return(nil)
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
 
 	ctx := context.Background()
 	input := &DeleteContributionInput{
@@ -444,7 +465,7 @@ func TestDeleteContribution_NotFound_Returns404(t *testing.T) {
 	contribID := "contrib-delnf"
 
 	contribRepo := new(mockSavingsContributionRepo)
-	handler := NewContributionHandler(contribRepo, nil)
+	handler := NewContributionHandler(contribRepo, nil, nil)
 
 	contribRepo.On("DeleteContribution", mock.Anything, userID, contribID).
 		Return(domain.ErrContributionNotFound)
@@ -476,6 +497,338 @@ func TestContributionResponseJSON(t *testing.T) {
 	assert.Equal(t, "manual", parsed["source"])
 	assert.Equal(t, "confirmed", parsed["status"])
 	assert.Equal(t, 250.00, parsed["amount"])
+}
+
+// =============================================================================
+// Tests — R3-2: RecomputeGoal (not RecomputeUser) is called after writes
+// =============================================================================
+
+// TestLogContribution_RecomputesSpecificGoal_NotUser verifies that after a manual log
+// the handler calls RecomputeGoal(userID, goalID) rather than RecomputeUser(userID).
+// This ensures completed goals are also recomputed (R3-2).
+func TestLogContribution_RecomputesSpecificGoal_NotUser(t *testing.T) {
+	goalID := "goal-recompute-goal"
+	userID := "user-recompute"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	progress := new(mockContributionProgressRecomputer)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, progress, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+	contribRepo.On("Insert", mock.Anything, userID, mock.Anything).Return(nil)
+	// Must be called with goalID, NOT just userID
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
+
+	ctx := context.Background()
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:     200.00,
+			OccurredOn: "2026-06-14",
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.NoError(t, err)
+	progress.AssertExpectations(t)
+}
+
+// =============================================================================
+// Tests — R3-3: Manual intake gated on contributions basis (C8)
+// =============================================================================
+
+// TestLogContribution_NonContributionsBasis_Returns422 verifies that a manual log
+// for a goal with progress_basis != 'contributions' is rejected with 422 (C8 gate).
+func TestLogContribution_NonContributionsBasis_Returns422(t *testing.T) {
+	goalID := "goal-manual-basis"
+	userID := "user-manual-basis"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	// Goal has manual basis — contributions not tracked here.
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+
+	ctx := context.Background()
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:     100.00,
+			OccurredOn: "2026-06-14",
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus(),
+		"manual log on non-contributions goal must return 422")
+	contribRepo.AssertNotCalled(t, "Insert")
+}
+
+// TestLogContribution_BalanceBasis_Returns422 verifies that balance-basis goals
+// are also gated (completeness check for C8).
+func TestLogContribution_BalanceBasis_Returns422(t *testing.T) {
+	goalID := "goal-balance-basis"
+	userID := "user-balance-basis"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisBalance,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+
+	ctx := context.Background()
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:     75.00,
+			OccurredOn: "2026-06-14",
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus())
+	contribRepo.AssertNotCalled(t, "Insert")
+}
+
+// =============================================================================
+// Tests — R3-1: Txn-linked manual log is capacity-safe (C2)
+// =============================================================================
+
+// TestLogContribution_TxnLinked_OverAllocated_Returns422 verifies that when a manual
+// contribution includes a transaction_id, an over-allocation returns 422 (C2 / R3-1).
+func TestLogContribution_TxnLinked_OverAllocated_Returns422(t *testing.T) {
+	goalID := "goal-txn-overalloc"
+	userID := "user-txn-overalloc"
+	txnID := "txn-overalloc"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+
+	// UpsertFromTransaction is called instead of Insert for txn-linked logs.
+	// It returns ErrContributionOverAllocated when the txn is maxed out.
+	contribRepo.On("UpsertFromTransaction", mock.Anything, userID, goalID, txnID, 999.00, "manual").
+		Return(domain.ErrContributionOverAllocated)
+
+	ctx := context.Background()
+	txnIDStr := txnID
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:        999.00,
+			OccurredOn:    "2026-06-14",
+			TransactionID: &txnIDStr,
+		},
+	}
+
+	_, err := handler.LogContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnprocessableEntity, humaErr.GetStatus(),
+		"over-allocated txn-linked manual log must return 422")
+	contribRepo.AssertNotCalled(t, "Insert")
+}
+
+// TestLogContribution_TxnLinked_Success uses UpsertFromTransaction (capacity-safe path).
+func TestLogContribution_TxnLinked_Success(t *testing.T) {
+	goalID := "goal-txn-ok"
+	userID := "user-txn-ok"
+	txnID := "txn-ok"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	progress := new(mockContributionProgressRecomputer)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, progress, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+	contribRepo.On("UpsertFromTransaction", mock.Anything, userID, goalID, txnID, 100.00, "manual").
+		Return(nil)
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
+
+	ctx := context.Background()
+	txnIDStr := txnID
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:        100.00,
+			OccurredOn:    "2026-06-14",
+			TransactionID: &txnIDStr,
+		},
+	}
+
+	output, err := handler.LogContribution(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	contribRepo.AssertNotCalled(t, "Insert")
+	contribRepo.AssertExpectations(t)
+	progress.AssertExpectations(t)
+}
+
+// TestLogContribution_NoTxn_Success uses Insert (unlinked manual log — no capacity to consume).
+func TestLogContribution_NoTxn_Success(t *testing.T) {
+	goalID := "goal-notxn"
+	userID := "user-notxn"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	goalReader := new(mockSavingsGoalReader)
+	handler := NewContributionHandler(contribRepo, nil, goalReader)
+
+	goal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalReader.On("GetByIDForUser", mock.Anything, goalID, userID).Return(goal, nil)
+	contribRepo.On("Insert", mock.Anything, userID, mock.MatchedBy(func(c *domain.SavingsGoalContribution) bool {
+		return c.SavingsGoalID == goalID && c.Amount == 150.00
+	})).Return(nil)
+
+	ctx := context.Background()
+	input := &LogContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		Body: domain.LogContributionRequest{
+			Amount:     150.00,
+			OccurredOn: "2026-06-14",
+		},
+	}
+
+	output, err := handler.LogContribution(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	contribRepo.AssertNotCalled(t, "UpsertFromTransaction")
+	contribRepo.AssertExpectations(t)
+}
+
+// =============================================================================
+// Tests — RejectContribution (POST /reject)
+// =============================================================================
+
+// TestRejectContribution_Success verifies that a proposed contribution can be rejected
+// (status→'rejected') and progress is recomputed (R3-7).
+func TestRejectContribution_Success(t *testing.T) {
+	goalID := "goal-reject-1"
+	userID := "user-reject-1"
+	contribID := "contrib-reject-1"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	progress := new(mockContributionProgressRecomputer)
+	handler := NewContributionHandler(contribRepo, progress, nil)
+
+	rejected := makeTestContribution(goalID)
+	rejected.ID = contribID
+	rejected.Status = "rejected"
+
+	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+		Return(rejected, nil)
+	progress.On("RecomputeGoalByID", mock.Anything, userID, goalID).Return(nil)
+
+	ctx := context.Background()
+	input := &RejectContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 contribID,
+	}
+
+	output, err := handler.RejectContribution(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "rejected", output.Body.Status)
+	contribRepo.AssertExpectations(t)
+	progress.AssertExpectations(t)
+}
+
+// TestRejectContribution_NotFound_Returns404 verifies ErrContributionNotFound → 404.
+func TestRejectContribution_NotFound_Returns404(t *testing.T) {
+	goalID := "goal-rjnf"
+	userID := "user-rjnf"
+	contribID := "contrib-rjnf"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+		Return(nil, domain.ErrContributionNotFound)
+
+	ctx := context.Background()
+	input := &RejectContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 contribID,
+	}
+
+	_, err := handler.RejectContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusNotFound, humaErr.GetStatus())
+}
+
+// TestRejectContribution_NotProposed_Returns409 verifies ErrContributionNotProposed → 409.
+func TestRejectContribution_NotProposed_Returns409(t *testing.T) {
+	goalID := "goal-rjnp"
+	userID := "user-rjnp"
+	contribID := "contrib-rjnp"
+
+	contribRepo := new(mockSavingsContributionRepo)
+	handler := NewContributionHandler(contribRepo, nil, nil)
+
+	contribRepo.On("RejectContribution", mock.Anything, userID, contribID).
+		Return(nil, domain.ErrContributionNotProposed)
+
+	ctx := context.Background()
+	input := &RejectContributionInput{
+		AuthenticatedInput: authenticatedInput(userID),
+		GoalID:             goalID,
+		ID:                 contribID,
+	}
+
+	_, err := handler.RejectContribution(ctx, input)
+	require.Error(t, err)
+	humaErr, ok := err.(huma.StatusError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusConflict, humaErr.GetStatus())
 }
 
 // =============================================================================

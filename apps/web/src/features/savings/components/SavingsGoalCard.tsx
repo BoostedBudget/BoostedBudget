@@ -122,8 +122,8 @@ export function SavingsGoalCard({ goal, onEdit, onDelete, onAddFunds, onContribu
         </div>
       )}
 
-      {/* Contributions button — always shown when edit/delete actions are present (#1300 M21) */}
-      {(onEdit || onDelete) && (
+      {/* Contributions button — only shown for contributions-basis goals (R3-3 C8) */}
+      {(onEdit || onDelete) && goal.progress_basis === 'contributions' && (
         <button
           className="mt-1 text-xs font-medium text-primary hover:underline self-start"
           onClick={() => setContributionsOpen(true)}

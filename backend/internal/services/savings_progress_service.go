@@ -18,6 +18,10 @@ import (
 type SavingsProgressGoalRepo interface {
 	// GetActiveByUserID returns all non-completed goals for a user.
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+	// GetByIDForUser retrieves a single goal by ID with ownership validation.
+	// Used by RecomputeGoalByID (R3-2) to load a specific goal (incl. completed)
+	// without scanning all active goals.
+	GetByIDForUser(ctx context.Context, id, userID string) (*domain.SavingsGoal, error)
 	// UpdateCurrentAmount stores the recomputed current_amount + timestamps.
 	UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error
 	// MarkCompleted sets is_completed and sticky completed_at (Codex C5).
@@ -44,6 +48,11 @@ type SavingsProgressService interface {
 	// progress_basis and updates last_calculated_at. Marks the goal completed
 	// (sticky) when current_amount >= target_amount (Codex C5). No-op for manual basis.
 	RecomputeGoal(ctx context.Context, goal *domain.SavingsGoal) error
+
+	// RecomputeGoalByID recomputes progress for a specific goal identified by
+	// (userID, goalID). Unlike RecomputeUser, it also recomputes completed goals
+	// (R3-2 / Codex C5 — completed_at stays sticky but current_amount still updates).
+	RecomputeGoalByID(ctx context.Context, userID, goalID string) error
 
 	// RecomputeUser recomputes all active goals for a user. Per-goal errors are
 	// logged but do not abort processing of the remaining goals.
@@ -166,6 +175,18 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 	}
 
 	return nil
+}
+
+// RecomputeGoalByID recomputes progress for a specific goal by (userID, goalID).
+// Unlike RecomputeUser, it includes completed goals so that contribution writes
+// (log/confirm/delete) on a completed goal keep current_amount in sync while
+// preserving the sticky completed_at (R3-2 / Codex C5).
+func (s *savingsProgressService) RecomputeGoalByID(ctx context.Context, userID, goalID string) error {
+	goal, err := s.goalRepo.GetByIDForUser(ctx, goalID, userID)
+	if err != nil {
+		return fmt.Errorf("savings_progress: load goal %s for recompute: %w", goalID, err)
+	}
+	return s.RecomputeGoal(ctx, goal)
 }
 
 // RecomputeUser recomputes all active goals for a user. Per-goal errors are logged

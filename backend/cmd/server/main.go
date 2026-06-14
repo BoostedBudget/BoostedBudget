@@ -1498,7 +1498,8 @@ func main() {
 		// Issue #1300 M20: Register contribution API routes (D6 source-a manual log + confirm + delete)
 		humaContributionHandler := operations.NewContributionHandler(
 			savingsContribRepo,     // SavingsContributionRepository
-			savingsProgressService, // ContributionProgressRecomputer: RecomputeUser
+			savingsProgressService, // ContributionProgressRecomputer: RecomputeGoalByID (R3-2)
+			savingsGoalRepo,        // ContributionGoalReader: GetByIDForUser (R3-3 C8 basis gate)
 		)
 		operations.RegisterContributionRoutes(humaAPI, humaContributionHandler)
 		appLogger.Info("Huma savings goal contribution routes registered (M20 D6 source-a)")

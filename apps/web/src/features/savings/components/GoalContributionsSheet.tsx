@@ -1,15 +1,17 @@
 /**
  * GoalContributionsSheet
- * Issue #1300 M21: Contributions review panel for a savings goal
+ * Issue #1300 M21 / R3-7: Contributions review panel for a savings goal
  *
  * Displays all contributions (proposed + confirmed) for a goal in a slide-over sheet.
- * Proposed contributions show Confirm and Delete actions (D6 source-b/c user review).
+ * Proposed contributions show Confirm + Reject actions (D6 source-b/c user review).
+ *   Reject sets status='rejected' (sticky tombstone — R3-7: prevents re-proposal on sync).
  * Confirmed contributions show a Delete action only.
+ * Rejected contributions are not shown (tombstone is server-side only).
  * All amounts are masked with data-ph-mask (PII policy).
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { CheckIcon, Trash2Icon, PlusIcon } from 'lucide-react'
+import { CheckIcon, Trash2Icon, PlusIcon, XIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,6 +24,7 @@ import {
   useListSavingsGoalContributions,
   useConfirmSavingsGoalContribution,
   useDeleteSavingsGoalContribution,
+  useRejectSavingsGoalContribution,
 } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import type { SavingsGoalContribution } from '@boostedbudget/api-client/models'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
@@ -69,21 +72,30 @@ interface ContributionRowProps {
   contribution: SavingsGoalContribution
   goalId: string
   onConfirmed: () => void
+  onRejected: () => void
   onDeleted: () => void
 }
 
-function ContributionRow({ contribution, goalId, onConfirmed, onDeleted }: ContributionRowProps) {
+function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted }: ContributionRowProps) {
   const trackEvent = useTrackEvent()
   const { mutateAsync: confirmMutate, isPending: confirming } = useConfirmSavingsGoalContribution()
+  const { mutateAsync: rejectMutate, isPending: rejecting } = useRejectSavingsGoalContribution()
   const { mutateAsync: deleteMutate, isPending: deleting } = useDeleteSavingsGoalContribution()
 
   const isProposed = contribution.status === 'proposed'
+  const busy = confirming || rejecting || deleting
 
   const handleConfirm = useCallback(async () => {
     await confirmMutate({ goalID: goalId, id: contribution.id })
     trackEvent(ANALYTICS_EVENTS.SAVINGS_CONTRIBUTION_CONFIRMED, { goal_id: goalId, contribution_id: contribution.id })
     onConfirmed()
   }, [goalId, contribution.id, confirmMutate, trackEvent, onConfirmed])
+
+  const handleReject = useCallback(async () => {
+    await rejectMutate({ goalID: goalId, id: contribution.id })
+    trackEvent(ANALYTICS_EVENTS.SAVINGS_CONTRIBUTION_REJECTED, { goal_id: goalId, contribution_id: contribution.id })
+    onRejected()
+  }, [goalId, contribution.id, rejectMutate, trackEvent, onRejected])
 
   const handleDelete = useCallback(async () => {
     await deleteMutate({ goalID: goalId, id: contribution.id })
@@ -109,28 +121,44 @@ function ContributionRow({ contribution, goalId, onConfirmed, onDeleted }: Contr
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
-        {isProposed && (
-          <button
-            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-success-foreground bg-success/90 border border-success/30 rounded-md hover:bg-success transition-colors disabled:opacity-50"
-            onClick={() => void handleConfirm()}
-            disabled={confirming || deleting}
-            aria-label="Confirm"
+        {isProposed ? (
+          // Proposed rows: Confirm + Reject (R3-7: Reject creates sticky tombstone)
+          <>
+            <button
+              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-success-foreground bg-success/90 border border-success/30 rounded-md hover:bg-success transition-colors disabled:opacity-50"
+              onClick={() => void handleConfirm()}
+              disabled={busy}
+              aria-label="Confirm"
+            >
+              <CheckIcon className="size-3" />
+              Confirm
+            </button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleReject()}
+              disabled={busy}
+              aria-label="Reject"
+              className="h-auto px-2 py-1 text-xs text-destructive hover:text-destructive"
+            >
+              <XIcon className="size-3" />
+              Reject
+            </Button>
+          </>
+        ) : (
+          // Confirmed rows: Delete only
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => void handleDelete()}
+            disabled={busy}
+            aria-label="Delete"
+            className="h-auto px-2 py-1 text-xs"
           >
-            <CheckIcon className="size-3" />
-            Confirm
-          </button>
+            <Trash2Icon className="size-3" />
+            Delete
+          </Button>
         )}
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={() => void handleDelete()}
-          disabled={confirming || deleting}
-          aria-label="Delete"
-          className="h-auto px-2 py-1 text-xs"
-        >
-          <Trash2Icon className="size-3" />
-          Delete
-        </Button>
       </div>
     </li>
   )
@@ -212,6 +240,7 @@ export function GoalContributionsSheet({
                       contribution={c}
                       goalId={goalId}
                       onConfirmed={handleChanged}
+                      onRejected={handleChanged}
                       onDeleted={handleChanged}
                     />
                   ))}

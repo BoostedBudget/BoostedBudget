@@ -9,6 +9,7 @@ import type { Budget } from '../types'
 import {
   mockUseCreateBudget,
   mockCreateBudgetMutateAsync,
+  mockUseGetBudgets,
 } from '@/test/mocks/budgets-api'
 import { mockUseGetPlaidCategories } from '@/test/mocks/categories-api'
 import { mockUseGetUserTags } from '@/test/mocks/tags-api'
@@ -59,9 +60,12 @@ describe('CreateBudgetDialog', () => {
     mockUseCreateBudget.mockClear()
     mockUseGetPlaidCategories.mockClear()
     mockUseGetUserTags.mockClear()
+    mockUseGetBudgets.mockClear()
 
     // Configure mutation to resolve successfully
     mockCreateBudgetMutateAsync.mockResolvedValue(mockCreatedBudget)
+    // Default: no existing budgets (hides the selector)
+    mockUseGetBudgets.mockReturnValue({ data: [], isLoading: false, error: null, refetch: mock(() => Promise.resolve({})) })
   })
 
 
@@ -571,5 +575,97 @@ describe('CreateBudgetDialog', () => {
         expect(screen.queryByLabelText(/source type/i)).not.toBeInTheDocument()
       })
     }, 20000)
+  })
+
+  // =============================================================================
+  // R3-8: from_budget_id selector (M22 FE — Issue #1300)
+  // existingBudgets is fetched internally via useGetBudgets — mock it here.
+  // =============================================================================
+
+  describe('from_budget_id selector (M22)', () => {
+    const existingBudgets: Budget[] = [
+      { ...mockCreatedBudget, id: 'budget-prev-1', name: 'January Budget' },
+      { ...mockCreatedBudget, id: 'budget-prev-2', name: 'February Budget' },
+    ]
+
+    it('renders "Based on existing budget" selector when useGetBudgets returns budgets', () => {
+      mockUseGetBudgets.mockReturnValue({ data: existingBudgets, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})) })
+
+      renderWithProviders(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      )
+      expect(screen.getByLabelText(/based on existing budget/i)).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /january budget/i })).toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /february budget/i })).toBeInTheDocument()
+    })
+
+    it('does not render the selector when useGetBudgets returns empty', () => {
+      // default beforeEach already sets mockUseGetBudgets to return []
+      renderWithProviders(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      )
+      expect(screen.queryByLabelText(/based on existing budget/i)).not.toBeInTheDocument()
+    })
+
+    it('sends from_budget_id in the create request when a budget is selected', async () => {
+      mockUseGetBudgets.mockReturnValue({ data: existingBudgets, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})) })
+      mockCreateBudgetMutateAsync.mockResolvedValue(mockCreatedBudget)
+
+      renderWithProviders(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'March Budget' } })
+      fireEvent.change(screen.getByLabelText(/expected income/i), { target: { value: '2000' } })
+
+      const selector = screen.getByLabelText(/based on existing budget/i)
+      fireEvent.change(selector, { target: { value: 'budget-prev-1' } })
+
+      submitForm()
+
+      await waitFor(() => {
+        const callArg = mockCreateBudgetMutateAsync.mock.calls[0]?.[0]
+        expect(callArg).toBeDefined()
+        expect(callArg?.data?.from_budget_id ?? callArg?.from_budget_id).toBe('budget-prev-1')
+      })
+    })
+
+    it('sends no from_budget_id when "— None —" is selected (default)', async () => {
+      mockUseGetBudgets.mockReturnValue({ data: existingBudgets, isLoading: false, error: null, refetch: mock(() => Promise.resolve({})) })
+      mockCreateBudgetMutateAsync.mockResolvedValue(mockCreatedBudget)
+
+      renderWithProviders(
+        <CreateBudgetDialog
+          isOpen={true}
+          onCancel={mockOnCancel}
+          onBudgetCreated={mockOnCreate}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'March Budget' } })
+      fireEvent.change(screen.getByLabelText(/expected income/i), { target: { value: '2000' } })
+      // Selector left at default "— None —" (value="")
+
+      submitForm()
+
+      await waitFor(() => {
+        const callArg = mockCreateBudgetMutateAsync.mock.calls[0]?.[0]
+        expect(callArg).toBeDefined()
+        const fromId = callArg?.data?.from_budget_id ?? callArg?.from_budget_id
+        expect(fromId == null || fromId === '' || fromId === undefined).toBe(true)
+      })
+    })
   })
 })
