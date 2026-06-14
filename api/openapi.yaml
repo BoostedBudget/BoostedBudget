@@ -1033,6 +1033,8 @@ components:
           type: string
         period:
           type: string
+        series_id:
+          type: string
         start_date:
           format: date-time
           type: string
@@ -1055,6 +1057,7 @@ components:
         - income_amount
         - income_sources
         - expected_income
+        - series_id
       type: object
     BudgetCategory:
       additionalProperties: false
