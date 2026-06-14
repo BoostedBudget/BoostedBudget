@@ -243,14 +243,16 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 165 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 169 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
     //   getInvestmentGainLossSummary, getInvestmentIncomeSummary
     // +1 from Issue #1300: getSavingsProgressSummary (basis-aware analytics, Codex C11)
+    // +4 from Issue #1300 M20: listSavingsGoalContributions, logSavingsGoalContribution,
+    //   confirmSavingsGoalContribution, deleteSavingsGoalContribution
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(165)
+    expect(ALL_OPERATION_IDS.length).toBe(169)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
