@@ -14,7 +14,7 @@ interface PortfolioTimeRangeProps {
 
 export function PortfolioTimeRange({ activePreset, onPresetChange }: PortfolioTimeRangeProps) {
   const handleValueChange = (value: string) => {
-    if (!value) return // ToggleGroup single-select fires empty on deselect — ignore
+    if (!value || value === activePreset) return
     onPresetChange(value as PortfolioPreset)
   }
 

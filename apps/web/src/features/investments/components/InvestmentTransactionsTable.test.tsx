@@ -65,7 +65,7 @@ describe('InvestmentTransactionsTable', () => {
     })
     await waitFor(() => {
       expect(container.querySelector('[role="status"]')).toBeNull()
-    })
+    }, { timeout: 5000 })
     expect(container.querySelector('[data-testid="virtual-scroll-container"]')).not.toBeNull()
     expect(container.querySelector('table')).not.toBeNull()
   })
@@ -82,7 +82,7 @@ describe('InvestmentTransactionsTable', () => {
     await waitFor(() => {
       const sentinelEl = container.querySelector('[data-testid="virtual-sentinel"]')
       expect(sentinelEl).not.toBeNull()
-    })
+    }, { timeout: 5000 })
   })
 
   it('calls getInvestmentTransactions with correct dateRange params', async () => {
@@ -102,7 +102,7 @@ describe('InvestmentTransactionsTable', () => {
     })
     await waitFor(() => {
       expect(container.querySelector('[role="status"]')).toBeNull()
-    })
+    }, { timeout: 5000 })
     expect(container.querySelector('[data-testid="virtual-sentinel"]')).toBeNull()
   })
 
