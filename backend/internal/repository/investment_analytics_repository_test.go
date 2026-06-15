@@ -51,7 +51,7 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	result, err := repo.AllocationBreakdown(ctx, userID)
+	result, err := repo.AllocationBreakdown(ctx, userID, domain.AllocationOptions{})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -88,7 +88,7 @@ func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	result, err := repo.AllocationBreakdown(ctx, userID)
+	result, err := repo.AllocationBreakdown(ctx, userID, domain.AllocationOptions{})
 
 	require.NoError(t, err)
 	require.NotNil(t, result)

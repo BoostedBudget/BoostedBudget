@@ -56,7 +56,7 @@ type mockInvestmentAnalyticsService struct {
 	incomeErr     error
 }
 
-func (m *mockInvestmentAnalyticsService) GetAllocationBreakdown(_ context.Context, _ string) (*domain.AllocationBreakdown, error) {
+func (m *mockInvestmentAnalyticsService) GetAllocationBreakdown(_ context.Context, _ string, _ domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
 	return m.allocation, m.allocationErr
 }
 func (m *mockInvestmentAnalyticsService) GetTopMovers(_ context.Context, _ string, _ int) (*domain.TopMovers, error) {

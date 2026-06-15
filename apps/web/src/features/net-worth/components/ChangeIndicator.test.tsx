@@ -51,4 +51,29 @@ describe('ChangeIndicator', () => {
     const masked = container.querySelectorAll('[data-ph-mask]')
     expect(masked.length).toBeGreaterThan(0)
   })
+
+  it('defaults aria-label prefix to "Net worth" when label prop is omitted', () => {
+    const { container } = render(
+      <ChangeIndicator variant="positive" amount={100} percent={2} />
+    )
+    const el = container.firstChild as HTMLElement
+    expect(el.getAttribute('aria-label')).toContain('Net worth')
+  })
+
+  it('uses custom label prop in aria-label', () => {
+    const { container } = render(
+      <ChangeIndicator variant="positive" amount={100} percent={2} label="Portfolio" />
+    )
+    const el = container.firstChild as HTMLElement
+    expect(el.getAttribute('aria-label')).toBe('Portfolio up by 2.00% versus previous period')
+    expect(el.getAttribute('aria-label')).not.toContain('Net worth')
+  })
+
+  it('uses custom label prop with negative variant', () => {
+    const { container } = render(
+      <ChangeIndicator variant="negative" amount={-300} percent={-4.5} label="Day change" />
+    )
+    const el = container.firstChild as HTMLElement
+    expect(el.getAttribute('aria-label')).toBe('Day change down by 4.50% versus previous period')
+  })
 })

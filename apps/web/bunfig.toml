@@ -52,7 +52,8 @@ preload = [
   "./src/test/mocks/notifications-api.ts",
   "./src/test/mocks/transfer-suggestions-api.ts",
   "./src/test/mocks/savings-impact-api.ts",
-  "./src/test/mocks/savings-impact-hooks.ts"
+  "./src/test/mocks/savings-impact-hooks.ts",
+  "./src/test/mocks/investments-api.ts"
 ]
 # NOTE: cash-flow-hooks.ts is NOT preloaded because hook implementation tests
 # (useCashFlowData.test.tsx) need real hooks with API-level mocks.

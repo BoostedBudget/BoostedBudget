@@ -68,6 +68,7 @@ import type {
   GetLargestTransactionsForPeriodParams,
   GetMonthOverMonthSpendingChangeParams,
   GetNetWorthTrendParams,
+  GetPortfolioAllocationBreakdownParams,
   GetSavingsRateForPeriodParams,
   GetSpendingByCategoryParams,
   GetSpendingByMerchantParams,
@@ -1790,17 +1791,30 @@ export function useGetUnusualSpend<TData = Awaited<ReturnType<typeof getUnusualS
 
 
 /**
- * Returns portfolio value grouped by security type (stock, etf, bond, crypto, cash, other, unknown). Each bucket includes total value, percentage, and holding count. Single DB round-trip; designed as an AI-tool-callable function.
+ * Returns portfolio value grouped by bucket type. By default (no params) returns investment holdings only, grouped by security type — backward-compatible with the #138 behavior.
+ *
+ * Optional query parameters:
+ * - include (csv): additional asset classes to union into the result.
+ *   Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
+ *   Example: include=cash,liabilities
+ * - group_by: bucketing dimension.
+ *   Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+ * - basis: whether liabilities reduce the grand total.
+ *   Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
+ *
+ * Each bucket includes: security_type, asset_class (when group_by=asset_class), total_value, percentage, holding_count.
+ * Single DB round-trip; designed as an AI-tool-callable function.
  * @summary Get portfolio allocation breakdown
  */
 export const getPortfolioAllocationBreakdown = (
-
+    params?: GetPortfolioAllocationBreakdownParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<AllocationBreakdown>(
-      {url: `/api/v1/investments/portfolio/allocation`, method: 'GET', signal
+      {url: `/api/v1/investments/portfolio/allocation`, method: 'GET',
+        params, signal
     },
       options);
     }
@@ -1808,23 +1822,23 @@ export const getPortfolioAllocationBreakdown = (
 
 
 
-export const getGetPortfolioAllocationBreakdownQueryKey = () => {
+export const getGetPortfolioAllocationBreakdownQueryKey = (params?: GetPortfolioAllocationBreakdownParams,) => {
     return [
-    `/api/v1/investments/portfolio/allocation`
+    `/api/v1/investments/portfolio/allocation`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetPortfolioAllocationBreakdownQueryOptions = <TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetPortfolioAllocationBreakdownQueryOptions = <TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetPortfolioAllocationBreakdownQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetPortfolioAllocationBreakdownQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>> = ({ signal }) => getPortfolioAllocationBreakdown(requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>> = ({ signal }) => getPortfolioAllocationBreakdown(params, requestOptions, signal);
 
 
 
@@ -1838,7 +1852,7 @@ export type GetPortfolioAllocationBreakdownQueryError = ErrorType<ErrorModel>
 
 
 export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
+ params: undefined |  GetPortfolioAllocationBreakdownParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>,
           TError,
@@ -1848,7 +1862,7 @@ export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<ty
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>,
           TError,
@@ -1858,7 +1872,7 @@ export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<ty
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -1866,11 +1880,11 @@ export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<ty
  */
 
 export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetPortfolioAllocationBreakdownQueryOptions(options)
+  const queryOptions = getGetPortfolioAllocationBreakdownQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
