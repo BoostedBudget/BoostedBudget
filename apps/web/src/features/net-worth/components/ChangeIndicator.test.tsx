@@ -9,7 +9,7 @@ describe('ChangeIndicator', () => {
     )
     const el = container.firstChild as HTMLElement
     expect(el.className).toContain('text-success')
-    expect(el.getAttribute('aria-label')).toBe('Net worth up by 5.20% versus previous period')
+    expect(el.getAttribute('aria-label')).toBe('Net worth up versus previous period')
   })
 
   it('renders negative variant with down glyph and destructive color', () => {
@@ -18,7 +18,8 @@ describe('ChangeIndicator', () => {
     )
     const el = container.firstChild as HTMLElement
     expect(el.className).toContain('text-destructive')
-    expect(el.getAttribute('aria-label')).toBe('Net worth down by 2.10% versus previous period')
+    // aria-label omits numeric percent to prevent PostHog session replay capturing financial figures
+    expect(el.getAttribute('aria-label')).toBe('Net worth down versus previous period')
   })
 
   it('renders neutral variant with muted color', () => {
@@ -65,8 +66,10 @@ describe('ChangeIndicator', () => {
       <ChangeIndicator variant="positive" amount={100} percent={2} label="Portfolio" />
     )
     const el = container.firstChild as HTMLElement
-    expect(el.getAttribute('aria-label')).toBe('Portfolio up by 2.00% versus previous period')
+    expect(el.getAttribute('aria-label')).toBe('Portfolio up versus previous period')
     expect(el.getAttribute('aria-label')).not.toContain('Net worth')
+    // Numeric percent must NOT appear in aria-label (captured by PostHog attribute channel)
+    expect(el.getAttribute('aria-label')).not.toMatch(/\d+(\.\d+)?%/)
   })
 
   it('uses custom label prop with negative variant', () => {
@@ -74,6 +77,6 @@ describe('ChangeIndicator', () => {
       <ChangeIndicator variant="negative" amount={-300} percent={-4.5} label="Day change" />
     )
     const el = container.firstChild as HTMLElement
-    expect(el.getAttribute('aria-label')).toBe('Day change down by 4.50% versus previous period')
+    expect(el.getAttribute('aria-label')).toBe('Day change down versus previous period')
   })
 })
