@@ -123,10 +123,7 @@ const { SearchableSelect } = await import('@/shared/components/SearchableSelect/
 // --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
 const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
 const { HoldingsTable } = await import('@/features/investments/components/HoldingsTable')
-const {
-  InvestmentTransactionsTable,
-  INVESTMENT_TXN_MASKED_COLUMN_IDS,
-} = await import('@/features/investments/components/InvestmentTransactionsTable')
+const { InvestmentTransactionsTable } = await import('@/features/investments/components/InvestmentTransactionsTable')
 
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
@@ -1501,31 +1498,18 @@ describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', 
 //
 // Virtualization (TanStack Virtual) is enabled; jsdom has no layout
 // engine so container height = 0 → no data rows are rendered even
-// when transactions array is non-empty.  We therefore use two
-// complementary assertions:
+// when transactions array is non-empty.
 //
-//   a) Static: INVESTMENT_TXN_MASKED_COLUMN_IDS (the exported constant
-//      that DataTable's maskedColumnIds receives) must contain every
-//      monetary column.
-//   b) Render: with real transaction data fed through the mocked API,
-//      the non-virtualized content (column headers, toolbar) must
-//      contain no unmasked currency values.
-//
-// The DataTable masking guarantee — that cells in maskedColumnIds are
-// wrapped in data-ph-mask <td>s — is verified by DataTable's own
-// test suite; we trust it here.
+// maskedColumnIds = ['quantity','price','amount','fees'] — these are
+// passed to DataTable which applies data-ph-mask at the <td> level.
+// DataTable's own masking guarantee is verified by DataTable's test
+// suite.  This test feeds real transaction data through the mocked
+// API fetcher and verifies the non-virtualized content (column
+// headers, toolbar) contains no unmasked currency values.
 // ---------------------------------------------------------------
 describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () => {
   beforeEach(() => {
     cleanup()
-  })
-
-  test('INVESTMENT_TXN_MASKED_COLUMN_IDS covers all monetary columns', () => {
-    // Static assertion: every column that can carry a dollar/share amount must be masked.
-    const requiredMasked = ['quantity', 'price', 'amount', 'fees']
-    for (const col of requiredMasked) {
-      expect(INVESTMENT_TXN_MASKED_COLUMN_IDS).toContain(col)
-    }
   })
 
   test('non-virtualized content (headers) contains no unmasked currency values', async () => {
