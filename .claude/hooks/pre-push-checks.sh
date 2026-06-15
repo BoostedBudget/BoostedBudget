@@ -28,9 +28,16 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 # Only intercept git push commands (also matches when RTK rewrites to "rtk git push")
 printf '%s' "$CMD" | grep -qE '(^|[;&|])\s*(rtk\s+)?git push' || exit 0
 
-# Redirect all subsequent output to stderr — Claude Code reads stderr for the block message
-# (exit 2 with nothing on stderr shows "hook error: No stderr output" instead of our report)
-exec 1>&2
+# Buffer all output in a temp file and only write it to stderr on failure (exit 2).
+# Claude Code's PreToolUse protocol:
+#   exit 0  + no stderr  → allow push
+#   exit 2  + stderr     → block push, show stderr
+#   exit 0  + stderr     → "hook error: No stderr output" (confusing but true — any
+#                          stderr output on exit 0 triggers the hook-error path)
+REPORT_FILE=$(mktemp)
+trap 'rm -f "$REPORT_FILE"' EXIT
+exec 3>&2            # save original stderr as fd 3
+exec 1>"$REPORT_FILE" 2>&1  # buffer all output
 
 # --- Setup ---------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -166,7 +173,7 @@ if [ -n "$WARNINGS" ]; then
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  printf '✅ All pre-push checks passed — push allowed.\n\n'
+  # exit 0 with NO stderr — Claude Code allows the push
   exit 0
 else
   printf '❌ Checks FAILED — push blocked.\n\n'
@@ -174,5 +181,7 @@ else
   printf '%b\n' "$ERRORS"
   printf '\nFix the issues above, then retry your push.\n'
   printf '(To push anyway, use git push directly in a terminal outside Claude.)\n\n'
+  # Flush the buffered report to the saved stderr (fd 3) so Claude Code shows it
+  cat "$REPORT_FILE" >&3
   exit 2
 fi
