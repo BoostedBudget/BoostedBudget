@@ -32,6 +32,7 @@
  */
 
 export interface AllocationItem {
+  asset_class: string;
   holding_count: number;
   percentage: number;
   security_type: string;

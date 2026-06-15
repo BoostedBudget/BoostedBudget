@@ -119,6 +119,9 @@ const { ChangeIndicator } = await import('@/features/net-worth/components/Change
 // --- Round 12 component imports (SearchableSelect account-option PII leak) ---
 const { SearchableSelect } = await import('@/shared/components/SearchableSelect/SearchableSelect')
 
+// --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
+const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
+
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
@@ -1360,6 +1363,47 @@ describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
     )
     // Visible spans are already data-ph-mask'd.
     // The scanner reads aria-label text verbatim — no currency must appear there.
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 20. Round 13 — Portfolio tab monetary surfaces (#1296)
+//     PortfolioSummaryCard renders total_value, total_gain_loss, and day_change.
+//     All currency amounts must be inside data-ph-mask wrappers.
+// ---------------------------------------------------------------
+describe('PII coverage — Portfolio: PortfolioSummaryCard', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('masks total_value, total_gain_loss, and day_change', async () => {
+    const summary = {
+      total_value: 99999.99,
+      total_cost_basis: 80000.0,
+      total_gain_loss: 19999.99,
+      total_gain_loss_pct: 24.99,
+      day_change: 1234.56,
+      day_change_pct: 1.23,
+      holdings_count: 5,
+    }
+    render(<PortfolioSummaryCard summary={summary as any} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Total Value'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('null day_change renders "--" without leaking currency', async () => {
+    const summary = {
+      total_value: 99999.99,
+      total_cost_basis: 80000.0,
+      total_gain_loss: 19999.99,
+      total_gain_loss_pct: 24.99,
+      day_change: null,
+      day_change_pct: null,
+      holdings_count: 5,
+    }
+    render(<PortfolioSummaryCard summary={summary as any} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Total Value'))
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

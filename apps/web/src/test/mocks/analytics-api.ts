@@ -64,6 +64,13 @@ export const mockUseGetSpendingTrends = mock(() => ({
   refetch: createMockRefetch(),
 }))
 
+// === useGetPortfolioAllocationBreakdown (#1296) ===
+export const mockUseGetPortfolioAllocationBreakdown = mock(() => ({
+  data: undefined,
+  isLoading: false,
+  isError: false,
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   ...RealAnalyticsModule,
@@ -75,4 +82,5 @@ mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   getGetSpendingByCategoryQueryKey: mockGetSpendingByCategoryQueryKey,
   useGetSpendingByMerchant: mockUseGetSpendingByMerchant,
   useGetSpendingTrends: mockUseGetSpendingTrends,
+  useGetPortfolioAllocationBreakdown: mockUseGetPortfolioAllocationBreakdown,
 }))

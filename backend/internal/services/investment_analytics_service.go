@@ -19,9 +19,10 @@ import (
 //
 // Issue #138: Investment Backend — analytics helpers (Code Mode).
 type InvestmentAnalyticsService interface {
-	// GetAllocationBreakdown returns portfolio value grouped by security type.
-	// NULL security.type is bucketed as "unknown".
-	GetAllocationBreakdown(ctx context.Context, userID string) (*domain.AllocationBreakdown, error)
+	// GetAllocationBreakdown returns portfolio value grouped per AllocationOptions.
+	// Default (zero value): investment holdings only, grouped by security_type —
+	// backward-compatible with #138 behavior. See AllocationOptions for extension docs.
+	GetAllocationBreakdown(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error)
 
 	// GetTopMovers returns the top N gainers and losers by day_change.
 	// Holdings with NULL institution_price or securities with NULL close_price are excluded.
@@ -48,8 +49,8 @@ func NewInvestmentAnalyticsService(repo repository.InvestmentAnalyticsRepository
 }
 
 // GetAllocationBreakdown delegates to the repository aggregate query and returns the result.
-func (s *investmentAnalyticsService) GetAllocationBreakdown(ctx context.Context, userID string) (*domain.AllocationBreakdown, error) {
-	result, err := s.repo.AllocationBreakdown(ctx, userID)
+func (s *investmentAnalyticsService) GetAllocationBreakdown(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
+	result, err := s.repo.AllocationBreakdown(ctx, userID, opts)
 	if err != nil {
 		return nil, fmt.Errorf("GetAllocationBreakdown: %w", err)
 	}

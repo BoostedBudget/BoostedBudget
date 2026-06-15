@@ -21,8 +21,8 @@ type MockInvestmentAnalyticsRepository struct {
 	mock.Mock
 }
 
-func (m *MockInvestmentAnalyticsRepository) AllocationBreakdown(ctx context.Context, userID string) (*domain.AllocationBreakdown, error) {
-	args := m.Called(ctx, userID)
+func (m *MockInvestmentAnalyticsRepository) AllocationBreakdown(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
+	args := m.Called(ctx, userID, opts)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -70,9 +70,10 @@ func TestInvestmentAnalyticsService_GetAllocationBreakdown_DelegatesAndReturns(t
 			{SecurityType: "etf", TotalValue: 2000.0, Percentage: 40.0, HoldingCount: 2},
 		},
 	}
-	repo.On("AllocationBreakdown", ctx, userID).Return(expected, nil)
+	defaultOpts := domain.AllocationOptions{}
+	repo.On("AllocationBreakdown", ctx, userID, defaultOpts).Return(expected, nil)
 
-	result, err := svc.GetAllocationBreakdown(ctx, userID)
+	result, err := svc.GetAllocationBreakdown(ctx, userID, defaultOpts)
 
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
@@ -84,12 +85,36 @@ func TestInvestmentAnalyticsService_GetAllocationBreakdown_PropagatesError(t *te
 	svc := NewInvestmentAnalyticsService(repo)
 	ctx := context.Background()
 
-	repo.On("AllocationBreakdown", ctx, "user-err").Return(nil, errors.New("db error"))
+	opts := domain.AllocationOptions{}
+	repo.On("AllocationBreakdown", ctx, "user-err", opts).Return(nil, errors.New("db error"))
 
-	result, err := svc.GetAllocationBreakdown(ctx, "user-err")
+	result, err := svc.GetAllocationBreakdown(ctx, "user-err", opts)
 
 	assert.Nil(t, result)
 	assert.ErrorContains(t, err, "GetAllocationBreakdown")
+}
+
+// TestInvestmentAnalyticsService_GetAllocationBreakdown_PassesOptionsThroughToRepo
+// verifies that AllocationOptions are forwarded verbatim to the repository.
+func TestInvestmentAnalyticsService_GetAllocationBreakdown_PassesOptionsThroughToRepo(t *testing.T) {
+	repo := new(MockInvestmentAnalyticsRepository)
+	svc := NewInvestmentAnalyticsService(repo)
+	ctx := context.Background()
+	userID := "user-opts"
+
+	opts := domain.AllocationOptions{
+		Include: []string{"cash", "liabilities"},
+		GroupBy: domain.AllocationGroupByAssetClass,
+		Basis:   domain.AllocationBasisNet,
+	}
+	expected := &domain.AllocationBreakdown{TotalValue: 10000.0, Buckets: []domain.AllocationItem{}}
+	repo.On("AllocationBreakdown", ctx, userID, opts).Return(expected, nil)
+
+	result, err := svc.GetAllocationBreakdown(ctx, userID, opts)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+	repo.AssertExpectations(t)
 }
 
 // ============================================================================

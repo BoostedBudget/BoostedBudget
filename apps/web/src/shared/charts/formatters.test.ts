@@ -7,6 +7,7 @@ import {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyFull,
+  formatPercent,
 } from './formatters'
 
 describe('formatCurrency', () => {
@@ -70,5 +71,35 @@ describe('formatCurrencyFull', () => {
 
   it('formats zero with cents', () => {
     expect(formatCurrencyFull(0)).toBe('$0.00')
+  })
+})
+
+describe('formatPercent', () => {
+  it('formats positive percentage with 2 decimal places by default', () => {
+    expect(formatPercent(45.67)).toBe('45.67%')
+    expect(formatPercent(100)).toBe('100.00%')
+  })
+
+  it('formats negative percentage', () => {
+    expect(formatPercent(-12.34)).toBe('-12.34%')
+  })
+
+  it('formats zero', () => {
+    expect(formatPercent(0)).toBe('0.00%')
+  })
+
+  it('accepts custom decimal places', () => {
+    expect(formatPercent(12.345, { decimals: 1 })).toBe('12.3%')
+    expect(formatPercent(12.345, { decimals: 0 })).toBe('12%')
+  })
+
+  it('handles abs option for unsigned display', () => {
+    expect(formatPercent(-12.34, { abs: true })).toBe('12.34%')
+    expect(formatPercent(12.34, { abs: true })).toBe('12.34%')
+  })
+
+  it('handles small decimals without floating-point noise', () => {
+    expect(formatPercent(33.333333)).toBe('33.33%')
+    expect(formatPercent(66.666667)).toBe('66.67%')
   })
 })
