@@ -218,6 +218,160 @@ func TestAllocationBreakdown_CashPlusLiabilities_BothBuckets_Integration(t *test
 	assert.True(t, hasLiab, "must have liabilities bucket from credit account")
 }
 
+// TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration proves that
+// basis=net drops the liabilities bucket from the response and sets TotalValue to the
+// net-of-liabilities total. Asset percentages must recompute on the net denominator and sum to 100%.
+func TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Fixture: stock=5000, cash(depository)=3000, liabilities(credit)=|−1200|=1200
+	userID, _, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-basis-net")
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	opts := domain.AllocationOptions{
+		Include: []string{"cash", "liabilities"},
+		Basis:   domain.AllocationBasisNet,
+	}
+	result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// basis=net: TotalValue = assets(5000+3000) − liabilities(1200) = 6800
+	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total must be assets minus liabilities")
+
+	// Liabilities bucket must NOT appear — it is consumed by the net calculation.
+	for _, b := range result.Buckets {
+		assert.NotEqual(t, "liabilities", b.SecurityType,
+			"liabilities bucket must not appear in basis=net response")
+	}
+
+	// Asset buckets: stock + cash
+	var stockBucket, cashBucket *domain.AllocationItem
+	for i := range result.Buckets {
+		switch result.Buckets[i].SecurityType {
+		case "stock":
+			b := result.Buckets[i]
+			stockBucket = &b
+		case "cash":
+			b := result.Buckets[i]
+			cashBucket = &b
+		}
+	}
+	require.NotNil(t, stockBucket, "stock bucket must be present")
+	require.NotNil(t, cashBucket, "cash bucket must be present")
+
+	// Percentages must be computed on net denominator (6800), not gross.
+	assert.InDelta(t, 5000.0/6800.0*100, stockBucket.Percentage, 0.1,
+		"stock pct must be relative to net total")
+	assert.InDelta(t, 3000.0/6800.0*100, cashBucket.Percentage, 0.1,
+		"cash pct must be relative to net total")
+
+	// All asset bucket percentages must sum to ~100%.
+	var totalPct float64
+	for _, b := range result.Buckets {
+		totalPct += b.Percentage
+	}
+	assert.InDelta(t, 100.0, totalPct, 0.1, "asset percentages must sum to 100%% in basis=net")
+}
+
+// TestAllocationBreakdown_GroupByAccount_Integration proves that group_by=account returns
+// one bucket per active account, labeled by account name, with asset_class = account type.
+func TestAllocationBreakdown_GroupByAccount_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Fixture: "Test Brokerage" (investment, holdings value=5000),
+	//          "Checking"        (depository, balance=3000),
+	//          "Visa Card"       (credit, balance=−1200).
+	userID, _, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-by-acct")
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	// include=[cash] only — credit account must NOT appear.
+	opts := domain.AllocationOptions{
+		Include: []string{"cash"},
+		GroupBy: domain.AllocationGroupByAccount,
+	}
+	result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Must have exactly two buckets: brokerage + checking.
+	require.Len(t, result.Buckets, 2, "must have one bucket per included account type")
+
+	var brokerageBucket, checkingBucket *domain.AllocationItem
+	for i := range result.Buckets {
+		switch result.Buckets[i].SecurityType {
+		case "Test Brokerage":
+			b := result.Buckets[i]
+			brokerageBucket = &b
+		case "Checking":
+			b := result.Buckets[i]
+			checkingBucket = &b
+		}
+	}
+	require.NotNil(t, brokerageBucket, "must have 'Test Brokerage' account bucket")
+	require.NotNil(t, checkingBucket, "must have 'Checking' account bucket")
+
+	assert.InDelta(t, 5000.0, brokerageBucket.TotalValue, 0.01)
+	assert.Equal(t, "investment", brokerageBucket.AssetClass)
+	assert.InDelta(t, 3000.0, checkingBucket.TotalValue, 0.01)
+	assert.Equal(t, "depository", checkingBucket.AssetClass)
+
+	// Net total: 5000 + 3000 = 8000 (credit not included → basis=assets implicit).
+	assert.InDelta(t, 8000.0, result.TotalValue, 0.01)
+
+	// Credit/loan accounts must not appear (not in Include).
+	for _, b := range result.Buckets {
+		assert.NotEqual(t, "credit", b.AssetClass, "credit account must not appear")
+		assert.NotEqual(t, "loan", b.AssetClass, "loan account must not appear")
+	}
+}
+
+// TestAllocationBreakdown_GroupByAccount_BasisNet_Integration proves that group_by=account
+// combined with basis=net removes credit/loan account buckets and sets TotalValue to net.
+func TestAllocationBreakdown_GroupByAccount_BasisNet_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-acct-net")
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	opts := domain.AllocationOptions{
+		Include: []string{"cash", "liabilities"},
+		GroupBy: domain.AllocationGroupByAccount,
+		Basis:   domain.AllocationBasisNet,
+	}
+	result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// basis=net: net = (5000 + 3000) − 1200 = 6800; credit bucket removed.
+	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total = assets − liabilities")
+	for _, b := range result.Buckets {
+		assert.NotEqual(t, "credit", b.AssetClass, "credit account must not appear in basis=net")
+		assert.NotEqual(t, "loan", b.AssetClass, "loan account must not appear in basis=net")
+	}
+
+	// Two buckets: brokerage + checking only.
+	require.Len(t, result.Buckets, 2, "only asset accounts in basis=net response")
+}
+
 // TestAllocationBreakdown_GroupByAssetClass_Integration proves that group_by=asset_class
 // collapses security types into high-level asset class buckets (investments, cash, liabilities).
 func TestAllocationBreakdown_GroupByAssetClass_Integration(t *testing.T) {
