@@ -14,10 +14,10 @@
   "devDependencies": {
     "@lhci/cli": "^0.15.1",
     "@size-limit/file": "^12.1.0",
-    "basic-ftp": ">=6.0.1",
+    "basic-ftp": "^6.0.1",
     "serve": "^14.2.6",
-    "size-limit": "^12.0.1",
-    "turbo": "^2.9.16"
+    "size-limit": "^12.1.0",
+    "turbo": "^2.9.18"
   },
   "overrides": {
     "js-cookie": ">=3.0.7",
@@ -29,8 +29,11 @@
     "picomatch": ">=4.0.4",
     "yaml": ">=2.8.3",
     "brace-expansion": ">=5.0.5",
-    "tmp": ">=0.2.6",
-    "protobufjs": ">=7.5.6 <8",
+    "tmp": ">=0.2.7",
+    "protobufjs": ">=7.6.1 <8",
+    "form-data": ">=4.0.6",
+    "ws": ">=8.21.0",
+    "vite": ">=8.0.16",
     "dompurify": ">=3.4.0",
     "follow-redirects": ">=1.16.0",
     "protocol-buffers-schema": ">=3.6.1",
@@ -39,6 +42,6 @@
     "esbuild": "0.28.1"
   },
   "dependencies": {
-    "axios": "^1.16.1"
+    "axios": "^1.18.0"
   }
 }
