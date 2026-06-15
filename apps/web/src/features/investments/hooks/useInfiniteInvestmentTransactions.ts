@@ -1,12 +1,3 @@
-/**
- * useInfiniteInvestmentTransactions Hook — cursor-based infinite scroll for investment transactions.
- * Issue #1296: Portfolio tab — investment transactions table.
- *
- * The generated useGetInvestmentTransactions is a single-page useQuery and cannot accumulate
- * pages for infinite scroll. This hook wraps the raw getInvestmentTransactions fetcher with
- * useInfiniteQuery, mirroring the pattern in useInfiniteTransactions.ts.
- */
-
 import { useMemo } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { getInvestmentTransactions } from '@boostedbudget/api-client/endpoints/investments/investments'

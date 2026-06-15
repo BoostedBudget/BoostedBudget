@@ -1,22 +1,9 @@
-/**
- * usePortfolioAllocationConfig Hook
- * Issue #1296: localStorage-persisted allocation configuration for the Portfolio tab.
- *
- * Config is persisted under `bb:portfolio-alloc:{clerkUserId}` to keep it
- * user-scoped, matching the same namespacing convention as useTablePreferences.
- *
- * When the user is not authenticated, returns defaults and setConfig is a no-op.
- */
-
 import { useState, useCallback } from 'react'
 import { useUser } from '@clerk/react-router'
 
 export interface AllocationConfig {
-  /** Comma-value list of additional asset classes to include (e.g. ['cash', 'liabilities']). */
   include: string[]
-  /** Bucketing dimension: 'security_type' | 'asset_class' | 'account' */
   group_by: string
-  /** Whether to show assets-only or net of liabilities: 'assets' | 'net' */
   basis: string
 }
 
@@ -26,8 +13,6 @@ const DEFAULT_CONFIG: AllocationConfig = {
   basis: 'assets',
 }
 
-// Valid API parameter values — guards against corrupt or stale localStorage sending
-// unknown params to the allocation endpoint.
 const VALID_GROUP_BY = new Set(['security_type', 'asset_class', 'account'])
 const VALID_BASIS = new Set(['assets', 'net'])
 const VALID_INCLUDE = new Set(['cash', 'liabilities'])
@@ -74,13 +59,6 @@ function saveConfig(userId: string, config: AllocationConfig): void {
   }
 }
 
-/**
- * Returns `{ config, setConfig }` for the holistic allocation view configuration.
- *
- * - Persisted per Clerk user ID in localStorage.
- * - Defaults: include=[], group_by='security_type', basis='assets'.
- * - When unauthenticated: returns defaults, setConfig is a no-op.
- */
 export function usePortfolioAllocationConfig(): {
   config: AllocationConfig
   setConfig: (next: AllocationConfig) => void
@@ -95,7 +73,11 @@ export function usePortfolioAllocationConfig(): {
   const [prevUserId, setPrevUserId] = useState(userId)
   if (userId !== prevUserId) {
     setPrevUserId(userId)
-    setConfigState(userId ? loadConfig(userId) : DEFAULT_CONFIG)
+    if (userId) {
+      setConfigState(loadConfig(userId))
+    } else {
+      setConfigState(DEFAULT_CONFIG)
+    }
   }
 
   const setConfig = useCallback(
