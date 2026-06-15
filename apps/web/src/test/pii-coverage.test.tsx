@@ -59,6 +59,7 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
+import { mockUseGetHoldings, mockUseInfiniteInvestmentTransactions } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
@@ -121,6 +122,8 @@ const { SearchableSelect } = await import('@/shared/components/SearchableSelect/
 
 // --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
 const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
+const { HoldingsTable } = await import('@/features/investments/components/HoldingsTable')
+const { InvestmentTransactionsTable } = await import('@/features/investments/components/InvestmentTransactionsTable')
 
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
@@ -1444,5 +1447,78 @@ describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
     ]
     // SENTINEL_ACCOUNT_NAME must be masked; ••••9999 is auto-flagged by ACCOUNT_MASK_RE.
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 21. Round 13 extended — HoldingsTable monetary columns (#1296)
+//     price, market_value, cost_basis, gain_loss, day_change etc.
+//     must be inside data-ph-mask <td> cells (maskedColumnIds).
+// ---------------------------------------------------------------
+describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('monetary holding columns are inside data-ph-mask td cells', async () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: {
+        count: 1,
+        holdings: [
+          {
+            id: 'h-pii-1',
+            account_id: 'acct-1',
+            user_id: 'user-1',
+            security_id: 'sec-1',
+            quantity: 10,
+            security_name: 'Apple Inc',
+            ticker_symbol: 'AAPL',
+            security_type: 'equity',
+            institution_value: 99999.99,
+            institution_price: 9999.99,
+            cost_basis: 88888.88,
+            gain_loss: 11111.11,
+            gain_loss_pct: 12.5,
+            day_change: 222.22,
+            day_change_pct: 0.22,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(<HoldingsTable />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('AAPL'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------
+// 22. Round 13 extended — InvestmentTransactionsTable (#1296)
+//     Virtualization is enabled; in jsdom no data rows render.
+//     This smoke test verifies headers + empty-state contain no
+//     unmasked currency values.
+// ---------------------------------------------------------------
+describe('PII coverage — Round 13 extended: InvestmentTransactionsTable smoke', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('table structure renders without unmasked currency in non-virtualized content', async () => {
+    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+      transactions: [],
+      fetchNextPage: mock(() => Promise.resolve()),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    })
+    render(
+      <InvestmentTransactionsTable dateRange={{ start_date: '2024-01-01', end_date: '2024-12-31' }} />,
+      { wrapper: createWrapper() }
+    )
+    // Headers and empty state must not leak masked currency amounts
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

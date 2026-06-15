@@ -55,4 +55,3 @@ mock.module('@boostedbudget/api-client/endpoints/investments/investments', () =>
   useGetPortfolioHistory: mockUseGetPortfolioHistory,
   useGetHoldings: mockUseGetHoldings,
 }))
-

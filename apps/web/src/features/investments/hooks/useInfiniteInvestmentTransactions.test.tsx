@@ -59,7 +59,9 @@ const lastPageResponse: GetInvestmentTransactionsOutputBody = {
 
 describe('useInfiniteInvestmentTransactions', () => {
   beforeEach(() => {
-    mockGetInvestmentTransactions.mockClear()
+    // mockReset clears both call history AND stored mockResolvedValue implementations,
+    // ensuring no state bleeds between tests. Each test sets its own mock return value.
+    mockGetInvestmentTransactions.mockReset()
   })
 
   describe('First page (no cursor)', () => {
@@ -208,9 +210,14 @@ describe('useInfiniteInvestmentTransactions', () => {
 
   describe('Error handling', () => {
     it('sets isError: true and preserves prior pages when fetch fails', async () => {
+      // Use mockImplementationOnce (lazy) rather than mockRejectedValueOnce (eager).
+      // bun:test v1.x detects pre-created rejected promises as unhandled rejections
+      // immediately during test setup, before TanStack Query can catch them. A lazy
+      // implementation only creates the rejected promise when the mock is actually
+      // invoked by TQ, at which point TQ's internal error handling catches it first.
       mockGetInvestmentTransactions
         .mockResolvedValueOnce(page1Response)
-        .mockRejectedValueOnce(new Error('Network error'))
+        .mockImplementationOnce(() => Promise.reject(new Error('Network error')))
 
       const { result } = renderHook(() => useInfiniteInvestmentTransactions({}), {
         wrapper: createWrapper(),
@@ -220,7 +227,7 @@ describe('useInfiniteInvestmentTransactions', () => {
       expect(result.current.transactions).toHaveLength(2)
 
       act(() => {
-        result.current.fetchNextPage()
+        result.current.fetchNextPage().catch(() => {})
       })
 
       await waitFor(() => expect(result.current.isError).toBe(true))
