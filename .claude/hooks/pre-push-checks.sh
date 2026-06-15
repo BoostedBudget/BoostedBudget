@@ -3,11 +3,13 @@
 # Runs tests + performance checks before any git push.
 # Exit 0 = allow push | Exit 2 = block push (stderr shown to user)
 #
-# Checks run (matches CI test.yml):
-#   1. Dependency audit:          bun audit --audit-level=high  (HIGH/CRITICAL block)
-#   2. Bundle size check:         make check-bundle-size        ← FAST; before tests
-#   3. Backend + frontend tests:  make test-fast
-#   4. Lighthouse CI audit:       npx lhci autorun
+# Checks run (fast local-only gates; tests run in CI):
+#   1. Dependency audit:    bun audit --audit-level=high  (HIGH/CRITICAL block)
+#   2. Go vuln scan:        govulncheck ./...
+#   3. Bundle size check:   make check-bundle-size  (~25 sec)
+#   4. MCP artifacts:       build:artifacts + check:artifacts-committed
+# Tests (go test + bun run test) are intentionally excluded — they exceed
+# the 60s Claude Code PreToolUse hook timeout. Run manually: make test-fast
 #
 # IMPORTANT: run_check returns 1 on failure; each call uses || true so set -e
 # does not exit the script before we reach the final exit 2 that Claude Code
@@ -142,31 +144,16 @@ fi
 printf '\n'
 
 # =========================================================================
-# 4. Backend + frontend tests
-#    Run go test and bun test directly rather than make test-fast to avoid
-#    the coverage HTML report generation step, which fails with
-#    "bufio.Scanner: token too long" on large coverage outputs and causes
-#    make to exit non-zero even when all tests pass.
+# 4. Tests — intentionally skipped in the hook.
+#    go test ./... (~35s) + bun run test (~4 min) exceed Claude Code's
+#    60-second PreToolUse hook timeout, causing a silent kill with no stderr
+#    output ("hook error: No stderr output"). Tests run in CI (GitHub
+#    Actions test.yml) on every push — no local gate needed here.
+#    Run manually with: make test-fast
 # =========================================================================
-printf 'Tests:\n'
-
-run_check "go test ./...         (Go backend tests)" \
-  "$PROJECT_ROOT/backend" \
-  "go test ./..." || true
-
-if command -v bun &>/dev/null; then
-  run_check "bun run test          (frontend tests)" \
-    "$PROJECT_ROOT/apps/web" \
-    "bun run test --reporter=dot" || true
-else
-  printf '  %-50s⚠️  (bun not installed)\n' "bun run test"
-  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
-fi
-
-printf '\n'
 
 # =========================================================================
-# 4. Lighthouse CI audit — runs in GitHub Actions; skip locally.
+# 5. Lighthouse CI audit — runs in GitHub Actions; skip locally.
 # =========================================================================
 
 # =========================================================================
