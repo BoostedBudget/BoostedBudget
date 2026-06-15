@@ -14,6 +14,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HoldingsTable } from './HoldingsTable'
 import { mockUseGetHoldings } from '@/test/mocks/investments-api'
+import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/clerk'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 
 function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingView {
@@ -39,6 +40,16 @@ function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingV
 const holdingA = makeHolding({ id: 'h1', security_name: 'Apple Inc', ticker_symbol: 'AAPL', institution_value: 2500, account_id: 'acct-alpha' })
 const holdingB = makeHolding({ id: 'h2', security_name: 'Microsoft', ticker_symbol: 'MSFT', institution_value: 1000, account_id: 'acct-beta' })
 const holdingC = makeHolding({ id: 'h3', security_name: 'Tesla', ticker_symbol: 'TSLA', institution_value: 5000, account_id: 'acct-alpha' })
+
+// Crossed values: gain_loss_pct and day_change_pct have OPPOSITE relative orderings so that
+// sorting by one column produces a different row order than sorting by the other. This ensures
+// each sort test independently proves its accessor rather than passing accidentally due to
+// correlated fixture values.
+//   gain_loss_pct order: LGH(5) < MGM(25) < HGL(50) → asc: LGH first, HGL last
+//   day_change_pct order: HGL(0.5) < MGM(2.5) < LGH(5.0) → asc: HGL first, LGH last
+const holdingLowGain = makeHolding({ id: 'h4', security_name: 'LowGainHighDay', ticker_symbol: 'LGH', gain_loss_pct: 5, day_change_pct: 5.0, institution_value: 2000, account_id: 'acct-x' })
+const holdingMidGain = makeHolding({ id: 'h5', security_name: 'MidGainMidDay', ticker_symbol: 'MGM', gain_loss_pct: 25, day_change_pct: 2.5, institution_value: 3000, account_id: 'acct-x' })
+const holdingHighGain = makeHolding({ id: 'h6', security_name: 'HighGainLowDay', ticker_symbol: 'HGL', gain_loss_pct: 50, day_change_pct: 0.5, institution_value: 1000, account_id: 'acct-x' })
 
 describe('HoldingsTable', () => {
   beforeEach(() => {
@@ -84,7 +95,6 @@ describe('HoldingsTable', () => {
     expect(maskedTds.length).toBeGreaterThan(0)
   })
 
-  // DataTable uses manualSorting=true: HoldingsTable's sortedHoldings memo must reorder rows.
   it('sorts by Market Value ascending on first header click', () => {
     mockUseGetHoldings.mockReturnValue({
       data: { holdings: [holdingA, holdingB, holdingC], count: 3 },
@@ -119,8 +129,6 @@ describe('HoldingsTable', () => {
     expect(dataRows[0].textContent).toContain('TSLA')
   })
 
-  // DataTable uses manualFiltering=true: HoldingsTable's filteredHoldings memo must
-  // apply the account filter before passing data to DataTable.
   it('filters rows to selected account when account filter is applied', async () => {
     mockUseGetHoldings.mockReturnValue({
       data: { holdings: [holdingA, holdingB, holdingC], count: 3 },
@@ -144,5 +152,72 @@ describe('HoldingsTable', () => {
     expect(screen.queryByText('AAPL')).toBeNull()
     expect(screen.queryByText('TSLA')).toBeNull()
     expect(screen.getByText('MSFT')).toBeDefined()
+  })
+
+  it('sorts by Gain/Loss (%) ascending on first header click', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [holdingHighGain, holdingLowGain, holdingMidGain], count: 3 },
+      isLoading: false,
+      isError: false,
+    })
+    render(<HoldingsTable />)
+
+    const sortBtn = screen.getAllByRole('button').find((b) => b.textContent?.includes('Gain/Loss (%)'))!
+    fireEvent.click(sortBtn)
+
+    // asc: LGH(5%) < MGM(25%) < HGL(50%)
+    const dataRows = screen.getAllByRole('row').slice(1)
+    expect(dataRows[0].textContent).toContain('LGH')
+    expect(dataRows[dataRows.length - 1].textContent).toContain('HGL')
+  })
+
+  it('sorts by Day Change (%) ascending on first header click', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [holdingLowGain, holdingMidGain, holdingHighGain], count: 3 },
+      isLoading: false,
+      isError: false,
+    })
+    render(<HoldingsTable />)
+
+    const sortBtn = screen.getAllByRole('button').find((b) => b.textContent?.includes('Day Change (%)'))!
+    fireEvent.click(sortBtn)
+
+    // asc: HGL(0.5%) < MGM(2.5%) < LGH(5.0%) — reversed vs. gain_loss_pct order
+    const dataRows = screen.getAllByRole('row').slice(1)
+    expect(dataRows[0].textContent).toContain('HGL')
+    expect(dataRows[dataRows.length - 1].textContent).toContain('LGH')
+  })
+
+  it('restores hidden column visibility from localStorage for signed-in user', () => {
+    const userId = mockClerkUser.id
+    const schemaVersion =
+      'name,ticker,type,quantity,price,market_value,cost_basis,gain_loss,gain_loss_pct,day_change,day_change_pct,account'
+    localStorage.setItem(
+      `bb:table-prefs:${userId}:portfolio-holdings`,
+      JSON.stringify({
+        schemaVersion,
+        sizingVersion: 'v3-compact',
+        sizing: {},
+        columnOrder: [],
+        columnVisibility: { account: false },
+      })
+    )
+    mockUseUser.mockReturnValue(createMockClerkUser({ isSignedIn: true, user: mockClerkUser }))
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [holdingA], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    // The 'Account' column header (hideable:true) must be absent when hidden in localStorage.
+    expect(screen.queryByText('Account')).toBeNull()
+    // Sanity: non-hideable column headers are still present.
+    expect(screen.getByText('Market Value')).toBeDefined()
+
+    // Restore mock and localStorage for subsequent tests.
+    mockUseUser.mockReturnValue(createMockClerkUser())
+    localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
   })
 })

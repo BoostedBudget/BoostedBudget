@@ -108,7 +108,8 @@ describe('PortfolioValueChart', () => {
     expect(types[0]).toBe('line')
   })
 
-  it('passes isDark to EChartsChart', () => {
+  // R4-2: C11 — both isDark branches must be explicitly asserted (not just dark).
+  it('passes isDark=true to EChartsChart in dark mode', () => {
     mockUseDarkMode.mockReturnValue(true)
     mockUseGetPortfolioHistory.mockReturnValue({
       data: {
@@ -122,6 +123,45 @@ describe('PortfolioValueChart', () => {
     })
     render(<PortfolioValueChart dateRange={DATE_RANGE} />)
     expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
+
+  it('passes isDark=false to EChartsChart in light mode', () => {
+    // beforeEach already sets mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2024-01-01', total_value: 1000 },
+          { date: '2024-01-08', total_value: 1100 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
+  })
+
+  // R4-3: C5 — prove the dateRange prop is forwarded to useGetPortfolioHistory.
+  // Without this test, a mismatch between dateRange prop and API params would be silent.
+  it('forwards dateRange start_date and end_date to useGetPortfolioHistory', () => {
+    const customRange = { start_date: '2023-06-01', end_date: '2023-09-30' }
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2023-06-01', total_value: 5000 },
+          { date: '2023-09-30', total_value: 5500 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    mockUseGetPortfolioHistory.mockClear()
+    render(<PortfolioValueChart dateRange={customRange} />)
+    // The mock captures the args passed to useGetPortfolioHistory on render
+    const callArg = mockUseGetPortfolioHistory.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(callArg).toBeDefined()
+    expect(callArg.start_date).toBe('2023-06-01')
+    expect(callArg.end_date).toBe('2023-09-30')
   })
 
   it('tooltip formatter escapes malicious names (XSS guard)', () => {

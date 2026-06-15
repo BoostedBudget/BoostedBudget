@@ -50,6 +50,7 @@ import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
   mockUseGetCashFlowSummary,
+  mockUseGetPortfolioAllocationBreakdown,
 } from '@/test/mocks/analytics-api'
 import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
@@ -59,15 +60,14 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
-import { mockUseGetHoldings, mockGetInvestmentTransactions } from '@/test/mocks/investments-api'
+import { mockUseGetHoldings, mockGetInvestmentTransactions, mockUseGetPortfolioHistory } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
-
-// --- Silence analytics in all tests (PostHog is no-op without POSTHOG_KEY) ---
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mock(() => {}),
-}))
+// EChartsChart mock — must be imported before any chart component dynamic imports
+// so that mock.module('@/shared/charts') is registered at load time.
+import '@/test/mocks/shared-charts'
+import { mockUseDarkMode } from '@/test/mocks/shared-charts'
 
 // --- Page imports (static — mocks are preloaded before module resolution) ---
 const { TransactionTable } = await import('@/features/transactions/components/TransactionTable')
@@ -86,7 +86,6 @@ const { SavingsImpactWidget } = await import(
   '@/features/dashboard/widgets/SavingsImpactWidget'
 )
 
-// --- Phase A component imports (currency surface PII coverage) ---
 const { CashFlowSummaryWidget } = await import('@/features/dashboard/widgets/CashFlowSummaryWidget')
 const { BudgetOverviewWidget } = await import('@/features/dashboard/widgets/BudgetOverviewWidget')
 const { AccountBalanceCards } = await import('@/features/dashboard/components/AccountBalanceCards')
@@ -96,44 +95,36 @@ const { IncomeSourceItem } = await import('@/features/budgets/components/income/
 const { IncomeSourceConfig } = await import('@/features/budgets/components/income/IncomeSourceConfig')
 const { DashboardContext } = await import('@/features/dashboard/context/DashboardContext')
 
-// --- Phase P1 Round-4 component imports (unconverted currency surfaces) ---
 const { AccountTypeFilter } = await import('@/features/dashboard/components/AccountTypeFilter')
 const { BudgetIncomeSection } = await import('@/features/budgets/components/budget-detail/BudgetIncomeSection')
 const { BudgetCategoryForm } = await import('@/features/budgets/components/category-management/BudgetCategoryForm')
 
-// --- Round 7 component imports (BalanceOverview + NetWorthSparkline) ---
 const { BalanceOverview } = await import('@/features/dashboard/components/BalanceOverview')
 const { NetWorthSparkline } = await import('@/features/dashboard/components/NetWorthSparkline')
 
-// --- Round 8 component imports (billing — personal charge surfaces) ---
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
 
-// --- Round 10 component imports (card↔table PII consistency) ---
 const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
 )
 
-// --- Round 11 component imports (aria-label currency leak) ---
 const { ChangeIndicator } = await import('@/features/net-worth/components/ChangeIndicator')
 
-// --- Round 12 component imports (SearchableSelect account-option PII leak) ---
 const { SearchableSelect } = await import('@/shared/components/SearchableSelect/SearchableSelect')
 
 // --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
 const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
 const { HoldingsTable } = await import('@/features/investments/components/HoldingsTable')
 const { InvestmentTransactionsTable } = await import('@/features/investments/components/InvestmentTransactionsTable')
+const { PortfolioValueChart } = await import('@/features/investments/components/PortfolioValueChart')
+const { AllocationCard } = await import('@/features/investments/components/AllocationCard')
 
-// --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
 const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
 const { CreateSavingsGoalDialog } = await import('@/features/savings/components/CreateSavingsGoalDialog')
 
-// ---------------------------------------------------------------
-// Sentinel constants
-// ---------------------------------------------------------------
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
 const SENTINEL_DESC = 'SENTINEL_DESC_QRS'
@@ -147,9 +138,6 @@ const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
 const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
 
-// ---------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -216,9 +204,6 @@ async function waitForSentinels(sentinels: PIISentinel[]) {
   }
 }
 
-// ---------------------------------------------------------------
-// 1. Transactions page
-// ---------------------------------------------------------------
 describe('PII coverage — Transactions page', () => {
   beforeEach(() => {
     cleanup()
@@ -272,9 +257,6 @@ describe('PII coverage — Transactions page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 2. Accounts page
-// ---------------------------------------------------------------
 describe('PII coverage — Accounts page', () => {
   beforeEach(() => {
     cleanup()
@@ -323,9 +305,6 @@ describe('PII coverage — Accounts page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 3. Net Worth page
-// ---------------------------------------------------------------
 describe('PII coverage — Net Worth page', () => {
   beforeEach(() => {
     cleanup()
@@ -374,9 +353,6 @@ describe('PII coverage — Net Worth page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 4. Savings page
-// ---------------------------------------------------------------
 describe('PII coverage — Savings page', () => {
   const sentinelGoal = {
     id: 'goal-sentinel',
@@ -423,9 +399,6 @@ describe('PII coverage — Savings page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 5. Profile page
-// ---------------------------------------------------------------
 describe('PII coverage — Profile page', () => {
   beforeEach(() => {
     cleanup()
@@ -460,9 +433,6 @@ describe('PII coverage — Profile page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 6. Categories component (no dedicated route — rendered directly)
-// ---------------------------------------------------------------
 describe('PII coverage — CategoryEditor component', () => {
   const sentinelCategory = {
     id: 'cat-sentinel',
@@ -506,9 +476,6 @@ describe('PII coverage — CategoryEditor component', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 7. Budgets list page
-// ---------------------------------------------------------------
 describe('PII coverage — Budgets list page', () => {
   beforeEach(() => {
     cleanup()
@@ -549,9 +516,6 @@ describe('PII coverage — Budgets list page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 8. Automation Rules page
-// ---------------------------------------------------------------
 describe('PII coverage — Rules page', () => {
   beforeEach(() => {
     cleanup()
@@ -584,9 +548,6 @@ describe('PII coverage — Rules page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 9. Auto-categorization rules page
-// ---------------------------------------------------------------
 describe('PII coverage — Auto-categorization rules page', () => {
   beforeEach(() => {
     cleanup()
@@ -620,9 +581,6 @@ describe('PII coverage — Auto-categorization rules page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 10. Reports / Spending page
-// ---------------------------------------------------------------
 describe('PII coverage — Spending Reports page', () => {
   beforeEach(() => {
     cleanup()
@@ -658,9 +616,6 @@ describe('PII coverage — Spending Reports page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 11. SavingsImpactWidget — destination account name (GAP CC)
-// ---------------------------------------------------------------
 describe('PII coverage — SavingsImpactWidget destination name', () => {
   beforeEach(() => {
     cleanup()
@@ -709,9 +664,6 @@ describe('PII coverage — SavingsImpactWidget destination name', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 12. Currency surface PII coverage (Phase A — Round 2 gap remediation #1285)
-// ---------------------------------------------------------------
 describe('PII coverage — currency surfaces (widgets + sub-components)', () => {
   beforeEach(() => {
     cleanup()
@@ -933,9 +885,6 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
   })
 })
 
-// ---------------------------------------------------------------
-// 13. Round 4 — unconverted currency surfaces (P1 gap remediation #1285)
-// ---------------------------------------------------------------
 describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / BudgetCategoryForm', () => {
   beforeEach(() => {
     cleanup()
@@ -1023,7 +972,6 @@ describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / Bu
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
-
 describe('PII coverage — Round 8: billing components (personal charge surfaces)', () => {
   beforeEach(() => {
     cleanup()
@@ -1149,10 +1097,6 @@ describe('PII coverage — Round 7: BalanceOverview / NetWorthSparkline', () => 
   })
 })
 
-// ---------------------------------------------------------------
-// 16. Round 9 — non-currency PII: account/institution/merchant names
-//     in DOM text, DOM attributes, and <option> text
-// ---------------------------------------------------------------
 describe('PII coverage — Round 9: account/institution/merchant names in text, attributes, <option> text', () => {
   beforeEach(() => {
     cleanup()
@@ -1307,11 +1251,6 @@ describe('PII coverage — Round 9: account/institution/merchant names in text, 
   })
 })
 
-// ---------------------------------------------------------------
-// 17. Round 10 — card↔table PII consistency: AutoCategorizationRuleTable
-//     The page (test #9) renders in cards view (masked). The TABLE view
-//     was never imported by this gate — this case closes that gap.
-// ---------------------------------------------------------------
 describe('PII coverage — Round 10: AutoCategorizationRuleTable name + description', () => {
   beforeEach(() => {
     cleanup()
@@ -1351,9 +1290,6 @@ describe('PII coverage — Round 10: AutoCategorizationRuleTable name + descript
   })
 })
 
-// ---------------------------------------------------------------
-// 18. Round 11 — aria-label currency leak (ChangeIndicator)
-// ---------------------------------------------------------------
 describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
   beforeEach(() => {
     cleanup()
@@ -1370,11 +1306,6 @@ describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 20. Round 13 — Portfolio tab monetary surfaces (#1296)
-//     PortfolioSummaryCard renders total_value, total_gain_loss, and day_change.
-//     All currency amounts must be inside data-ph-mask wrappers.
-// ---------------------------------------------------------------
 describe('PII coverage — Portfolio: PortfolioSummaryCard', () => {
   beforeEach(() => {
     cleanup()
@@ -1411,13 +1342,6 @@ describe('PII coverage — Portfolio: PortfolioSummaryCard', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 19. Round 12 — SearchableSelect account-option PII leak
-//     The dropdown <ul role="listbox"> renders only when isOpen.
-//     Prior gate tests never opened it — this case closes that gap.
-//     account name (∈ PII_PROPERTY_DENYLIST) + ••••mask (ACCOUNT_MASK_RE)
-//     must be masked once the dropdown is open.
-// ---------------------------------------------------------------
 describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
   beforeEach(() => {
     cleanup()
@@ -1450,11 +1374,6 @@ describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 21. Round 13 extended — HoldingsTable monetary columns (#1296)
-//     price, market_value, cost_basis, gain_loss, day_change etc.
-//     must be inside data-ph-mask <td> cells (maskedColumnIds).
-// ---------------------------------------------------------------
 describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', () => {
   beforeEach(() => {
     cleanup()
@@ -1493,20 +1412,6 @@ describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', 
   })
 })
 
-// ---------------------------------------------------------------
-// 22. Round 13 extended — InvestmentTransactionsTable (#1296)
-//
-// Virtualization (TanStack Virtual) is enabled; jsdom has no layout
-// engine so container height = 0 → no data rows are rendered even
-// when transactions array is non-empty.
-//
-// maskedColumnIds = ['quantity','price','amount','fees'] — these are
-// passed to DataTable which applies data-ph-mask at the <td> level.
-// DataTable's own masking guarantee is verified by DataTable's test
-// suite.  This test feeds real transaction data through the mocked
-// API fetcher and verifies the non-virtualized content (column
-// headers, toolbar) contains no unmasked currency values.
-// ---------------------------------------------------------------
 describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () => {
   beforeEach(() => {
     cleanup()
@@ -1542,6 +1447,73 @@ describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () =
       { wrapper: createWrapper() }
     )
     // jsdom virtualization renders 0 data rows; column headers must still be PII-clean.
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 13 extended: PortfolioValueChart', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+  })
+
+  // Note: EChartsChart renders a mocked stub (no DOM text), so scanForUnmaskedPII gates the
+  // wrapper DOM only. Currency values that reach the real ECharts option (tooltip/axis labels)
+  // are rendered as Canvas/SVG and masked via EChartsChart's own data-ph-mask wrapper —
+  // the same established pattern as NetWorthSparkline and SpendingReportsPage chart tests.
+  test('chart wrapper contains no unmasked currency text', async () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2024-01-01', total_value: 99999.99 },
+          { date: '2024-06-01', total_value: 109999.99 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(
+      <PortfolioValueChart dateRange={{ start_date: '2024-01-01', end_date: '2024-06-01' }} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 13 extended: AllocationCard', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 79999.99, percentage: 80, holding_count: 5 },
+          { security_type: 'Fixed Income', asset_class: 'bond', total_value: 19999.99, percentage: 20, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // Note: same scope as PortfolioValueChart above — ECharts mock stubs canvas rendering;
+  // scanForUnmaskedPII gates wrapper DOM only. AllocationCard's non-chart DOM (title, popover
+  // trigger) contains no formatted currency values, so the assertion is meaningful there.
+  test('card wrapper and donut chart contain no unmasked currency text', async () => {
+    render(
+      <AllocationCard
+        config={{ include: [], group_by: 'security_type', basis: 'assets' }}
+        onConfigChange={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

@@ -4,11 +4,11 @@
 // test files in bun:test.
 // QueryClientProvider is required because PortfolioPage uses useInfiniteInvestmentTransactions
 // (real useInfiniteQuery under the mocked getInvestmentTransactions fetcher).
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation as useRouterLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { InsightsPage } from './InsightsPage'
@@ -27,9 +27,6 @@ function renderInsightsPage(search = '') {
 }
 
 describe('InsightsPage', () => {
-  beforeEach(() => {
-    mock.restore()
-  })
 
   it('renders the Insights heading', () => {
     renderInsightsPage()
@@ -80,5 +77,30 @@ describe('InsightsPage', () => {
     expect(portfolioTab.getAttribute('data-state')).toBe('active')
     // Spending and Net Worth should no longer be active
     expect(screen.getByRole('tab', { name: 'Spending' }).getAttribute('data-state')).toBe('inactive')
+  })
+
+  it('clicking Portfolio tab writes ?tab=portfolio to the URL', async () => {
+    const locationRef = { current: '' }
+    function LocationProbe() {
+      const { search } = useRouterLocation()
+      locationRef.current = search
+      return null
+    }
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/insights']}>
+          <LocationProbe />
+          <Routes>
+            <Route path="/insights" element={<InsightsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Portfolio' }))
+
+    expect(locationRef.current).toBe('?tab=portfolio')
   })
 })

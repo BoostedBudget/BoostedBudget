@@ -105,7 +105,8 @@ describe('AllocationDonutChart', () => {
     expect(screen.getByTestId('echarts-chart')).toBeDefined()
   })
 
-  it('passes isDark to EChartsChart', () => {
+  // R4-2: C11 — both isDark branches must be explicitly asserted (not just dark).
+  it('passes isDark=true to EChartsChart in dark mode', () => {
     mockUseDarkMode.mockReturnValue(true)
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
@@ -119,6 +120,22 @@ describe('AllocationDonutChart', () => {
     })
     render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
     expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
+
+  it('passes isDark=false to EChartsChart in light mode', () => {
+    // beforeEach already sets mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 50000,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 50000, percentage: 100, holding_count: 5 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
   })
 
   it('renders a pie series type', () => {
