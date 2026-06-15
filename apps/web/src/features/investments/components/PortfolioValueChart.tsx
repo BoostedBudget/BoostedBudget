@@ -31,8 +31,9 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
       tooltip: {
         trigger: 'axis',
         formatter: (params: unknown) => {
-          if (!Array.isArray(params) || params.length === 0) return ''
-          const [p] = params as Array<{ name: string; value: number }>
+          const arr = Array.isArray(params) ? params : []
+          if (arr.length === 0) return ''
+          const [p] = arr as Array<{ name: string; value: number }>
           return `${escapeHtml(p.name)}<br>${formatCurrency(p.value)}`
         },
       },

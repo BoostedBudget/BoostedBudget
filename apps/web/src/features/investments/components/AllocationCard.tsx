@@ -7,6 +7,9 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { AllocationDonutChart } from './AllocationDonutChart'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
 
+const capitalize = (str: string): string =>
+  str[0].toUpperCase() + str.slice(1)
+
 interface AllocationCardProps {
   config: AllocationConfig
   onConfigChange: (next: AllocationConfig) => void
@@ -20,7 +23,7 @@ interface SettingsPopoverProps {
 function SettingsPopover({ config, onConfigChange }: SettingsPopoverProps) {
   const trackEvent = useTrackEvent()
 
-  function handleChange(next: AllocationConfig) {
+  const handleChange = (next: AllocationConfig) => {
     onConfigChange(next)
     trackEvent(ANALYTICS_EVENTS.PORTFOLIO_ALLOCATION_CONFIG_CHANGED, {
       group_by: next.group_by,
@@ -29,7 +32,7 @@ function SettingsPopover({ config, onConfigChange }: SettingsPopoverProps) {
     })
   }
 
-  function handleIncludeToggle(value: string) {
+  const handleIncludeToggle = (value: string) => {
     const next = config.include.includes(value)
       ? config.include.filter((v) => v !== value)
       : [...config.include, value]
@@ -61,9 +64,9 @@ function SettingsPopover({ config, onConfigChange }: SettingsPopoverProps) {
                   name={`include-${value}`}
                   checked={config.include.includes(value)}
                   onChange={() => handleIncludeToggle(value)}
-                  aria-label={value.charAt(0).toUpperCase() + value.slice(1)}
+                  aria-label={capitalize(value)}
                 />
-                {value.charAt(0).toUpperCase() + value.slice(1)}
+                {capitalize(value)}
               </label>
             ))}
           </div>

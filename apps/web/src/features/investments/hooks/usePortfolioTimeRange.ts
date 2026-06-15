@@ -13,31 +13,35 @@ export interface PortfolioDateRange {
 function toISO(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  const d2 = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d2}`
 }
 
 function computeDateRange(preset: PortfolioPreset): PortfolioDateRange {
   const today = new Date()
   const end_date = toISO(today)
+  const start = new Date(today)
 
   switch (preset) {
     case '1W':
+      start.setDate(start.getDate() - 7)
+      break
     case '1M':
+      start.setMonth(start.getMonth() - 1)
+      break
     case '3M':
-    case '1Y': {
-      const start = new Date(today)
-      if (preset === '1W') start.setDate(start.getDate() - 7)
-      else if (preset === '1M') start.setMonth(start.getMonth() - 1)
-      else if (preset === '3M') start.setMonth(start.getMonth() - 3)
-      else start.setFullYear(start.getFullYear() - 1)
-      return { start_date: toISO(start), end_date }
-    }
+      start.setMonth(start.getMonth() - 3)
+      break
+    case '1Y':
+      start.setFullYear(start.getFullYear() - 1)
+      break
     case 'YTD':
       return { start_date: `${today.getFullYear()}-01-01`, end_date }
     case 'All':
       return { start_date: PORTFOLIO_ALL_FLOOR, end_date }
   }
+
+  return { start_date: toISO(start), end_date }
 }
 
 export function usePortfolioTimeRange(defaultPreset: PortfolioPreset = '1Y') {

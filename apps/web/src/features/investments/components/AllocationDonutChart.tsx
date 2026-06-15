@@ -36,7 +36,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
       tooltip: {
         trigger: 'item',
         formatter: (params: unknown) => {
-          if (typeof params !== 'object' || params === null) return ''
+          if (!params || typeof params !== 'object') return ''
           const p = params as { name: string; value?: number; percent?: number }
           if (typeof p.value === 'number' && typeof p.percent === 'number') {
             return `${p.name}: ${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
