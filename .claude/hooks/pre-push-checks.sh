@@ -23,12 +23,26 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 # Pass through if we can't parse or command is empty
 [ -z "$CMD" ] && exit 0
 
-# Only intercept git push commands
-printf '%s' "$CMD" | grep -qE '(^|[;&|])\s*git push' || exit 0
+# Only intercept git push commands (also matches when RTK rewrites to "rtk git push")
+printf '%s' "$CMD" | grep -qE '(^|[;&|])\s*(rtk\s+)?git push' || exit 0
 
 # --- Setup ---------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Default: derive root from hook file location (main project)
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Worktree support: if pushing a named branch, find the matching worktree directory
+# and run checks from there so the correct bun.lock / package.json are audited.
+# All sub-commands use || true to avoid aborting via set -uo pipefail.
+PUSH_BRANCH=$(printf '%s' "$CMD" | sed 's/^rtk //' | rev | cut -d' ' -f1 | rev || true)
+if [[ -n "${PUSH_BRANCH:-}" ]]; then
+  WORKTREE_DIR=$(git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null \
+    | awk -v branch="refs/heads/${PUSH_BRANCH}" \
+        '/^worktree/{dir=$2} $0==("branch " branch){print dir; exit}' || true)
+  if [[ -n "${WORKTREE_DIR:-}" && -f "${WORKTREE_DIR}/package.json" ]]; then
+    PROJECT_ROOT="$WORKTREE_DIR"
+  fi
+fi
 
 FAILED=0
 ERRORS=""
