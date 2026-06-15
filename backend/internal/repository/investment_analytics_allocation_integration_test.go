@@ -154,6 +154,7 @@ func TestAllocationBreakdown_WithCash_AddsDepositoryBucket_Integration(t *testin
 
 // TestAllocationBreakdown_WithLiabilities_AddsLiabilitiesBucket_Integration proves that
 // include=["liabilities"] adds credit/loan account balances as a "liabilities" bucket.
+// Uses default basis (assets) so the liabilities bucket is preserved in the response.
 func TestAllocationBreakdown_WithLiabilities_AddsLiabilitiesBucket_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -165,7 +166,10 @@ func TestAllocationBreakdown_WithLiabilities_AddsLiabilitiesBucket_Integration(t
 	userID, _, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-liab")
 	repo := NewInvestmentAnalyticsRepository(tx)
 
-	opts := domain.AllocationOptions{Include: []string{"liabilities"}, Basis: "net"}
+	// Basis: domain.AllocationBasisAssets (default) so liabilities bucket is NOT removed.
+	// basis=net would remove the bucket via applyNetBasis — tested separately in
+	// TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration.
+	opts := domain.AllocationOptions{Include: []string{"liabilities"}}
 	result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
 
 	require.NoError(t, err)

@@ -59,7 +59,7 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
-import { mockUseGetHoldings, mockUseInfiniteInvestmentTransactions } from '@/test/mocks/investments-api'
+import { mockUseGetHoldings, mockGetInvestmentTransactions } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
@@ -123,7 +123,10 @@ const { SearchableSelect } = await import('@/shared/components/SearchableSelect/
 // --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
 const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
 const { HoldingsTable } = await import('@/features/investments/components/HoldingsTable')
-const { InvestmentTransactionsTable } = await import('@/features/investments/components/InvestmentTransactionsTable')
+const {
+  InvestmentTransactionsTable,
+  INVESTMENT_TXN_MASKED_COLUMN_IDS,
+} = await import('@/features/investments/components/InvestmentTransactionsTable')
 
 // --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
@@ -1495,30 +1498,66 @@ describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', 
 
 // ---------------------------------------------------------------
 // 22. Round 13 extended — InvestmentTransactionsTable (#1296)
-//     Virtualization is enabled; in jsdom no data rows render.
-//     This smoke test verifies headers + empty-state contain no
-//     unmasked currency values.
+//
+// Virtualization (TanStack Virtual) is enabled; jsdom has no layout
+// engine so container height = 0 → no data rows are rendered even
+// when transactions array is non-empty.  We therefore use two
+// complementary assertions:
+//
+//   a) Static: INVESTMENT_TXN_MASKED_COLUMN_IDS (the exported constant
+//      that DataTable's maskedColumnIds receives) must contain every
+//      monetary column.
+//   b) Render: with real transaction data fed through the mocked API,
+//      the non-virtualized content (column headers, toolbar) must
+//      contain no unmasked currency values.
+//
+// The DataTable masking guarantee — that cells in maskedColumnIds are
+// wrapped in data-ph-mask <td>s — is verified by DataTable's own
+// test suite; we trust it here.
 // ---------------------------------------------------------------
-describe('PII coverage — Round 13 extended: InvestmentTransactionsTable smoke', () => {
+describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () => {
   beforeEach(() => {
     cleanup()
   })
 
-  test('table structure renders without unmasked currency in non-virtualized content', async () => {
-    mockUseInfiniteInvestmentTransactions.mockReturnValue({
-      transactions: [],
-      fetchNextPage: mock(() => Promise.resolve()),
-      hasNextPage: false,
-      isFetchingNextPage: false,
-      isLoading: false,
-      isError: false,
-      isSuccess: true,
+  test('INVESTMENT_TXN_MASKED_COLUMN_IDS covers all monetary columns', () => {
+    // Static assertion: every column that can carry a dollar/share amount must be masked.
+    const requiredMasked = ['quantity', 'price', 'amount', 'fees']
+    for (const col of requiredMasked) {
+      expect(INVESTMENT_TXN_MASKED_COLUMN_IDS).toContain(col)
+    }
+  })
+
+  test('non-virtualized content (headers) contains no unmasked currency values', async () => {
+    // Seed the mocked raw API fetcher with a transaction that has large monetary values.
+    // The real useInfiniteInvestmentTransactions hook calls getInvestmentTransactions
+    // (intercepted by mock.module in investments-api.ts preload).
+    mockGetInvestmentTransactions.mockResolvedValue({
+      transactions: [
+        {
+          id: 'pii-txn-1',
+          user_id: 'user-1',
+          account_id: 'acct-1',
+          plaid_investment_transaction_id: 'plaid-1',
+          security_id: 'sec-1',
+          date: '2024-06-01',
+          name: 'AAPL Buy',
+          amount: 99999.99,
+          quantity: 123.4567,
+          price: 810.45,
+          fees: 4.99,
+          type: 'buy',
+          created_at: '2024-06-01T10:00:00Z',
+        },
+      ],
+      limit: 50,
+      next_cursor: undefined,
     })
     render(
       <InvestmentTransactionsTable dateRange={{ start_date: '2024-01-01', end_date: '2024-12-31' }} />,
       { wrapper: createWrapper() }
     )
-    // Headers and empty state must not leak masked currency amounts
+    // jsdom virtualization renders 0 data rows; column headers must still be PII-clean.
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

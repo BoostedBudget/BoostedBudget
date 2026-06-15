@@ -5,7 +5,7 @@
  * Tests preset-to-date mapping, the 'All' floor date, and state updates.
  */
 
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, setSystemTime, afterEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { usePortfolioTimeRange, PORTFOLIO_PRESETS, PORTFOLIO_ALL_FLOOR } from './usePortfolioTimeRange'
 
@@ -80,5 +80,36 @@ describe('usePortfolioTimeRange', () => {
 
     // 1Y start should be earlier than 1M start
     expect(range1Y < range1M).toBe(true)
+  })
+
+  describe('month-end date clamping (regression: setMonth() overflow)', () => {
+    afterEach(() => {
+      // Restore real clock after each frozen-time test
+      setSystemTime()
+    })
+
+    it('1M on March 31 clamps to Feb 28, not Mar 03', () => {
+      // Use explicit UTC time (15:00Z = 11 AM EDT / 10 AM EST) so getDate() returns
+      // 31 in every US timezone — date-only '2026-03-31' parses as UTC midnight, which
+      // is March 30 local time in UTC-4 (EDT).
+      setSystemTime(new Date('2026-03-31T15:00:00Z'))
+      const { result } = renderHook(() => usePortfolioTimeRange('1M'))
+      // Feb 2026 has 28 days — must NOT overflow to March
+      expect(result.current.dateRange.start_date).toBe('2026-02-28')
+      expect(result.current.dateRange.end_date).toBe('2026-03-31')
+    })
+
+    it('3M on May 31 clamps to Feb 28', () => {
+      setSystemTime(new Date('2026-05-31T15:00:00Z'))
+      const { result } = renderHook(() => usePortfolioTimeRange('3M'))
+      expect(result.current.dateRange.start_date).toBe('2026-02-28')
+      expect(result.current.dateRange.end_date).toBe('2026-05-31')
+    })
+
+    it('1M on a mid-month date is exact (no clamping needed)', () => {
+      setSystemTime(new Date('2026-06-14T15:00:00Z'))
+      const { result } = renderHook(() => usePortfolioTimeRange('1M'))
+      expect(result.current.dateRange.start_date).toBe('2026-05-14')
+    })
   })
 })

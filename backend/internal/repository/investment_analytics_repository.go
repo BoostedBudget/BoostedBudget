@@ -108,7 +108,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		SELECT
 			'liabilities'                          AS security_type,
 			COUNT(*)                               AS holding_count,
-			COALESCE(ABS(SUM(a.current_balance)), 0) AS total_value
+			COALESCE(SUM(ABS(a.current_balance)), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
 		  AND a.status = 'active'
