@@ -361,6 +361,30 @@ export function createApiClient(mutator: FetchMutator) {
       getActiveSavingsGoals(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/active', method: 'GET', signal })
       },
+      /** GET /api/v1/savings-goals/progress-summary */
+      getSavingsProgressSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-goals/progress-summary', method: 'GET', signal })
+      },
+      /** GET /api/v1/savings-goals/{goalID}/contributions */
+      listSavingsGoalContributions(goalID: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'GET', signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions */
+      logSavingsGoalContribution(goalID: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'POST', data, signal })
+      },
+      /** DELETE /api/v1/savings-goals/{goalID}/contributions/{id} */
+      deleteSavingsGoalContribution(goalID: string, id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}`, method: 'DELETE', signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm */
+      confirmSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/confirm`, method: 'POST', data, signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/reject */
+      rejectSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/reject`, method: 'POST', data, signal })
+      },
       /** GET /api/v1/savings-goals/{id} */
       getSavingsGoal(id: string, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/savings-goals/${id}`, method: 'GET', signal })

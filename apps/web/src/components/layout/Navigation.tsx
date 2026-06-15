@@ -10,12 +10,12 @@ interface NavigationProps {
 
 const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard' },
-  { to: '/net-worth', label: 'Net Worth' },
   { to: '/accounts', label: 'Accounts' },
   { to: '/transactions', label: 'Transactions' },
-  { to: '/budgets', label: 'Budgets' },
-  { to: '/savings', label: 'Savings' },
-  { to: '/reports', label: 'Reports' },
+  // Issue #1300: /budgets + /savings consolidated under /planning
+  { to: '/planning', label: 'Planning' },
+  // Issue #1300: /reports + /net-worth consolidated under /insights
+  { to: '/insights', label: 'Insights' },
   { to: '/boosts', label: 'Boosts' },
   { to: '/auto-categorization', label: 'Auto-Cat' },
 ]

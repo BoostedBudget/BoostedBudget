@@ -416,4 +416,43 @@ describe('BudgetCategoryCard', () => {
       expect(screen.getByRole('heading')).toHaveTextContent('Dining Out')
     })
   })
+
+  describe('Savings bucket variant (#1300)', () => {
+    const createSavingsCategory = (overrides?: Partial<BudgetCategory>): BudgetCategory =>
+      createMockCategory({
+        category_kind: 'savings',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        savings_goal_id: 'goal-1',
+        savings_goal_name: 'House Down Payment',
+        allocated_amount: 200,
+        spent_amount: 50,
+        ...overrides,
+      })
+
+    it('renders the goal name as the heading', () => {
+      render(<BudgetCategoryCard category={createSavingsCategory()} />)
+      expect(screen.getByRole('heading')).toHaveTextContent('House Down Payment')
+    })
+
+    it('falls back to "Savings Goal" when savings_goal_name is absent', () => {
+      render(
+        <BudgetCategoryCard
+          category={createSavingsCategory({ savings_goal_name: undefined })}
+        />
+      )
+      expect(screen.getByRole('heading')).toHaveTextContent('Savings Goal')
+    })
+
+    it('shows "Savings Bucket" badge instead of match logic label', () => {
+      render(<BudgetCategoryCard category={createSavingsCategory()} />)
+      expect(screen.getByText(/savings bucket/i)).toBeTruthy()
+    })
+
+    it('renders allocated and spent amounts', () => {
+      render(<BudgetCategoryCard category={createSavingsCategory()} />)
+      expect(screen.getByText('$200.00')).toBeTruthy()
+      expect(screen.getByText('$50.00')).toBeTruthy()
+    })
+  })
 })

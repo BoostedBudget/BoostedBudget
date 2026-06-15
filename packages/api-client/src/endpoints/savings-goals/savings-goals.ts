@@ -52,7 +52,10 @@ import type {
 import type {
   CreateSavingsGoalRequest,
   ErrorModel,
+  LogContributionRequest,
   SavingsGoal,
+  SavingsGoalContribution,
+  SavingsProgressSummary,
   UpdateSavingsGoalRequest
 } from '../../models';
 
@@ -342,6 +345,446 @@ export function useGetActiveSavingsGoals<TData = Awaited<ReturnType<typeof getAc
 
 
 /**
+ * Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).
+ * @summary Get savings progress summary
+ */
+export const getSavingsProgressSummary = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsProgressSummary>(
+      {url: `/api/v1/savings-goals/progress-summary`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetSavingsProgressSummaryQueryKey = () => {
+    return [
+    `/api/v1/savings-goals/progress-summary`
+    ] as const;
+    }
+
+
+export const getGetSavingsProgressSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSavingsProgressSummaryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSavingsProgressSummary>>> = ({ signal }) => getSavingsProgressSummary(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetSavingsProgressSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getSavingsProgressSummary>>>
+export type GetSavingsProgressSummaryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getSavingsProgressSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get savings progress summary
+ */
+
+export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetSavingsProgressSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns all confirmed and proposed contributions for a savings goal, newest first.
+ * @summary List savings goal contributions
+ */
+export const listSavingsGoalContributions = (
+    goalID: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoalContribution[] | null>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getListSavingsGoalContributionsQueryKey = (goalID: string,) => {
+    return [
+    `/api/v1/savings-goals/${goalID}/contributions`
+    ] as const;
+    }
+
+
+export const getListSavingsGoalContributionsQueryOptions = <TData = Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSavingsGoalContributionsQueryKey(goalID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSavingsGoalContributions>>> = ({ signal }) => listSavingsGoalContributions(goalID, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: goalID !== null && goalID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListSavingsGoalContributionsQueryResult = NonNullable<Awaited<ReturnType<typeof listSavingsGoalContributions>>>
+export type ListSavingsGoalContributionsQueryError = ErrorType<ErrorModel>
+
+
+export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSavingsGoalContributions>>,
+          TError,
+          Awaited<ReturnType<typeof listSavingsGoalContributions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSavingsGoalContributions>>,
+          TError,
+          Awaited<ReturnType<typeof listSavingsGoalContributions>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List savings goal contributions
+ */
+
+export function useListSavingsGoalContributions<TData = Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError = ErrorType<ErrorModel>>(
+ goalID: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listSavingsGoalContributions>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListSavingsGoalContributionsQueryOptions(goalID,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+ * @summary Log a savings goal contribution
+ */
+export const logSavingsGoalContribution = (
+    goalID: string,
+    logContributionRequest: BodyType<NonReadonly<LogContributionRequest>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoalContribution>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: logContributionRequest, signal
+    },
+      options);
+    }
+
+
+
+export const getLogSavingsGoalContributionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logSavingsGoalContribution>>, TError,{goalID: string;data: BodyType<NonReadonly<LogContributionRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof logSavingsGoalContribution>>, TError,{goalID: string;data: BodyType<NonReadonly<LogContributionRequest>>}, TContext> => {
+
+const mutationKey = ['logSavingsGoalContribution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof logSavingsGoalContribution>>, {goalID: string;data: BodyType<NonReadonly<LogContributionRequest>>}> = (props) => {
+          const {goalID,data} = props ?? {};
+
+          return  logSavingsGoalContribution(goalID,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LogSavingsGoalContributionMutationResult = NonNullable<Awaited<ReturnType<typeof logSavingsGoalContribution>>>
+    export type LogSavingsGoalContributionMutationBody = BodyType<NonReadonly<LogContributionRequest>>
+    export type LogSavingsGoalContributionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Log a savings goal contribution
+ */
+export const useLogSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logSavingsGoalContribution>>, TError,{goalID: string;data: BodyType<NonReadonly<LogContributionRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof logSavingsGoalContribution>>,
+        TError,
+        {goalID: string;data: BodyType<NonReadonly<LogContributionRequest>>},
+        TContext
+      > => {
+      return useMutation(getLogSavingsGoalContributionMutationOptions(options), queryClient);
+    }
+    /**
+ * Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.
+ * @summary Delete a savings goal contribution
+ */
+export const deleteSavingsGoalContribution = (
+    goalID: string,
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<void>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions/${id}`, method: 'DELETE', signal
+    },
+      options);
+    }
+
+
+
+export const getDeleteSavingsGoalContributionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext> => {
+
+const mutationKey = ['deleteSavingsGoalContribution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteSavingsGoalContribution>>, {goalID: string;id: string}> = (props) => {
+          const {goalID,id} = props ?? {};
+
+          return  deleteSavingsGoalContribution(goalID,id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteSavingsGoalContributionMutationResult = NonNullable<Awaited<ReturnType<typeof deleteSavingsGoalContribution>>>
+
+    export type DeleteSavingsGoalContributionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Delete a savings goal contribution
+ */
+export const useDeleteSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof deleteSavingsGoalContribution>>,
+        TError,
+        {goalID: string;id: string},
+        TContext
+      > => {
+      return useMutation(getDeleteSavingsGoalContributionMutationOptions(options), queryClient);
+    }
+    /**
+ * Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under a transaction-level lock before committing (Codex C2).
+ * @summary Confirm a proposed savings goal contribution
+ */
+export const confirmSavingsGoalContribution = (
+    goalID: string,
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoalContribution>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions/${id}/confirm`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+export const getConfirmSavingsGoalContributionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext> => {
+
+const mutationKey = ['confirmSavingsGoalContribution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmSavingsGoalContribution>>, {goalID: string;id: string}> = (props) => {
+          const {goalID,id} = props ?? {};
+
+          return  confirmSavingsGoalContribution(goalID,id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ConfirmSavingsGoalContributionMutationResult = NonNullable<Awaited<ReturnType<typeof confirmSavingsGoalContribution>>>
+
+    export type ConfirmSavingsGoalContributionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Confirm a proposed savings goal contribution
+ */
+export const useConfirmSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof confirmSavingsGoalContribution>>,
+        TError,
+        {goalID: string;id: string},
+        TContext
+      > => {
+      return useMutation(getConfirmSavingsGoalContributionMutationOptions(options), queryClient);
+    }
+    /**
+ * Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.
+ * @summary Reject a proposed savings goal contribution
+ */
+export const rejectSavingsGoalContribution = (
+    goalID: string,
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<SavingsGoalContribution>(
+      {url: `/api/v1/savings-goals/${goalID}/contributions/${id}/reject`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+export const getRejectSavingsGoalContributionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext> => {
+
+const mutationKey = ['rejectSavingsGoalContribution'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, {goalID: string;id: string}> = (props) => {
+          const {goalID,id} = props ?? {};
+
+          return  rejectSavingsGoalContribution(goalID,id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RejectSavingsGoalContributionMutationResult = NonNullable<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>>
+
+    export type RejectSavingsGoalContributionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Reject a proposed savings goal contribution
+ */
+export const useRejectSavingsGoalContribution = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof rejectSavingsGoalContribution>>, TError,{goalID: string;id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof rejectSavingsGoalContribution>>,
+        TError,
+        {goalID: string;id: string},
+        TContext
+      > => {
+      return useMutation(getRejectSavingsGoalContributionMutationOptions(options), queryClient);
+    }
+    /**
  * Removes a savings goal from the user's collection.
  * @summary Delete savings goal
  */

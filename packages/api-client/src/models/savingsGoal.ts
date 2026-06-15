@@ -37,6 +37,8 @@ export interface SavingsGoal {
   readonly $schema?: string;
   account?: Account;
   account_id: string;
+  account_percentage?: number;
+  balance_as_of?: string;
   completed_at?: string;
   created_at: string;
   currency_code: string;
@@ -45,7 +47,9 @@ export interface SavingsGoal {
   description?: string;
   id: string;
   is_completed: boolean;
+  last_calculated_at?: string;
   name: string;
+  progress_basis: string;
   target_amount: number;
   updated_at: string;
   user_account_id?: string;

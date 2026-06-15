@@ -117,11 +117,11 @@ test.describe('Spending Reports Page — Core Rendering', () => {
     await acceptCookieConsent(page)
   })
 
-  test('renders the page heading', async ({ page }) => {
+  test('renders the Spending tab active', async ({ page }) => {
     await mockReportsDependencies(page)
-    await page.goto('/reports')
+    await page.goto('/insights?tab=spending')
     await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('heading', { level: 1, name: /spending reports/i })).toBeVisible()
+    await expect(page.getByRole('tab', { name: 'Spending' })).toHaveAttribute('data-state', 'active')
   })
 })
 

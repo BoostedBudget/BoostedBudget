@@ -120,12 +120,6 @@
     "gzip": true
   },
   {
-    "name": "TransactionsPage",
-    "path": "apps/web/dist/assets/TransactionsPage-*.js",
-    "limit": "5 KB",
-    "gzip": true
-  },
-  {
     "name": "custom-category-manager",
     "path": "apps/web/dist/assets/CustomCategoryManager-*.js",
     "limit": "7 KB",
@@ -141,6 +135,18 @@
     "name": "css",
     "path": "apps/web/dist/assets/*.css",
     "limit": "68 KB",
+    "gzip": true
+  },
+  {
+    "name": "planning",
+    "path": "apps/web/dist/assets/planning-*.js",
+    "limit": "2 KB",
+    "gzip": true
+  },
+  {
+    "name": "insights",
+    "path": "apps/web/dist/assets/insights-*.js",
+    "limit": "2 KB",
     "gzip": true
   }
 ]

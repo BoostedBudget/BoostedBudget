@@ -1033,6 +1033,8 @@ components:
           type: string
         period:
           type: string
+        series_id:
+          type: string
         start_date:
           format: date-time
           type: string
@@ -1055,6 +1057,7 @@ components:
         - income_amount
         - income_sources
         - expected_income
+        - series_id
       type: object
     BudgetCategory:
       additionalProperties: false
@@ -1069,6 +1072,8 @@ components:
         allocated_amount:
           format: double
           type: number
+        auto_created:
+          type: boolean
         budget_id:
           type: string
         category_kind:
@@ -1084,6 +1089,8 @@ components:
           type: string
         id:
           type: string
+        managed_by_goal_id:
+          type: string
         match_logic:
           type: string
         pfc_detailed:
@@ -1093,6 +1100,10 @@ components:
         pfc_primary:
           type: string
         pfc_primary_display:
+          type: string
+        savings_goal_id:
+          type: string
+        savings_goal_name:
           type: string
         spent_amount:
           format: double
@@ -1110,6 +1121,7 @@ components:
         - id
         - budget_id
         - category_kind
+        - auto_created
         - allocated_amount
         - spent_amount
         - created_at
@@ -1992,6 +2004,8 @@ components:
           type: string
         pfc_primary:
           type: string
+        savings_goal_id:
+          type: string
         tags:
           items:
             type: string
@@ -2031,6 +2045,8 @@ components:
         expected_income:
           format: double
           type: number
+        from_budget_id:
+          type: string
         income_amount:
           format: double
           type: number
@@ -2187,6 +2203,9 @@ components:
           type: string
         account_id:
           type: string
+        account_percentage:
+          format: double
+          type: number
         currency_code:
           type: string
         current_amount:
@@ -2198,6 +2217,8 @@ components:
         description:
           type: string
         name:
+          type: string
+        progress_basis:
           type: string
         target_amount:
           format: double
@@ -3397,6 +3418,29 @@ components:
         - expiration
         - request_id
       type: object
+    LogContributionRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/LogContributionRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        notes:
+          type: string
+        occurred_on:
+          type: string
+        transaction_id:
+          type: string
+      required:
+        - amount
+        - occurred_on
+      type: object
     MCPRecipe:
       additionalProperties: false
       properties:
@@ -4575,6 +4619,12 @@ components:
           $ref: "#/components/schemas/Account"
         account_id:
           type: string
+        account_percentage:
+          format: double
+          type: number
+        balance_as_of:
+          format: date-time
+          type: string
         completed_at:
           format: date-time
           type: string
@@ -4595,7 +4645,12 @@ components:
           type: string
         is_completed:
           type: boolean
+        last_calculated_at:
+          format: date-time
+          type: string
         name:
+          type: string
+        progress_basis:
           type: string
         target_amount:
           format: double
@@ -4618,6 +4673,107 @@ components:
         - is_completed
         - created_at
         - updated_at
+        - progress_basis
+      type: object
+    SavingsGoalContribution:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsGoalContribution.json
+          format: uri
+          readOnly: true
+          type: string
+        amount:
+          format: double
+          type: number
+        confirmed_by_user:
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        managed_by_reconciliation:
+          type: boolean
+        occurred_on:
+          type: string
+        savings_goal_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        transaction_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - savings_goal_id
+        - amount
+        - source
+        - status
+        - managed_by_reconciliation
+        - confirmed_by_user
+        - occurred_on
+        - created_at
+        - updated_at
+      type: object
+    SavingsGoalProgressItem:
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+        account_percentage:
+          format: double
+          type: number
+        balance_as_of:
+          format: date-time
+          type: string
+        completed_at:
+          format: date-time
+          type: string
+        computed_from:
+          type: string
+        confirmed_contributions_total:
+          format: double
+          type: number
+        current_amount:
+          format: double
+          type: number
+        deadline:
+          format: date-time
+          type: string
+        freshness:
+          type: string
+        goal_id:
+          type: string
+        goal_name:
+          type: string
+        linked_balance:
+          format: double
+          type: number
+        percent_complete:
+          format: double
+          type: number
+        progress_basis:
+          type: string
+        target_amount:
+          format: double
+          type: number
+      required:
+        - goal_id
+        - goal_name
+        - current_amount
+        - target_amount
+        - percent_complete
+        - progress_basis
+        - computed_from
+        - confirmed_contributions_total
+        - freshness
       type: object
     SavingsImpactAggregateBody:
       additionalProperties: false
@@ -4652,6 +4808,45 @@ components:
         - total_amount
         - user_count
         - completed_count
+      type: object
+    SavingsProgressSummary:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SavingsProgressSummary.json
+          format: uri
+          readOnly: true
+          type: string
+        completed_goal_count:
+          format: int64
+          type: integer
+        goal_count:
+          format: int64
+          type: integer
+        goals:
+          items:
+            $ref: "#/components/schemas/SavingsGoalProgressItem"
+          type:
+            - array
+            - "null"
+        overall_percent_complete:
+          format: double
+          type: number
+        total_saved:
+          format: double
+          type: number
+        total_target:
+          format: double
+          type: number
+      required:
+        - goals
+        - total_saved
+        - total_target
+        - overall_percent_complete
+        - goal_count
+        - completed_goal_count
       type: object
     SavingsRateResponse:
       additionalProperties: false
@@ -5871,6 +6066,9 @@ components:
           type: string
         account_id:
           type: string
+        account_percentage:
+          format: double
+          type: number
         current_amount:
           format: double
           type: number
@@ -5880,6 +6078,8 @@ components:
         description:
           type: string
         name:
+          type: string
+        progress_basis:
           type: string
         target_amount:
           format: double
@@ -10827,6 +11027,223 @@ paths:
       summary: Get active savings goals
       tags:
         - Savings Goals
+  /api/v1/savings-goals/progress-summary:
+    get:
+      description: "Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11)."
+      operationId: getSavingsProgressSummary
+      parameters:
+        - description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+          in: header
+          name: X-MCP-Grant-Id
+          schema:
+            description: OAuth grant ID forwarded by the MCP Worker from the verified auth context
+            type: string
+        - description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+          in: header
+          name: X-MCP-Worker-Secret
+          schema:
+            description: Worker-only shared secret; constant-time validated to prove the request came from the MCP Worker, not an arbitrary client
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsProgressSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get savings progress summary
+      tags:
+        - Savings Goals
+        - Analytics
+  /api/v1/savings-goals/{goalID}/contributions:
+    get:
+      description: Returns all confirmed and proposed contributions for a savings goal, newest first.
+      operationId: listSavingsGoalContributions
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/SavingsGoalContribution"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List savings goal contributions
+      tags:
+        - Savings Goals
+        - Contributions
+    post:
+      description: Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.
+      operationId: logSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogContributionRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Log a savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}:
+    delete:
+      description: Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.
+      operationId: deleteSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Delete a savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}/confirm:
+    post:
+      description: Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under a transaction-level lock before committing (Codex C2).
+      operationId: confirmSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Confirm a proposed savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
+  /api/v1/savings-goals/{goalID}/contributions/{id}/reject:
+    post:
+      description: Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.
+      operationId: rejectSavingsGoalContribution
+      parameters:
+        - description: Savings goal ID
+          in: path
+          name: goalID
+          required: true
+          schema:
+            description: Savings goal ID
+            type: string
+        - description: Contribution ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Contribution ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavingsGoalContribution"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Reject a proposed savings goal contribution
+      tags:
+        - Savings Goals
+        - Contributions
   /api/v1/savings-goals/{id}:
     delete:
       description: Removes a savings goal from the user's collection.

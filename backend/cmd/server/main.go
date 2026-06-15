@@ -418,6 +418,26 @@ func main() {
 		budgetService := services.NewBudgetService(budgetRepo, customCategoryRepo, transactionRepo, budgetLogger)
 		savingsGoalService := services.NewSavingsGoalService(savingsGoalRepo, accountRepo, budgetLogger)
 
+		// Issue #1300: Savings contribution repo + progress service.
+		// Created here so budget sync and goal services can share a single instance.
+		savingsContribRepo := repository.NewSavingsContributionRepository(db)
+		savingsProgressService := services.NewSavingsProgressService(savingsGoalRepo, savingsContribRepo, accountRepo, budgetLogger)
+
+		// Issue #1300: Cross-wire budget ↔ savings-goal services for carry-forward / auto-create.
+		budgetService.SetGoalRepo(savingsGoalRepo)
+		// Issue #1300: Wire IDOR ownership checker so AddCategory validates savings_goal_id
+		// belongs to the authenticated user before persisting (Codex C1).
+		budgetService.SetGoalOwnershipChecker(savingsGoalRepo)
+		savingsGoalService.SetBudgetRepo(budgetRepo)
+		// Issue #1300 M13: Wire progress recomputer so CreateGoal initialises
+		// current_amount per progress_basis immediately after goal creation.
+		savingsGoalService.SetProgressService(savingsProgressService)
+		// Issue #1300 M14: Wire contribution repo + analytics for basis-switch semantics.
+		savingsGoalService.SetBasisSwitchContribRepo(savingsContribRepo)
+		if phClient != nil {
+			savingsGoalService.SetAnalytics(phClient)
+		}
+
 		// Issue #138: Investment read services — DB-only, no Plaid dependency.
 		// Initialized here (outside the Plaid block) so investment route handlers
 		// always have a non-nil service even when Plaid credentials are absent.
@@ -455,6 +475,8 @@ func main() {
 		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
 		// SetEventProcessor must be called after boostExecutionService is fully initialized.
 		budgetSyncService.SetEventProcessor(boostExecutionService)
+		// Issue #1300: Wire savings contribution ledger for savings-kind category spent amounts.
+		budgetSyncService.SetSavingsSpentCalc(savingsContribRepo)
 
 		// Issue #37: Boost Scheduler Manager with providers
 		boostSchedulerManager = workers.NewBoostSchedulerManager(appLogger)
@@ -785,8 +807,38 @@ func main() {
 				if phClient != nil {
 					transferCorrelationService.SetAnalytics(phClient)
 				}
+				// Issue #1300 M19: Wire D6 source-c boost-match → confirmed contribution
+				// savingsGoalRepo.GetActiveByUserID satisfies CorrelationGoalResolver
+				// savingsContribRepo.UpsertFromTransaction satisfies CorrelationConfirmedContributionUpserter
+				transferCorrelationService.SetBoostMatchContributionServices(
+					savingsGoalRepo,    // CorrelationGoalResolver: GetActiveByUserID
+					savingsContribRepo, // CorrelationConfirmedContributionUpserter: UpsertFromTransaction
+				)
+				appLogger.Info("Boost-match contribution services wired into transfer correlation (M19 D6 source-c)")
 				transactionSyncService.SetTransferCorrelationService(transferCorrelationService)
 				appLogger.Info("Transfer correlation service wired into transaction sync")
+
+				// Issue #1300 M12: Wire savings progress reconciliation into transaction sync
+				// ordering: DeleteManaged (for removed txns) → RecomputeUser → BackfillManagedCategories
+				// → RecalculateBudgetAmounts (which reads savings "spent" from the ledger)
+				transactionSyncService.SetSavingsProgressServices(
+					savingsContribRepo,      // SyncContributionCleaner: DeleteManagedForTransaction
+					savingsProgressService,  // SyncGoalProgressUpdater: RecomputeUser
+					budgetService,           // SyncManagedCategoryBackfiller: BackfillManagedCategories
+				)
+				appLogger.Info("Savings progress services wired into transaction sync")
+
+				// Issue #1300 M18: Wire D6 source-b proposed-contribution detection into sync
+				// ordering: detectAndUpsertProposedContributions → RecomputeUser
+				// savingsGoalRepo implements SyncContributionsBasisGoalReader (GetActiveByUserID)
+				// savingsContribRepo implements SyncProposedContributionUpserter (UpsertProposedFromTransaction)
+				// transactionRepo implements GetInflowTransactionsForAccount (37-day window)
+				transactionSyncService.SetSavingsDetectionServices(
+					savingsGoalRepo,    // SyncContributionsBasisGoalReader: GetActiveByUserID
+					savingsContribRepo, // SyncProposedContributionUpserter: UpsertProposedFromTransaction
+					transactionRepo,    // TransactionRepository: GetInflowTransactionsForAccount
+				)
+				appLogger.Info("Savings detection services wired into transaction sync (M18 D6 source-b)")
 
 				// Initialize Item Error Service for ITEM webhook processing
 				// Issue #257: Item Error Handler - Process ITEM Webhooks and User Notifications
@@ -1423,16 +1475,18 @@ func main() {
 
 		// Register Huma budget routes (Issue #559: Huma migration)
 		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService, operations.BudgetHandlerDeps{
-			IdempotencyRepo: humaIdempotencyRepo,
-			DB:              db,
-			MCPAuditRepo:    humaMCPAuditRepo,
-			MCPWorkerSecret: cfg.MCPWorkerSecret,
+			IdempotencyRepo:      humaIdempotencyRepo,
+			DB:                   db,
+			MCPAuditRepo:         humaMCPAuditRepo,
+			MCPWorkerSecret:      cfg.MCPWorkerSecret,
+			GoalOwnershipChecker: savingsGoalRepo, // R5-1: ensures MCP CreateBudget validates savings_goal_id ownership
 		})
 		operations.RegisterBudgetRoutes(humaAPI, humaBudgetHandler)
 		appLogger.Info("Huma budget routes registered")
 
 		// Register Huma savings goal routes (Issue #559: Huma migration)
 		humaSavingsGoalHandler := operations.NewSavingsGoalHandler(savingsGoalService, operations.SavingsGoalHandlerDeps{
+			ProgressService: savingsProgressService,
 			IdempotencyRepo: humaIdempotencyRepo,
 			DB:              db,
 			MCPAuditRepo:    humaMCPAuditRepo,
@@ -1441,6 +1495,15 @@ func main() {
 		})
 		operations.RegisterSavingsGoalRoutes(humaAPI, humaSavingsGoalHandler)
 		appLogger.Info("Huma savings goal routes registered")
+
+		// Issue #1300 M20: Register contribution API routes (D6 source-a manual log + confirm + delete)
+		humaContributionHandler := operations.NewContributionHandler(
+			savingsContribRepo,     // SavingsContributionRepository
+			savingsProgressService, // ContributionProgressRecomputer: RecomputeGoalByID (R3-2)
+			savingsGoalRepo,        // ContributionGoalReader: GetByIDForUser (R3-3 C8 basis gate)
+		)
+		operations.RegisterContributionRoutes(humaAPI, humaContributionHandler)
+		appLogger.Info("Huma savings goal contribution routes registered (M20 D6 source-a)")
 
 		// Register Huma boost routes (Issue #37: Boost Scheduler)
 		humaBoostHandler := operations.NewBoostHandler(boostService, boostSchedulerManager)

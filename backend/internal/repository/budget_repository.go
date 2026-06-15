@@ -58,6 +58,29 @@ type BudgetRepository interface {
 	// Missing users are not included in the map; callers should default to "UTC" for absent keys.
 	// Used by the period-close scanner (Issue #972) to avoid N+1 timezone lookups.
 	GetTimezonesByUserIDs(ctx context.Context, userIDs []string) (map[string]string, error)
+
+	// Savings goal category detach tombstone operations (Issue #1300, G5 — migration 000098).
+	// Since migration 000098 the tombstone is keyed by (series_id, savings_goal_id) so a
+	// user's detach intent persists across all budget periods that share the same series.
+
+	// IsGoalDetachedForSeries returns true when a tombstone exists for (seriesID, goalID).
+	IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error)
+	// InsertGoalDetach writes a tombstone keyed on (seriesID, goalID). budgetID is stored
+	// as a nullable audit-trail field indicating which period triggered the detach.
+	InsertGoalDetach(ctx context.Context, seriesID, budgetID, goalID string) error
+	// DeleteGoalDetach clears the tombstone for (seriesID, goalID) (user re-linked the goal).
+	DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error
+	// GetDetachedGoalIDsForSeries returns all savings_goal_ids tombstoned for a series.
+	GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error)
+
+	// CreateWithCategories atomically creates a budget and its user-provided categories in a
+	// single transaction. If any category INSERT fails the budget INSERT is rolled back too —
+	// no orphaned budget rows are left behind (R5-3). Best-effort carry-forward categories
+	// are intentionally outside this call (they use CreateCategory individually).
+	//
+	// When r.db is already a pgx.Tx (e.g. the MCP transactional path), db.Begin() creates a
+	// savepoint so the call composes safely with an outer transaction.
+	CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.
@@ -111,12 +134,17 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		budget.ExpectedIncome = budget.Amount
 	}
 
+	// series_id defaults to own id for standalone budgets (Issue #1300 G5).
+	if budget.SeriesID == "" {
+		budget.SeriesID = budget.ID
+	}
+
 	query := `
 		INSERT INTO budgets (
 			id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			income_amount, income_sources, expected_income, series_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -135,6 +163,7 @@ func (r *budgetRepository) Create(ctx context.Context, budget *domain.Budget) er
 		budget.IncomeAmount,
 		incomeSourcesJSON,
 		budget.ExpectedIncome,
+		budget.SeriesID,
 	)
 
 	if err != nil {
@@ -153,7 +182,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE id = $1
 	`
@@ -176,6 +205,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
 		&budget.ExpectedIncome,
+		&budget.SeriesID,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -207,7 +237,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -239,6 +269,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -266,7 +297,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1 AND is_active = true
 		ORDER BY created_at DESC
@@ -298,6 +329,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -325,7 +357,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE user_id = $1 AND name = $2
 	`
@@ -348,6 +380,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
 		&budget.ExpectedIncome,
+		&budget.SeriesID,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -486,8 +519,9 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		INSERT INTO budget_categories (
 			id, budget_id, category_kind, pfc_primary, pfc_detailed, custom_category_id,
 			allocated_amount, spent_amount, created_at, updated_at,
-			tags, match_logic
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			tags, match_logic,
+			savings_goal_id, auto_created, managed_by_goal_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -503,6 +537,9 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		category.UpdatedAt,
 		tagsJSON,
 		matchLogic,
+		category.SavingsGoalID,   // $13: nullable FK to savings_goals (Issue #1300)
+		category.AutoCreated,      // $14: bool — auto-created by savings goal linkage
+		category.ManagedByGoalID,  // $15: nullable FK — which goal manages this category
 	)
 
 	return err
@@ -510,15 +547,19 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 
 // GetCategoriesByBudgetID retrieves all categories for a budget.
 func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
-	// Issue #1203: join the referenced custom category to surface its parent linkage
-	// (parent_id / parent_pfc_primary) so budget totals can exclude sub-allocations.
+	// Issue #1203: join custom_categories for parent linkage (sub-allocation detection).
+	// Issue #1300: join savings_goals for display name so the API returns savings_goal_name
+	// and the frontend never shows a raw UUID as the category label.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary
+			cc.parent_id, cc.parent_pfc_primary,
+			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
+			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
 		WHERE bc.budget_id = $1
 		ORDER BY bc.created_at ASC
 	`
@@ -549,6 +590,10 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.SavingsGoalID,
+			&bc.AutoCreated,
+			&bc.ManagedByGoalID,
+			&bc.SavingsGoalName, // populated from LEFT JOIN savings_goals (Issue #1300)
 		)
 		if err != nil {
 			return nil, err
@@ -577,13 +622,17 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 		return map[string][]domain.BudgetCategory{}, nil
 	}
 
+	// Issue #1300: join savings_goals for display name (same as GetCategoriesByBudgetID).
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary
+			cc.parent_id, cc.parent_pfc_primary,
+			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
+			sg.name AS savings_goal_name
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id
 		WHERE bc.budget_id = ANY($1)
 		ORDER BY bc.budget_id ASC, bc.created_at ASC
 	`
@@ -614,6 +663,10 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.SavingsGoalID,
+			&bc.AutoCreated,
+			&bc.ManagedByGoalID,
+			&bc.SavingsGoalName, // populated from LEFT JOIN savings_goals (Issue #1300)
 		)
 		if err != nil {
 			return nil, err
@@ -940,7 +993,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income
+			income_amount, income_sources, expected_income, series_id
 		FROM budgets
 		WHERE is_active = true
 		ORDER BY id ASC
@@ -973,6 +1026,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
+			&budget.SeriesID,
 		)
 		if err != nil {
 			return nil, err
@@ -1044,7 +1098,6 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 	`
 	var bc domain.BudgetCategory
 	var tagsJSON []byte
-	var matchLogicJSON []byte
 
 	err := r.db.QueryRow(ctx, query, categoryID, userID).Scan(
 		&bc.ID,
@@ -1058,7 +1111,7 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		&bc.CreatedAt,
 		&bc.UpdatedAt,
 		&tagsJSON,
-		&matchLogicJSON,
+		&bc.MatchLogic,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1067,4 +1120,99 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		return nil, err
 	}
 	return &bc, nil
+}
+
+// =============================================================================
+// Savings goal category detach tombstone operations (Issue #1300, G5 — migration 000098)
+// All methods now key on series_id so detach intent persists across budget periods.
+// =============================================================================
+
+// IsGoalDetachedForSeries returns true when a (series_id, savings_goal_id) tombstone exists.
+func (r *budgetRepository) IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM savings_goal_category_detach
+			WHERE series_id = $1 AND savings_goal_id = $2
+		)
+	`
+	var exists bool
+	if err := r.db.QueryRow(ctx, query, seriesID, goalID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// InsertGoalDetach writes a tombstone keyed on (series_id, savings_goal_id).
+// budgetID is stored as a nullable audit-trail column.
+// Idempotent: ON CONFLICT (series_id, savings_goal_id) DO NOTHING.
+func (r *budgetRepository) InsertGoalDetach(ctx context.Context, seriesID, budgetID, goalID string) error {
+	query := `
+		INSERT INTO savings_goal_category_detach (series_id, budget_id, savings_goal_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (series_id, savings_goal_id) DO NOTHING
+	`
+	_, err := r.db.Exec(ctx, query, seriesID, budgetID, goalID)
+	return err
+}
+
+// DeleteGoalDetach clears the tombstone for (series_id, savings_goal_id).
+func (r *budgetRepository) DeleteGoalDetach(ctx context.Context, seriesID, goalID string) error {
+	query := `
+		DELETE FROM savings_goal_category_detach
+		WHERE series_id = $1 AND savings_goal_id = $2
+	`
+	_, err := r.db.Exec(ctx, query, seriesID, goalID)
+	return err
+}
+
+// GetDetachedGoalIDsForSeries returns all savings_goal_ids tombstoned for a given series.
+func (r *budgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seriesID string) ([]string, error) {
+	query := `
+		SELECT savings_goal_id::text
+		FROM savings_goal_category_detach
+		WHERE series_id = $1
+	`
+	rows, err := r.db.Query(ctx, query, seriesID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goalIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		goalIDs = append(goalIDs, id)
+	}
+	return goalIDs, rows.Err()
+}
+
+// CreateWithCategories atomically inserts a budget and all its user-provided categories.
+// If any category INSERT fails the budget INSERT is rolled back; no orphaned budget rows
+// are left behind (R5-3 / Codex C1 / Issue #1300).
+//
+// When r.db is already a pgx.Tx (e.g. the MCP transactional path in budget.go), db.Begin()
+// opens a savepoint so this call composes safely with an outer transaction.
+func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	txRepo := &budgetRepository{db: tx}
+
+	if err := txRepo.Create(ctx, budget); err != nil {
+		return err
+	}
+
+	for _, cat := range categories {
+		if err := txRepo.CreateCategory(ctx, cat); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }

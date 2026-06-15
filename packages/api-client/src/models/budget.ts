@@ -51,6 +51,7 @@ export interface Budget {
   is_active: boolean;
   name: string;
   period: string;
+  series_id: string;
   start_date: string;
   updated_at: string;
   user_id: string;

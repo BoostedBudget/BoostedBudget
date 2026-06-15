@@ -1,6 +1,11 @@
 // Issue #1267: Boosts page — unified control center for transfer suggestions + rules management
-import { useState, useEffect, useRef } from 'react'
+// Issue #1300: "Create Boost" button always visible above tabs for discoverability
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Plus } from 'lucide-react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import {
@@ -34,9 +39,15 @@ function getInitialTab(): BoostsTab {
 
 export function BoostsPage() {
   const trackEvent = useTrackEvent()
+  const navigate = useNavigate()
   const pageViewFired = useRef(false)
   const [activeTab, setActiveTab] = useState<BoostsTab>(getInitialTab)
   const [historyOffset, setHistoryOffset] = useState(0)
+
+  const handleCreateBoost = useCallback(() => {
+    trackEvent(ANALYTICS_EVENTS.BOOSTS_CREATE_CLICKED, { source: 'page_header' })
+    navigate('/boosts/new')
+  }, [navigate, trackEvent])
 
   useEffect(() => {
     if (!pageViewFired.current) {
@@ -82,7 +93,16 @@ export function BoostsPage() {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold text-foreground">Boosts</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold text-foreground">Boosts</h1>
+        {/* Issue #1300: always-visible Create Boost button for discoverability */}
+        <ReadOnlyGuard>
+          <Button onClick={handleCreateBoost} aria-label="Create new boost">
+            <Plus aria-hidden="true" />
+            Create Boost
+          </Button>
+        </ReadOnlyGuard>
+      </div>
 
       <SavingsSummaryHeader
         totalMoved={summary.totalMoved}

@@ -14,7 +14,7 @@ export const TAB_LABELS: Record<BoostsTab, string> = {
   active: 'Active Recommendations',
   awaiting: 'Awaiting Match',
   history: 'History',
-  boosts: 'Boosts',
+  boosts: 'Manage Boosts', // Issue #1300: renamed for discoverability
 }
 
 export function isBoostsTab(value: string | null): value is BoostsTab {

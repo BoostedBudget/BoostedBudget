@@ -180,6 +180,15 @@ type TransactionRepository interface {
 	// Issue #972: Savings transfer automation.
 	GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error)
 
+	// GetInflowTransactionsForAccount returns posted inflow transactions
+	// (amount < 0 under PFCv2) for a specific account within [start, end].
+	// Chain-aware: expands to include transactions from all accounts in the re-link
+	// chain via user_account_id (Issue #1109 pattern).
+	// Returns lightweight projections with ABS(amount) as Magnitude — always positive.
+	// Used by the savings progress service to detect and propose contributions
+	// (Issue #1300 plan section 1D).
+	GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error)
+
 	// GetByUserIDKeysetUnified returns a merged feed of banking transactions and investment
 	// transactions using a 3-part keyset (sort_date DESC, source ASC, id ASC).
 	// Issue #138: unified activity feed with cursor-correct UNION ALL.
@@ -2088,6 +2097,51 @@ func effDateStr(tx domain.Transaction) string {
 		return tx.AuthorizedDate.Format(time.DateOnly)
 	}
 	return tx.Date.Format(time.DateOnly)
+}
+
+// GetInflowTransactionsForAccount returns posted inflow transactions (amount < 0 under
+// PFCv2) for a specific account within [start, end].  Chain-aware via user_account_id
+// (Issue #1109). Returns lightweight projections; Magnitude = ABS(amount) (always
+// positive — #1303 sign-inversion guard, Issue #1300 plan section 1D).
+func (r *transactionRepository) GetInflowTransactionsForAccount(
+	ctx context.Context,
+	userID, accountID string,
+	start, end time.Time,
+) ([]*domain.SavingsInflowTransaction, error) {
+	query := `
+		SELECT t.id::text, ABS(t.amount) AS magnitude, t.date::text
+		FROM transactions t
+		WHERE t.user_id = $1
+		  AND (
+		      t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $2 AND user_account_id IS NOT NULL)
+		      OR (t.account_id = $2 AND t.user_account_id IS NULL)
+		  )
+		  AND t.amount < 0
+		  AND t.pending = false
+		  AND t.date >= $3::date
+		  AND t.date <= $4::date
+		ORDER BY t.date ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, accountID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query inflow transactions for account: %w", err)
+	}
+	defer rows.Close()
+
+	var inflows []*domain.SavingsInflowTransaction
+	for rows.Next() {
+		inflow := &domain.SavingsInflowTransaction{}
+		if err := rows.Scan(&inflow.ID, &inflow.Magnitude, &inflow.Date); err != nil {
+			return nil, fmt.Errorf("failed to scan inflow transaction: %w", err)
+		}
+		inflows = append(inflows, inflow)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating inflow transactions: %w", err)
+	}
+
+	return inflows, nil
 }
 
 // GetRecentInflowsByUserID returns posted (non-pending) inflow transactions

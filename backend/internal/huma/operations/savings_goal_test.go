@@ -10,6 +10,8 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +64,39 @@ func (m *mockSavingsGoalService) UpdateGoal(ctx context.Context, userID, goalID 
 
 func (m *mockSavingsGoalService) DeleteGoal(ctx context.Context, userID, goalID string) error {
 	return m.deleteErr
+}
+
+func (m *mockSavingsGoalService) SetBudgetRepo(_ services.GoalAutoCreateBudgetRepo) {}
+
+func (m *mockSavingsGoalService) SetProgressService(_ services.GoalProgressRecomputer) {}
+
+func (m *mockSavingsGoalService) SetBasisSwitchContribRepo(_ services.GoalBasisSwitchContribRepo) {}
+
+func (m *mockSavingsGoalService) SetAnalytics(_ phclient.Analytics) {}
+
+// mockSavingsProgressService is a mock implementation of services.SavingsProgressService.
+type mockSavingsProgressService struct {
+	summary    *domain.SavingsProgressSummary
+	summaryErr error
+}
+
+func (m *mockSavingsProgressService) RecomputeGoal(_ context.Context, _ *domain.SavingsGoal) error {
+	return nil
+}
+
+func (m *mockSavingsProgressService) RecomputeGoalByID(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockSavingsProgressService) RecomputeUser(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockSavingsProgressService) GetProgressSummary(_ context.Context, _ string) (*domain.SavingsProgressSummary, error) {
+	if m.summaryErr != nil {
+		return nil, m.summaryErr
+	}
+	return m.summary, nil
 }
 
 // Helper function to create test savings goal
@@ -347,4 +382,172 @@ func TestSavingsGoalResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+// TestGetProgressSummary_Success tests the GetProgressSummary handler.
+func TestGetProgressSummary_Success(t *testing.T) {
+	pct := 46.67
+	summary := &domain.SavingsProgressSummary{
+		Goals: []domain.SavingsGoalProgressItem{
+			{
+				GoalID:          "goal-1",
+				GoalName:        "Vacation",
+				CurrentAmount:   700,
+				TargetAmount:    1500,
+				PercentComplete: pct,
+				ProgressBasis:   domain.ProgressBasisContributions,
+				ComputedFrom:    domain.ComputedFromConfirmedContribs,
+				Freshness:       domain.FreshnessNotApplicable,
+			},
+		},
+		TotalSaved:             700,
+		TotalTarget:            1500,
+		OverallPercentComplete: pct,
+		GoalCount:              1,
+		CompletedGoalCount:     0,
+	}
+
+	mockGoalSvc := &mockSavingsGoalService{}
+	mockProgSvc := &mockSavingsProgressService{summary: summary}
+
+	handler := NewSavingsGoalHandler(mockGoalSvc, SavingsGoalHandlerDeps{
+		ProgressService: mockProgSvc,
+	})
+
+	input := &GetSavingsProgressSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetProgressSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.Equal(t, 1, output.Body.GoalCount)
+	assert.Equal(t, 700.0, output.Body.TotalSaved)
+	assert.Equal(t, 1500.0, output.Body.TotalTarget)
+	assert.Equal(t, pct, output.Body.OverallPercentComplete)
+	assert.Len(t, output.Body.Goals, 1)
+	assert.Equal(t, domain.ComputedFromConfirmedContribs, output.Body.Goals[0].ComputedFrom)
+	assert.Equal(t, domain.FreshnessNotApplicable, output.Body.Goals[0].Freshness)
+}
+
+// TestGetProgressSummary_NoService returns 503 when progressService is nil.
+func TestGetProgressSummary_NoService(t *testing.T) {
+	mockGoalSvc := &mockSavingsGoalService{}
+	// No ProgressService set
+	handler := NewSavingsGoalHandler(mockGoalSvc)
+
+	input := &GetSavingsProgressSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetProgressSummary(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestGetProgressSummary_ServiceError propagates service errors.
+func TestGetProgressSummary_ServiceError(t *testing.T) {
+	mockGoalSvc := &mockSavingsGoalService{}
+	mockProgSvc := &mockSavingsProgressService{summaryErr: domain.ErrSavingsGoalNotFound}
+
+	handler := NewSavingsGoalHandler(mockGoalSvc, SavingsGoalHandlerDeps{
+		ProgressService: mockProgSvc,
+	})
+
+	input := &GetSavingsProgressSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+
+	output, err := handler.GetProgressSummary(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// =============================================================================
+// Issue #1300 RG6: huma-ops progress_basis pass-through assertion (M23)
+// =============================================================================
+
+// capturingSavingsGoalService wraps mockSavingsGoalService and records the last request
+// forwarded to CreateGoal, so tests can assert on what the handler passed through.
+type capturingSavingsGoalService struct {
+	mockSavingsGoalService
+	lastCreateReq *domain.CreateSavingsGoalRequest
+	lastUpdateReq *domain.UpdateSavingsGoalRequest
+}
+
+func (c *capturingSavingsGoalService) CreateGoal(_ context.Context, _ string, req *domain.CreateSavingsGoalRequest) (*domain.SavingsGoal, error) {
+	c.lastCreateReq = req
+	return c.goal, c.createErr
+}
+
+func (c *capturingSavingsGoalService) UpdateGoal(_ context.Context, _, _ string, req *domain.UpdateSavingsGoalRequest) (*domain.SavingsGoal, error) {
+	c.lastUpdateReq = req
+	return c.goal, c.updateErr
+}
+
+// TestCreateSavingsGoal_ProgressBasisPersistsToService verifies the huma handler
+// correctly forwards progress_basis from the request body to the service layer.
+func TestCreateSavingsGoal_ProgressBasisPersistsToService(t *testing.T) {
+	svc := &capturingSavingsGoalService{
+		mockSavingsGoalService: mockSavingsGoalService{goal: createTestSavingsGoal()},
+	}
+	handler := NewSavingsGoalHandler(svc)
+
+	input := &CreateSavingsGoalInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.CreateSavingsGoalRequest{
+		Name:          "Savings Goal",
+		TargetAmount:  1000.00,
+		CurrencyCode:  "USD",
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+
+	output, err := handler.CreateGoal(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, svc.lastCreateReq, "handler must forward request to service")
+	assert.Equal(t, domain.ProgressBasisContributions, svc.lastCreateReq.ProgressBasis,
+		"handler must pass progress_basis from request body through to service")
+}
+
+// TestUpdateSavingsGoal_ProgressBasisPersistsToService verifies the huma handler
+// correctly forwards progress_basis from a PATCH request body to the service layer.
+func TestUpdateSavingsGoal_ProgressBasisPersistsToService(t *testing.T) {
+	svc := &capturingSavingsGoalService{
+		mockSavingsGoalService: mockSavingsGoalService{goal: createTestSavingsGoal()},
+	}
+	handler := NewSavingsGoalHandler(svc)
+
+	basis := domain.ProgressBasisBalance
+	input := &UpdateSavingsGoalInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "goal-123",
+	}
+	input.Body = domain.UpdateSavingsGoalRequest{
+		ProgressBasis: &basis,
+	}
+
+	output, err := handler.UpdateGoal(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, svc.lastUpdateReq, "handler must forward update request to service")
+	assert.Equal(t, &basis, svc.lastUpdateReq.ProgressBasis,
+		"handler must pass progress_basis from PATCH body through to service")
+}
+
+// TestProgressSummaryRouteRegistration verifies the route is registered and requires auth.
+func TestProgressSummaryRouteRegistration(t *testing.T) {
+	_, api := humatest.New(t)
+	handler := NewSavingsGoalHandler(&mockSavingsGoalService{})
+	RegisterSavingsGoalRoutes(api, handler)
+
+	resp := api.Get("/api/v1/savings-goals/progress-summary")
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 }
