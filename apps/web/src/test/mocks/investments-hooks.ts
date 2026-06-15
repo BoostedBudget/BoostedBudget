@@ -1,11 +1,12 @@
 // Issue #1296: Wrapper hook mocks for investment component tests.
-// These mock the WRAPPER hooks (useInfiniteInvestmentTransactions)
-// for component tests that need to test in isolation from the actual hook implementation.
+// Preloaded globally via bunfig.toml (after investments-api.ts).
 //
-// NOTE: Hook implementation tests (e.g., useInfiniteInvestmentTransactions.test.tsx) use
-// API-level mocks from investments-api.ts instead, so they test real hook behavior.
-// This file is NOT in bunfig.toml preload — import it directly in component test files
-// that need wrapper-level mocks.
+// Mocks the WRAPPER hook (useInfiniteInvestmentTransactions) process-globally so that
+// component tests (InvestmentTransactionsTable, PortfolioPage) use the synchronous mock
+// without needing real React Query — preventing waitFor timeout races in the full suite.
+//
+// Hook implementation tests (useInfiniteInvestmentTransactions.test.tsx) use API-level
+// mocks from investments-api.ts and run via test-real-implementations.sh (real-impl pass).
 
 import { mock } from 'bun:test'
 import { mockFetchNextInvestmentPage, mockUseInfiniteInvestmentTransactions } from './investments-api'

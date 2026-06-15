@@ -5,6 +5,7 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { useGetPortfolioSummary } from '@boostedbudget/api-client/endpoints/investments/investments'
 import { PlaidLinkButton } from '@/features/accounts/PlaidLinkButton'
+import { useActiveAccounts } from '@/features/accounts/hooks/useActiveAccounts'
 import { NetWorthSection } from '@/features/net-worth/components/NetWorthSection'
 import { PortfolioSummaryCard } from './components/PortfolioSummaryCard'
 import { PortfolioTimeRange } from './components/PortfolioTimeRange'
@@ -28,6 +29,8 @@ export function PortfolioPage() {
   const { data: summaryData, isLoading: summaryLoading, isError: summaryError } =
     useGetPortfolioSummary()
 
+  const { accounts } = useActiveAccounts()
+
   if (summaryLoading) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -49,7 +52,10 @@ export function PortfolioPage() {
   }
 
   const holdingsCount = summaryData?.holdings_count ?? 0
-  if (holdingsCount === 0) {
+  // Show empty state only when accounts have loaded (not undefined) AND none are investment type.
+  // While accounts === undefined (still loading), fall through to sections to avoid a flash of the CTA.
+  const hasInvestmentAccount = accounts?.some((a) => a.type === 'investment') ?? false
+  if (holdingsCount === 0 && accounts !== undefined && !hasInvestmentAccount) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <EmptyState

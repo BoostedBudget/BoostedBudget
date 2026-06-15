@@ -60,7 +60,6 @@ describe('AllocationDonutChart', () => {
   })
 
   it('shows no-data state when buckets is null or undefined', () => {
-    // Test both null and undefined — both falsy cases render no-data state.
     ;[null, undefined].forEach((buckets) => {
       mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
         data: buckets === undefined ? undefined : { total_value: 0, buckets: buckets as null },
@@ -195,8 +194,146 @@ describe('AllocationDonutChart', () => {
     expect(types[0]).toBe('pie')
   })
 
-  // Criterion 7: "shows % AND value" — the legend formatter must produce text that includes
-  // both a currency value ($) and a percentage (%) so the legend is self-contained.
+  // R6-3: Aggregate same-normalized-name buckets — duplicate labels must not collide.
+  it('merges two buckets normalizing to the same label into one slice with summed value+pct', () => {
+    // Two buckets both normalize to "Other" (unknown + empty security_type).
+    // Without aggregation the second would overwrite the first in sliceByName,
+    // causing the legend to show the wrong value for "Other".
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 10000,
+        buckets: [
+          { security_type: 'unknown', asset_class: '', total_value: 3000, percentage: 30, holding_count: 1 },
+          { security_type: '', asset_class: '', total_value: 2000, percentage: 20, holding_count: 2 },
+          { security_type: 'stock', asset_class: 'stock', total_value: 5000, percentage: 50, holding_count: 3 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string; value: number; pct: number }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    // The two "Other" buckets must be merged into one — only 2 slices total.
+    expect(data?.length).toBe(2)
+
+    const otherSlice = data?.find((d) => d.name === 'Other')
+    expect(otherSlice).toBeDefined()
+    expect(otherSlice?.value).toBe(5000) // 3000 + 2000
+    expect(otherSlice?.pct).toBeCloseTo(50, 1) // 30 + 20
+
+    const stockSlice = data?.find((d) => d.name === 'stock')
+    expect(stockSlice).toBeDefined()
+    expect(stockSlice?.value).toBe(5000)
+  })
+
+  // R6-3: Legend formatter must use the merged "Other" slice value, not the overwritten one.
+  it('legend formatter shows the merged (summed) value for a merged "Other" slice', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 5000,
+        buckets: [
+          { security_type: 'unknown', asset_class: '', total_value: 2000, percentage: 40, holding_count: 1 },
+          { security_type: '', asset_class: '', total_value: 3000, percentage: 60, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { legend?: { formatter?: unknown } }
+    }
+    const formatter = props.option?.legend?.formatter
+    expect(typeof formatter).toBe('function')
+    if (typeof formatter === 'function') {
+      const result = formatter('Other') as string
+      // Merged value is 5000 (2000+3000) — must NOT show 3000 (last-write-wins)
+      expect(result).toContain('$5,000')
+    }
+  })
+
+  // Codex R6 issue 2: zero-value buckets (e.g. fully-overdrawn cash floored to $0 by GREATEST)
+  // must not render a 0.1%-fabricated slice — show "No allocation data" instead.
+  it('shows no-data state when all buckets have zero total_value', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 0,
+        buckets: [
+          { security_type: 'cash', asset_class: 'cash', total_value: 0, percentage: 0, holding_count: 0 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+    expect(screen.getByText(/no allocation data/i)).toBeDefined()
+  })
+
+  // Codex R6 issue 3: reconcilePercentages must handle negative deficit (API pcts sum > 100).
+  it('displayed percentages sum to exactly 100.0 when API pcts slightly overshoot 100 (negative deficit)', () => {
+    // Two slices with pct=50.11: floors = [501, 501], sum=1002 > TARGET=1000 → deficit=-2.
+    // Without the fix: no adjustments → displayed 50.1+50.1=100.2. With fix: both reduced to 50.0.
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 20000,
+        buckets: [
+          { security_type: 'A', asset_class: 'A', total_value: 10000, percentage: 50.11, holding_count: 1 },
+          { security_type: 'B', asset_class: 'B', total_value: 10000, percentage: 50.11, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ pct: number }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    if (data) {
+      const displayedSum = data.reduce((sum, d) => sum + parseFloat(d.pct.toFixed(1)), 0)
+      expect(Math.abs(displayedSum - 100.0)).toBeLessThanOrEqual(0.05)
+    }
+  })
+
+  // R6-5: Largest-remainder rounding — sum of displayed percentages must be exactly 100.0.
+  it('displayed percentages (after .toFixed(1)) sum to exactly 100.0', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 30000,
+        buckets: [
+          { security_type: 'A', asset_class: 'A', total_value: 10000, percentage: 33.333333, holding_count: 1 },
+          { security_type: 'B', asset_class: 'B', total_value: 10000, percentage: 33.333333, holding_count: 1 },
+          { security_type: 'C', asset_class: 'C', total_value: 10000, percentage: 33.333333, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ pct: number }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    if (data) {
+      const displayedSum = data.reduce((sum, d) => sum + parseFloat(d.pct.toFixed(1)), 0)
+      expect(Math.abs(displayedSum - 100.0)).toBeLessThanOrEqual(0.05)
+    }
+  })
+
   it('legend formatter produces text with currency and percent', () => {
     const buckets = [
       { security_type: 'stock', asset_class: 'stock', total_value: 8000, percentage: 80, holding_count: 3 },

@@ -425,3 +425,93 @@ func TestAllocationBreakdown_GroupByAssetClass_Integration(t *testing.T) {
 	assert.True(t, hasInvestments, "must have 'investments' asset class bucket")
 	assert.True(t, hasCash, "must have 'cash' asset class bucket from depository")
 }
+
+// TestAllocationBreakdown_OverdrawnDepository_CashBucketIsZero_Integration proves that
+// an overdrawn depository account (negative current_balance) never produces a negative
+// cash bucket value. Both security-type/asset-class mode and group_by=account mode are
+// tested. Regression test for the GREATEST(balance, 0) SQL floor added in Issue #1296 R6-2.
+func TestAllocationBreakdown_OverdrawnDepository_CashBucketIsZero_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Minimal fixture: user + linked item + one overdrawn depository account (-500).
+	// No investment holdings — isolates the depository floor behavior.
+	userID := uuid.New()
+	linkedItemID := uuid.New()
+	depAcctID := uuid.New()
+	prefix := "alloc-overdrawn"
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+prefix+"-"+userID.String(), prefix+"-"+userID.String()+"@example.com")
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, linkedItemID, userID, prefix+"-item-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, current_balance)
+		VALUES ($1, $2, $3, $4, 'Overdrawn Checking', 'depository', 'active', -500)
+	`, depAcctID, linkedItemID, userID, prefix+"-dep-"+depAcctID.String())
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	t.Run("security_type mode", func(t *testing.T) {
+		opts := domain.AllocationOptions{Include: []string{"cash"}}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Cash bucket must be 0 (not -500): GREATEST(−500, 0) = 0.
+		var cashBucket *domain.AllocationItem
+		for i := range result.Buckets {
+			if result.Buckets[i].SecurityType == "cash" {
+				b := result.Buckets[i]
+				cashBucket = &b
+			}
+		}
+		if cashBucket != nil {
+			assert.InDelta(t, 0.0, cashBucket.TotalValue, 0.01,
+				"overdrawn depository must contribute 0 to cash bucket, not a negative value")
+			assert.GreaterOrEqual(t, cashBucket.TotalValue, 0.0,
+				"cash bucket total_value must never be negative")
+		}
+		// Total must also be non-negative.
+		assert.GreaterOrEqual(t, result.TotalValue, 0.0, "TotalValue must be non-negative")
+	})
+
+	t.Run("group_by=account mode", func(t *testing.T) {
+		opts := domain.AllocationOptions{
+			Include: []string{"cash"},
+			GroupBy: domain.AllocationGroupByAccount,
+		}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// The per-account row for "Overdrawn Checking" must have total_value = 0.
+		var checkingBucket *domain.AllocationItem
+		for i := range result.Buckets {
+			if result.Buckets[i].SecurityType == "Overdrawn Checking" {
+				b := result.Buckets[i]
+				checkingBucket = &b
+			}
+		}
+		if checkingBucket != nil {
+			assert.InDelta(t, 0.0, checkingBucket.TotalValue, 0.01,
+				"overdrawn account bucket must show 0, not a negative value")
+			assert.GreaterOrEqual(t, checkingBucket.TotalValue, 0.0,
+				"per-account cash total_value must never be negative")
+		}
+		assert.GreaterOrEqual(t, result.TotalValue, 0.0, "TotalValue must be non-negative")
+	})
+}
