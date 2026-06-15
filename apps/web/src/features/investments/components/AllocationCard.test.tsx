@@ -13,6 +13,14 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { AllocationCard } from './AllocationCard'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
 
+// Re-register useTrackEvent with the preloaded mockTrackEvent reference so that
+// analytics assertions work regardless of which file ran before us (other test files
+// such as BudgetDetailPage.analytics and InsightsPage may override or clear this mock).
+// Pattern established by BoostsPage.test.tsx and BudgetDetailPage.analytics.test.tsx.
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
+
 const DEFAULT_CONFIG: AllocationConfig = {
   include: [],
   group_by: 'security_type',
@@ -68,10 +76,11 @@ describe('AllocationCard', () => {
     const [nextConfig] = onConfigChange.mock.calls[0] as [AllocationConfig]
     expect(nextConfig.basis).toBe('net')
 
-    expect(mockTrackEvent).toHaveBeenCalledWith(
-      'portfolio_allocation_config_changed',
-      expect.anything(),
-    )
+    expect(mockTrackEvent).toHaveBeenCalledWith('portfolio_allocation_config_changed', {
+      group_by: 'security_type',
+      basis: 'net',
+      include_count: 0,
+    })
   })
 
   it('fires PORTFOLIO_ALLOCATION_CONFIG_CHANGED when group_by changed', () => {
@@ -87,10 +96,11 @@ describe('AllocationCard', () => {
     const [nextConfig] = onConfigChange.mock.calls[0] as [AllocationConfig]
     expect(nextConfig.group_by).toBe('asset_class')
 
-    expect(mockTrackEvent).toHaveBeenCalledWith(
-      'portfolio_allocation_config_changed',
-      expect.anything(),
-    )
+    expect(mockTrackEvent).toHaveBeenCalledWith('portfolio_allocation_config_changed', {
+      group_by: 'asset_class',
+      basis: 'assets',
+      include_count: 0,
+    })
   })
 
   it('fires PORTFOLIO_ALLOCATION_CONFIG_CHANGED when include checkbox toggled', () => {
@@ -106,10 +116,11 @@ describe('AllocationCard', () => {
     const [nextConfig] = onConfigChange.mock.calls[0] as [AllocationConfig]
     expect(nextConfig.include).toContain('cash')
 
-    expect(mockTrackEvent).toHaveBeenCalledWith(
-      'portfolio_allocation_config_changed',
-      expect.anything(),
-    )
+    expect(mockTrackEvent).toHaveBeenCalledWith('portfolio_allocation_config_changed', {
+      group_by: 'security_type',
+      basis: 'assets',
+      include_count: 1,
+    })
   })
 
   it('unchecks include when already checked', () => {

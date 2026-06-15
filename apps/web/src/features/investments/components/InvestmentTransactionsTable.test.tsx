@@ -3,11 +3,6 @@
  * Issue #1296: Portfolio tab — investment transactions DataTable with infinite scroll.
  * Tests: loading state, scroll container structure, hasNextPage sentinel, param forwarding.
  *
- * Uses the REAL useInfiniteInvestmentTransactions hook with a mocked API fetcher
- * (mockGetInvestmentTransactions). No mock.module() on the hook itself — that would
- * be process-global and contaminate useInfiniteInvestmentTransactions.test.tsx which
- * needs the real hook. A QueryClientProvider wrapper is required for useInfiniteQuery.
- *
  * NOTE: TanStack Virtualizer measures offsetHeight=0 in jsdom — row text is not visible.
  * Tests assert on structural elements (virtual-scroll-container, sentinel, loading spinner).
  */
@@ -98,5 +93,16 @@ describe('InvestmentTransactionsTable', () => {
     const callParams = mockGetInvestmentTransactions.mock.calls[0][0] as Record<string, unknown>
     expect(callParams.start_date).toBe('2024-01-01')
     expect(callParams.end_date).toBe('2024-12-31')
+  })
+
+  it('does not render Load More sentinel when API has no next_cursor', async () => {
+    // beforeEach already returns { transactions: [], limit: 50, next_cursor: undefined }
+    const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />, {
+      wrapper: createWrapper(),
+    })
+    await waitFor(() => {
+      expect(container.querySelector('[role="status"]')).toBeNull()
+    })
+    expect(container.querySelector('[data-testid="virtual-sentinel"]')).toBeNull()
   })
 })

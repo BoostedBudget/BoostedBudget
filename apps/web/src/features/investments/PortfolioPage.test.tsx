@@ -4,8 +4,10 @@
  * Tests: loading, error, empty-state (PlaidLinkButton), and data states.
  */
 
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { PortfolioPage } from './PortfolioPage'
@@ -18,6 +20,13 @@ import {
 import { mockUseGetPortfolioAllocationBreakdown } from '@/test/mocks/analytics-api'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
 import type { GetPortfolioHistoryOutputBody } from '@boostedbudget/api-client/models/getPortfolioHistoryOutputBody'
+
+// Re-register useTrackEvent with the preloaded mockTrackEvent reference so analytics
+// assertions work regardless of file execution order (other files may override this mock).
+// Pattern from BoostsPage.test.tsx / BudgetDetailPage.analytics.test.tsx.
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
 
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -64,6 +73,10 @@ describe('PortfolioPage', () => {
     render(<PortfolioPage />, { wrapper: createWrapper() })
     // EmptyState renders an h3 with the title
     expect(screen.getByText(/no.*(portfolio|investment|holding)/i)).toBeDefined()
+    // PlaidLinkButton CTA must render (loading state shows "Preparing bank connection...")
+    expect(
+      screen.queryByText(/preparing bank connection|connect bank account/i)
+    ).not.toBeNull()
   })
 
   it('renders portfolio content when holdings_count > 0', () => {
@@ -97,5 +110,21 @@ describe('PortfolioPage', () => {
     render(<PortfolioPage />, { wrapper: createWrapper() })
     // 1Y preset should be visible by default
     expect(screen.getByText('1Y')).toBeDefined()
+  })
+
+  // R4-6: proves PORTFOLIO_RANGE_CHANGED fires with the correct preset when user changes range.
+  it('fires portfolio_range_changed event when preset is changed', async () => {
+    mockUseGetPortfolioSummary.mockReturnValue({ data: mockSummary, isLoading: false, isError: false })
+    mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+
+    render(<PortfolioPage />, { wrapper: createWrapper() })
+
+    mockTrackEvent.mockClear()
+
+    await userEvent.click(screen.getByText('1M'))
+
+    expect(mockTrackEvent).toHaveBeenCalledWith('portfolio_range_changed', { preset: '1M' })
   })
 })
