@@ -110,6 +110,14 @@ func (m *mockBudgetService) GetAvailableCategories(ctx context.Context, userID s
 	return m.categories, nil
 }
 
+func (m *mockBudgetService) SetGoalRepo(_ services.ActiveGoalRepo) {}
+
+func (m *mockBudgetService) SetGoalOwnershipChecker(_ services.GoalOwnershipChecker) {}
+
+func (m *mockBudgetService) BackfillManagedCategories(_ context.Context, _ string) error {
+	return nil
+}
+
 // mockBudgetSyncService is a mock implementation of services.BudgetSyncService
 type mockBudgetSyncService struct {
 	recalculateErr error
@@ -124,6 +132,10 @@ func (m *mockBudgetSyncService) RecalculateBudget(ctx context.Context, budget *d
 }
 
 func (m *mockBudgetSyncService) SetEventProcessor(processor services.EventTriggerProcessor) {
+	// No-op for mock
+}
+
+func (m *mockBudgetSyncService) SetSavingsSpentCalc(calc services.SavingsContributionSpentCalc) {
 	// No-op for mock
 }
 
@@ -180,6 +192,10 @@ func (m *mockTransactionRepoForBudget) GetByUserIDKeysetUnified(ctx context.Cont
 }
 
 func (m *mockTransactionRepoForBudget) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
+func (m *mockTransactionRepoForBudget) GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error) {
 	return nil, nil
 }
 
@@ -1070,6 +1086,124 @@ func TestCreateBudget_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
 	assert.Error(t, err, "handler must return error when audit INSERT fails (fail-closed)")
 	assert.Nil(t, out)
 	assert.False(t, tx.committed, "tx must NOT be committed when audit fails")
+}
+
+// mockGoalOwnershipCheckerForBudget is a simple ownership checker that accepts/rejects
+// based on a pre-configured map of (goalID → error). Used by R5-1 handler tests.
+type mockGoalOwnershipCheckerForBudget struct {
+	// results maps goalID to the error the checker should return (nil = owned).
+	results map[string]error
+	// calls records each (goalID, userID) pair passed to GetByIDForUser.
+	calls []string
+}
+
+func (m *mockGoalOwnershipCheckerForBudget) GetByIDForUser(_ context.Context, id, _ string) (*domain.SavingsGoal, error) {
+	m.calls = append(m.calls, id)
+	if err, ok := m.results[id]; ok {
+		if err != nil {
+			return nil, err
+		}
+		return &domain.SavingsGoal{ID: id}, nil
+	}
+	return nil, domain.ErrSavingsGoalNotFound
+}
+
+// TestCreateBudget_MCPOrigin_SavingsGoalIDOR verifies that an MCP-origin CreateBudget
+// request including a savings category that references another user's savings goal is
+// rejected before any budget row is persisted (R5-1).
+//
+// Root cause: the MCP path in CreateBudget constructed a fresh txBudgetService with
+// nil deps and never called SetGoalOwnershipChecker — so the R4-3 ownership check
+// silently degraded to a WARN-log no-op on that path.
+func TestCreateBudget_MCPOrigin_SavingsGoalIDOR(t *testing.T) {
+	const workerSecret = "test-worker-secret-mcp-idor"
+	userID := "user-mcp-idor"
+	otherGoalID := "goal-other-user-mcp"
+	ownGoalID := "goal-own-user-mcp"
+
+	makeHandler := func(checker services.GoalOwnershipChecker) (*BudgetHandler, *mockTx) {
+		tx := &mockTx{}
+		db := &mockDB{tx: tx}
+		auditRepo := &mockMCPAuditRepositoryForBudget{}
+		handler := NewBudgetHandler(
+			&mockBudgetService{},
+			&mockBudgetSyncService{},
+			services.NewTransactionService(&mockTransactionRepoForBudget{}, &mockCustomCategoryRepoForBudget{}),
+			BudgetHandlerDeps{
+				DB:              db,
+				MCPAuditRepo:    auditRepo,
+				MCPWorkerSecret: workerSecret,
+				GoalOwnershipChecker: checker,
+			},
+		)
+		return handler, tx
+	}
+
+	t.Run("rejects cross-user savings goal in MCP path", func(t *testing.T) {
+		checker := &mockGoalOwnershipCheckerForBudget{
+			results: map[string]error{
+				otherGoalID: domain.ErrSavingsGoalNotFound,
+			},
+		}
+		handler, tx := makeHandler(checker)
+
+		_, err := handler.CreateBudget(context.Background(), &CreateBudgetInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-idor", MCPWorkerSecret: workerSecret},
+			Body: domain.CreateBudgetRequest{
+				Name:         "IDOR Budget",
+				Period:       domain.BudgetPeriodMonthly,
+				StartDate:    time.Now(),
+				Amount:       1000.00,
+				CurrencyCode: "USD",
+				Categories: []domain.CreateBudgetCategoryRequest{
+					{
+						CategoryKind:    "savings",
+						SavingsGoalID:   &otherGoalID,
+						AllocatedAmount: 200.00,
+					},
+				},
+			},
+		})
+
+		require.Error(t, err, "MCP CreateBudget with cross-user savings goal must return an error")
+		assert.False(t, tx.committed, "tx must NOT be committed — no budget should be persisted")
+		// Verify the checker was actually invoked (not just any unrelated error path).
+		assert.Contains(t, checker.calls, otherGoalID,
+			"the ownership checker must have been called with the cross-user goal ID")
+	})
+
+	t.Run("accepts own savings goal in MCP path", func(t *testing.T) {
+		checker := &mockGoalOwnershipCheckerForBudget{
+			results: map[string]error{
+				ownGoalID: nil, // owned by this user
+			},
+		}
+		handler, tx := makeHandler(checker)
+
+		out, err := handler.CreateBudget(context.Background(), &CreateBudgetInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+			MCPContextInput:    inputs.MCPContextInput{MCPGrantID: "grant-own", MCPWorkerSecret: workerSecret},
+			Body: domain.CreateBudgetRequest{
+				Name:         "Own-Goal Budget",
+				Period:       domain.BudgetPeriodMonthly,
+				StartDate:    time.Now(),
+				Amount:       1500.00,
+				CurrencyCode: "USD",
+				Categories: []domain.CreateBudgetCategoryRequest{
+					{
+						CategoryKind:    "savings",
+						SavingsGoalID:   &ownGoalID,
+						AllocatedAmount: 500.00,
+					},
+				},
+			},
+		})
+
+		require.NoError(t, err, "MCP CreateBudget with own savings goal must succeed")
+		require.NotNil(t, out)
+		assert.True(t, tx.committed, "tx must be committed when the budget is created successfully")
+	})
 }
 
 // TestBudgetResponseJSON tests JSON serialization of response.

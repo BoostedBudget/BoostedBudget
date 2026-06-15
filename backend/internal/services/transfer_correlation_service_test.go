@@ -871,3 +871,298 @@ func TestCorrelateForUser_FuzzyMatch_ReservedSuggestionSkippedOnNextRun(t *testi
 	notifRepo.AssertExpectations(t)
 	suggestionRepo.AssertExpectations(t)
 }
+
+// ============================================================================
+// Issue #1300 M19 — D6 source-c: boost-match → auto-confirmed contribution
+// ============================================================================
+
+// mockCorrelationGoalResolver mocks CorrelationGoalResolver for M19 tests.
+type mockCorrelationGoalResolver struct {
+	mock.Mock
+}
+
+func (m *mockCorrelationGoalResolver) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.SavingsGoal), args.Error(1)
+}
+
+// mockCorrelationContribUpserter mocks CorrelationConfirmedContributionUpserter for M19 tests.
+type mockCorrelationContribUpserter struct {
+	mock.Mock
+}
+
+func (m *mockCorrelationContribUpserter) UpsertFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, source string) error {
+	args := m.Called(ctx, userID, goalID, transactionID, amount, source)
+	return args.Error(0)
+}
+
+// TestCorrelateForUser_ExactMatch_CreatesBoostMatchContribution verifies that after an exact
+// boost-match, UpsertFromTransaction is called with source="boost_match" for the contributions-basis
+// savings goal whose account_id matches the suggestion's to_account_id (M19 D6 source-c RG1).
+func TestCorrelateForUser_ExactMatch_CreatesBoostMatchContribution(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-boost-match-1"
+	accountID := "acct-savings-m19"
+	goalID := "goal-m19-contrib"
+	suggID := "sug-m19-exact"
+	txnID := "txn-m19-exact"
+
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	goalResolver := new(mockCorrelationGoalResolver)
+	contribUpserter := new(mockCorrelationContribUpserter)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	svc.SetBoostMatchContributionServices(goalResolver, contribUpserter)
+
+	toAccountIDStr := accountID
+	suggestion := &domain.TransferSuggestion{
+		ID:           suggID,
+		UserID:       userID,
+		ToAccountID:  &toAccountIDStr,
+		Amount:       500.00,
+		CurrencyCode: "USD",
+		Source:       domain.SuggestionSourceBoost,
+		Status:       domain.SuggestionStatusPending,
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+	}
+
+	// Plaid inflow txn that exactly matches the suggestion amount
+	inflow := &domain.Transaction{
+		ID:        txnID,
+		UserID:    userID,
+		AccountID: accountID,
+		Amount:    -500.00, // negative = inflow in PFCv2
+		Pending:   false,
+		Date:      time.Now(),
+	}
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).
+		Return([]*domain.Transaction{inflow}, nil)
+
+	// Complete the suggestion
+	txnIDCopy := txnID
+	suggestionRepo.On("Complete", ctx, suggID, &txnIDCopy, 500.00, "exact_match", mock.AnythingOfType("time.Time")).
+		Return(nil)
+
+	// Acknowledgeable notification
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == domain.NotificationTypeTransferSuggestion && n.InteractionPattern == "acknowledgeable"
+	})).Return(nil)
+
+	// Goal resolver returns the contributions-basis goal linked to the destination account
+	contributionsGoal := &domain.SavingsGoal{
+		ID:            goalID,
+		UserID:        userID,
+		AccountID:     accountID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalResolver.On("GetActiveByUserID", ctx, userID).Return([]*domain.SavingsGoal{contributionsGoal}, nil)
+
+	// UpsertFromTransaction called with boost_match source and exact amount
+	contribUpserter.On("UpsertFromTransaction", ctx, userID, goalID, txnID, 500.00, "boost_match").Return(nil)
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	contribUpserter.AssertExpectations(t)
+	goalResolver.AssertExpectations(t)
+	suggestionRepo.AssertExpectations(t)
+	notifRepo.AssertExpectations(t)
+}
+
+// TestCorrelateForUser_ExactMatch_BoostMatchContributionNonFatal verifies that an error in
+// UpsertFromTransaction does not abort the correlation — sync still returns success (M19 non-fatal).
+func TestCorrelateForUser_ExactMatch_BoostMatchContributionNonFatal(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-boost-nonfatal"
+	accountID := "acct-nonfatal"
+	goalID := "goal-nonfatal"
+	suggID := "sug-nonfatal"
+	txnID := "txn-nonfatal"
+
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	goalResolver := new(mockCorrelationGoalResolver)
+	contribUpserter := new(mockCorrelationContribUpserter)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	svc.SetBoostMatchContributionServices(goalResolver, contribUpserter)
+
+	toAccountIDStr := accountID
+	suggestion := &domain.TransferSuggestion{
+		ID:           suggID,
+		UserID:       userID,
+		ToAccountID:  &toAccountIDStr,
+		Amount:       300.00,
+		CurrencyCode: "USD",
+		Source:       domain.SuggestionSourceBoost,
+		Status:       domain.SuggestionStatusPending,
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+	}
+
+	inflow := &domain.Transaction{
+		ID:        txnID,
+		UserID:    userID,
+		AccountID: accountID,
+		Amount:    -300.00,
+		Pending:   false,
+		Date:      time.Now(),
+	}
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).
+		Return([]*domain.Transaction{inflow}, nil)
+
+	txnIDCopy := txnID
+	suggestionRepo.On("Complete", ctx, suggID, &txnIDCopy, 300.00, "exact_match", mock.AnythingOfType("time.Time")).
+		Return(nil)
+
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == domain.NotificationTypeTransferSuggestion
+	})).Return(nil)
+
+	contribGoal := &domain.SavingsGoal{
+		ID: goalID, UserID: userID, AccountID: accountID,
+		ProgressBasis: domain.ProgressBasisContributions,
+	}
+	goalResolver.On("GetActiveByUserID", ctx, userID).Return([]*domain.SavingsGoal{contribGoal}, nil)
+
+	// Upsert errors — correlation must still succeed
+	contribUpserter.On("UpsertFromTransaction", ctx, userID, goalID, txnID, 300.00, "boost_match").
+		Return(fmt.Errorf("db error"))
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err) // non-fatal
+	contribUpserter.AssertExpectations(t)
+}
+
+// TestCorrelateForUser_ExactMatch_NoContributionWhenServicesNotWired verifies that
+// UpsertFromTransaction is NOT called if SetBoostMatchContributionServices was not called (M19 nil-safe).
+func TestCorrelateForUser_ExactMatch_NoContributionWhenServicesNotWired(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-not-wired"
+	accountID := "acct-not-wired"
+	suggID := "sug-not-wired"
+	txnID := "txn-not-wired"
+
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+
+	// No SetBoostMatchContributionServices call
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+
+	toAccountIDStr := accountID
+	suggestion := &domain.TransferSuggestion{
+		ID:           suggID,
+		UserID:       userID,
+		ToAccountID:  &toAccountIDStr,
+		Amount:       100.00,
+		CurrencyCode: "USD",
+		Source:       domain.SuggestionSourceBoost,
+		Status:       domain.SuggestionStatusPending,
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+	}
+
+	inflow := &domain.Transaction{
+		ID:        txnID,
+		UserID:    userID,
+		AccountID: accountID,
+		Amount:    -100.00,
+		Pending:   false,
+		Date:      time.Now(),
+	}
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).
+		Return([]*domain.Transaction{inflow}, nil)
+
+	txnIDCopy := txnID
+	suggestionRepo.On("Complete", ctx, suggID, &txnIDCopy, 100.00, "exact_match", mock.AnythingOfType("time.Time")).
+		Return(nil)
+
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == domain.NotificationTypeTransferSuggestion
+	})).Return(nil)
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	// No contribution-related mocks set — the code must not panic or call anything
+	suggestionRepo.AssertExpectations(t)
+	notifRepo.AssertExpectations(t)
+}
+
+// TestCorrelateForUser_ExactMatch_NoContributionForNonContributionsBasisGoal verifies that
+// when the destination goal has progress_basis != 'contributions', no contribution is created (M19).
+func TestCorrelateForUser_ExactMatch_NoContributionForNonContributionsBasisGoal(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-manual-basis"
+	accountID := "acct-manual-basis"
+	goalID := "goal-manual-basis"
+	suggID := "sug-manual-basis"
+	txnID := "txn-manual-basis"
+
+	suggestionRepo := new(mockActiveSuggestionRepo)
+	txnRepo := new(mockRecentTransactionRepo)
+	notifRepo := new(mockCorrelationNotificationRepo)
+	goalResolver := new(mockCorrelationGoalResolver)
+	contribUpserter := new(mockCorrelationContribUpserter)
+
+	svc := NewTransferCorrelationService(suggestionRepo, txnRepo, notifRepo)
+	svc.SetBoostMatchContributionServices(goalResolver, contribUpserter)
+
+	toAccountIDStr := accountID
+	suggestion := &domain.TransferSuggestion{
+		ID:           suggID,
+		UserID:       userID,
+		ToAccountID:  &toAccountIDStr,
+		Amount:       400.00,
+		CurrencyCode: "USD",
+		Source:       domain.SuggestionSourceBoost,
+		Status:       domain.SuggestionStatusPending,
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+	}
+
+	inflow := &domain.Transaction{
+		ID:        txnID,
+		UserID:    userID,
+		AccountID: accountID,
+		Amount:    -400.00,
+		Pending:   false,
+		Date:      time.Now(),
+	}
+
+	suggestionRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.TransferSuggestion{suggestion}, nil)
+	txnRepo.On("GetRecentInflowsByUserID", ctx, userID, mock.AnythingOfType("time.Time")).
+		Return([]*domain.Transaction{inflow}, nil)
+
+	txnIDCopy := txnID
+	suggestionRepo.On("Complete", ctx, suggID, &txnIDCopy, 400.00, "exact_match", mock.AnythingOfType("time.Time")).
+		Return(nil)
+
+	notifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == domain.NotificationTypeTransferSuggestion
+	})).Return(nil)
+
+	// Goal has progress_basis = manual — should not create contribution
+	manualGoal := &domain.SavingsGoal{
+		ID: goalID, UserID: userID, AccountID: accountID,
+		ProgressBasis: domain.ProgressBasisManual,
+	}
+	goalResolver.On("GetActiveByUserID", ctx, userID).Return([]*domain.SavingsGoal{manualGoal}, nil)
+
+	err := svc.CorrelateForUser(ctx, userID)
+
+	require.NoError(t, err)
+	contribUpserter.AssertNotCalled(t, "UpsertFromTransaction")
+	goalResolver.AssertExpectations(t)
+}

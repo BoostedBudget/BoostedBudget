@@ -19,6 +19,7 @@ mock.module('@/shared/analytics/events', () => ({
   ANALYTICS_EVENTS: {
     ...RealAnalyticsEvents.ANALYTICS_EVENTS,
     SAVINGS_GOAL_EDITED: 'savings_goal_edited',
+    SAVINGS_GOAL_PROGRESS_BASIS_CHANGED: 'savings_goal_progress_basis_changed',
   },
 }))
 
@@ -378,6 +379,172 @@ describe('UpdateSavingsGoalDialog', () => {
             }),
           })
         )
+      })
+    })
+  })
+
+  describe('Progress Tracking basis (Issue #1300 G1)', () => {
+    it('renders a Progress Tracking selector', () => {
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      expect(screen.getByLabelText('Progress Tracking')).toBeInTheDocument()
+    })
+
+    it('pre-fills progress_basis from goal (defaults to manual when absent)', () => {
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      const select = screen.getByLabelText('Progress Tracking') as HTMLSelectElement
+      expect(select.value).toBe('manual')
+    })
+
+    it('pre-fills progress_basis=contributions from goal', () => {
+      const goalContributions: SavingsGoal = { ...mockGoal, progress_basis: 'contributions' }
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={goalContributions}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      const select = screen.getByLabelText('Progress Tracking') as HTMLSelectElement
+      expect(select.value).toBe('contributions')
+    })
+
+    it('pre-fills account_percentage as percentage (×100) from goal', () => {
+      const goalPct: SavingsGoal = {
+        ...mockGoal,
+        progress_basis: 'account_percentage',
+        account_percentage: 0.4,
+      }
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={goalPct}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      // account_percentage input should be shown
+      const pctInput = screen.getByLabelText(/Account %/) as HTMLInputElement
+      expect(pctInput.value).toBe('40')
+    })
+
+    it('shows account_percentage input when basis changes to account_percentage', () => {
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      expect(screen.queryByLabelText(/Account %/)).not.toBeInTheDocument()
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+
+      expect(screen.getByLabelText(/Account %/)).toBeInTheDocument()
+    })
+
+    it('fires SAVINGS_GOAL_PROGRESS_BASIS_CHANGED analytics event on basis change', () => {
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'contributions' } })
+
+      expect(mockTrackEvent).toHaveBeenCalledWith('savings_goal_progress_basis_changed')
+    })
+
+    it('shows validation error when account_percentage is out of range', async () => {
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+      fireEvent.change(screen.getByLabelText(/Account %/), { target: { value: '0' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      expect(await screen.findByText('Enter a percentage between 0 and 100 (exclusive)')).toBeInTheDocument()
+    })
+
+    it('submits progress_basis and account_percentage/100 for account_percentage basis', async () => {
+      const updatedGoal = { ...mockGoal }
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
+
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'account_percentage' } })
+      fireEvent.change(screen.getByLabelText(/Account %/), { target: { value: '75' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockUpdateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.progress_basis).toBe('account_percentage')
+        expect(callArg.data.account_percentage).toBeCloseTo(0.75)
+      })
+    })
+
+    it('submits progress_basis=contributions without account_percentage', async () => {
+      const updatedGoal = { ...mockGoal }
+      mockUpdateSavingsGoalMutateAsync.mockResolvedValueOnce(updatedGoal)
+
+      renderWithQueryClient(
+        <UpdateSavingsGoalDialog
+          isOpen={true}
+          goal={mockGoal}
+          onCancel={mockOnCancel}
+          onGoalUpdated={mockOnGoalUpdated}
+        />
+      )
+
+      fireEvent.change(screen.getByLabelText('Progress Tracking'), { target: { value: 'contributions' } })
+
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+
+      await waitFor(() => {
+        const callArg = mockUpdateSavingsGoalMutateAsync.mock.calls[0][0]
+        expect(callArg.data.progress_basis).toBe('contributions')
+        expect(callArg.data.account_percentage).toBeUndefined()
       })
     })
   })

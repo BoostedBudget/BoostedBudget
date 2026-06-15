@@ -59,7 +59,7 @@ describe('MobileNav', () => {
       expect(screen.getByRole('link', { name: /dashboard/i })).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /accounts/i })).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /transactions/i })).toBeInTheDocument()
-      expect(screen.getByRole('link', { name: /budgets/i })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /planning/i })).toBeInTheDocument()
       expect(screen.getByText(mockUser.name)).toBeInTheDocument()
       expect(screen.getByText(mockUser.email)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /view profile/i })).toBeInTheDocument()

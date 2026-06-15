@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 102 allowed operation methods', () => {
+  it('contains exactly 116 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -103,6 +103,10 @@ describe('createApiClient', () => {
     // +8 from #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //               getInvestmentTransactions, getPortfolioAllocationBreakdown,
     //               getTopMovers, getInvestmentGainLossSummary, getInvestmentIncomeSummary
-    expect(count).toBe(110)
+    // +1 from #1300: getSavingsGoalsProgressSummary
+    // +4 from #1300 M20: logSavingsGoalContribution, listSavingsGoalContributions,
+    //                    confirmSavingsGoalContribution, deleteSavingsGoalContribution
+    // +1 from #1300 R3-7: rejectSavingsGoalContribution (sticky reject tombstone)
+    expect(count).toBe(116)
   })
 })

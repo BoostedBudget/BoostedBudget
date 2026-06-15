@@ -1,9 +1,5 @@
 /**
  * BudgetCategoryCard
- * Issue #497: Budget Category Manager + Match Config UI
- * Issue #499: Transaction-Budget Linking UI - Collapsible transactions
- * Issue #1200: Multi-level category hierarchy — variant prop for visual grouping
- *
  * Displays a single budget category with its allocation, spending, and match configuration.
  * Supports edit and delete actions.
  * Optionally shows collapsible transaction list when budgetId is provided.
@@ -24,6 +20,7 @@ import { BudgetTransactionList } from '../transaction-link/BudgetTransactionList
  * - standalone: default full card (custom categories, primary-only with no children)
  * - parent: primary-only PFC with children below (removes bottom rounding/border to connect)
  * - child: indented sub-budget (left indent, top-none rounding, left accent border)
+ * - savings: savings bucket — emerald left accent to distinguish from spending categories (#1300)
  */
 const budgetCategoryCardVariants = cva(
   'bg-card border border-border transition-shadow duration-200 hover:shadow-sm',
@@ -33,6 +30,7 @@ const budgetCategoryCardVariants = cva(
         standalone: 'rounded-lg p-4',
         parent: 'rounded-lg rounded-b-none border-b-0 p-4',
         child: 'rounded-lg rounded-t-none border-t-border/50 border-l-2 border-l-primary/20 ml-6 pl-4 pr-4 pt-3 pb-3',
+        savings: 'rounded-lg border-l-2 border-l-emerald-500 p-4',
       },
     },
     defaultVariants: { variant: 'standalone' },
@@ -55,8 +53,9 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
    * - 'standalone': default full card (custom categories, primary-only with no children)
    * - 'parent': primary-only PFC with children below (connects visually to children)
    * - 'child': indented sub-budget (left accent border, strips primary prefix from label)
+   * - 'savings': savings bucket card with emerald left accent (#1300)
    */
-  variant?: 'standalone' | 'parent' | 'child';
+  variant?: 'standalone' | 'parent' | 'child' | 'savings';
   /**
    * Human-readable name for custom categories (resolved from useGetUserCategories by the parent).
    * Required for category_kind='custom' to avoid showing a raw UUID as the label.
@@ -142,8 +141,13 @@ export function BudgetCategoryCard({
             </span>
           )}
         </h3>
-        <span className="budget-category-card__badge text-[0.6875rem] font-medium text-primary bg-primary/10 py-0.5 px-2 rounded-full whitespace-nowrap shrink-0">
-          {matchLogicLabel}
+        <span className={cn(
+          'budget-category-card__badge text-[0.6875rem] font-medium py-0.5 px-2 rounded-full whitespace-nowrap shrink-0',
+          category.category_kind === 'savings'
+            ? 'bg-success/10 text-success'
+            : 'text-primary bg-primary/10'
+        )}>
+          {category.category_kind === 'savings' ? 'Savings Bucket' : matchLogicLabel}
         </span>
       </div>
 

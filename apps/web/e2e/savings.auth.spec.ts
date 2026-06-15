@@ -124,19 +124,20 @@ test.describe('Savings Page - Navigation', () => {
     await acceptCookieConsent(page)
   })
 
-  test('clicking Savings nav link navigates to /savings', async ({ page }) => {
+  test('clicking Planning nav link navigates to /planning', async ({ page }) => {
     await mockAuthDependencies(page)
     await mockSavingsGoals(page, GOALS_LIST_RESPONSE)
 
     await page.goto('/dashboard')
     await page.waitForLoadState('networkidle')
 
-    const savingsLink = page.getByRole('link', { name: 'Savings' }).first()
-    await expect(savingsLink).toBeVisible()
-    await savingsLink.click()
+    // Issue #1300: Savings is now a sub-tab under "Planning"
+    const planningLink = page.getByRole('link', { name: 'Planning' }).first()
+    await expect(planningLink).toBeVisible()
+    await planningLink.click()
     await page.waitForLoadState('networkidle')
 
-    await expect(page).toHaveURL(/\/savings/)
+    await expect(page).toHaveURL(/\/planning/)
   })
 })
 
@@ -183,14 +184,16 @@ test.describe('Savings Page - Goals Grid', () => {
     await acceptCookieConsent(page)
   })
 
-  test('shows page heading and goal cards when goals exist', async ({ page }) => {
+  test('shows goal cards when goals exist', async ({ page }) => {
     await mockAuthDependencies(page)
     await mockSavingsGoals(page, GOALS_LIST_RESPONSE)
 
-    await page.goto('/savings')
+    // Issue #1300: /savings redirects to /planning?tab=savings; h1 is hidden inside PlanningPage
+    await page.goto('/planning?tab=savings')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('heading', { name: 'Savings' })).toBeVisible()
+    // Savings tab is active instead of an h1 heading
+    await expect(page.getByRole('tab', { name: 'Savings' })).toHaveAttribute('data-state', 'active')
     // All tab shows every goal
     await page.getByRole('tab', { name: /^all$/i }).click()
     await expect(page.getByText('Vacation Fund')).toBeVisible()
@@ -537,17 +540,17 @@ test.describe('Savings Page - Mobile', () => {
     await acceptCookieConsent(page)
   })
 
-  test('mobile nav drawer contains Savings link', async ({ page }) => {
+  test('mobile nav drawer contains Planning link', async ({ page }) => {
     await mockAuthDependencies(page)
     await mockSavingsGoals(page, EMPTY_GOALS_RESPONSE)
 
-    await page.goto('/savings')
+    await page.goto('/planning?tab=savings')
     await page.waitForLoadState('networkidle')
 
     // Open the mobile hamburger drawer
     await page.getByRole('button', { name: /open menu/i }).click()
 
-    await expect(page.getByRole('link', { name: 'Savings' })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Planning' })).toBeVisible()
   })
 
   test('goal grid renders cards within viewport width at 375px', async ({ page }) => {

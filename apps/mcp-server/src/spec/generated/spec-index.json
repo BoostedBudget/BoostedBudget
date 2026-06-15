@@ -2637,6 +2637,150 @@
       "description": "Retrieves all active (not completed) savings goals for the authenticated user."
     },
     {
+      "operationId": "getSavingsProgressSummary",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/progress-summary",
+      "summary": "Get savings progress summary",
+      "tags": [
+        "Savings Goals",
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11)."
+    },
+    {
+      "operationId": "listSavingsGoalContributions",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/{goalID}/contributions",
+      "summary": "List savings goal contributions",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "logSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions",
+      "summary": "Log a savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "deleteSavingsGoalContribution",
+      "method": "DELETE",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}",
+      "summary": "Delete a savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "confirmSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}/confirm",
+      "summary": "Confirm a proposed savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under a transaction-level lock before committing (Codex C2).",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "rejectSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}/reject",
+      "summary": "Reject a proposed savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "getSavingsGoal",
       "method": "GET",
       "path": "/api/v1/savings-goals/{id}",

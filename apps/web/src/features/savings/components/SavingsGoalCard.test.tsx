@@ -136,6 +136,24 @@ describe('SavingsGoalCard', () => {
       expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
     });
 
+    // R3-3 C8: Contributions affordance gated on progress_basis === 'contributions'
+    it('hides Contributions button when progress_basis is not "contributions"', () => {
+      const manualGoal = { ...mockGoal, progress_basis: 'manual' as const }
+      render(<SavingsGoalCard goal={manualGoal} onEdit={mock(() => {})} onDelete={mock(() => {})} />)
+      expect(screen.queryByRole('button', { name: /view contributions/i })).not.toBeInTheDocument()
+    })
+
+    it('hides Contributions button when progress_basis is undefined (default manual)', () => {
+      render(<SavingsGoalCard goal={mockGoal} onEdit={mock(() => {})} onDelete={mock(() => {})} />)
+      expect(screen.queryByRole('button', { name: /view contributions/i })).not.toBeInTheDocument()
+    })
+
+    it('shows Contributions button when progress_basis is "contributions"', () => {
+      const contributionsGoal = { ...mockGoal, progress_basis: 'contributions' as const }
+      render(<SavingsGoalCard goal={contributionsGoal} onEdit={mock(() => {})} onDelete={mock(() => {})} />)
+      expect(screen.getByRole('button', { name: /view contributions/i })).toBeInTheDocument()
+    })
+
     it('should call onAddFunds when add funds button is clicked', () => {
       const onAddFunds = mock(() => {});
       render(<SavingsGoalCard goal={mockGoal} onAddFunds={onAddFunds} />);

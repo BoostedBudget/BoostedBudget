@@ -1,6 +1,6 @@
-import { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { formatPFCEnum } from '@/shared/categories/formatPfc';
 import type { Transaction } from '../transactions/types';
+import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 export type { MatchLogic } from '@boostedbudget/shared-types/matching';
 
 export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
@@ -24,7 +24,7 @@ export interface IncomeSource {
 export interface BudgetCategory {
   id: string;
   budget_id: string;
-  category_kind: string; // 'pfc' | 'custom'
+  category_kind: string; // 'pfc' | 'custom' | 'savings'
   pfc_primary?: string;
   pfc_detailed?: string;
   pfc_primary_display?: string;
@@ -34,6 +34,11 @@ export interface BudgetCategory {
   // Used to detect sub-allocations so budget totals aren't double-counted.
   custom_parent_id?: string | null;
   custom_parent_pfc_primary?: string | null;
+  // Issue #1300: savings bucket linkage
+  savings_goal_id?: string | null;
+  savings_goal_name?: string | null; // Server-supplied display name for the linked goal
+  auto_created?: boolean;
+  managed_by_goal_id?: string | null;
   allocated_amount: number;
   spent_amount: number;
   created_at: string;
@@ -105,6 +110,8 @@ export interface CreateBudgetRequest {
   income_amount?: number;
   income_sources?: IncomeSource[];
   expected_income?: number;
+  /** Inherit series_id from this budget (Issue #1300 M22). */
+  from_budget_id?: string;
 }
 
 export interface UpdateBudgetRequest {
@@ -121,10 +128,11 @@ export interface UpdateBudgetRequest {
 }
 
 export interface CreateBudgetCategoryRequest {
-  category_kind: string; // 'pfc' | 'custom'
+  category_kind: string; // 'pfc' | 'custom' | 'savings'
   pfc_primary?: string;
   pfc_detailed?: string;
   custom_category_id?: string;
+  savings_goal_id?: string; // #1300: savings bucket linkage
   allocated_amount: number;
   tags?: string[];
   match_logic?: MatchLogic;
@@ -183,15 +191,18 @@ export function formatCategoryPath(category: string[]): string {
   return category.join(' > ');
 }
 
-export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'pfc_primary_display' | 'pfc_detailed_display' | 'custom_category_id'>): string {
-  if (cat.category_kind === 'custom') {
-    return cat.custom_category_id || 'Custom'
+export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'pfc_primary_display' | 'pfc_detailed_display' | 'custom_category_id' | 'savings_goal_name'>): string {
+  if (cat.category_kind === 'savings') {
+    return cat.savings_goal_name ?? 'Savings Goal';
   }
-  if (cat.pfc_detailed_display) return cat.pfc_detailed_display
-  if (cat.pfc_primary_display) return cat.pfc_primary_display
-  if (cat.pfc_detailed) return formatPFCEnum(cat.pfc_detailed)
-  if (cat.pfc_primary) return formatPFCEnum(cat.pfc_primary)
-  return 'Uncategorized'
+  if (cat.category_kind === 'custom') {
+    return cat.custom_category_id ?? 'Custom';
+  }
+  if (cat.pfc_detailed_display) return cat.pfc_detailed_display;
+  if (cat.pfc_primary_display) return cat.pfc_primary_display;
+  if (cat.pfc_detailed) return formatPFCEnum(cat.pfc_detailed);
+  if (cat.pfc_primary) return formatPFCEnum(cat.pfc_primary);
+  return 'Uncategorized';
 }
 
 /**

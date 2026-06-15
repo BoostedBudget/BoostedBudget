@@ -113,9 +113,9 @@ printf '\n'
 printf 'MCP Artifacts:\n'
 
 if command -v bun &>/dev/null; then
-  run_check "check:artifacts-committed (spec-index/facade in sync)" \
+  run_check "build:artifacts + check:artifacts-committed (spec-index/facade)" \
     "$PROJECT_ROOT/apps/mcp-server" \
-    "bun run check:artifacts-committed" || true
+    "bun run build:artifacts && bun run check:artifacts-committed" || true
 else
   printf '  %-50s⚠️  (bun not installed)\n' "check:artifacts-committed"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"

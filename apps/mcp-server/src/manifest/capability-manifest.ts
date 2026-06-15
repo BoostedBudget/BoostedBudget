@@ -239,9 +239,16 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSavingsGoals'),
   read('getActiveSavingsGoals'),
   read('getSavingsGoal'),
+  read('getSavingsProgressSummary'),  // #1300: basis-aware analytics (Codex C11)
   write('createSavingsGoal'),
   write('updateSavingsGoal', { idempotent: true }),
   write('deleteSavingsGoal', { destructive: true }),
+  // #1300 M20: contribution ledger
+  read('listSavingsGoalContributions'),
+  write('logSavingsGoalContribution'),
+  write('confirmSavingsGoalContribution', { idempotent: true }),
+  write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
+  write('deleteSavingsGoalContribution', { destructive: true }),
 
   // ── Subscription ─────────────────────────────────────────────────────────
   read('get-current-subscription'),
