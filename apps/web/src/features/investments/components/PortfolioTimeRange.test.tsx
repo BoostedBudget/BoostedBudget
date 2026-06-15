@@ -20,18 +20,14 @@ describe('PortfolioTimeRange', () => {
     }
   })
 
-  it('marks the active preset with data-state="on" and others with data-state="off"', () => {
+  it('does not call onPresetChange when the already-active preset is clicked', () => {
+    // Proves the ToggleGroup single-select behavior: clicking the current value is a no-op.
+    // This works with both real Radix and the suite-wide toggle-group mock used by
+    // TransactionDateFilter/DateRangePicker/SpendingReportsPage tests.
     const onPresetChange = mock(() => {})
     render(<PortfolioTimeRange activePreset="3M" onPresetChange={onPresetChange} />)
-
-    // Radix ToggleGroupPrimitive.Item sets data-state="on" on the active item (confirmed in
-    // toggle-group.test.tsx "Single Selection" suite — this works in happydom).
-    const activeBtn = screen.getByText('3M').closest('button')
-    expect(activeBtn?.getAttribute('data-state')).toBe('on')
-
-    // Non-active items should have data-state="off"
-    const otherBtn = screen.getByText('1Y').closest('button')
-    expect(otherBtn?.getAttribute('data-state')).toBe('off')
+    fireEvent.click(screen.getByText('3M'))
+    expect(onPresetChange).not.toHaveBeenCalled()
   })
 
   it('calls onPresetChange with clicked preset', () => {
