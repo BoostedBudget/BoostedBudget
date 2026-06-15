@@ -164,6 +164,8 @@ export * from './getNetWorthParams';
 export * from './getNetWorthTrendParams';
 export * from './getNotificationsParams';
 export * from './getPaymentFailuresOutputBody';
+export * from './getPortfolioAllocationBreakdownBasis';
+export * from './getPortfolioAllocationBreakdownGroupBy';
 export * from './getPortfolioAllocationBreakdownParams';
 export * from './getPortfolioHistoryOutputBody';
 export * from './getPortfolioHistoryParams';

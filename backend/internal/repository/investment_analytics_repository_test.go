@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"testing"
 	"time"
@@ -43,13 +44,11 @@ func incomeSubtypeAnyArgs() []interface{} {
 // Expected: netTotal=6800 (5000+3000−1200), stock%≈62.5%, cash%≈37.5% (both /8000).
 func TestApplyNetBasis_OptionA(t *testing.T) {
 	buckets := []domain.AllocationItem{
-		{SecurityType: "stock", TotalValue: 5000, HoldingCount: 1},
-		{SecurityType: "cash", TotalValue: 3000, HoldingCount: 1},
-		{SecurityType: "liabilities", TotalValue: 1200, HoldingCount: 1},
+		{SecurityType: "stock", AssetClass: "investments", TotalValue: 5000, HoldingCount: 1},
+		{SecurityType: "cash", AssetClass: "cash", TotalValue: 3000, HoldingCount: 1},
+		{SecurityType: "liabilities", AssetClass: "liabilities", TotalValue: 1200, HoldingCount: 1},
 	}
-	grandTotal := 9200.0 // 5000+3000+1200 as summed by the row-scan loop
-
-	result, total := applyNetBasis(buckets, grandTotal)
+	result, total := applyNetBasis(buckets)
 
 	// Option A: headline = assets − liabilities = (9200−1200) − 1200 = 6800.
 	assert.InDelta(t, 6800.0, total, 0.01, "net total must be asset_total minus liabilities")
@@ -95,9 +94,7 @@ func TestApplyNetBasis_AccountMode(t *testing.T) {
 		{SecurityType: "Checking", AssetClass: "depository", TotalValue: 3000},
 		{SecurityType: "Visa Card", AssetClass: "credit", TotalValue: 1200},
 	}
-	grandTotal := 9200.0
-
-	result, total := applyNetBasis(buckets, grandTotal)
+	result, total := applyNetBasis(buckets)
 
 	assert.InDelta(t, 6800.0, total, 0.01, "net total = asset_total − liabilities")
 	require.Len(t, result, 2)
@@ -117,11 +114,9 @@ func TestApplyNetBasis_NoLiabilities(t *testing.T) {
 		{SecurityType: "stock", TotalValue: 5000, HoldingCount: 2},
 		{SecurityType: "etf", TotalValue: 3000, HoldingCount: 1},
 	}
-	grandTotal := 8000.0
+	result, total := applyNetBasis(buckets)
 
-	result, total := applyNetBasis(buckets, grandTotal)
-
-	// No liabilities → net = assets = grand total; percentages unchanged.
+	// No liabilities → net = assets = sum of bucket values; percentages unchanged.
 	assert.InDelta(t, 8000.0, total, 0.01, "net total == asset total when no liabilities")
 	require.Len(t, result, 2)
 
@@ -130,6 +125,72 @@ func TestApplyNetBasis_NoLiabilities(t *testing.T) {
 		totalPct += b.Percentage
 	}
 	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100%%")
+}
+
+// TestApplyNetBasis_OracleNetArithmetic is an oracle-style test: expected values are derived
+// independently from raw input sums, not from the function's intermediate variables.
+// This guards against implementation changes that alter the internal computation path
+// (e.g. sign-convention changes in the SQL union query) without breaking correctness.
+//
+//	assetTotal     = stock + cash       = 5000 + 3000 = 8000
+//	netTotal       = assetTotal − liab  = 8000 − 1200 = 6800
+//	stock%         = 5000 / 8000 * 100  = 62.5
+//	cash%          = 3000 / 8000 * 100  = 37.5
+//	Σ percentages  = 100.0
+func TestApplyNetBasis_OracleNetArithmetic(t *testing.T) {
+	const (
+		stockValue = 5000.0
+		cashValue  = 3000.0
+		liabValue  = 1200.0
+	)
+
+	buckets := []domain.AllocationItem{
+		{SecurityType: "stock", AssetClass: "investments", TotalValue: stockValue, HoldingCount: 1},
+		{SecurityType: "cash", AssetClass: "cash", TotalValue: cashValue, HoldingCount: 1},
+		{SecurityType: "liabilities", AssetClass: "liabilities", TotalValue: liabValue, HoldingCount: 1},
+	}
+
+	// Oracle: compute expected outputs from raw inputs, independent of any intermediate variable.
+	expectedAssetTotal := stockValue + cashValue          // 8000
+	expectedNetTotal := expectedAssetTotal - liabValue    // 6800
+	expectedStockPct := stockValue / expectedAssetTotal * 100 // 62.5
+	expectedCashPct := cashValue / expectedAssetTotal * 100   // 37.5
+
+	result, total := applyNetBasis(buckets)
+
+	assert.InDelta(t, expectedNetTotal, total, 0.01, "net total must equal sum(assets) − sum(liabilities)")
+
+	require.Len(t, result, 2, "only asset buckets must be returned")
+	var stockPct, cashPct, sumPct float64
+	for _, b := range result {
+		require.NotEqual(t, "liabilities", b.SecurityType, "liabilities must be excluded from output")
+		sumPct += b.Percentage
+		switch b.SecurityType {
+		case "stock":
+			stockPct = b.Percentage
+		case "cash":
+			cashPct = b.Percentage
+		}
+	}
+	assert.InDelta(t, expectedStockPct, stockPct, 0.1, "stock pct must be stock / asset_total * 100")
+	assert.InDelta(t, expectedCashPct, cashPct, 0.1, "cash pct must be cash / asset_total * 100")
+	assert.InDelta(t, 100.0, sumPct, 0.1, "slice percentages must sum to 100%%")
+}
+
+// TestApplyNetBasis_AllLiabilities tests the degenerate case where every bucket is a liability.
+// assetTotal = 0, so the guard prevents divide-by-zero; net total is negative (user is underwater).
+func TestApplyNetBasis_AllLiabilities(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		{SecurityType: "credit-card", AssetClass: "credit", TotalValue: 2000},
+		{SecurityType: "auto-loan", AssetClass: "loan", TotalValue: 5000},
+	}
+	result, total := applyNetBasis(buckets)
+
+	assert.Empty(t, result, "no asset buckets expected when all inputs are liabilities")
+	assert.InDelta(t, -7000.0, total, 0.01, "net total is negative when no assets")
+	for _, b := range result {
+		assert.True(t, !math.IsNaN(b.Percentage) && !math.IsInf(b.Percentage, 0), "no NaN/Inf percentages")
+	}
 }
 
 // TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets tests that AllocationBreakdown

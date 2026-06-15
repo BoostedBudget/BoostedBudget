@@ -2252,19 +2252,28 @@
         {
           "name": "include",
           "in": "query",
-          "description": "Comma-separated list of additional asset classes to include in the breakdown. Allowed values: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only).",
+          "description": "Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible).",
           "type": "string"
         },
         {
           "name": "group_by",
           "in": "query",
-          "description": "Bucketing dimension. Allowed values: 'security_type' (default), 'asset_class', 'account'.",
+          "description": "How to bucket the result. Default: 'security_type'.",
+          "enum": [
+            "security_type",
+            "asset_class",
+            "account"
+          ],
           "type": "string"
         },
         {
           "name": "basis",
           "in": "query",
-          "description": "Whether liabilities reduce the total. Allowed values: 'assets' (default, assets-only), 'net' (net of liabilities).",
+          "description": "Whether liabilities reduce the total. Default: 'assets'.",
+          "enum": [
+            "assets",
+            "net"
+          ],
           "type": "string"
         }
       ]

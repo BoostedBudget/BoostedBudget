@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useGetHoldings } from '@boostedbudget/api-client/endpoints/investments/investments'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import { formatCurrency, formatPercent } from '@/shared/charts/formatters'
@@ -43,6 +44,14 @@ export function HoldingsTable() {
   const [filters, setFilters] = useState<FilterState>({})
 
   const { data: holdingsData, isLoading, isError } = useGetHoldings()
+  const { accounts } = useActiveAccounts()
+
+  // Build id→name map for resolving account UUIDs to human-readable names.
+  const accountNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    accounts?.forEach((a) => map.set(a.id, a.nickname ?? a.name))
+    return map
+  }, [accounts])
 
   const {
     sizing,
@@ -86,7 +95,7 @@ export function HoldingsTable() {
   const holdings = rawHoldings ?? []
 
   const accountOptions = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
-    label: id,
+    label: accountNameById.get(id) ?? id,
     value: id,
   }))
 
@@ -177,7 +186,7 @@ export function HoldingsTable() {
     {
       id: 'account',
       header: 'Account',
-      key: 'account_id',
+      render: (r) => <span>{accountNameById.get(r.account_id) ?? r.account_id}</span>,
       hideable: true,
       filter:
         accountOptions.length > 0

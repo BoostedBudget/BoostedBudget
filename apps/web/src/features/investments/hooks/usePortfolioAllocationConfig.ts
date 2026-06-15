@@ -1,10 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useUser } from '@clerk/react-router'
+import type { GetPortfolioAllocationBreakdownGroupBy } from '@boostedbudget/api-client/models/getPortfolioAllocationBreakdownGroupBy'
+import type { GetPortfolioAllocationBreakdownBasis } from '@boostedbudget/api-client/models/getPortfolioAllocationBreakdownBasis'
+
+export type { GetPortfolioAllocationBreakdownGroupBy, GetPortfolioAllocationBreakdownBasis }
 
 export interface AllocationConfig {
   include: string[]
-  group_by: string
-  basis: string
+  group_by: GetPortfolioAllocationBreakdownGroupBy
+  basis: GetPortfolioAllocationBreakdownBasis
 }
 
 const DEFAULT_CONFIG: AllocationConfig = {

@@ -112,6 +112,39 @@ describe('PortfolioPage', () => {
     expect(screen.getByText('1Y')).toBeDefined()
   })
 
+  // R5-7: proves the full preset→dateRange→API seam. Clicking a preset must change the
+  // {start_date,end_date} args forwarded to useGetPortfolioHistory — not just the preset label.
+  it('changes dateRange args reaching useGetPortfolioHistory when preset changes', async () => {
+    mockUseGetPortfolioSummary.mockReturnValue({ data: mockSummary, isLoading: false, isError: false })
+    mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+      transactions: [], fetchNextPage: () => {}, hasNextPage: false,
+      isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
+    })
+
+    mockUseGetPortfolioHistory.mockClear()
+    render(<PortfolioPage />, { wrapper: createWrapper() })
+
+    // Capture the initial call args (default preset = 1Y).
+    type HistoryArgs = { start_date: string; end_date: string }
+    const initialArgs = mockUseGetPortfolioHistory.mock.calls[0]?.[0] as HistoryArgs
+    expect(initialArgs?.start_date).toBeTruthy()
+    expect(initialArgs?.end_date).toBeTruthy()
+
+    // Click the 3M preset.
+    await userEvent.click(screen.getByText('3M'))
+
+    // The hook must be called again with a different (more recent) start_date.
+    const calls = mockUseGetPortfolioHistory.mock.calls
+    const lastArgs = calls[calls.length - 1]?.[0] as HistoryArgs
+    expect(lastArgs?.start_date).toBeTruthy()
+    expect(lastArgs.start_date).not.toBe(initialArgs.start_date) // range changed
+    // 3M ago is more recent than 1Y ago — start_date string lexicographic comparison works for ISO dates.
+    expect(lastArgs.start_date > initialArgs.start_date).toBe(true)
+  })
+
   // R4-6: proves PORTFOLIO_RANGE_CHANGED fires with the correct preset when user changes range.
   it('fires portfolio_range_changed event when preset is changed', async () => {
     mockUseGetPortfolioSummary.mockReturnValue({ data: mockSummary, isLoading: false, isError: false })

@@ -29,6 +29,18 @@ function subMonths(from: Date, n: number): Date {
   return d
 }
 
+/** Subtract n years, clamping to the last day of the target month.
+ * Prevents Date.setFullYear() overflow on leap day (e.g. Feb 29 - 1Y → Feb 28, not Mar 1). */
+function subYears(from: Date, n: number): Date {
+  const d = new Date(from)
+  const day = d.getDate()
+  d.setDate(1)
+  d.setFullYear(d.getFullYear() - n)
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  d.setDate(Math.min(day, lastDay))
+  return d
+}
+
 function computeDateRange(preset: PortfolioPreset): PortfolioDateRange {
   const today = new Date()
   const end_date = toISO(today)
@@ -43,8 +55,7 @@ function computeDateRange(preset: PortfolioPreset): PortfolioDateRange {
     case '3M':
       return { start_date: toISO(subMonths(today, 3)), end_date }
     case '1Y':
-      start.setFullYear(start.getFullYear() - 1)
-      break
+      return { start_date: toISO(subYears(today, 1)), end_date }
     case 'YTD':
       return { start_date: `${today.getFullYear()}-01-01`, end_date }
     case 'All':
