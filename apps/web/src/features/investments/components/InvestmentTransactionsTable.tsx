@@ -22,7 +22,9 @@ const TXN_COLUMN_IDS = [
   'fees',
 ] as const
 
-const MASKED_COLUMN_IDS = ['price', 'amount', 'fees']
+/** Exported so pii-coverage tests can statically verify all monetary columns are masked. */
+export const INVESTMENT_TXN_MASKED_COLUMN_IDS = ['quantity', 'price', 'amount', 'fees']
+const MASKED_COLUMN_IDS = INVESTMENT_TXN_MASKED_COLUMN_IDS
 
 export function InvestmentTransactionsTable({ dateRange }: InvestmentTransactionsTableProps) {
   const [sortState, setSortState] = useState<SortState>(null)
@@ -81,8 +83,8 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
       id: 'amount',
       header: 'Amount',
       key: 'amount',
-      sortable: true,
-      sortAccessor: (r) => r.amount,
+      // sortable intentionally omitted: cursor-based infinite scroll loads pages in
+      // date order; client-side sort would only reorder the loaded subset.
       numeric: true,
       align: 'right',
       render: (r) => formatCurrency(r.amount),

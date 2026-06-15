@@ -5,6 +5,7 @@ import {
   useDarkMode,
   CATEGORY_COLORS,
   formatCurrencyFull,
+  escapeHtml,
 } from '@/shared/charts'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
@@ -39,9 +40,9 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
           if (!params || typeof params !== 'object') return ''
           const p = params as { name: string; value?: number; percent?: number }
           if (typeof p.value === 'number' && typeof p.percent === 'number') {
-            return `${p.name}: ${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
+            return `${escapeHtml(String(p.name))}: ${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
           }
-          return String(p.name ?? '')
+          return escapeHtml(String(p.name ?? ''))
         },
       },
       legend: {
@@ -54,10 +55,19 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
           type: 'pie',
           radius: ['40%', '70%'],
           avoidLabelOverlap: false,
-          label: { show: true, position: 'inside', formatter: '{d}%' },
+          // Use API-computed percentage (not ECharts internal {d}%) so basis=net renders correctly
+          label: {
+            show: true,
+            position: 'inside',
+            formatter: (params: unknown) => {
+              const p = params as { data?: { pct?: number } }
+              return `${(p.data?.pct ?? 0).toFixed(1)}%`
+            },
+          },
           data: buckets.map((bucket, i) => ({
             name: normalizeBucketLabel(bucket, config.group_by),
             value: bucket.total_value,
+            pct: bucket.percentage,
             itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
           })),
         },

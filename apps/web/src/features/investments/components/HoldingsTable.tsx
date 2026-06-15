@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useGetHoldings } from '@boostedbudget/api-client/endpoints/investments/investments'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
@@ -8,8 +8,9 @@ import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 const formatOrDefault = (value: number | null | undefined): string =>
   value != null ? formatCurrency(value) : '--'
 
+// Backend returns percentage values already (e.g. 25.0 means 25%); no /100 conversion needed
 const formatPercentOrDefault = (value: number | null | undefined): string =>
-  value != null ? formatPercent(value / 100) : '--'
+  value != null ? formatPercent(value) : '--'
 
 const HOLDINGS_COLUMN_IDS = [
   'name',
@@ -27,6 +28,7 @@ const HOLDINGS_COLUMN_IDS = [
 ] as const
 
 const MASKED_COLUMN_IDS = [
+  'quantity',
   'price',
   'market_value',
   'cost_basis',
@@ -51,7 +53,29 @@ export function HoldingsTable() {
     onColumnVisibilityChange,
   } = useTablePreferences('portfolio-holdings', [...HOLDINGS_COLUMN_IDS])
 
-  const holdings = holdingsData?.holdings ?? []
+  const rawHoldings = holdingsData?.holdings
+
+  // DataTable uses manualSorting=true — apply client-side sort before rendering.
+  // Depend on rawHoldings (not rawHoldings ?? []) to avoid a new [] ref each render.
+  const sortedHoldings = useMemo(() => {
+    const all = rawHoldings ?? []
+    if (!sortState) return all
+    const accessors: Partial<Record<string, (r: HoldingView) => number>> = {
+      market_value: (r) => r.institution_value ?? 0,
+      gain_loss: (r) => r.gain_loss ?? 0,
+      gain_loss_pct: (r) => r.gain_loss_pct ?? 0,
+      day_change: (r) => r.day_change ?? 0,
+      day_change_pct: (r) => r.day_change_pct ?? 0,
+    }
+    const accessor = accessors[sortState.columnId]
+    if (!accessor) return all
+    return [...all].sort((a, b) => {
+      const cmp = accessor(a) < accessor(b) ? -1 : accessor(a) > accessor(b) ? 1 : 0
+      return sortState.direction === 'asc' ? cmp : -cmp
+    })
+  }, [rawHoldings, sortState])
+
+  const holdings = rawHoldings ?? []
 
   const accountOptions = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
     label: id,
@@ -172,7 +196,7 @@ export function HoldingsTable() {
 
   return (
     <DataTable
-      data={holdings}
+      data={sortedHoldings}
       columns={columns}
       rowKey={(r) => r.id}
       sort={sortState}
