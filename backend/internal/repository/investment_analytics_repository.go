@@ -86,13 +86,15 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		GROUP BY COALESCE(sec.type, 'unknown')`
 
 	// Optional cash branch: aggregate depository account current_balance as "cash".
+	// GREATEST(balance, 0) per-row floors overdrawn accounts to zero — a negative
+	// checking balance must not reduce the cash asset bucket.
 	if opts.IncludesCash() {
 		query += `
 		UNION ALL
 		SELECT
-			'cash'                                 AS security_type,
-			COUNT(*)                               AS holding_count,
-			COALESCE(SUM(a.current_balance), 0)    AS total_value
+			'cash'                                         AS security_type,
+			COUNT(*)                                       AS holding_count,
+			COALESCE(SUM(GREATEST(a.current_balance, 0)), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
 		  AND a.status = 'active'
@@ -187,6 +189,8 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 		GROUP BY a.id, a.name`
 
 	// Optional cash: one row per depository account, labeled by account name.
+	// GREATEST(balance, 0) floors overdrawn accounts to zero — same invariant as the
+	// security-type/asset-class cash branch above.
 	if opts.IncludesCash() {
 		query += `
 		UNION ALL
@@ -194,7 +198,7 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 			a.name                                AS security_type,
 			'depository'                          AS asset_class,
 			1                                     AS holding_count,
-			COALESCE(a.current_balance, 0)        AS total_value
+			GREATEST(COALESCE(a.current_balance, 0), 0) AS total_value
 		FROM accounts a
 		WHERE a.user_id = $1
 		  AND a.status = 'active'

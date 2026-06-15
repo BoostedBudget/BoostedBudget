@@ -18,6 +18,7 @@ import {
   mockUseInfiniteInvestmentTransactions,
 } from '@/test/mocks/investments-api'
 import { mockUseGetPortfolioAllocationBreakdown } from '@/test/mocks/analytics-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
 import type { GetPortfolioHistoryOutputBody } from '@boostedbudget/api-client/models/getPortfolioHistoryOutputBody'
 
@@ -62,17 +63,24 @@ describe('PortfolioPage', () => {
   it('renders error state when portfolio summary fails', () => {
     mockUseGetPortfolioSummary.mockReturnValue({ data: undefined, isLoading: false, isError: true })
     render(<PortfolioPage />, { wrapper: createWrapper() })
-    // Should show some error indicator
-    const errorElements = screen.queryAllByRole('alert', { hidden: true })
-    expect(errorElements.length + screen.queryAllByText(/error|failed|unable/i).length).toBeGreaterThan(0)
+    const errorElement = screen.queryByRole('alert', { hidden: true })
+    expect(errorElement).not.toBeNull()
   })
 
-  it('renders empty state with link-account CTA when holdings_count is 0', () => {
+  it('renders empty state with link-account CTA when holdings_count is 0 and no investment account', () => {
     const emptySummary: PortfolioSummary = { ...mockSummary, holdings_count: 0 }
     mockUseGetPortfolioSummary.mockReturnValue({ data: emptySummary, isLoading: false, isError: false })
+    // Accounts loaded, none are investment type → empty state with CTA
+    mockUseGetAccounts.mockReturnValueOnce({
+      data: { accounts: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
     render(<PortfolioPage />, { wrapper: createWrapper() })
-    // EmptyState renders an h3 with the title
-    expect(screen.getByText(/no.*(portfolio|investment|holding)/i)).toBeDefined()
+    // EmptyState renders its title
+    expect(screen.getByText(/no portfolio data yet/i)).toBeDefined()
     // PlaidLinkButton CTA must render (loading state shows "Preparing bank connection...")
     expect(
       screen.queryByText(/preparing bank connection|connect bank account/i)
@@ -84,16 +92,15 @@ describe('PortfolioPage', () => {
     mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
-    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+    const mockTransactions = {
       transactions: [], fetchNextPage: () => {}, hasNextPage: false,
       isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
-    })
+    }
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(mockTransactions)
 
     render(<PortfolioPage />, { wrapper: createWrapper() })
 
-    // Should not show empty state title "No portfolio data yet"
     expect(screen.queryByText(/no portfolio data/i)).toBeNull()
-    // Should render a heading or the summary card label
     expect(screen.getByText(/total value/i)).toBeDefined()
   })
 
@@ -102,13 +109,13 @@ describe('PortfolioPage', () => {
     mockUseGetPortfolioHistory.mockReturnValue({ data: undefined, isLoading: false, isError: false })
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
-    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+    const mockTransactions = {
       transactions: [], fetchNextPage: () => {}, hasNextPage: false,
       isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
-    })
+    }
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(mockTransactions)
 
     render(<PortfolioPage />, { wrapper: createWrapper() })
-    // 1Y preset should be visible by default
     expect(screen.getByText('1Y')).toBeDefined()
   })
 
@@ -119,10 +126,11 @@ describe('PortfolioPage', () => {
     mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
-    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+    const mockTransactions = {
       transactions: [], fetchNextPage: () => {}, hasNextPage: false,
       isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
-    })
+    }
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(mockTransactions)
 
     mockUseGetPortfolioHistory.mockClear()
     render(<PortfolioPage />, { wrapper: createWrapper() })
@@ -145,12 +153,94 @@ describe('PortfolioPage', () => {
     expect(lastArgs.start_date > initialArgs.start_date).toBe(true)
   })
 
+  // R6-4: Gate empty-state CTA on investment-account presence.
+  // A synced brokerage with 0 holdings (e.g. cash-only) must NOT show the "connect" CTA.
+  it('renders sections (not Plaid CTA) when holdings_count is 0 but an investment account is linked', () => {
+    const emptySummary: PortfolioSummary = { ...mockSummary, holdings_count: 0 }
+    mockUseGetPortfolioSummary.mockReturnValue({ data: emptySummary, isLoading: false, isError: false })
+    // Accounts loaded: one investment account present
+    mockUseGetAccounts.mockReturnValueOnce({
+      data: {
+        accounts: [{
+          id: 'acc-inv',
+          type: 'investment',
+          status: 'active',
+          name: 'Brokerage',
+          user_id: 'u1',
+          linked_item_id: 'li1',
+          plaid_account_id: 'p1',
+          created_at: '2024-01-01',
+          updated_at: '2024-01-01',
+          currency_code: 'USD',
+          is_hidden: false,
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+      transactions: [], fetchNextPage: () => {}, hasNextPage: false,
+      isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
+    })
+
+    render(<PortfolioPage />, { wrapper: createWrapper() })
+
+    // CTA must NOT appear — an investment account is already linked.
+    // "No portfolio data yet" is the EmptyState title; "Connect a brokerage" is the description.
+    expect(screen.queryByText(/no portfolio data yet/i)).toBeNull()
+    expect(screen.queryByText(/connect a brokerage account/i)).toBeNull()
+    // Sections must render — the summary card shows "Total Value"
+    expect(screen.getByText(/total value/i)).toBeDefined()
+  })
+
+  it('renders Plaid CTA when holdings_count is 0 and no investment account is linked (only depository)', () => {
+    const emptySummary: PortfolioSummary = { ...mockSummary, holdings_count: 0 }
+    mockUseGetPortfolioSummary.mockReturnValue({ data: emptySummary, isLoading: false, isError: false })
+    // Accounts loaded: only a depository (no investment)
+    mockUseGetAccounts.mockReturnValueOnce({
+      data: {
+        accounts: [{
+          id: 'acc-dep',
+          type: 'depository',
+          status: 'active',
+          name: 'Checking',
+          user_id: 'u1',
+          linked_item_id: 'li1',
+          plaid_account_id: 'p2',
+          created_at: '2024-01-01',
+          updated_at: '2024-01-01',
+          currency_code: 'USD',
+          is_hidden: false,
+        }],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+
+    render(<PortfolioPage />, { wrapper: createWrapper() })
+
+    expect(screen.getByText(/no portfolio data yet/i)).toBeDefined()
+    expect(screen.queryByText(/preparing bank connection|connect bank account/i)).not.toBeNull()
+  })
+
   // R4-6: proves PORTFOLIO_RANGE_CHANGED fires with the correct preset when user changes range.
   it('fires portfolio_range_changed event when preset is changed', async () => {
     mockUseGetPortfolioSummary.mockReturnValue({ data: mockSummary, isLoading: false, isError: false })
     mockUseGetPortfolioHistory.mockReturnValue({ data: mockHistory, isLoading: false, isError: false })
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({ data: undefined, isLoading: false, isError: false })
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    const mockTransactions = {
+      transactions: [], fetchNextPage: () => {}, hasNextPage: false,
+      isFetchingNextPage: false, isLoading: false, isError: false, isSuccess: true,
+    }
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(mockTransactions)
 
     render(<PortfolioPage />, { wrapper: createWrapper() })
 
