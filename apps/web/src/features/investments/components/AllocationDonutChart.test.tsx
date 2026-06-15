@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
 import { mockUseGetPortfolioAllocationBreakdown } from '@/test/mocks/analytics-api'
 import { AllocationDonutChart } from './AllocationDonutChart'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
@@ -59,24 +59,18 @@ describe('AllocationDonutChart', () => {
     expect(screen.getByText(/no allocation data/i)).toBeDefined()
   })
 
-  it('shows no-data state when buckets is null', () => {
-    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
-      data: { total_value: 0, buckets: null },
-      isLoading: false,
-      isError: false,
+  it('shows no-data state when buckets is null or undefined', () => {
+    // Test both null and undefined — both falsy cases render no-data state.
+    ;[null, undefined].forEach((buckets) => {
+      mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+        data: buckets === undefined ? undefined : { total_value: 0, buckets: buckets as null },
+        isLoading: false,
+        isError: false,
+      })
+      const { unmount } = render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+      expect(screen.getByText(/no allocation data/i)).toBeDefined()
+      unmount()
     })
-    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
-    expect(screen.getByText(/no allocation data/i)).toBeDefined()
-  })
-
-  it('shows no-data state when data is undefined', () => {
-    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: false,
-    })
-    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
-    expect(screen.getByText(/no allocation data/i)).toBeDefined()
   })
 
   it('normalizes "unknown" bucket label to "Other"', () => {
@@ -142,5 +136,36 @@ describe('AllocationDonutChart', () => {
     const chart = screen.getByTestId('echarts-chart')
     const types = JSON.parse(chart.dataset.seriesTypes ?? '[]') as string[]
     expect(types[0]).toBe('pie')
+  })
+
+  // Criterion 7: "shows % AND value" — the legend formatter must produce text that includes
+  // both a currency value ($) and a percentage (%) so the legend is self-contained.
+  it('legend formatter produces text with currency and percent', () => {
+    const buckets = [
+      { security_type: 'stock', asset_class: 'stock', total_value: 8000, percentage: 80, holding_count: 3 },
+      { security_type: 'cash', asset_class: 'cash', total_value: 2000, percentage: 20, holding_count: 1 },
+    ]
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: { total_value: 10000, buckets },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    // Retrieve the option prop passed to EChartsChart via mock call inspection.
+    const calls = MockEChartsChart.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    // The last call's first arg is the props object; option is a prop.
+    const props = calls[calls.length - 1][0] as { option?: { legend?: { formatter?: unknown } } }
+    const formatter = props.option?.legend?.formatter
+
+    expect(typeof formatter).toBe('function')
+    if (typeof formatter === 'function') {
+      const result = formatter('stock') as string
+      // Must include a currency marker and a percent marker
+      expect(result).toContain('$')
+      expect(result).toContain('%')
+    }
   })
 })

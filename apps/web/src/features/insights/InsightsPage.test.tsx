@@ -6,6 +6,7 @@
 // (real useInfiniteQuery under the mocked getInvestmentTransactions fetcher).
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import React from 'react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -65,5 +66,19 @@ describe('InsightsPage', () => {
     const tab = screen.getByRole('tab', { name: 'Portfolio' })
     expect(tab).toBeDefined()
     expect(tab.getAttribute('data-state')).toBe('active')
+  })
+
+  it('clicking Portfolio tab updates URL and activates the Portfolio tab', async () => {
+    // Start at default (Spending tab) — no ?tab param
+    renderInsightsPage()
+    const portfolioTab = screen.getByRole('tab', { name: 'Portfolio' })
+    expect(portfolioTab.getAttribute('data-state')).toBe('inactive')
+
+    // useTabState writes ?tab=portfolio to MemoryRouter history on click
+    await userEvent.click(portfolioTab)
+
+    expect(portfolioTab.getAttribute('data-state')).toBe('active')
+    // Spending and Net Worth should no longer be active
+    expect(screen.getByRole('tab', { name: 'Spending' }).getAttribute('data-state')).toBe('inactive')
   })
 })

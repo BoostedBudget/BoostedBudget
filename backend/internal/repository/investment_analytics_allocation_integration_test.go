@@ -21,6 +21,16 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// assertPercentagesSum100 is a helper that validates allocation percentages sum to 100%.
+func assertPercentagesSum100(t *testing.T, buckets []domain.AllocationItem, msg string) {
+	t.Helper()
+	var total float64
+	for _, b := range buckets {
+		total += b.Percentage
+	}
+	assert.InDelta(t, 100.0, total, 0.1, msg)
+}
+
 // seedAllocationFixture creates a user with three accounts:
 //   - investment brokerage with one stock holding (value=5000)
 //   - depository checking account (current_balance=3000)
@@ -224,7 +234,12 @@ func TestAllocationBreakdown_CashPlusLiabilities_BothBuckets_Integration(t *test
 
 // TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration proves that
 // basis=net drops the liabilities bucket from the response and sets TotalValue to the
-// net-of-liabilities total. Asset percentages must recompute on the net denominator and sum to 100%.
+// net-of-liabilities total (Option A: TotalValue=assets−liabilities, percentages on asset
+// denominator so the donut ring sums to 100%).
+//
+// Fixture: stock=5000, cash=3000, liabilities(credit)=1200.
+// grandTotal inside repo = 9200 (all buckets positive).
+// Expected: TotalValue=6800, stock%=62.5% (5000/8000), cash%=37.5% (3000/8000), Σ=100%.
 func TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -233,7 +248,6 @@ func TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration(t 
 	require.NoError(t, err)
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// Fixture: stock=5000, cash(depository)=3000, liabilities(credit)=|−1200|=1200
 	userID, _, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-basis-net")
 	repo := NewInvestmentAnalyticsRepository(tx)
 
@@ -246,16 +260,16 @@ func TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration(t 
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// basis=net: TotalValue = assets(5000+3000) − liabilities(1200) = 6800
-	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total must be assets minus liabilities")
+	// Option A: TotalValue = asset_total − liabilities = (5000+3000) − 1200 = 6800.
+	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total must be asset_total minus liabilities")
 
-	// Liabilities bucket must NOT appear — it is consumed by the net calculation.
+	// Liabilities bucket must NOT appear — consumed by the net calculation.
 	for _, b := range result.Buckets {
 		assert.NotEqual(t, "liabilities", b.SecurityType,
 			"liabilities bucket must not appear in basis=net response")
 	}
 
-	// Asset buckets: stock + cash
+	// Asset buckets: stock + cash.
 	var stockBucket, cashBucket *domain.AllocationItem
 	for i := range result.Buckets {
 		switch result.Buckets[i].SecurityType {
@@ -270,18 +284,12 @@ func TestAllocationBreakdown_BasisNet_RemovesLiabilitiesFromTotal_Integration(t 
 	require.NotNil(t, stockBucket, "stock bucket must be present")
 	require.NotNil(t, cashBucket, "cash bucket must be present")
 
-	// Percentages must be computed on net denominator (6800), not gross.
-	assert.InDelta(t, 5000.0/6800.0*100, stockBucket.Percentage, 0.1,
-		"stock pct must be relative to net total")
-	assert.InDelta(t, 3000.0/6800.0*100, cashBucket.Percentage, 0.1,
-		"cash pct must be relative to net total")
-
-	// All asset bucket percentages must sum to ~100%.
-	var totalPct float64
-	for _, b := range result.Buckets {
-		totalPct += b.Percentage
-	}
-	assert.InDelta(t, 100.0, totalPct, 0.1, "asset percentages must sum to 100%% in basis=net")
+	// Option A: percentages on asset denominator (8000) so donut ring sums to 100%.
+	assert.InDelta(t, 5000.0/8000.0*100, stockBucket.Percentage, 0.1,
+		"stock pct on asset denominator (not net denominator)")
+	assert.InDelta(t, 3000.0/8000.0*100, cashBucket.Percentage, 0.1,
+		"cash pct on asset denominator (not net denominator)")
+	assertPercentagesSum100(t, result.Buckets, "asset percentages must sum to 100%% in basis=net")
 }
 
 // TestAllocationBreakdown_GroupByAccount_Integration proves that group_by=account returns
@@ -340,10 +348,12 @@ func TestAllocationBreakdown_GroupByAccount_Integration(t *testing.T) {
 		assert.NotEqual(t, "credit", b.AssetClass, "credit account must not appear")
 		assert.NotEqual(t, "loan", b.AssetClass, "loan account must not appear")
 	}
+	assertPercentagesSum100(t, result.Buckets, "percentages must sum to 100%% when basis=assets")
 }
 
 // TestAllocationBreakdown_GroupByAccount_BasisNet_Integration proves that group_by=account
-// combined with basis=net removes credit/loan account buckets and sets TotalValue to net.
+// combined with basis=net removes credit/loan account buckets and sets TotalValue to the
+// net total (Option A: TotalValue=asset_total−liabilities; percentages on asset denominator).
 func TestAllocationBreakdown_GroupByAccount_BasisNet_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -365,8 +375,8 @@ func TestAllocationBreakdown_GroupByAccount_BasisNet_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// basis=net: net = (5000 + 3000) − 1200 = 6800; credit bucket removed.
-	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total = assets − liabilities")
+	// Option A: TotalValue = (5000+3000) − 1200 = 6800; credit bucket removed.
+	assert.InDelta(t, 6800.0, result.TotalValue, 0.01, "net total = asset_total minus liabilities")
 	for _, b := range result.Buckets {
 		assert.NotEqual(t, "credit", b.AssetClass, "credit account must not appear in basis=net")
 		assert.NotEqual(t, "loan", b.AssetClass, "loan account must not appear in basis=net")
@@ -374,6 +384,9 @@ func TestAllocationBreakdown_GroupByAccount_BasisNet_Integration(t *testing.T) {
 
 	// Two buckets: brokerage + checking only.
 	require.Len(t, result.Buckets, 2, "only asset accounts in basis=net response")
+
+	// Percentages on asset denominator (8000) so ring sums to 100%.
+	assertPercentagesSum100(t, result.Buckets, "percentages must sum to 100%% in basis=net+account mode")
 }
 
 // TestAllocationBreakdown_GroupByAssetClass_Integration proves that group_by=asset_class

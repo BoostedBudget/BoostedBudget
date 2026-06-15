@@ -5,6 +5,7 @@ import {
   useDarkMode,
   CATEGORY_COLORS,
   formatCurrencyFull,
+  formatPercent,
   escapeHtml,
 } from '@/shared/charts'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
@@ -33,6 +34,17 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
 
   const option = useMemo((): EChartsOption => {
     if (!buckets || buckets.length === 0) return {}
+
+    // Build name→{value,pct} lookup so the legend formatter can show value and % without
+    // relying on ECharts-internal params (which aren't available in legend formatters).
+    const sliceData = buckets.map((bucket, i) => ({
+      name: normalizeBucketLabel(bucket, config.group_by),
+      value: bucket.total_value,
+      pct: bucket.percentage,
+      itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
+    }))
+    const sliceByName = new Map(sliceData.map((s) => [s.name, s]))
+
     return {
       tooltip: {
         trigger: 'item',
@@ -53,6 +65,12 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         orient: 'vertical',
         right: 0,
         top: 'middle',
+        // Surface value + % in the legend so the donut is readable without hovering.
+        formatter: (name: string) => {
+          const slice = sliceByName.get(name)
+          if (!slice) return escapeHtml(name)
+          return `${escapeHtml(name)}  ${formatCurrencyFull(slice.value)}  (${formatPercent(slice.pct)})`
+        },
       },
       series: [
         {
@@ -68,12 +86,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
               return `${(p.data?.pct ?? 0).toFixed(1)}%`
             },
           },
-          data: buckets.map((bucket, i) => ({
-            name: normalizeBucketLabel(bucket, config.group_by),
-            value: bucket.total_value,
-            pct: bucket.percentage,
-            itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
-          })),
+          data: sliceData,
         },
       ],
     }

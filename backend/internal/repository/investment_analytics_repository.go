@@ -259,9 +259,16 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 	return &domain.AllocationBreakdown{Buckets: buckets, TotalValue: grandTotal}, nil
 }
 
-// applyNetBasis removes liability buckets from the slice and returns the net total
-// (assets − liabilities) and asset-only buckets with percentages recomputed on the
-// net denominator.
+// applyNetBasis removes liability buckets from the slice and returns (asset-only buckets,
+// net total). Option-A semantics (user-confirmed):
+//
+//   - TotalValue (headline) = asset_total − liabilities  (true net worth; e.g. 6800)
+//   - Slice percentages use asset_total as the denominator so the donut ring sums to 100%
+//     (e.g. stock=62.5%, cash=37.5%) rather than the net denominator (which would sum >100%)
+//
+// grandTotal from the row-scan loop includes the positive-valued liabilities union row, so
+// asset_total = grandTotal − liabilitiesTotal (e.g. 9200 − 1200 = 8000).
+// netTotal = asset_total − liabilitiesTotal (e.g. 8000 − 1200 = 6800).
 //
 // Liability detection:
 //   - security_type/asset_class modes: SecurityType == "liabilities"
@@ -276,10 +283,15 @@ func applyNetBasis(buckets []domain.AllocationItem, grandTotal float64) ([]domai
 			assetBuckets = append(assetBuckets, b)
 		}
 	}
-	netTotal := grandTotal - liabilitiesTotal
-	if netTotal > 0 {
+	// assetTotal is the sum of non-liability buckets (grandTotal already includes liabilities
+	// as a positive union row, so we subtract them once to recover the pure asset sum).
+	// netTotal is the true net-worth headline: assets minus what we owe.
+	assetTotal := grandTotal - liabilitiesTotal
+	netTotal := assetTotal - liabilitiesTotal
+	// Percentages on assetTotal so the donut ring always completes 100%.
+	if assetTotal > 0 {
 		for i := range assetBuckets {
-			assetBuckets[i].Percentage = assetBuckets[i].TotalValue / netTotal * 100
+			assetBuckets[i].Percentage = assetBuckets[i].TotalValue / assetTotal * 100
 		}
 	}
 	return assetBuckets, netTotal

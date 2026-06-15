@@ -34,6 +34,104 @@ func incomeSubtypeAnyArgs() []interface{} {
 	return args
 }
 
+// TestApplyNetBasis_OptionA tests that applyNetBasis implements Option-A semantics:
+//   - TotalValue (headline) = asset_total − liabilities (true net worth)
+//   - Slice percentages use the asset denominator so the donut ring sums to 100%
+//   - Liability bucket is removed from the output slice
+//
+// Fixture: stock=5000, cash=3000, liabilities=1200; grandTotal=9200 (all positive).
+// Expected: netTotal=6800 (5000+3000−1200), stock%≈62.5%, cash%≈37.5% (both /8000).
+func TestApplyNetBasis_OptionA(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		{SecurityType: "stock", TotalValue: 5000, HoldingCount: 1},
+		{SecurityType: "cash", TotalValue: 3000, HoldingCount: 1},
+		{SecurityType: "liabilities", TotalValue: 1200, HoldingCount: 1},
+	}
+	grandTotal := 9200.0 // 5000+3000+1200 as summed by the row-scan loop
+
+	result, total := applyNetBasis(buckets, grandTotal)
+
+	// Option A: headline = assets − liabilities = (9200−1200) − 1200 = 6800.
+	assert.InDelta(t, 6800.0, total, 0.01, "net total must be asset_total minus liabilities")
+
+	// Liabilities bucket must be removed.
+	for _, b := range result {
+		assert.NotEqual(t, "liabilities", b.SecurityType, "liabilities bucket must not appear in output")
+	}
+
+	// Exactly 2 asset buckets.
+	require.Len(t, result, 2)
+
+	var stockBucket, cashBucket *domain.AllocationItem
+	for i := range result {
+		switch result[i].SecurityType {
+		case "stock":
+			b := result[i]
+			stockBucket = &b
+		case "cash":
+			b := result[i]
+			cashBucket = &b
+		}
+	}
+	require.NotNil(t, stockBucket, "stock bucket must be present")
+	require.NotNil(t, cashBucket, "cash bucket must be present")
+
+	// Percentages on asset denominator (8000), so ring sums to 100%.
+	assert.InDelta(t, 5000.0/8000.0*100, stockBucket.Percentage, 0.1, "stock pct on asset denominator")
+	assert.InDelta(t, 3000.0/8000.0*100, cashBucket.Percentage, 0.1, "cash pct on asset denominator")
+
+	var totalPct float64
+	for _, b := range result {
+		totalPct += b.Percentage
+	}
+	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100%%")
+}
+
+// TestApplyNetBasis_AccountMode tests that applyNetBasis correctly identifies liability
+// buckets in group_by=account mode, where AssetClass is "credit" or "loan" (not SecurityType).
+func TestApplyNetBasis_AccountMode(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		{SecurityType: "Brokerage", AssetClass: "investment", TotalValue: 5000},
+		{SecurityType: "Checking", AssetClass: "depository", TotalValue: 3000},
+		{SecurityType: "Visa Card", AssetClass: "credit", TotalValue: 1200},
+	}
+	grandTotal := 9200.0
+
+	result, total := applyNetBasis(buckets, grandTotal)
+
+	assert.InDelta(t, 6800.0, total, 0.01, "net total = asset_total − liabilities")
+	require.Len(t, result, 2)
+
+	var totalPct float64
+	for _, b := range result {
+		assert.NotEqual(t, "credit", b.AssetClass, "credit account must be removed")
+		totalPct += b.Percentage
+	}
+	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100%%")
+}
+
+// TestApplyNetBasis_NoLiabilities tests that applyNetBasis is a no-op when there are
+// no liability buckets (basis=net with include=[] — investment-only allocation).
+func TestApplyNetBasis_NoLiabilities(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		{SecurityType: "stock", TotalValue: 5000, HoldingCount: 2},
+		{SecurityType: "etf", TotalValue: 3000, HoldingCount: 1},
+	}
+	grandTotal := 8000.0
+
+	result, total := applyNetBasis(buckets, grandTotal)
+
+	// No liabilities → net = assets = grand total; percentages unchanged.
+	assert.InDelta(t, 8000.0, total, 0.01, "net total == asset total when no liabilities")
+	require.Len(t, result, 2)
+
+	var totalPct float64
+	for _, b := range result {
+		totalPct += b.Percentage
+	}
+	assert.InDelta(t, 100.0, totalPct, 0.1, "percentages must sum to 100%%")
+}
+
 // TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets tests that AllocationBreakdown
 // groups rows into buckets and computes percentages correctly.
 func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testing.T) {

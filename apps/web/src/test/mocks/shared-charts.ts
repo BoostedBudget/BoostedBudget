@@ -142,8 +142,9 @@ const EChartsChartMockComponent = ({
 }
 export const MockEChartsChart = mock(EChartsChartMockComponent)
 
-// escapeHtml is a pure utility — pass through the real implementation, no mock needed
+// escapeHtml and formatPercent are pure utilities — pass through the real implementations
 import { escapeHtml } from '../../shared/charts/escapeHtml'
+import { formatPercent } from '../../shared/charts/formatters'
 
 // === Mock the module ===
 mock.module('@/shared/charts', () => ({
@@ -161,5 +162,6 @@ mock.module('@/shared/charts', () => ({
   formatCurrency: mockFormatCurrency,
   formatCurrencyCompact: mockFormatCurrencyCompact,
   formatCurrencyFull: mockFormatCurrencyFull,
+  formatPercent,
   escapeHtml,
 }))

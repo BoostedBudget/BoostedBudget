@@ -37,7 +37,10 @@ function formatAmount(amount: number): string {
 export function ChangeIndicator({ variant = 'neutral', amount, percent, label = 'Net worth', className }: ChangeIndicatorProps) {
   const directionMap = { positive: 'up', negative: 'down', neutral: 'unchanged' } as const
   const direction = directionMap[variant ?? 'neutral']
-  const ariaLabel = `${label} ${direction} by ${formatPercent(Math.abs(percent))} versus previous period`
+  // Numeric percent intentionally omitted from aria-label — PostHog session replay captures
+  // attribute text, which would expose a financial figure. The visible (data-ph-mask'd) span
+  // is still read by screen readers. See docs/security/posthog-pii-masking.md §attribute rule.
+  const ariaLabel = `${label} ${direction} versus previous period`
 
   return (
     <span
