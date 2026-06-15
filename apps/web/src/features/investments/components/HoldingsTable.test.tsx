@@ -9,13 +9,15 @@
  * Filter is proven by opening the account filter dropdown and selecting an account.
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HoldingsTable } from './HoldingsTable'
 import { mockUseGetHoldings } from '@/test/mocks/investments-api'
+import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/clerk'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
+import type { Account } from '@boostedbudget/api-client/models'
 
 function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingView {
   return {
@@ -51,9 +53,52 @@ const holdingLowGain = makeHolding({ id: 'h4', security_name: 'LowGainHighDay', 
 const holdingMidGain = makeHolding({ id: 'h5', security_name: 'MidGainMidDay', ticker_symbol: 'MGM', gain_loss_pct: 25, day_change_pct: 2.5, institution_value: 3000, account_id: 'acct-x' })
 const holdingHighGain = makeHolding({ id: 'h6', security_name: 'HighGainLowDay', ticker_symbol: 'HGL', gain_loss_pct: 50, day_change_pct: 0.5, institution_value: 1000, account_id: 'acct-x' })
 
+function makeAccount(overrides: Partial<Account> & { id: string; name: string }): Account {
+  return {
+    available_balance: undefined,
+    created_at: '2024-01-01',
+    currency_code: 'USD',
+    current_balance: 10000,
+    custom_color: undefined,
+    custom_emoji: undefined,
+    custom_icon: undefined,
+    display_order: undefined,
+    institution_name: 'Test Bank',
+    is_hidden: false,
+    linked_item_id: 'item-1',
+    linked_item_status: 'active',
+    mask: undefined,
+    nickname: undefined,
+    official_name: undefined,
+    plaid_account_id: 'plaid-1',
+    replaced_at: undefined,
+    replaced_by_id: undefined,
+    status: 'active',
+    subtype: 'checking',
+    type: 'depository',
+    updated_at: '2024-01-01',
+    user_account_id: undefined,
+    user_id: 'u1',
+    ...overrides,
+  }
+}
+
+const accountAlpha = makeAccount({ id: 'acct-alpha', name: 'Alpha Brokerage' })
+const accountBeta = makeAccount({ id: 'acct-beta', name: 'Beta Brokerage' })
+
 describe('HoldingsTable', () => {
   beforeEach(() => {
     mockUseGetHoldings.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [accountAlpha, accountBeta] },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+  })
+
+  afterEach(() => {
+    mockUseGetAccounts.mockClear()
   })
 
   it('renders holdings data', () => {
@@ -129,6 +174,22 @@ describe('HoldingsTable', () => {
     expect(dataRows[0].textContent).toContain('TSLA')
   })
 
+  it('shows account names (not raw IDs) in Account column cells and filter options', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [holdingA, holdingB], count: 2 },
+      isLoading: false,
+      isError: false,
+    })
+    render(<HoldingsTable />)
+
+    // Account column cells should show the account name, not the raw UUID
+    expect(screen.getAllByText('Alpha Brokerage').length).toBeGreaterThan(0)
+    // Raw ID should not appear in the account column cell
+    const rows = screen.getAllByRole('row').slice(1)
+    const hasRawId = rows.some((r) => r.textContent?.includes('acct-alpha') || r.textContent?.includes('acct-beta'))
+    expect(hasRawId).toBe(false)
+  })
+
   it('filters rows to selected account when account filter is applied', async () => {
     mockUseGetHoldings.mockReturnValue({
       data: { holdings: [holdingA, holdingB, holdingC], count: 3 },
@@ -144,11 +205,10 @@ describe('HoldingsTable', () => {
 
     // DataTable renders a filter button for the Account column with aria-label "Filter by Account"
     await userEvent.click(screen.getByRole('button', { name: /filter by account/i }))
-    // Use checkbox role to target the dropdown option unambiguously — 'acct-beta' also
-    // appears as cell text in the Account column for holdingB, causing getByText to throw.
-    await userEvent.click(screen.getByRole('checkbox', { name: 'acct-beta' }))
+    // Filter dropdown should show account names, not raw IDs
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Beta Brokerage' }))
 
-    // After applying the filter, only MSFT (acct-beta) should remain
+    // After applying the filter, only MSFT (acct-beta = Beta Brokerage) should remain
     expect(screen.queryByText('AAPL')).toBeNull()
     expect(screen.queryByText('TSLA')).toBeNull()
     expect(screen.getByText('MSFT')).toBeDefined()
@@ -219,5 +279,26 @@ describe('HoldingsTable', () => {
     // Restore mock and localStorage for subsequent tests.
     mockUseUser.mockReturnValue(createMockClerkUser())
     localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
+  })
+
+  // R5-5: C11 — HoldingsTable is CSS-only dark; this test gates against dark-mode class
+  // changes stripping data-ph-mask from monetary cells.
+  describe('dark mode', () => {
+    afterEach(() => {
+      document.documentElement.classList.remove('dark')
+    })
+
+    it('renders and applies data-ph-mask to monetary cells in dark mode context', () => {
+      document.documentElement.classList.add('dark')
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      const { container } = render(<HoldingsTable />)
+      expect(screen.getByText('AAPL')).toBeDefined()
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      expect(maskedTds.length).toBeGreaterThan(0)
+    })
   })
 })

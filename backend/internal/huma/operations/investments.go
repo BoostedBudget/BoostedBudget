@@ -121,9 +121,16 @@ type GetInvestmentTransactionsOutput struct {
 // Unknown values for group_by or basis return HTTP 422. Unknown values in include also return 422.
 type GetPortfolioAllocationBreakdownInput struct {
 	inputs.AuthenticatedInput
-	Include string `query:"include"  doc:"Comma-separated list of additional asset classes to include in the breakdown. Allowed values: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only)."`
-	GroupBy string `query:"group_by" doc:"Bucketing dimension. Allowed values: 'security_type' (default), 'asset_class', 'account'."`
-	Basis   string `query:"basis"    doc:"Whether liabilities reduce the total. Allowed values: 'assets' (default, assets-only), 'net' (net of liabilities)."`
+	// Include is a comma-separated list of additional asset classes to union into the breakdown.
+	// Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts).
+	// Default: empty — investment holdings only (backward-compatible with existing consumers).
+	Include string `query:"include" doc:"Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible)."`
+	// GroupBy controls how the results are bucketed.
+	// Default: 'security_type'. Allowed values: 'security_type', 'asset_class', 'account'.
+	GroupBy string `query:"group_by" doc:"How to bucket the result. Default: 'security_type'." enum:"security_type,asset_class,account"`
+	// Basis controls whether liabilities are netted against assets in the headline total.
+	// Default: 'assets'. Allowed values: 'assets' (gross assets), 'net' (assets minus liabilities).
+	Basis string `query:"basis" doc:"Whether liabilities reduce the total. Default: 'assets'." enum:"assets,net"`
 }
 
 // GetPortfolioAllocationBreakdownOutput is the response for GET /investments/portfolio/allocation.
@@ -332,12 +339,13 @@ func (h *InvestmentHandler) GetPortfolioAllocationBreakdown(ctx context.Context,
 	}
 
 	if input.Include != "" {
-		for _, v := range parseCommaSeparated(input.Include) {
+		includeValues := parseCommaSeparated(input.Include)
+		for _, v := range includeValues {
 			if !validAllocationIncludeValues[v] {
 				return nil, huma.Error422UnprocessableEntity("invalid include value '"+v+"': must be one of cash, liabilities", nil)
 			}
 		}
-		opts.Include = parseCommaSeparated(input.Include)
+		opts.Include = includeValues
 	}
 
 	result, err := h.analyticsService.GetAllocationBreakdown(ctx, input.UserID, opts)

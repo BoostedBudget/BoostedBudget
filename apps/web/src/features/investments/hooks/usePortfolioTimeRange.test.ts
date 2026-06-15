@@ -111,5 +111,14 @@ describe('usePortfolioTimeRange', () => {
       const { result } = renderHook(() => usePortfolioTimeRange('1M'))
       expect(result.current.dateRange.start_date).toBe('2026-05-14')
     })
+
+    it('1Y on leap day Feb 29 clamps to Feb 28 of prior non-leap year', () => {
+      // 2028 is a leap year. Subtracting 1Y from 2028-02-29 via setFullYear produces
+      // 2027-03-01 (overflow) — should clamp to 2027-02-28 instead.
+      setSystemTime(new Date('2028-02-29T15:00:00Z'))
+      const { result } = renderHook(() => usePortfolioTimeRange('1Y'))
+      expect(result.current.dateRange.start_date).toBe('2027-02-28')
+      expect(result.current.dateRange.end_date).toBe('2028-02-29')
+    })
   })
 })

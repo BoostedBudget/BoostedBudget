@@ -9,13 +9,13 @@ import {
   escapeHtml,
 } from '@/shared/charts'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
-import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
+import type { AllocationConfig, GetPortfolioAllocationBreakdownGroupBy } from '../hooks/usePortfolioAllocationConfig'
 
 interface AllocationDonutChartProps {
   config: AllocationConfig
 }
 
-function normalizeBucketLabel(bucket: { security_type: string; asset_class: string }, groupBy: string): string {
+function normalizeBucketLabel(bucket: { security_type: string; asset_class: string }, groupBy: GetPortfolioAllocationBreakdownGroupBy): string {
   const raw = groupBy === 'asset_class' ? bucket.asset_class : bucket.security_type
   if (!raw || raw.toLowerCase() === 'unknown') return 'Other'
   return raw

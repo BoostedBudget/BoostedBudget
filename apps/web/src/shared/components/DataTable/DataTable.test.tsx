@@ -2021,6 +2021,30 @@ describe('DataTable virtualization', () => {
     }
   })
 
+  it('renders emptyState in virtualized tbody when data is empty', () => {
+    render(
+      <DataTable<Row>
+        data={[]}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        emptyState={<p>No virtual rows</p>}
+        virtualization={{
+          enabled: true,
+          estimateRowHeight: 56,
+          scrollContainerHeight: '400px',
+        }}
+      />
+    )
+    expect(screen.getByText('No virtual rows')).toBeInTheDocument()
+    const td = screen.getByText('No virtual rows').closest('td')
+    expect(td).not.toBeNull()
+    expect(td?.closest('tbody')).not.toBeNull()
+  })
+
   it('calls onScrollEnd when last virtual item is within prefetchRows of the end', () => {
     const onScrollEnd = mock(() => {})
     const tinyRows: Row[] = Array.from({ length: 5 }, (_, i) => ({

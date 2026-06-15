@@ -1483,6 +1483,35 @@ describe('PII coverage — Round 13 extended: PortfolioValueChart', () => {
   })
 })
 
+describe('PII coverage — Round 13 extended: PortfolioValueChart (dark mode)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(true) // dark mode
+  })
+
+  // R5-5: Run PII gate in dark mode to ensure isDark=true doesn't strip data-ph-mask.
+  test('chart wrapper contains no unmasked currency text in dark mode', async () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2024-01-01', total_value: 99999.99 },
+          { date: '2024-06-01', total_value: 109999.99 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(
+      <PortfolioValueChart dateRange={{ start_date: '2024-01-01', end_date: '2024-06-01' }} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
 describe('PII coverage — Round 13 extended: AllocationCard', () => {
   beforeEach(() => {
     cleanup()
@@ -1504,6 +1533,39 @@ describe('PII coverage — Round 13 extended: AllocationCard', () => {
   // scanForUnmaskedPII gates wrapper DOM only. AllocationCard's non-chart DOM (title, popover
   // trigger) contains no formatted currency values, so the assertion is meaningful there.
   test('card wrapper and donut chart contain no unmasked currency text', async () => {
+    render(
+      <AllocationCard
+        config={{ include: [], group_by: 'security_type', basis: 'assets' }}
+        onConfigChange={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(true) // dark mode
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 79999.99, percentage: 80, holding_count: 5 },
+          { security_type: 'Fixed Income', asset_class: 'bond', total_value: 19999.99, percentage: 20, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // R5-5: Run PII gate in dark mode to ensure isDark=true doesn't strip data-ph-mask.
+  test('card wrapper and donut chart contain no unmasked currency text in dark mode', async () => {
     render(
       <AllocationCard
         config={{ include: [], group_by: 'security_type', basis: 'assets' }}

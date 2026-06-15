@@ -160,7 +160,7 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 
 	// basis=net: remove liability buckets, subtract from total, recompute percentages.
 	if opts.EffectiveBasis() == domain.AllocationBasisNet {
-		buckets, grandTotal = applyNetBasis(buckets, grandTotal)
+		buckets, grandTotal = applyNetBasis(buckets)
 	}
 
 	if buckets == nil {
@@ -250,7 +250,7 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 
 	// basis=net: remove liability account buckets, recompute percentages on net total.
 	if opts.EffectiveBasis() == domain.AllocationBasisNet {
-		buckets, grandTotal = applyNetBasis(buckets, grandTotal)
+		buckets, grandTotal = applyNetBasis(buckets)
 	}
 
 	if buckets == nil {
@@ -266,27 +266,30 @@ func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context
 //   - Slice percentages use asset_total as the denominator so the donut ring sums to 100%
 //     (e.g. stock=62.5%, cash=37.5%) rather than the net denominator (which would sum >100%)
 //
-// grandTotal from the row-scan loop includes the positive-valued liabilities union row, so
-// asset_total = grandTotal − liabilitiesTotal (e.g. 9200 − 1200 = 8000).
-// netTotal = asset_total − liabilitiesTotal (e.g. 8000 − 1200 = 6800).
+// asset_total is computed by summing the non-liability buckets directly (not grandTotal − liab),
+// so this function is resilient to future sign-convention changes in the SQL union query.
+// Example: stock=5000, cash=3000, liab=1200 → assetTotal=8000, netTotal=6800, stock%=62.5.
 //
-// Liability detection:
-//   - security_type/asset_class modes: SecurityType == "liabilities"
-//   - account mode:                    AssetClass == "credit" or "loan"
-func applyNetBasis(buckets []domain.AllocationItem, grandTotal float64) ([]domain.AllocationItem, float64) {
+// Liability detection uses AssetClass exclusively (never SecurityType) so that account names
+// cannot collide with the "liabilities" sentinel used in security-type grouping mode:
+//   - security_type/asset_class modes: AssetClass == "liabilities" (set by securityTypeToAssetClass)
+//   - account mode:                    AssetClass == "credit" or "loan" (set by SQL a.type column)
+func applyNetBasis(buckets []domain.AllocationItem) ([]domain.AllocationItem, float64) {
 	var liabilitiesTotal float64
 	var assetBuckets []domain.AllocationItem
 	for _, b := range buckets {
-		if b.SecurityType == "liabilities" || b.AssetClass == "credit" || b.AssetClass == "loan" {
+		if b.AssetClass == "liabilities" || b.AssetClass == "credit" || b.AssetClass == "loan" {
 			liabilitiesTotal += b.TotalValue
 		} else {
 			assetBuckets = append(assetBuckets, b)
 		}
 	}
-	// assetTotal is the sum of non-liability buckets (grandTotal already includes liabilities
-	// as a positive union row, so we subtract them once to recover the pure asset sum).
-	// netTotal is the true net-worth headline: assets minus what we owe.
-	assetTotal := grandTotal - liabilitiesTotal
+	// Compute assetTotal by summing non-liability buckets directly — resilient to sign changes.
+	var assetTotal float64
+	for _, b := range assetBuckets {
+		assetTotal += b.TotalValue
+	}
+	// netTotal is the true net-worth headline: what you own minus what you owe.
 	netTotal := assetTotal - liabilitiesTotal
 	// Percentages on assetTotal so the donut ring always completes 100%.
 	if assetTotal > 0 {

@@ -153,4 +153,11 @@ describe('AllocationCard', () => {
     expect(screen.getByRole('radio', { name: /asset class/i })).toBeDefined()
     expect(screen.getByRole('radio', { name: /account/i })).toBeDefined()
   })
+
+  // R5-5: C11 — AllocationCard must forward isDark=true to EChartsChart via AllocationDonutChart.
+  it('passes isDark=true to EChartsChart when in dark mode', () => {
+    mockUseDarkMode.mockReturnValue(true)
+    render(<AllocationCard config={DEFAULT_CONFIG} onConfigChange={makeOnConfigChange()} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
 })

@@ -7,7 +7,7 @@
  * Tests assert on structural elements (virtual-scroll-container, sentinel, loading spinner).
  */
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -104,5 +104,23 @@ describe('InvestmentTransactionsTable', () => {
       expect(container.querySelector('[role="status"]')).toBeNull()
     })
     expect(container.querySelector('[data-testid="virtual-sentinel"]')).toBeNull()
+  })
+
+  // R5-5: C11 — InvestmentTransactionsTable is CSS-only dark; gate against class changes.
+  describe('dark mode', () => {
+    afterEach(() => {
+      document.documentElement.classList.remove('dark')
+    })
+
+    it('renders virtual scroll container in dark mode context without error', async () => {
+      document.documentElement.classList.add('dark')
+      const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />, {
+        wrapper: createWrapper(),
+      })
+      await waitFor(() => {
+        expect(container.querySelector('[role="status"]')).toBeNull()
+      })
+      expect(container.querySelector('[data-testid="virtual-scroll-container"]')).not.toBeNull()
+    })
   })
 })

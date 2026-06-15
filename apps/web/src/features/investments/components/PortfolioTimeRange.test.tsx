@@ -20,15 +20,18 @@ describe('PortfolioTimeRange', () => {
     }
   })
 
-  it('marks the active preset as selected', () => {
+  it('marks the active preset with data-state="on" and others with data-state="off"', () => {
     const onPresetChange = mock(() => {})
     render(<PortfolioTimeRange activePreset="3M" onPresetChange={onPresetChange} />)
 
-    // '3M' is rendered — selection state is managed internally by ToggleGroup
-    // (Real Radix: data-state="on"; mock: identical button, no data-state applied)
-    // Behavioral check: clicking the active preset should not fire onPresetChange
-    const button = screen.getByText('3M').closest('button') ?? screen.getByText('3M')
-    expect(button).not.toBeNull()
+    // Radix ToggleGroupPrimitive.Item sets data-state="on" on the active item (confirmed in
+    // toggle-group.test.tsx "Single Selection" suite — this works in happydom).
+    const activeBtn = screen.getByText('3M').closest('button')
+    expect(activeBtn?.getAttribute('data-state')).toBe('on')
+
+    // Non-active items should have data-state="off"
+    const otherBtn = screen.getByText('1Y').closest('button')
+    expect(otherBtn?.getAttribute('data-state')).toBe('off')
   })
 
   it('calls onPresetChange with clicked preset', () => {

@@ -3,7 +3,7 @@
  * Issue #1296: KPI summary tiles for the portfolio tab.
  */
 
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { PortfolioSummaryCard } from './PortfolioSummaryCard'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
@@ -65,5 +65,22 @@ describe('PortfolioSummaryCard', () => {
     // Loading state should render some skeleton or placeholder elements
     const skeletons = container.querySelectorAll('[data-slot="skeleton"], [aria-label*="Loading"], .animate-pulse')
     expect(skeletons.length).toBeGreaterThan(0)
+  })
+
+  // R5-5: C11 — verify no crash and PII masking is intact in dark-mode CSS context.
+  // PortfolioSummaryCard is CSS-only dark (no useDarkMode hook); this test gates
+  // against dark-mode class changes that could strip data-ph-mask attributes.
+  describe('dark mode', () => {
+    afterEach(() => {
+      document.documentElement.classList.remove('dark')
+    })
+
+    it('renders and applies data-ph-mask in dark mode context', () => {
+      document.documentElement.classList.add('dark')
+      const { container } = render(<PortfolioSummaryCard summary={mockSummary} />)
+      expect(screen.getByText(/total value/i)).toBeDefined()
+      const masked = container.querySelectorAll('[data-ph-mask]')
+      expect(masked.length).toBeGreaterThan(0)
+    })
   })
 })

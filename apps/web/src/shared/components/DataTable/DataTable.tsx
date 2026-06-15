@@ -641,7 +641,7 @@ export function DataTable<T,>({
               {colgroupEl}
               {theadEl}
               <tbody
-                style={showSkeleton ? undefined : {
+                style={showSkeleton || rows.length === 0 ? undefined : {
                   position: 'relative',
                   height: `${virtualizer.getTotalSize()}px`,
                 }}
@@ -655,8 +655,12 @@ export function DataTable<T,>({
                     </tr>
                     {Array.from({ length: skeletonRows! }).map((_, i) => renderSkeletonRow(i))}
                   </>
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={totalCols}>{emptyState}</td>
+                  </tr>
                 ) : null}
-                {!showSkeleton && virtualItems.map((virtualItem) => {
+                {!showSkeleton && rows.length > 0 && virtualItems.map((virtualItem) => {
                   const tanStackRow = rows[virtualItem.index]
                   if (!tanStackRow) return null
                   const row = tanStackRow.original

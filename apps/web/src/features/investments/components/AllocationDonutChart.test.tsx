@@ -73,7 +73,7 @@ describe('AllocationDonutChart', () => {
     })
   })
 
-  it('normalizes "unknown" bucket label to "Other"', () => {
+  it('normalizes "unknown" bucket label to "Other" in series data', () => {
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 10000,
@@ -84,13 +84,16 @@ describe('AllocationDonutChart', () => {
       isLoading: false,
       isError: false,
     })
+    MockEChartsChart.mockClear()
     render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
-    // The option should have a data item named "Other"
-    // Chart renders so the echarts-chart mock is present
-    expect(screen.getByTestId('echarts-chart')).toBeDefined()
+    // series[0].data[0].name must be 'Other', not 'unknown'
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string }> }> }
+    }
+    expect(props.option?.series?.[0]?.data?.[0]?.name).toBe('Other')
   })
 
-  it('normalizes empty bucket label to "Other"', () => {
+  it('normalizes empty bucket label to "Other" in series data', () => {
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 5000,
@@ -101,8 +104,45 @@ describe('AllocationDonutChart', () => {
       isLoading: false,
       isError: false,
     })
+    MockEChartsChart.mockClear()
     render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
-    expect(screen.getByTestId('echarts-chart')).toBeDefined()
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string }> }> }
+    }
+    expect(props.option?.series?.[0]?.data?.[0]?.name).toBe('Other')
+  })
+
+  // R5-6: assert the exact {name, value, pct} shape of series[0].data so mis-mapping
+  // is caught even if the chart renders (donut being "present" is not enough).
+  it('series[0].data items have exact {name, value, pct} shape from bucket fields', () => {
+    const buckets = [
+      { security_type: 'stock', asset_class: 'stock', total_value: 8000, percentage: 80, holding_count: 3 },
+      { security_type: 'cash', asset_class: 'cash', total_value: 2000, percentage: 20, holding_count: 1 },
+    ]
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: { total_value: 10000, buckets },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string; value: number; pct: number }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    expect(data?.length).toBe(2)
+
+    const stock = data?.[0]
+    expect(stock?.name).toBe('stock')
+    expect(stock?.value).toBe(8000)
+    expect(stock?.pct).toBe(80)
+
+    const cash = data?.[1]
+    expect(cash?.name).toBe('cash')
+    expect(cash?.value).toBe(2000)
+    expect(cash?.pct).toBe(20)
   })
 
   // R4-2: C11 — both isDark branches must be explicitly asserted (not just dark).

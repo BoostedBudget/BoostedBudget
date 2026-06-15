@@ -30,18 +30,20 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetPortfolioAllocationBreakdownBasis } from './getPortfolioAllocationBreakdownBasis';
+import type { GetPortfolioAllocationBreakdownGroupBy } from './getPortfolioAllocationBreakdownGroupBy';
 
 export type GetPortfolioAllocationBreakdownParams = {
 /**
- * Comma-separated list of additional asset classes to include in the breakdown. Allowed values: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only).
+ * Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible).
  */
 include?: string;
 /**
- * Bucketing dimension. Allowed values: 'security_type' (default), 'asset_class', 'account'.
+ * How to bucket the result. Default: 'security_type'.
  */
-group_by?: string;
+group_by?: GetPortfolioAllocationBreakdownGroupBy;
 /**
- * Whether liabilities reduce the total. Allowed values: 'assets' (default, assets-only), 'net' (net of liabilities).
+ * Whether liabilities reduce the total. Default: 'assets'.
  */
-basis?: string;
+basis?: GetPortfolioAllocationBreakdownBasis;
 };
