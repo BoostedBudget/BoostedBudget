@@ -55,11 +55,17 @@ export function HoldingsTable() {
 
   const rawHoldings = holdingsData?.holdings
 
-  // DataTable uses manualSorting=true — apply client-side sort before rendering.
-  // Depend on rawHoldings (not rawHoldings ?? []) to avoid a new [] ref each render.
-  const sortedHoldings = useMemo(() => {
+  // DataTable uses manualFiltering=true — apply account filter client-side.
+  const filteredHoldings = useMemo(() => {
     const all = rawHoldings ?? []
-    if (!sortState) return all
+    const accountFilter = filters['account']
+    if (!accountFilter || !Array.isArray(accountFilter) || accountFilter.length === 0) return all
+    return all.filter((h) => (accountFilter as string[]).includes(h.account_id))
+  }, [rawHoldings, filters])
+
+  // DataTable uses manualSorting=true — apply client-side sort before rendering.
+  const sortedHoldings = useMemo(() => {
+    if (!sortState) return filteredHoldings
     const accessors: Partial<Record<string, (r: HoldingView) => number>> = {
       market_value: (r) => r.institution_value ?? 0,
       gain_loss: (r) => r.gain_loss ?? 0,
@@ -68,13 +74,15 @@ export function HoldingsTable() {
       day_change_pct: (r) => r.day_change_pct ?? 0,
     }
     const accessor = accessors[sortState.columnId]
-    if (!accessor) return all
-    return [...all].sort((a, b) => {
+    if (!accessor) return filteredHoldings
+    return [...filteredHoldings].sort((a, b) => {
       const cmp = accessor(a) < accessor(b) ? -1 : accessor(a) > accessor(b) ? 1 : 0
       return sortState.direction === 'asc' ? cmp : -cmp
     })
-  }, [rawHoldings, sortState])
+  }, [filteredHoldings, sortState])
 
+  // accountOptions derived from all holdings (unfiltered) so the dropdown always shows
+  // every account even while a filter is active.
   const holdings = rawHoldings ?? []
 
   const accountOptions = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({

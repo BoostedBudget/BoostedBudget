@@ -36,11 +36,15 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
     return {
       tooltip: {
         trigger: 'item',
+        // Use API-computed pct (p.data.pct) so basis=net percentages are correct.
+        // ECharts' own p.percent always normalises to 100% of visible slices,
+        // which gives wrong results when the net denominator differs from slice sum.
         formatter: (params: unknown) => {
           if (!params || typeof params !== 'object') return ''
-          const p = params as { name: string; value?: number; percent?: number }
-          if (typeof p.value === 'number' && typeof p.percent === 'number') {
-            return `${escapeHtml(String(p.name))}: ${formatCurrencyFull(p.value)} (${p.percent.toFixed(1)}%)`
+          const p = params as { name: string; value?: number; data?: { pct?: number } }
+          if (typeof p.value === 'number') {
+            const pct = (p.data?.pct ?? 0).toFixed(1)
+            return `${escapeHtml(String(p.name))}: ${formatCurrencyFull(p.value)} (${pct}%)`
           }
           return escapeHtml(String(p.name ?? ''))
         },
