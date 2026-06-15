@@ -1,7 +1,7 @@
 #!/bin/bash
 # Pre-push quality gate for BoostedBudget
 # Runs tests + performance checks before any git push.
-# Exit 0 = allow push | Exit 2 = block push (stdout shown to user)
+# Exit 0 = allow push | Exit 2 = block push (stderr shown to user)
 #
 # Checks run (matches CI test.yml):
 #   1. Dependency audit:          bun audit --audit-level=high  (HIGH/CRITICAL block)
@@ -25,6 +25,10 @@ CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null ||
 
 # Only intercept git push commands (also matches when RTK rewrites to "rtk git push")
 printf '%s' "$CMD" | grep -qE '(^|[;&|])\s*(rtk\s+)?git push' || exit 0
+
+# Redirect all subsequent output to stderr — Claude Code reads stderr for the block message
+# (exit 2 with nothing on stderr shows "hook error: No stderr output" instead of our report)
+exec 1>&2
 
 # --- Setup ---------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -138,13 +142,26 @@ fi
 printf '\n'
 
 # =========================================================================
-# 4. Backend + frontend tests (test-fast: ~2 min)
+# 4. Backend + frontend tests
+#    Run go test and bun test directly rather than make test-fast to avoid
+#    the coverage HTML report generation step, which fails with
+#    "bufio.Scanner: token too long" on large coverage outputs and causes
+#    make to exit non-zero even when all tests pass.
 # =========================================================================
 printf 'Tests:\n'
 
-run_check "make test-fast       (backend + frontend)" \
-  "$PROJECT_ROOT" \
-  "make test-fast" || true
+run_check "go test ./...         (Go backend tests)" \
+  "$PROJECT_ROOT/backend" \
+  "go test ./..." || true
+
+if command -v bun &>/dev/null; then
+  run_check "bun run test          (frontend tests)" \
+    "$PROJECT_ROOT/apps/web" \
+    "bun run test --reporter=dot" || true
+else
+  printf '  %-50s⚠️  (bun not installed)\n' "bun run test"
+  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
+fi
 
 printf '\n'
 
