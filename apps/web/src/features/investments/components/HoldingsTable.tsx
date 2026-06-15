@@ -5,6 +5,12 @@ import type { ColumnDef, SortState, FilterState } from '@/shared/components/Data
 import { formatCurrency, formatPercent } from '@/shared/charts/formatters'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 
+const formatOrDefault = (value: number | null | undefined): string =>
+  value != null ? formatCurrency(value) : '--'
+
+const formatPercentOrDefault = (value: number | null | undefined): string =>
+  value != null ? formatPercent(value / 100) : '--'
+
 const HOLDINGS_COLUMN_IDS = [
   'name',
   'ticker',
@@ -80,7 +86,7 @@ export function HoldingsTable() {
       id: 'price',
       header: 'Price',
       key: 'institution_price',
-      render: (r) => (r.institution_price != null ? formatCurrency(r.institution_price) : '--'),
+      render: (r) => formatOrDefault(r.institution_price),
       numeric: true,
       align: 'right',
     },
@@ -89,14 +95,14 @@ export function HoldingsTable() {
       header: 'Market Value',
       sortable: true,
       sortAccessor: (r) => r.institution_value ?? 0,
-      render: (r) => (r.institution_value != null ? formatCurrency(r.institution_value) : '--'),
+      render: (r) => formatOrDefault(r.institution_value),
       numeric: true,
       align: 'right',
     },
     {
       id: 'cost_basis',
       header: 'Cost Basis',
-      render: (r) => (r.cost_basis != null ? formatCurrency(r.cost_basis) : '--'),
+      render: (r) => formatOrDefault(r.cost_basis),
       numeric: true,
       align: 'right',
     },
@@ -105,7 +111,7 @@ export function HoldingsTable() {
       header: 'Gain/Loss ($)',
       sortable: true,
       sortAccessor: (r) => r.gain_loss ?? 0,
-      render: (r) => (r.gain_loss != null ? formatCurrency(r.gain_loss) : '--'),
+      render: (r) => formatOrDefault(r.gain_loss),
       numeric: true,
       align: 'right',
     },
@@ -114,8 +120,7 @@ export function HoldingsTable() {
       header: 'Gain/Loss (%)',
       sortable: true,
       sortAccessor: (r) => r.gain_loss_pct ?? 0,
-      render: (r) =>
-        r.gain_loss_pct != null ? formatPercent(r.gain_loss_pct / 100) : '--',
+      render: (r) => formatPercentOrDefault(r.gain_loss_pct),
       numeric: true,
       align: 'right',
     },
@@ -124,7 +129,7 @@ export function HoldingsTable() {
       header: 'Day Change ($)',
       sortable: true,
       sortAccessor: (r) => r.day_change ?? 0,
-      render: (r) => (r.day_change != null ? formatCurrency(r.day_change) : '--'),
+      render: (r) => formatOrDefault(r.day_change),
       numeric: true,
       align: 'right',
     },
@@ -133,8 +138,7 @@ export function HoldingsTable() {
       header: 'Day Change (%)',
       sortable: true,
       sortAccessor: (r) => r.day_change_pct ?? 0,
-      render: (r) =>
-        r.day_change_pct != null ? formatPercent(r.day_change_pct / 100) : '--',
+      render: (r) => formatPercentOrDefault(r.day_change_pct),
       numeric: true,
       align: 'right',
     },

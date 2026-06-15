@@ -59,12 +59,9 @@ function saveConfig(userId: string, config: AllocationConfig): void {
   }
 }
 
-export function usePortfolioAllocationConfig(): {
-  config: AllocationConfig
-  setConfig: (next: AllocationConfig) => void
-} {
+export function usePortfolioAllocationConfig() {
   const { user } = useUser()
-  const userId = user?.id ?? null
+  const userId = user?.id
 
   const [config, setConfigState] = useState<AllocationConfig>(() =>
     userId ? loadConfig(userId) : DEFAULT_CONFIG,
@@ -82,9 +79,10 @@ export function usePortfolioAllocationConfig(): {
 
   const setConfig = useCallback(
     (next: AllocationConfig) => {
-      if (!userId) return
-      setConfigState(next)
-      saveConfig(userId, next)
+      if (userId) {
+        setConfigState(next)
+        saveConfig(userId, next)
+      }
     },
     [userId],
   )

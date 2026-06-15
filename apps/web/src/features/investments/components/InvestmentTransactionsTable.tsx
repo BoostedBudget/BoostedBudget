@@ -5,6 +5,9 @@ import type { ColumnDef, SortState, FilterState } from '@/shared/components/Data
 import { formatCurrency } from '@/shared/charts/formatters'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
 
+const formatOrDefault = (value: number | null | undefined): string =>
+  value != null ? formatCurrency(value) : '--'
+
 interface InvestmentTransactionsTableProps {
   dateRange: { start_date: string; end_date: string }
 }
@@ -51,7 +54,7 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
       id: 'type',
       header: 'Type',
       key: 'type',
-      render: (r) => r.type.charAt(0).toUpperCase() + r.type.slice(1),
+      render: (r) => r.type[0].toUpperCase() + r.type.slice(1),
     },
     {
       id: 'security',
@@ -69,13 +72,15 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
     {
       id: 'price',
       header: 'Price',
+      key: 'price',
       numeric: true,
       align: 'right',
-      render: (r) => (r.price != null ? formatCurrency(r.price) : '--'),
+      render: (r) => formatOrDefault(r.price),
     },
     {
       id: 'amount',
       header: 'Amount',
+      key: 'amount',
       sortable: true,
       sortAccessor: (r) => r.amount,
       numeric: true,
@@ -85,6 +90,7 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
     {
       id: 'fees',
       header: 'Fees',
+      key: 'fees',
       numeric: true,
       align: 'right',
       render: (r) => (r.fees != null && r.fees > 0 ? formatCurrency(r.fees) : '--'),
