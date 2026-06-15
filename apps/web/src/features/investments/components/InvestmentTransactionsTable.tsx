@@ -22,9 +22,7 @@ const TXN_COLUMN_IDS = [
   'fees',
 ] as const
 
-/** Exported so pii-coverage tests can statically verify all monetary columns are masked. */
-export const INVESTMENT_TXN_MASKED_COLUMN_IDS = ['quantity', 'price', 'amount', 'fees']
-const MASKED_COLUMN_IDS = INVESTMENT_TXN_MASKED_COLUMN_IDS
+const MASKED_COLUMN_IDS = ['quantity', 'price', 'amount', 'fees']
 
 export function InvestmentTransactionsTable({ dateRange }: InvestmentTransactionsTableProps) {
   const [sortState, setSortState] = useState<SortState>(null)
