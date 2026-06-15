@@ -67,6 +67,12 @@ func NewInvestmentAnalyticsRepository(db DB) InvestmentAnalyticsRepository {
 // Single DB round-trip: the UNION is inlined so the DB engine sees one query.
 // Scoped strictly to user_id (IDOR-safe).
 func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
+	// group_by=account uses a per-account SQL shape — dispatch to a dedicated method.
+	if opts.EffectiveGroupBy() == domain.AllocationGroupByAccount {
+		return r.allocationBreakdownByAccount(ctx, userID, opts)
+	}
+
+	// Default: group by security_type (or asset_class, which post-processes security_type).
 	// Base branch: investment holdings only (always present).
 	query := `
 		SELECT
@@ -152,10 +158,131 @@ func (r *investmentAnalyticsRepository) AllocationBreakdown(ctx context.Context,
 		}
 	}
 
+	// basis=net: remove liability buckets, subtract from total, recompute percentages.
+	if opts.EffectiveBasis() == domain.AllocationBasisNet {
+		buckets, grandTotal = applyNetBasis(buckets, grandTotal)
+	}
+
 	if buckets == nil {
 		buckets = []domain.AllocationItem{}
 	}
 	return &domain.AllocationBreakdown{Buckets: buckets, TotalValue: grandTotal}, nil
+}
+
+// allocationBreakdownByAccount handles group_by=account: one bucket per active account,
+// with SecurityType = account name and AssetClass = account type.
+// Cash and liabilities branches add depository/credit accounts when requested via opts.Include.
+// Scoped to user_id on every branch (IDOR-safe). Single round-trip via UNION CTE.
+func (r *investmentAnalyticsRepository) allocationBreakdownByAccount(ctx context.Context, userID string, opts domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
+	// Investment holdings: one bucket per brokerage/investment account.
+	query := `
+		SELECT
+			a.name                                AS security_type,
+			'investment'                          AS asset_class,
+			COUNT(*)                              AS holding_count,
+			COALESCE(SUM(h.institution_value), 0) AS total_value
+		FROM holdings h
+		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		WHERE h.user_id = $1
+		GROUP BY a.id, a.name`
+
+	// Optional cash: one row per depository account, labeled by account name.
+	if opts.IncludesCash() {
+		query += `
+		UNION ALL
+		SELECT
+			a.name                                AS security_type,
+			'depository'                          AS asset_class,
+			1                                     AS holding_count,
+			COALESCE(a.current_balance, 0)        AS total_value
+		FROM accounts a
+		WHERE a.user_id = $1
+		  AND a.status = 'active'
+		  AND a.type = 'depository'`
+	}
+
+	// Optional liabilities: one row per credit/loan account; balance stored as absolute value.
+	if opts.IncludesLiabilities() {
+		query += `
+		UNION ALL
+		SELECT
+			a.name                                AS security_type,
+			a.type                                AS asset_class,
+			1                                     AS holding_count,
+			COALESCE(ABS(a.current_balance), 0)   AS total_value
+		FROM accounts a
+		WHERE a.user_id = $1
+		  AND a.status = 'active'
+		  AND a.type IN ('credit', 'loan')`
+	}
+
+	query = `WITH combined AS (` + query + `)
+		SELECT security_type, asset_class, holding_count, total_value
+		FROM combined
+		ORDER BY total_value DESC`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("allocationBreakdownByAccount: %w", err)
+	}
+	defer rows.Close()
+
+	var buckets []domain.AllocationItem
+	var grandTotal float64
+	for rows.Next() {
+		var item domain.AllocationItem
+		if err := rows.Scan(&item.SecurityType, &item.AssetClass, &item.HoldingCount, &item.TotalValue); err != nil {
+			return nil, fmt.Errorf("allocationBreakdownByAccount scan: %w", err)
+		}
+		grandTotal += item.TotalValue
+		buckets = append(buckets, item)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("allocationBreakdownByAccount rows: %w", rows.Err())
+	}
+
+	// Compute percentages.
+	if grandTotal > 0 {
+		for i := range buckets {
+			buckets[i].Percentage = buckets[i].TotalValue / grandTotal * 100
+		}
+	}
+
+	// basis=net: remove liability account buckets, recompute percentages on net total.
+	if opts.EffectiveBasis() == domain.AllocationBasisNet {
+		buckets, grandTotal = applyNetBasis(buckets, grandTotal)
+	}
+
+	if buckets == nil {
+		buckets = []domain.AllocationItem{}
+	}
+	return &domain.AllocationBreakdown{Buckets: buckets, TotalValue: grandTotal}, nil
+}
+
+// applyNetBasis removes liability buckets from the slice and returns the net total
+// (assets − liabilities) and asset-only buckets with percentages recomputed on the
+// net denominator.
+//
+// Liability detection:
+//   - security_type/asset_class modes: SecurityType == "liabilities"
+//   - account mode:                    AssetClass == "credit" or "loan"
+func applyNetBasis(buckets []domain.AllocationItem, grandTotal float64) ([]domain.AllocationItem, float64) {
+	var liabilitiesTotal float64
+	var assetBuckets []domain.AllocationItem
+	for _, b := range buckets {
+		if b.SecurityType == "liabilities" || b.AssetClass == "credit" || b.AssetClass == "loan" {
+			liabilitiesTotal += b.TotalValue
+		} else {
+			assetBuckets = append(assetBuckets, b)
+		}
+	}
+	netTotal := grandTotal - liabilitiesTotal
+	if netTotal > 0 {
+		for i := range assetBuckets {
+			assetBuckets[i].Percentage = assetBuckets[i].TotalValue / netTotal * 100
+		}
+	}
+	return assetBuckets, netTotal
 }
 
 // securityTypeToAssetClass maps a raw security_type string to a high-level asset class label.
