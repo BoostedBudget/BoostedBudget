@@ -87,6 +87,16 @@ describe('PortfolioSummaryCard', () => {
     expect(screen.getAllByText('--').length).toBeGreaterThan(0)
   })
 
+  // G15-1: StatCard renders `value` inside <p data-slot="stat-value"> (phrasing-only context).
+  // PortfolioSummaryCard must not pass block-level <div> wrappers as value — that produces
+  // invalid <p><div> nesting, React validateDOMNesting warnings, and browser auto-close.
+  it('renders no invalid <div> block markup inside the StatCard value <p> (HTML validity)', () => {
+    const { container } = render(<PortfolioSummaryCard summary={mockSummary} />)
+    const valueEls = container.querySelectorAll('p[data-slot="stat-value"]')
+    expect(valueEls.length).toBe(3)
+    valueEls.forEach((p) => expect(p.querySelector('div')).toBeNull())
+  })
+
   describe('dark mode', () => {
     afterEach(() => {
       document.documentElement.classList.remove('dark')
