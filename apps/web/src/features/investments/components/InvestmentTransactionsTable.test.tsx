@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
 import {
   mockUseInfiniteInvestmentTransactions,
@@ -105,6 +105,37 @@ describe('InvestmentTransactionsTable', () => {
       mockUseInfiniteInvestmentTransactions.mockReturnValue(loadedResult())
       const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
       expect(container.querySelector('[data-testid="virtual-scroll-container"]')).not.toBeNull()
+    })
+  })
+
+  // R11-3: defensive empty-type render — uses disableVirtualization to force real rows
+  describe('type column rendering (disableVirtualization seam)', () => {
+    it('renders "--" for a transaction with empty type without crashing', () => {
+      const emptyTypeTxn = { ...mockTxn, type: '' }
+      mockUseInfiniteInvestmentTransactions.mockReturnValue(
+        loadedResult({ transactions: [emptyTypeTxn] }),
+      )
+      // disableVirtualization forces DataTable to render all rows (no jsdom layout needed).
+      const { container } = render(
+        <InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />,
+      )
+      // Both type='' and fees=0 render '--', but only fees is in MASKED_COLUMN_IDS.
+      // Assert we have exactly one unmasked '--' cell (the type column) to prove
+      // formatTransactionType('') crashed guard works and type is masking-exempt.
+      const unmaskedDashCells = Array.from(container.querySelectorAll('td'))
+        .filter((td) => td.textContent === '--' && !td.hasAttribute('data-ph-mask'))
+      expect(unmaskedDashCells.length).toBe(1)
+    })
+
+    it('renders capitalized type for a normal transaction', () => {
+      mockUseInfiniteInvestmentTransactions.mockReturnValue(
+        loadedResult({ transactions: [mockTxn] }),
+      )
+      render(
+        <InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />,
+      )
+      // mockTxn.type = 'buy' → formatTransactionType → 'Buy'
+      expect(screen.getByText('Buy')).toBeDefined()
     })
   })
 })
