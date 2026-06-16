@@ -133,14 +133,88 @@ describe('AllocationDonutChart', () => {
     expect(data?.length).toBe(2)
 
     const stock = data?.[0]
-    expect(stock?.name).toBe('stock')
+    expect(stock?.name).toBe('Stock')
     expect(stock?.value).toBe(8000)
     expect(stock?.pct).toBe(80)
 
     const cash = data?.[1]
-    expect(cash?.name).toBe('cash')
+    expect(cash?.name).toBe('Cash')
     expect(cash?.value).toBe(2000)
     expect(cash?.pct).toBe(20)
+  })
+
+  // R8-1: humanizeBucketLabel — underscored / acronym / mixed-case security types
+  it('humanizes underscored security types to title-case display labels', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 30000,
+        buckets: [
+          { security_type: 'mutual_fund', asset_class: 'mutual_fund', total_value: 10000, percentage: 33.3, holding_count: 2 },
+          { security_type: 'fixed_income', asset_class: 'fixed_income', total_value: 10000, percentage: 33.3, holding_count: 1 },
+          { security_type: 'real_estate', asset_class: 'real_estate', total_value: 10000, percentage: 33.4, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string }> }> }
+    }
+    const names = props.option?.series?.[0]?.data?.map((d) => d.name)
+    expect(names).toContain('Mutual Fund')
+    expect(names).toContain('Fixed Income')
+    expect(names).toContain('Real Estate')
+  })
+
+  it('humanizes acronym security types to uppercase display labels', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 20000,
+        buckets: [
+          { security_type: 'etf', asset_class: 'etf', total_value: 12000, percentage: 60, holding_count: 3 },
+          { security_type: 'reit', asset_class: 'reit', total_value: 8000, percentage: 40, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string }> }> }
+    }
+    const names = props.option?.series?.[0]?.data?.map((d) => d.name)
+    expect(names).toContain('ETF')
+    expect(names).toContain('REIT')
+  })
+
+  it('passes account names verbatim in group_by=account mode (no title-casing)', () => {
+    const accountConfig: AllocationConfig = { include: [], group_by: 'account', basis: 'assets' }
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 30000,
+        buckets: [
+          // Intentionally lowercase so title-case would produce a different string —
+          // this gates the groupBy==='account' verbatim passthrough branch.
+          { security_type: 'schwab brokerage', asset_class: 'investments', total_value: 20000, percentage: 66.7, holding_count: 5 },
+          { security_type: 'fidelity ira', asset_class: 'investments', total_value: 10000, percentage: 33.3, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={accountConfig} />)
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string }> }> }
+    }
+    const names = props.option?.series?.[0]?.data?.map((d) => d.name)
+    // Account names must NOT be title-cased — lowercase fixture would become 'Schwab Brokerage'
+    // / 'Fidelity Ira' if title-case ran; asserting the original proves the verbatim path.
+    expect(names).toContain('schwab brokerage')
+    expect(names).toContain('fidelity ira')
   })
 
   // R4-2: C11 — both isDark branches must be explicitly asserted (not just dark).
@@ -223,7 +297,7 @@ describe('AllocationDonutChart', () => {
     expect(otherSlice?.value).toBe(5000) // 3000 + 2000
     expect(otherSlice?.pct).toBeCloseTo(50, 1) // 30 + 20
 
-    const stockSlice = data?.find((d) => d.name === 'stock')
+    const stockSlice = data?.find((d) => d.name === 'Stock')
     expect(stockSlice).toBeDefined()
     expect(stockSlice?.value).toBe(5000)
   })
@@ -405,7 +479,8 @@ describe('AllocationDonutChart', () => {
 
     expect(typeof formatter).toBe('function')
     if (typeof formatter === 'function') {
-      const result = formatter('stock') as string
+      // ECharts calls the legend formatter with the slice's display name (humanized).
+      const result = formatter('Stock') as string
       // Must include a currency marker and a percent marker
       expect(result).toContain('$')
       expect(result).toContain('%')

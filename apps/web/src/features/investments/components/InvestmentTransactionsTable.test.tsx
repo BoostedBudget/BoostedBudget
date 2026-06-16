@@ -121,9 +121,13 @@ describe('InvestmentTransactionsTable', () => {
     mockUseInfiniteInvestmentTransactions.mockReturnValue(
       loadedResult({ transactions: [mockTxn], hasNextPage: true }),
     )
-    const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
-    // Sentinel presence confirms the DataTable received hasMore=true from fetchNextPage wiring.
-    expect(container.querySelector('[data-testid="virtual-sentinel"]')).not.toBeNull()
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
+    // Assert the captured DataTable virtualization prop wires onScrollEnd to the real
+    // fetchNextPage fn — removing / no-op-ing the wiring in the component fails this.
+    const virt = lastDataTableProps?.virtualization as
+      | { hasMore?: boolean; onScrollEnd?: () => void }
+      | undefined
+    expect(virt?.onScrollEnd).toBe(mockFetchNextInvestmentPage)
   })
 
   it('passes maskedColumnIds to DataTable (monetary columns are masked)', () => {

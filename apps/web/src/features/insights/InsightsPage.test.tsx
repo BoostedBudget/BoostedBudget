@@ -1,17 +1,26 @@
 // Issue #1300: InsightsPage sub-tabs + URL state tests
 // API hooks are mocked via bunfig.toml preloads (analytics-api.ts, net-worth-hooks.ts,
-// track-event.ts, investments-api.ts). Do NOT add mock.module() here — it leaks across
-// test files in bun:test.
+// track-event.ts, investments-api.ts).
+// IMPORTANT: Do NOT add ad-hoc mock.module() calls here for hooks other than useTrackEvent
+// — they leak globally across test files in bun:test. The track-event re-registration
+// below is intentional: it pins useTrackEvent to the canonical mockTrackEvent reference
+// so analytics assertions work regardless of file execution order (pattern from
+// PortfolioPage.test.tsx / BudgetDetailPage.analytics.test.tsx).
 // QueryClientProvider is required because PortfolioPage uses useInfiniteInvestmentTransactions
 // (real useInfiniteQuery under the mocked getInvestmentTransactions fetcher).
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 import { MemoryRouter, Routes, Route, useLocation as useRouterLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { InsightsPage } from './InsightsPage'
+
+mock.module('@/shared/hooks/useTrackEvent', () => ({
+  useTrackEvent: () => mockTrackEvent,
+}))
 
 function renderInsightsPage(search = '') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -102,5 +111,32 @@ describe('InsightsPage', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Portfolio' }))
 
     expect(locationRef.current).toBe('?tab=portfolio')
+  })
+
+  // R8-3: Insights analytics events must be fired and testable.
+  describe('analytics', () => {
+    it('fires insights_page_viewed exactly once on mount (ref-guarded)', () => {
+      mockTrackEvent.mockClear()
+      renderInsightsPage()
+      const pageViewedCalls = mockTrackEvent.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'insights_page_viewed',
+      )
+      expect(pageViewedCalls.length).toBe(1)
+      // Payload includes the active tab (defaults to 'spending')
+      expect(pageViewedCalls[0][1]).toMatchObject({ tab: 'spending' })
+    })
+
+    it('fires insights_tab_changed with the correct tab payload when switching tabs', async () => {
+      mockTrackEvent.mockClear()
+      renderInsightsPage()
+
+      await userEvent.click(screen.getByRole('tab', { name: 'Portfolio' }))
+
+      const tabChangedCalls = mockTrackEvent.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'insights_tab_changed',
+      )
+      expect(tabChangedCalls.length).toBeGreaterThanOrEqual(1)
+      expect(tabChangedCalls[0][1]).toMatchObject({ tab: 'portfolio' })
+    })
   })
 })
