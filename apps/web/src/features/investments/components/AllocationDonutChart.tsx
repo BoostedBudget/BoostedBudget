@@ -15,13 +15,33 @@ interface AllocationDonutChartProps {
   config: AllocationConfig
 }
 
-function normalizeBucketLabel(value: string): string {
-  if (!value || value.toLowerCase() === 'unknown') return 'Other'
-  return value
+// Map raw API security-type tokens to display-ready labels.
+// Rules (in priority order):
+//   1. Falsy / "unknown" → "Other"
+//   2. group_by=account → verbatim (account names are already human-readable)
+//   3. Known acronyms → uppercase canonical form (etf → "ETF", reit → "REIT")
+//   4. Everything else → title-case by splitting on underscores/spaces
+//      ("mutual_fund" → "Mutual Fund", "stock" → "Stock")
+const ACRONYM_LABELS: Readonly<Record<string, string>> = {
+  etf: 'ETF',
+  reit: 'REIT',
+  mbs: 'MBS',
+  abs: 'ABS',
 }
 
-// Aggregate buckets with the same normalized label, summing values and counts.
-// Prevents last-write-wins collisions in the legend formatter (e.g., multiple "unknown" → "Other").
+function humanizeBucketLabel(value: string, groupBy: GetPortfolioAllocationBreakdownGroupBy): string {
+  if (!value || value.toLowerCase() === 'unknown') return 'Other'
+  if (groupBy === 'account') return value
+  const lower = value.toLowerCase()
+  if (ACRONYM_LABELS[lower]) return ACRONYM_LABELS[lower]
+  return value
+    .split(/[_\s]+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
+}
+
+// Aggregate buckets with the same humanized label, summing values and counts.
+// Prevents last-write-wins collisions (e.g., multiple "unknown"/"" → "Other").
 function aggregateBuckets(
   buckets: Array<{ security_type: string; asset_class: string; total_value: number; percentage: number; holding_count: number }>,
   groupBy: GetPortfolioAllocationBreakdownGroupBy,
@@ -31,7 +51,7 @@ function aggregateBuckets(
 
   for (const bucket of buckets) {
     const raw = groupBy === 'asset_class' ? bucket.asset_class : bucket.security_type
-    const name = normalizeBucketLabel(raw)
+    const name = humanizeBucketLabel(raw, groupBy)
     const existing = byName.get(name)
     if (existing) {
       byName.set(name, {
