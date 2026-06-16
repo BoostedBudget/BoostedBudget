@@ -1,26 +1,12 @@
 /**
  * InvestmentTransactionsTable Component Tests
  * Issue #1296: Portfolio tab — investment transactions DataTable with infinite scroll.
- *
- * Uses the synchronous wrapper-hook mock preloaded globally via investments-hooks.ts +
- * bunfig.toml — NO real React Query, NO waitFor/timeout races in the full suite.
- *
- * Hook implementation is tested separately in useInfiniteInvestmentTransactions.test.tsx
- * which runs via test-real-implementations.sh with API-level mocks.
- *
- * NOTE: TanStack Virtualizer fires onScrollEnd when all rows fit in the jsdom viewport
- * (400px). With estimateRowHeight=56 and 1 row (56px < 400px), the virtualizer renders
- * the row on mount and calls onScrollEnd immediately when hasMore=true.
- *
- * NOTE: Tests that check the "loaded" state assert DataTable presence
- * ([data-testid="virtual-scroll-container"] + <table>) rather than asserting the absence
- * of [role="status"]. In happydom, the TanStack Virtualizer's ResizeObserver triggers
- * async re-renders after act() returns, which can leave the component in an indeterminate
- * state for negative assertions. Presence of the DataTable structure is the correct proof
- * of loaded state — it is mutually exclusive with the spinner (conditional return).
+ * Uses mocked hook (no real React Query); hook tested separately in useInfiniteInvestmentTransactions.test.tsx.
+ * Assert DataTable presence (loaded state), not absence of spinner (ResizeObserver async race).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import React from 'react'
 import { render } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
 import {
@@ -28,6 +14,31 @@ import {
   mockFetchNextInvestmentPage,
 } from '@/test/mocks/investments-api'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
+
+// Capture DataTable props for maskedColumnIds assertion (R7-6)
+let lastDataTableProps: Record<string, unknown> | null = null
+
+mock.module('@/shared/components/DataTable', () => ({
+  DataTable: (props: Record<string, unknown>) => {
+    lastDataTableProps = props
+    const virt = props.virtualization as { hasMore?: boolean } | undefined
+    // Emit the same data-testids the real DataTable uses so existing tests pass.
+    return React.createElement(
+      'div',
+      { 'data-testid': 'virtual-scroll-container' },
+      React.createElement('table'),
+      virt?.hasMore ? React.createElement('div', { 'data-testid': 'virtual-sentinel' }) : null,
+    )
+  },
+  useTablePreferences: () => ({
+    sizing: {},
+    onSizingChange: () => {},
+    columnOrder: [],
+    onColumnOrderChange: () => {},
+    columnVisibility: {},
+    onColumnVisibilityChange: () => {},
+  }),
+}))
 
 const mockTxn: InvestmentTransaction = {
   id: 't1',
@@ -46,9 +57,6 @@ const mockTxn: InvestmentTransaction = {
 
 const defaultDateRange = { start_date: '2024-01-01', end_date: '2024-12-31' }
 
-// Helper: build a loaded mock return value with optional overrides.
-// NOTE: No QueryClientProvider needed — useInfiniteInvestmentTransactions is mocked
-// globally via investments-hooks.ts preloaded in bunfig.toml.
 function loadedResult(overrides: Record<string, unknown> = {}) {
   return {
     transactions: [],
@@ -64,6 +72,7 @@ function loadedResult(overrides: Record<string, unknown> = {}) {
 
 describe('InvestmentTransactionsTable', () => {
   beforeEach(() => {
+    lastDataTableProps = null
     mockUseInfiniteInvestmentTransactions.mockClear()
     mockFetchNextInvestmentPage.mockClear()
     // Default: loaded, no transactions, no more pages
@@ -121,11 +130,12 @@ describe('InvestmentTransactionsTable', () => {
     mockUseInfiniteInvestmentTransactions.mockReturnValue(
       loadedResult({ transactions: [mockTxn] }),
     )
-    const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
-    expect(container.querySelector('table')).not.toBeNull()
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
+    // maskedColumnIds must deep-equal the monetary set — removing the prop from the
+    // component would fail this assertion (unlike the previous table-existence check).
+    expect(lastDataTableProps?.maskedColumnIds).toEqual(['quantity', 'price', 'amount', 'fees'])
   })
 
-  // R5-5: CSS-only dark mode — gate against class changes.
   describe('dark mode', () => {
     afterEach(() => {
       document.documentElement.classList.remove('dark')

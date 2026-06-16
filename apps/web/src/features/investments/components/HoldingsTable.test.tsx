@@ -43,12 +43,8 @@ const holdingA = makeHolding({ id: 'h1', security_name: 'Apple Inc', ticker_symb
 const holdingB = makeHolding({ id: 'h2', security_name: 'Microsoft', ticker_symbol: 'MSFT', institution_value: 1000, account_id: 'acct-beta' })
 const holdingC = makeHolding({ id: 'h3', security_name: 'Tesla', ticker_symbol: 'TSLA', institution_value: 5000, account_id: 'acct-alpha' })
 
-// Crossed values: gain_loss_pct and day_change_pct have OPPOSITE relative orderings so that
-// sorting by one column produces a different row order than sorting by the other. This ensures
-// each sort test independently proves its accessor rather than passing accidentally due to
-// correlated fixture values.
-//   gain_loss_pct order: LGH(5) < MGM(25) < HGL(50) → asc: LGH first, HGL last
-//   day_change_pct order: HGL(0.5) < MGM(2.5) < LGH(5.0) → asc: HGL first, LGH last
+// Crossed values: opposite orderings ensure each sort test proves its accessor independently
+// gain_loss_pct: LGH(5) < MGM(25) < HGL(50)  |  day_change_pct: HGL(0.5) < MGM(2.5) < LGH(5.0)
 const holdingLowGain = makeHolding({ id: 'h4', security_name: 'LowGainHighDay', ticker_symbol: 'LGH', gain_loss_pct: 5, day_change_pct: 5.0, institution_value: 2000, account_id: 'acct-x' })
 const holdingMidGain = makeHolding({ id: 'h5', security_name: 'MidGainMidDay', ticker_symbol: 'MGM', gain_loss_pct: 25, day_change_pct: 2.5, institution_value: 3000, account_id: 'acct-x' })
 const holdingHighGain = makeHolding({ id: 'h6', security_name: 'HighGainLowDay', ticker_symbol: 'HGL', gain_loss_pct: 50, day_change_pct: 0.5, institution_value: 1000, account_id: 'acct-x' })
@@ -281,8 +277,47 @@ describe('HoldingsTable', () => {
     localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
   })
 
-  // R5-5: C11 — HoldingsTable is CSS-only dark; this test gates against dark-mode class
-  // changes stripping data-ph-mask from monetary cells.
+  it('reads updated column visibility on remount (full persistence round-trip)', () => {
+    const userId = mockClerkUser.id
+    const schemaVersion =
+      'name,ticker,type,quantity,price,market_value,cost_basis,gain_loss,gain_loss_pct,day_change,day_change_pct,account'
+
+    mockUseUser.mockReturnValue(createMockClerkUser({ isSignedIn: true, user: mockClerkUser }))
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [holdingA], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    // Mount 1: no stored prefs → Account column should be visible (default).
+    localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
+    const { unmount: unmount1 } = render(<HoldingsTable />)
+    expect(screen.queryByText('Account')).not.toBeNull()
+    unmount1()
+
+    // Simulate saving a preference (hide the Account column).
+    localStorage.setItem(
+      `bb:table-prefs:${userId}:portfolio-holdings`,
+      JSON.stringify({
+        schemaVersion,
+        sizingVersion: 'v3-compact',
+        sizing: {},
+        columnOrder: [],
+        columnVisibility: { account: false },
+      }),
+    )
+
+    // Mount 2: Account column must be hidden (restored from updated localStorage).
+    render(<HoldingsTable />)
+    expect(screen.queryByText('Account')).toBeNull()
+    // Non-hideable column still present.
+    expect(screen.getByText('Market Value')).toBeDefined()
+
+    // Cleanup.
+    mockUseUser.mockReturnValue(createMockClerkUser())
+    localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
+  })
+
   describe('dark mode', () => {
     afterEach(() => {
       document.documentElement.classList.remove('dark')

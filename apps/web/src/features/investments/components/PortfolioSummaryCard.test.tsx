@@ -24,10 +24,16 @@ const nullDaySummary: PortfolioSummary = {
   day_change_pct: null,
 }
 
+// G7-1: day_change is present but pct is null (intraday data partially available)
+const partialDaySummary: PortfolioSummary = {
+  ...mockSummary,
+  day_change: 230.15,
+  day_change_pct: null,
+}
+
 describe('PortfolioSummaryCard', () => {
   it('renders Total Value stat', () => {
     render(<PortfolioSummaryCard summary={mockSummary} />)
-    // StatCard labels are uppercase in CSS but the accessible text is normal
     expect(screen.getByText(/total value/i)).toBeDefined()
   })
 
@@ -47,29 +53,40 @@ describe('PortfolioSummaryCard', () => {
     expect(masked.length).toBeGreaterThan(0)
   })
 
-  it('shows "--" for null day_change', () => {
+  it('shows "--" when day_change is null', () => {
     render(<PortfolioSummaryCard summary={nullDaySummary} />)
-    const dashes = screen.getAllByText('--')
-    expect(dashes.length).toBeGreaterThan(0)
+    expect(screen.getAllByText('--').length).toBeGreaterThan(0)
   })
 
   it('does not render ChangeIndicator when day_change is null', () => {
     render(<PortfolioSummaryCard summary={nullDaySummary} />)
-    // ChangeIndicator for "Day change" sets aria-label like "Day change up by X% versus previous period"
-    // When day_change is null the ChangeIndicator for that section must not render
-    expect(screen.queryByLabelText(/day change.*by/i)).toBeNull()
+    expect(screen.queryByLabelText(/day change.*versus previous period/i)).toBeNull()
   })
 
   it('renders loading skeleton when summary is undefined', () => {
     const { container } = render(<PortfolioSummaryCard summary={undefined} />)
-    // Loading state should render some skeleton or placeholder elements
     const skeletons = container.querySelectorAll('[data-slot="skeleton"], [aria-label*="Loading"], .animate-pulse')
     expect(skeletons.length).toBeGreaterThan(0)
   })
 
-  // R5-5: C11 — verify no crash and PII masking is intact in dark-mode CSS context.
-  // PortfolioSummaryCard is CSS-only dark (no useDarkMode hook); this test gates
-  // against dark-mode class changes that could strip data-ph-mask attributes.
+  // R7-1: Show dollar even when day_change_pct is null (mirrors Gain/Loss behavior)
+  it('shows dollar amount when day_change is set but day_change_pct is null', () => {
+    render(<PortfolioSummaryCard summary={partialDaySummary} />)
+    expect(screen.getByText('$230.15')).toBeDefined()
+    expect(screen.queryAllByText('--').length).toBe(0)
+  })
+
+  it('suppresses ChangeIndicator when day_change is set but day_change_pct is null', () => {
+    render(<PortfolioSummaryCard summary={partialDaySummary} />)
+    expect(screen.queryByLabelText(/day change.*versus previous period/i)).toBeNull()
+  })
+
+  it('shows "--" when day_change is null even if day_change_pct is non-null', () => {
+    const noChangeSummary: PortfolioSummary = { ...mockSummary, day_change: null, day_change_pct: 1.2 }
+    render(<PortfolioSummaryCard summary={noChangeSummary} />)
+    expect(screen.getAllByText('--').length).toBeGreaterThan(0)
+  })
+
   describe('dark mode', () => {
     afterEach(() => {
       document.documentElement.classList.remove('dark')
