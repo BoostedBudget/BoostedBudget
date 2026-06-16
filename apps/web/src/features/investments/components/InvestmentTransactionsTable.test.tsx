@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
 import {
   mockUseInfiniteInvestmentTransactions,
@@ -93,6 +93,47 @@ describe('InvestmentTransactionsTable', () => {
   it('does not render Load More sentinel when hasNextPage is false', () => {
     const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
     expect(container.querySelector('[data-testid="virtual-sentinel"]')).toBeNull()
+  })
+
+  // R12-1: end-to-end wiring — proves the component passes fetchNextPage from the hook
+  // into buildInvestmentVirtualization so DataTable's onScrollEnd fires it.
+  // TanStack Virtual uses offsetHeight (via getRect) for initial container sizing.
+  // Stubbing offsetHeight + disabling ResizeObserver (which would override with 0) lets
+  // the virtualizer produce virtual items in happy-dom → DataTable's onScrollEnd useEffect fires.
+  describe('onScrollEnd wiring (component → DataTable)', () => {
+    const origOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    const origRO = (globalThis as Record<string, unknown>).ResizeObserver
+
+    beforeEach(() => {
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+        configurable: true,
+        get() { return 600 },
+      })
+      // Prevent ResizeObserver from firing with 0 dimensions after the initial getRect call
+      ;(globalThis as Record<string, unknown>).ResizeObserver = class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    })
+
+    afterEach(() => {
+      if (origOffsetHeight) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetHeight', origOffsetHeight)
+      }
+      ;(globalThis as Record<string, unknown>).ResizeObserver = origRO
+    })
+
+    it('calls fetchNextPage when virtual scroll reaches the end', async () => {
+      mockFetchNextInvestmentPage.mockClear()
+      mockUseInfiniteInvestmentTransactions.mockReturnValue(
+        loadedResult({ transactions: [mockTxn], hasNextPage: true }),
+      )
+      render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
+      await waitFor(() => {
+        expect(mockFetchNextInvestmentPage).toHaveBeenCalled()
+      })
+    })
   })
 
   describe('dark mode', () => {
