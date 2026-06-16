@@ -62,7 +62,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
         label="Total Gain / Loss"
         trend={gainTrend}
         value={
-          <div className="flex flex-col gap-1">
+          <span className="flex flex-col gap-1">
             <span data-ph-mask className="text-2xl font-bold">
               {formatCurrencyFull(summary.total_gain_loss)}
             </span>
@@ -74,7 +74,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                 label="Portfolio gain/loss"
               />
             )}
-          </div>
+          </span>
         }
       />
 
@@ -83,7 +83,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
         trend={dayVariantAndTrend?.trend}
         value={
           dayChange != null ? (
-            <div className="flex flex-col gap-1">
+            <span className="flex flex-col gap-1">
               <span data-ph-mask className="text-2xl font-bold">
                 {formatCurrencyFull(dayChange)}
               </span>
@@ -95,7 +95,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                   label="Day change"
                 />
               )}
-            </div>
+            </span>
           ) : (
             <span data-ph-mask className="text-2xl font-bold text-muted-foreground">
               --

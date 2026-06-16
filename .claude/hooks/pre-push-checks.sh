@@ -107,9 +107,23 @@ printf '\n'
 printf 'Security:\n'
 
 if command -v bun &>/dev/null; then
-  run_check "bun audit            (HIGH/CRITICAL advisories)" \
-    "$PROJECT_ROOT" \
-    "bun audit --audit-level=high" || true
+  # bun audit was added in bun 1.2.15; older versions report "Script not found".
+  # Treat missing-command as a non-blocking warning so the gate works on any bun version.
+  _AUDIT_OUT=$(cd "$PROJECT_ROOT" && bun audit --audit-level=high 2>&1)
+  _AUDIT_RC=$?
+  if printf '%s' "$_AUDIT_OUT" | grep -qF "Script not found"; then
+    printf '  %-50s⚠️  (bun audit not available in bun %s — upgrade to ≥1.2.15)\n' \
+      "bun audit" "$(bun --version)"
+    WARNINGS="${WARNINGS}\n  • bun audit requires bun ≥1.2.15; current: $(bun --version) — upgrade: https://bun.sh"
+  elif [ "$_AUDIT_RC" -ne 0 ]; then
+    printf '  %-50s❌\n' "bun audit            (HIGH/CRITICAL advisories)"
+    FAILED=1
+    _snippet=$(printf '%s' "$_AUDIT_OUT" | tail -30)
+    ERRORS="${ERRORS}\n  • bun audit            (HIGH/CRITICAL advisories)\n    Fix: cd ${PROJECT_ROOT} && bun audit --audit-level=high\n    Output:\n$(printf '%s' "$_snippet" | sed 's/^/      /')\n"
+  else
+    printf '  %-50s✅\n' "bun audit            (HIGH/CRITICAL advisories)"
+  fi
+  unset _AUDIT_OUT _AUDIT_RC _snippet
 else
   printf '  %-50s⚠️  (bun not installed)\n' "bun audit"
   WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
