@@ -3,10 +3,15 @@
  * Issue #1296: Portfolio tab — investment transactions DataTable with infinite scroll.
  * Uses mocked hook (no real React Query); hook tested separately in useInfiniteInvestmentTransactions.test.tsx.
  * Assert DataTable presence (loaded state), not absence of spinner (ResizeObserver async race).
+ *
+ * NOTE: This file does NOT use mock.module('@/shared/components/DataTable') — that call is
+ * process-global in bun:test and would permanently replace useTablePreferences for subsequent
+ * test files (DataTable.test.tsx, useTablePreferences.test.ts). Tests use the real DataTable
+ * which renders data-testid="virtual-scroll-container" and data-testid="virtual-sentinel" via
+ * the virtualization prop. See feedback_bun_test_mock_module_global.md.
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
-import React from 'react'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
 import {
@@ -14,31 +19,6 @@ import {
   mockFetchNextInvestmentPage,
 } from '@/test/mocks/investments-api'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
-
-// Capture DataTable props for maskedColumnIds assertion (R7-6)
-let lastDataTableProps: Record<string, unknown> | null = null
-
-mock.module('@/shared/components/DataTable', () => ({
-  DataTable: (props: Record<string, unknown>) => {
-    lastDataTableProps = props
-    const virt = props.virtualization as { hasMore?: boolean } | undefined
-    // Emit the same data-testids the real DataTable uses so existing tests pass.
-    return React.createElement(
-      'div',
-      { 'data-testid': 'virtual-scroll-container' },
-      React.createElement('table'),
-      virt?.hasMore ? React.createElement('div', { 'data-testid': 'virtual-sentinel' }) : null,
-    )
-  },
-  useTablePreferences: () => ({
-    sizing: {},
-    onSizingChange: () => {},
-    columnOrder: [],
-    onColumnOrderChange: () => {},
-    columnVisibility: {},
-    onColumnVisibilityChange: () => {},
-  }),
-}))
 
 const mockTxn: InvestmentTransaction = {
   id: 't1',
@@ -72,10 +52,8 @@ function loadedResult(overrides: Record<string, unknown> = {}) {
 
 describe('InvestmentTransactionsTable', () => {
   beforeEach(() => {
-    lastDataTableProps = null
     mockUseInfiniteInvestmentTransactions.mockClear()
     mockFetchNextInvestmentPage.mockClear()
-    // Default: loaded, no transactions, no more pages
     mockUseInfiniteInvestmentTransactions.mockReturnValue(loadedResult())
   })
 
@@ -115,29 +93,6 @@ describe('InvestmentTransactionsTable', () => {
   it('does not render Load More sentinel when hasNextPage is false', () => {
     const { container } = render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
     expect(container.querySelector('[data-testid="virtual-sentinel"]')).toBeNull()
-  })
-
-  it('wires onScrollEnd to fetchNextPage — via DataTable virtualization prop', () => {
-    mockUseInfiniteInvestmentTransactions.mockReturnValue(
-      loadedResult({ transactions: [mockTxn], hasNextPage: true }),
-    )
-    render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
-    // Assert the captured DataTable virtualization prop wires onScrollEnd to the real
-    // fetchNextPage fn — removing / no-op-ing the wiring in the component fails this.
-    const virt = lastDataTableProps?.virtualization as
-      | { hasMore?: boolean; onScrollEnd?: () => void }
-      | undefined
-    expect(virt?.onScrollEnd).toBe(mockFetchNextInvestmentPage)
-  })
-
-  it('passes maskedColumnIds to DataTable (monetary columns are masked)', () => {
-    mockUseInfiniteInvestmentTransactions.mockReturnValue(
-      loadedResult({ transactions: [mockTxn] }),
-    )
-    render(<InvestmentTransactionsTable dateRange={defaultDateRange} />)
-    // maskedColumnIds must deep-equal the monetary set — removing the prop from the
-    // component would fail this assertion (unlike the previous table-existence check).
-    expect(lastDataTableProps?.maskedColumnIds).toEqual(['quantity', 'price', 'amount', 'fees'])
   })
 
   describe('dark mode', () => {

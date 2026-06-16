@@ -16,6 +16,7 @@ const DATE_RANGE = { start_date: '2024-01-01', end_date: '2024-03-31' }
 describe('PortfolioValueChart', () => {
   beforeEach(() => {
     mockUseDarkMode.mockReturnValue(false)
+    MockEChartsChart.mockClear()
   })
 
   it('renders a line chart with history data', () => {
@@ -126,7 +127,6 @@ describe('PortfolioValueChart', () => {
   })
 
   it('passes isDark=false to EChartsChart in light mode', () => {
-    // beforeEach already sets mockUseDarkMode.mockReturnValue(false)
     mockUseGetPortfolioHistory.mockReturnValue({
       data: {
         history: [
@@ -176,16 +176,18 @@ describe('PortfolioValueChart', () => {
       isError: false,
     })
     render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+    // Anchor: exactly one render call — prevents reading a stale call from a prior test.
+    expect(MockEChartsChart).toHaveBeenCalledTimes(1)
     const lastCall = MockEChartsChart.mock.calls.at(-1)
     const option = lastCall?.[0]?.option as {
       tooltip?: { formatter?: (p: unknown) => string }
     }
-    const formatted = option?.tooltip?.formatter?.([
-      { name: '<script>alert(1)</script>', value: 1000 },
-    ])
-    if (formatted !== undefined) {
-      expect(formatted).not.toMatch(/<script/i)
-      expect(formatted).toContain('&lt;script')
-    }
+    // Fail-stop: if the formatter is removed/renamed the guard can never fire silently.
+    const formatter = option?.tooltip?.formatter
+    expect(formatter).toBeDefined()
+    expect(typeof formatter).toBe('function')
+    const formatted = formatter!([{ name: '<script>alert(1)</script>', value: 1000 }])
+    expect(formatted).not.toMatch(/<script/i)
+    expect(formatted).toContain('&lt;script')
   })
 })
