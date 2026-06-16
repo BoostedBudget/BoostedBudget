@@ -21,9 +21,6 @@ describe('PortfolioTimeRange', () => {
   })
 
   it('does not call onPresetChange when the already-active preset is clicked', () => {
-    // Proves the ToggleGroup single-select behavior: clicking the current value is a no-op.
-    // This works with both real Radix and the suite-wide toggle-group mock used by
-    // TransactionDateFilter/DateRangePicker/SpendingReportsPage tests.
     const onPresetChange = mock(() => {})
     render(<PortfolioTimeRange activePreset="3M" onPresetChange={onPresetChange} />)
     fireEvent.click(screen.getByText('3M'))
@@ -37,17 +34,6 @@ describe('PortfolioTimeRange', () => {
     fireEvent.click(screen.getByText('1M'))
     expect(onPresetChange).toHaveBeenCalledTimes(1)
     expect(onPresetChange).toHaveBeenCalledWith('1M')
-  })
-
-  it('does not call onPresetChange for the already-active preset', () => {
-    const onPresetChange = mock(() => {})
-    render(<PortfolioTimeRange activePreset="1Y" onPresetChange={onPresetChange} />)
-
-    fireEvent.click(screen.getByText('1Y'))
-    // ToggleGroup single-select doesn't fire on deselect — onPresetChange should not fire
-    // (or if it does fire, verify that the parent receives a valid preset)
-    // In practice the ToggleGroup single mode ignores clicks on already-selected value
-    expect(onPresetChange).not.toHaveBeenCalledWith(undefined)
   })
 
   it('has accessible group label for screen readers', () => {
