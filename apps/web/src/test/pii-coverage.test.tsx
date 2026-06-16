@@ -1516,11 +1516,9 @@ describe('PII coverage — Round 13 extended: PortfolioValueChart', () => {
     mockUseDarkMode.mockReturnValue(false)
   })
 
-  // Note: EChartsChart renders a mocked stub (no DOM text), so scanForUnmaskedPII gates the
-  // wrapper DOM only. Currency values that reach the real ECharts option (tooltip/axis labels)
-  // are rendered as Canvas/SVG and masked via EChartsChart's own data-ph-mask wrapper —
-  // the same established pattern as NetWorthSparkline and SpendingReportsPage chart tests.
-  test('chart wrapper contains no unmasked currency text', async () => {
+  // PortfolioValueChart is pure-canvas: currency values render in ECharts canvas, not DOM text.
+  // Guard: verify EChartsChart wrapper has data-ph-mask (EChartsChart.tsx:31).
+  test('chart canvas is wrapped in data-ph-mask element (light mode)', async () => {
     mockUseGetPortfolioHistory.mockReturnValue({
       data: {
         history: [
@@ -1538,18 +1536,18 @@ describe('PII coverage — Round 13 extended: PortfolioValueChart', () => {
     await waitFor(() =>
       expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
   })
 })
 
 describe('PII coverage — Round 13 extended: PortfolioValueChart (dark mode)', () => {
   beforeEach(() => {
     cleanup()
-    mockUseDarkMode.mockReturnValue(true) // dark mode
+    mockUseDarkMode.mockReturnValue(true)
   })
 
-  // R5-5: Run PII gate in dark mode to ensure isDark=true doesn't strip data-ph-mask.
-  test('chart wrapper contains no unmasked currency text in dark mode', async () => {
+  // Verify data-ph-mask persists in dark mode (isDark=true should not strip it).
+  test('chart canvas is wrapped in data-ph-mask element (dark mode)', async () => {
     mockUseGetPortfolioHistory.mockReturnValue({
       data: {
         history: [
@@ -1567,7 +1565,7 @@ describe('PII coverage — Round 13 extended: PortfolioValueChart (dark mode)', 
     await waitFor(() =>
       expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
   })
 })
 
@@ -1588,10 +1586,8 @@ describe('PII coverage — Round 13 extended: AllocationCard', () => {
     })
   })
 
-  // Note: same scope as PortfolioValueChart above — ECharts mock stubs canvas rendering;
-  // scanForUnmaskedPII gates wrapper DOM only. AllocationCard's non-chart DOM (title, popover
-  // trigger) contains no formatted currency values, so the assertion is meaningful there.
-  test('card wrapper and donut chart contain no unmasked currency text', async () => {
+  // AllocationCard is pure-canvas via ECharts. Guard: verify data-ph-mask wraps the canvas.
+  test('donut chart canvas is wrapped in data-ph-mask element (light mode)', async () => {
     render(
       <AllocationCard
         config={{ include: [], group_by: 'security_type', basis: 'assets' }}
@@ -1602,14 +1598,14 @@ describe('PII coverage — Round 13 extended: AllocationCard', () => {
     await waitFor(() =>
       expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
   })
 })
 
 describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () => {
   beforeEach(() => {
     cleanup()
-    mockUseDarkMode.mockReturnValue(true) // dark mode
+    mockUseDarkMode.mockReturnValue(true)
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 99999.99,
@@ -1623,8 +1619,8 @@ describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () =>
     })
   })
 
-  // R5-5: Run PII gate in dark mode to ensure isDark=true doesn't strip data-ph-mask.
-  test('card wrapper and donut chart contain no unmasked currency text in dark mode', async () => {
+  // Verify data-ph-mask persists in dark mode (isDark=true should not strip it).
+  test('donut chart canvas is wrapped in data-ph-mask element (dark mode)', async () => {
     render(
       <AllocationCard
         config={{ include: [], group_by: 'security_type', basis: 'assets' }}
@@ -1635,6 +1631,6 @@ describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () =>
     await waitFor(() =>
       expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
     )
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
   })
 })
