@@ -15,10 +15,9 @@ interface AllocationDonutChartProps {
   config: AllocationConfig
 }
 
-function normalizeBucketLabel(bucket: { security_type: string; asset_class: string }, groupBy: GetPortfolioAllocationBreakdownGroupBy): string {
-  const raw = groupBy === 'asset_class' ? bucket.asset_class : bucket.security_type
-  if (!raw || raw.toLowerCase() === 'unknown') return 'Other'
-  return raw
+function normalizeBucketLabel(value: string): string {
+  if (!value || value.toLowerCase() === 'unknown') return 'Other'
+  return value
 }
 
 // Aggregate buckets with the same normalized label, summing values and counts.
@@ -31,7 +30,8 @@ function aggregateBuckets(
   const byName = new Map<string, { total_value: number; pct: number; holding_count: number }>()
 
   for (const bucket of buckets) {
-    const name = normalizeBucketLabel(bucket, groupBy)
+    const raw = groupBy === 'asset_class' ? bucket.asset_class : bucket.security_type
+    const name = normalizeBucketLabel(raw)
     const existing = byName.get(name)
     if (existing) {
       byName.set(name, {
@@ -53,31 +53,40 @@ function aggregateBuckets(
 }
 
 // Largest-remainder (Hamilton) rounding: ensures displayed percentages (via toFixed(1)) sum to 100.0.
-// Handles both positive deficit (floors sum < 1000 → add tenths to largest-remainder slices) and
-// negative deficit (floors sum > 1000 → subtract tenths from smallest-remainder slices).
+// Handles any deficit magnitude — including |deficit| > sliceCount — by distributing
+// floor(|deficit|/n) tenths to every slice, then distributing the remaining tenths
+// to the highest-remainder slices. This is the general form; the original single-pass
+// Set approach only worked when |deficit| ≤ n.
 function reconcilePercentages<T extends { pct: number }>(slices: T[]): T[] {
   if (slices.length === 0) return slices
 
   // Work in tenths of a percent to avoid floating-point accumulation errors.
   const SCALE = 10
   const TARGET = 1000 // 100.0 × 10
+  const n = slices.length
 
   const floors = slices.map((s) => Math.floor(s.pct * SCALE))
   const remainders = slices.map((s, i) => s.pct * SCALE - floors[i])
   const deficit = TARGET - floors.reduce((a, b) => a + b, 0)
 
-  const count = Math.abs(deficit)
-  // Positive deficit: adjust slices with the largest remainders upward (+1 tenth each).
-  // Negative deficit: adjust slices with the smallest remainders downward (-1 tenth each).
+  if (deficit === 0) return slices.map((s, i) => ({ ...s, pct: floors[i] / SCALE }))
+
+  const sign = deficit >= 0 ? 1 : -1
+  const absDeficit = Math.abs(deficit)
+  // Each slice receives at least `base` extra tenths; `extra` slices receive one more.
+  const base = Math.floor(absDeficit / n)
+  const extra = absDeficit % n
+
+  // Positive deficit → give extra to largest-remainder slices.
+  // Negative deficit → take extra from smallest-remainder slices.
   const ranked = remainders
     .map((r, i) => ({ i, r }))
     .sort((a, b) => (deficit >= 0 ? b.r - a.r : a.r - b.r))
-  const adjustIndices = new Set(ranked.slice(0, count).map((x) => x.i))
-  const adjustment = deficit >= 0 ? 1 : -1
+  const extraIndices = new Set(ranked.slice(0, extra).map((x) => x.i))
 
   return slices.map((s, i) => ({
     ...s,
-    pct: (floors[i] + (adjustIndices.has(i) ? adjustment : 0)) / SCALE,
+    pct: (floors[i] + sign * (base + (extraIndices.has(i) ? 1 : 0))) / SCALE,
   }))
 }
 
@@ -95,15 +104,10 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
   const option = useMemo((): EChartsOption => {
     if (!buckets || buckets.length === 0) return {}
 
-    // Step 1: Aggregate buckets with the same normalized label (e.g., two "unknown" → "Other")
-    // so sliceByName cannot have last-write-wins collisions. Filter out zero-value buckets
-    // (e.g. overdrawn cash floored to $0 by GREATEST) to avoid invisible slices and fabricated
-    // 0.1% labels from Hamilton rounding on a single zero-value entry.
+    // Aggregate same-label buckets, filter zero-value (overdrawn cash, etc.), apply rounding
     const aggregated = aggregateBuckets(buckets, config.group_by).filter((b) => b.total_value > 0)
     if (aggregated.length === 0) return {}
 
-    // Step 2: Build slice objects with colors, then apply largest-remainder rounding so that
-    // the displayed percentages (via .toFixed(1)) sum to exactly 100.0.
     const rawSlices = aggregated.map((b, i) => ({
       name: b.name,
       value: b.total_value,
@@ -111,8 +115,6 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
       itemStyle: { color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] },
     }))
     const sliceData = reconcilePercentages(rawSlices)
-
-    // Build name→slice lookup for the legend formatter (safe: all names are now unique).
     const sliceByName = new Map(sliceData.map((s) => [s.name, s]))
 
     return {

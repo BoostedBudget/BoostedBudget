@@ -13,10 +13,6 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { AllocationCard } from './AllocationCard'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
 
-// Re-register useTrackEvent with the preloaded mockTrackEvent reference so that
-// analytics assertions work regardless of which file ran before us (other test files
-// such as BudgetDetailPage.analytics and InsightsPage may override or clear this mock).
-// Pattern established by BoostsPage.test.tsx and BudgetDetailPage.analytics.test.tsx.
 mock.module('@/shared/hooks/useTrackEvent', () => ({
   useTrackEvent: () => mockTrackEvent,
 }))
@@ -154,10 +150,15 @@ describe('AllocationCard', () => {
     expect(screen.getByRole('radio', { name: /account/i })).toBeDefined()
   })
 
-  // R5-5: C11 — AllocationCard must forward isDark=true to EChartsChart via AllocationDonutChart.
   it('passes isDark=true to EChartsChart when in dark mode', () => {
     mockUseDarkMode.mockReturnValue(true)
     render(<AllocationCard config={DEFAULT_CONFIG} onConfigChange={makeOnConfigChange()} />)
     expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('true')
+  })
+
+  it('passes isDark=false to EChartsChart in light mode', () => {
+    // beforeEach already sets mockUseDarkMode.mockReturnValue(false)
+    render(<AllocationCard config={DEFAULT_CONFIG} onConfigChange={makeOnConfigChange()} />)
+    expect(screen.getByTestId('echarts-chart').dataset.isDark).toBe('false')
   })
 })

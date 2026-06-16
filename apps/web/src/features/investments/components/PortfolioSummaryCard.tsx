@@ -19,15 +19,12 @@ function Skeleton() {
   return <div className="animate-pulse h-6 w-24 rounded-md bg-muted" />
 }
 
-type ChangeVariant = 'positive' | 'negative' | 'neutral'
-
-function toChangeVariant(value: number): ChangeVariant {
-  return value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral'
-}
-
-function toStatTrend(variant: ChangeVariant): 'up' | 'down' | 'neutral' {
-  const map = { positive: 'up', negative: 'down', neutral: 'neutral' } as const
-  return map[variant]
+function getVariantAndTrend(
+  value: number,
+): { variant: 'positive' | 'negative' | 'neutral'; trend: 'up' | 'down' | 'neutral' } {
+  const variant = value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral'
+  const trend = variant === 'positive' ? 'up' : variant === 'negative' ? 'down' : 'neutral'
+  return { variant, trend }
 }
 
 /**
@@ -50,8 +47,9 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
     )
   }
 
-  const gainVariant = toChangeVariant(summary.total_gain_loss)
-  const dayVariant = summary.day_change != null ? toChangeVariant(summary.day_change) : 'neutral'
+  const { variant: gainVariant, trend: gainTrend } = getVariantAndTrend(summary.total_gain_loss)
+  const dayChange = summary.day_change
+  const dayVariantAndTrend = dayChange != null ? getVariantAndTrend(dayChange) : null
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -62,7 +60,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
 
       <StatCard
         label="Total Gain / Loss"
-        trend={toStatTrend(gainVariant)}
+        trend={gainTrend}
         value={
           <div className="flex flex-col gap-1">
             <span data-ph-mask className="text-2xl font-bold">
@@ -82,19 +80,21 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
 
       <StatCard
         label="Day Change"
-        trend={summary.day_change != null ? toStatTrend(dayVariant) : undefined}
+        trend={dayVariantAndTrend?.trend}
         value={
-          summary.day_change != null && summary.day_change_pct != null ? (
+          dayChange != null ? (
             <div className="flex flex-col gap-1">
               <span data-ph-mask className="text-2xl font-bold">
-                {formatCurrencyFull(summary.day_change)}
+                {formatCurrencyFull(dayChange)}
               </span>
-              <ChangeIndicator
-                variant={dayVariant}
-                amount={summary.day_change}
-                percent={summary.day_change_pct}
-                label="Day change"
-              />
+              {summary.day_change_pct != null && dayVariantAndTrend && (
+                <ChangeIndicator
+                  variant={dayVariantAndTrend.variant}
+                  amount={dayChange}
+                  percent={summary.day_change_pct}
+                  label="Day change"
+                />
+              )}
             </div>
           ) : (
             <span data-ph-mask className="text-2xl font-bold text-muted-foreground">

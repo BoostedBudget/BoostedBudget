@@ -133,7 +133,7 @@ const EChartsChartMockComponent = ({
       'data-has-markline': hasMarkline ? 'true' : 'false',
       'data-markline-series': JSON.stringify(marklineSeries),
       'data-renderer': 'svg',
-      'data-is-dark': isDark ? 'true' : 'false',
+      'data-is-dark': String(isDark),
       style,
     },
     'ECharts Mock',

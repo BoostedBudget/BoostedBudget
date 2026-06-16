@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import '@/test/mocks/shared-charts'
-import { mockUseDarkMode, MockEChartsChart } from '@/test/mocks/shared-charts'
+import { mockUseDarkMode, MockEChartsChart, MOCK_CATEGORY_COLORS } from '@/test/mocks/shared-charts'
 import { mockUseGetPortfolioAllocationBreakdown } from '@/test/mocks/analytics-api'
 import { AllocationDonutChart } from './AllocationDonutChart'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
@@ -111,8 +111,7 @@ describe('AllocationDonutChart', () => {
     expect(props.option?.series?.[0]?.data?.[0]?.name).toBe('Other')
   })
 
-  // R5-6: assert the exact {name, value, pct} shape of series[0].data so mis-mapping
-  // is caught even if the chart renders (donut being "present" is not enough).
+  // R5-6: Verify exact {name, value, pct} shape to catch field mis-mapping
   it('series[0].data items have exact {name, value, pct} shape from bucket fields', () => {
     const buckets = [
       { security_type: 'stock', asset_class: 'stock', total_value: 8000, percentage: 80, holding_count: 3 },
@@ -194,11 +193,8 @@ describe('AllocationDonutChart', () => {
     expect(types[0]).toBe('pie')
   })
 
-  // R6-3: Aggregate same-normalized-name buckets — duplicate labels must not collide.
+  // R6-3: Aggregate same-label buckets (e.g., unknown + empty → "Other")
   it('merges two buckets normalizing to the same label into one slice with summed value+pct', () => {
-    // Two buckets both normalize to "Other" (unknown + empty security_type).
-    // Without aggregation the second would overwrite the first in sliceByName,
-    // causing the legend to show the wrong value for "Other".
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 10000,
@@ -232,8 +228,7 @@ describe('AllocationDonutChart', () => {
     expect(stockSlice?.value).toBe(5000)
   })
 
-  // R6-3: Legend formatter must use the merged "Other" slice value, not the overwritten one.
-  it('legend formatter shows the merged (summed) value for a merged "Other" slice', () => {
+  it('legend formatter shows the merged (summed) value for "Other" slice', () => {
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 5000,
@@ -260,8 +255,7 @@ describe('AllocationDonutChart', () => {
     }
   })
 
-  // Codex R6 issue 2: zero-value buckets (e.g. fully-overdrawn cash floored to $0 by GREATEST)
-  // must not render a 0.1%-fabricated slice — show "No allocation data" instead.
+  // Zero-value buckets (overdrawn cash, etc.) must not render fabricated slices
   it('shows no-data state when all buckets have zero total_value', () => {
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
@@ -277,10 +271,8 @@ describe('AllocationDonutChart', () => {
     expect(screen.getByText(/no allocation data/i)).toBeDefined()
   })
 
-  // Codex R6 issue 3: reconcilePercentages must handle negative deficit (API pcts sum > 100).
+  // Handle negative deficit (API pcts > 100) in percentage reconciliation
   it('displayed percentages sum to exactly 100.0 when API pcts slightly overshoot 100 (negative deficit)', () => {
-    // Two slices with pct=50.11: floors = [501, 501], sum=1002 > TARGET=1000 → deficit=-2.
-    // Without the fix: no adjustments → displayed 50.1+50.1=100.2. With fix: both reduced to 50.0.
     mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
       data: {
         total_value: 20000,
@@ -332,6 +324,63 @@ describe('AllocationDonutChart', () => {
       const displayedSum = data.reduce((sum, d) => sum + parseFloat(d.pct.toFixed(1)), 0)
       expect(Math.abs(displayedSum - 100.0)).toBeLessThanOrEqual(0.05)
     }
+  })
+
+  // R7-2: Handle large deficits (|deficit| > sliceCount) in percentage reconciliation
+  it('displayed percentages sum to exactly 100.0 when |deficit| > sliceCount', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 20000,
+        buckets: [
+          { security_type: 'A', asset_class: 'A', total_value: 10000, percentage: 50.31, holding_count: 1 },
+          { security_type: 'B', asset_class: 'B', total_value: 10000, percentage: 50.31, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ pct: number }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    if (data) {
+      // base=3, extra=0 → each slice: floor(503) - 3 = 500 tenths = 50.0%
+      expect(data[0].pct).toBe(50.0)
+      expect(data[1].pct).toBe(50.0)
+      const displayedSum = data.reduce((sum, d) => sum + parseFloat(d.pct.toFixed(1)), 0)
+      expect(Math.abs(displayedSum - 100.0)).toBeLessThanOrEqual(0.05)
+    }
+  })
+
+  // R7-4: Enforce colorblind-safe palette slice-by-slice
+  it('applies CATEGORY_COLORS palette to each slice (colorblind-safe)', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 30000,
+        buckets: [
+          { security_type: 'stock', asset_class: 'stock', total_value: 20000, percentage: 66.7, holding_count: 2 },
+          { security_type: 'bond', asset_class: 'bond', total_value: 10000, percentage: 33.3, holding_count: 1 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    MockEChartsChart.mockClear()
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const props = MockEChartsChart.mock.calls[0]?.[0] as {
+      option?: { series?: Array<{ data?: Array<{ name: string; itemStyle?: { color: string } }> }> }
+    }
+    const data = props.option?.series?.[0]?.data
+    expect(data).toBeDefined()
+    expect(data?.length).toBeGreaterThanOrEqual(2)
+    data?.forEach((slice, i) => {
+      expect(slice.itemStyle?.color).toBe(MOCK_CATEGORY_COLORS[i % MOCK_CATEGORY_COLORS.length])
+    })
   })
 
   it('legend formatter produces text with currency and percent', () => {
