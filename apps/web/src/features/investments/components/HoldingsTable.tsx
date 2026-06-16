@@ -3,6 +3,7 @@ import { useGetHoldings } from '@boostedbudget/api-client/endpoints/investments/
 import { useActiveAccounts } from '@/features/accounts/hooks'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
+import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
 import { formatCurrency, formatPercent } from '@/shared/charts/formatters'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 
@@ -37,6 +38,7 @@ const MASKED_COLUMN_IDS = [
   'gain_loss_pct',
   'day_change',
   'day_change_pct',
+  'account',
 ]
 
 export function HoldingsTable() {
@@ -94,9 +96,10 @@ export function HoldingsTable() {
   // every account even while a filter is active.
   const holdings = rawHoldings ?? []
 
-  const accountOptions = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
+  const accountOptions: FilterOption[] = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
     label: accountNameById.get(id) ?? id,
     value: id,
+    masked: true,
   }))
 
   const columns: ColumnDef<HoldingView>[] = [
