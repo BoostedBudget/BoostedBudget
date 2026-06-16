@@ -39,9 +39,9 @@ describe('PortfolioTimeRange', () => {
   it('has accessible group label for screen readers', () => {
     const onPresetChange = mock(() => {})
     render(<PortfolioTimeRange activePreset="1Y" onPresetChange={onPresetChange} />)
-    // The ToggleGroup receives aria-label="Portfolio time range".
-    // Real Radix renders with data-slot="toggle-group"; the suite-wide mock renders with data-testid="toggle-group".
-    // Either way a wrapper container element must exist with the preset buttons inside.
+    // aria-label="Portfolio time range" is set on ToggleGroup (PortfolioTimeRange.tsx:26).
+    // Happy-dom's Radix ToggleGroup doesn't expose accessible name via queryByRole('group', { name: ... }),
+    // so we assert the group container is present instead.
     const group = screen.queryByTestId('toggle-group') ?? screen.queryByRole('group')
     expect(group).not.toBeNull()
   })

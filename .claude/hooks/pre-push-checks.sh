@@ -56,6 +56,17 @@ if [[ -n "${PUSH_BRANCH:-}" ]]; then
     PROJECT_ROOT="$WORKTREE_DIR"
   fi
 fi
+# Fallback: if CMD-based detection didn't find a worktree, check if the current
+# working directory (PWD) is a registered worktree with its own package.json.
+# Claude Code sets PWD to the working directory of the Bash tool that triggered
+# the hook, which is the worktree root even when CLAUDE_PROJECT_DIR is the main repo.
+if [[ "${PROJECT_ROOT}" == "$(cd "$SCRIPT_DIR/../.." && pwd)" && \
+      "${PWD}" != "${PROJECT_ROOT}" && \
+      -f "${PWD}/package.json" ]]; then
+  if git -C "$PROJECT_ROOT" worktree list --porcelain 2>/dev/null | grep -qxF "worktree ${PWD}"; then
+    PROJECT_ROOT="${PWD}"
+  fi
+fi
 
 FAILED=0
 ERRORS=""
