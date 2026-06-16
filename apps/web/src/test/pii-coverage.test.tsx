@@ -1379,36 +1379,72 @@ describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', 
     cleanup()
   })
 
+  const holdingFixture = {
+    id: 'h-pii-1',
+    account_id: 'acct-1',
+    user_id: 'user-1',
+    security_id: 'sec-1',
+    quantity: 10,
+    security_name: 'Apple Inc',
+    ticker_symbol: 'AAPL',
+    security_type: 'equity',
+    institution_value: 99999.99,
+    institution_price: 9999.99,
+    cost_basis: 88888.88,
+    gain_loss: 11111.11,
+    gain_loss_pct: 12.5,
+    day_change: 222.22,
+    day_change_pct: 0.22,
+  }
+
   test('monetary holding columns are inside data-ph-mask td cells', async () => {
     mockUseGetHoldings.mockReturnValue({
-      data: {
-        count: 1,
-        holdings: [
-          {
-            id: 'h-pii-1',
-            account_id: 'acct-1',
-            user_id: 'user-1',
-            security_id: 'sec-1',
-            quantity: 10,
-            security_name: 'Apple Inc',
-            ticker_symbol: 'AAPL',
-            security_type: 'equity',
-            institution_value: 99999.99,
-            institution_price: 9999.99,
-            cost_basis: 88888.88,
-            gain_loss: 11111.11,
-            gain_loss_pct: 12.5,
-            day_change: 222.22,
-            day_change_pct: 0.22,
-          },
-        ],
-      },
+      data: { count: 1, holdings: [holdingFixture] },
       isLoading: false,
       isError: false,
     })
     render(<HoldingsTable />, { wrapper: createWrapper() })
     await waitFor(() => expect(document.body.textContent ?? '').toContain('AAPL'))
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('account name in Account cell and filter dropdown option is masked', async () => {
+    // HoldingsTable must mask account names — convention (all 3 other name-bearing
+    // DataTables do: AccountBreakdownTable, TransactionTable, AccountTable).
+    // Seed accounts so accountNameById resolves 'acct-1' → SENTINEL_ACCOUNT_NAME.
+    const user = userEvent.setup()
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [{ id: 'acct-1', name: SENTINEL_ACCOUNT_NAME, status: 'active', user_account_id: 'ua-1' }],
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => {}),
+    })
+    mockUseGetHoldings.mockReturnValue({
+      data: { count: 1, holdings: [holdingFixture] },
+      isLoading: false,
+      isError: false,
+    })
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account name in HoldingsTable Account cell' },
+    ]
+    render(<HoldingsTable />, { wrapper: createWrapper() })
+    await waitForSentinels(sentinels)
+
+    // Open account filter so Radix portal mounts option labels into document.body.
+    // Without this the scanner never sees portaled filter labels.
+    await user.click(screen.getByRole('button', { name: /filter by account/i }))
+    const listbox = await waitFor(
+      () => screen.getByRole('listbox'),
+      { timeout: 3000 },
+    )
+    // Confirm sentinel is present in the portal before asserting it is masked.
+    expect(within(listbox).getByText(SENTINEL_ACCOUNT_NAME)).toBeInTheDocument()
+
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    // Dismiss dropdown so Radix portal unmounts cleanly before bun worker teardown.
+    await user.keyboard('{Escape}')
   })
 })
 
