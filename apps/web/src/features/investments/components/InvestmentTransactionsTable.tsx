@@ -4,27 +4,29 @@ import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import { formatCurrency } from '@/shared/charts/formatters'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
+import {
+  TXN_COLUMN_IDS,
+  MASKED_COLUMN_IDS,
+  formatTransactionType,
+  buildInvestmentVirtualization,
+} from './investmentTransactionsTable.constants'
 
 const formatOrDefault = (value: number | null | undefined): string =>
   value != null ? formatCurrency(value) : '--'
 
 interface InvestmentTransactionsTableProps {
   dateRange: { start_date: string; end_date: string }
+  /**
+   * Test seam: when true, virtualization is disabled so jsdom renders real rows.
+   * Never set in production — only used by pii-coverage tests.
+   */
+  disableVirtualization?: boolean
 }
 
-const TXN_COLUMN_IDS = [
-  'date',
-  'type',
-  'security',
-  'quantity',
-  'price',
-  'amount',
-  'fees',
-] as const
-
-const MASKED_COLUMN_IDS = ['quantity', 'price', 'amount', 'fees']
-
-export function InvestmentTransactionsTable({ dateRange }: InvestmentTransactionsTableProps) {
+export function InvestmentTransactionsTable({
+  dateRange,
+  disableVirtualization = false,
+}: InvestmentTransactionsTableProps) {
   const [sortState, setSortState] = useState<SortState>(null)
   const [filters, setFilters] = useState<FilterState>({})
 
@@ -54,7 +56,7 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
       id: 'type',
       header: 'Type',
       key: 'type',
-      render: (r) => r.type[0].toUpperCase() + r.type.slice(1),
+      render: (r) => formatTransactionType(r.type),
     },
     {
       id: 'security',
@@ -132,17 +134,11 @@ export function InvestmentTransactionsTable({ dateRange }: InvestmentTransaction
       onColumnOrderChange={onColumnOrderChange}
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={onColumnVisibilityChange}
-      virtualization={{
-        enabled: true,
-        estimateRowHeight: 56,
-        overscan: 8,
-        dynamicRowHeight: true,
-        scrollContainerHeight: 'calc(100dvh - 240px)',
-        onScrollEnd: fetchNextPage,
-        hasMore: hasNextPage,
-        isFetchingMore: isFetchingNextPage,
-        prefetchRows: 5,
-      }}
+      virtualization={
+        disableVirtualization
+          ? undefined
+          : buildInvestmentVirtualization({ fetchNextPage, hasNextPage, isFetchingNextPage })
+      }
     />
   )
 }

@@ -60,7 +60,7 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
-import { mockUseGetHoldings, mockGetInvestmentTransactions, mockUseGetPortfolioHistory } from '@/test/mocks/investments-api'
+import { mockUseGetHoldings, mockUseGetPortfolioHistory, mockUseInfiniteInvestmentTransactions, mockFetchNextInvestmentPage } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
@@ -1451,39 +1451,62 @@ describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', 
 describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () => {
   beforeEach(() => {
     cleanup()
+    mockFetchNextInvestmentPage.mockClear()
+    mockUseInfiniteInvestmentTransactions.mockClear()
   })
 
-  test('non-virtualized content (headers) contains no unmasked currency values', async () => {
-    // Seed the mocked raw API fetcher with a transaction that has large monetary values.
-    // The real useInfiniteInvestmentTransactions hook calls getInvestmentTransactions
-    // (intercepted by mock.module in investments-api.ts preload).
-    mockGetInvestmentTransactions.mockResolvedValue({
+  test('financial cells (quantity, price, amount, fees) are masked and no sentinel leaks unmasked', async () => {
+    // CRITICAL: seed the WRAPPER hook mock (not the raw API fetcher).
+    // InvestmentTransactionsTable imports useInfiniteInvestmentTransactions which is
+    // globally preloaded-mocked (investments-hooks.ts). Default returns transactions: [].
+    // The raw API fetcher (mockGetInvestmentTransactions) is never called by the component.
+    mockUseInfiniteInvestmentTransactions.mockReturnValue({
       transactions: [
         {
           id: 'pii-txn-1',
           user_id: 'user-1',
           account_id: 'acct-1',
           plaid_investment_transaction_id: 'plaid-1',
-          security_id: 'sec-1',
           date: '2024-06-01',
           name: 'AAPL Buy',
-          amount: 99999.99,
-          quantity: 123.4567,
-          price: 810.45,
-          fees: 4.99,
+          // Sentinel values — must NOT appear as raw text in the DOM
+          amount: 99999.99,      // → '$99,999.99'
+          quantity: 123.4567,    // → '123.4567' (not currency-formatted)
+          price: 810.45,         // → '$810.45'
+          fees: 4.99,            // → '$4.99'
           type: 'buy',
           created_at: '2024-06-01T10:00:00Z',
         },
       ],
-      limit: 50,
-      next_cursor: undefined,
+      fetchNextPage: mockFetchNextInvestmentPage,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
     })
+
+    // disableVirtualization=true forces DataTable to render real rows (no jsdom layout needed).
+    // This is the documented test seam for the pii-coverage suite; production always uses
+    // virtualization (disableVirtualization defaults to false).
     render(
-      <InvestmentTransactionsTable dateRange={{ start_date: '2024-01-01', end_date: '2024-12-31' }} />,
-      { wrapper: createWrapper() }
+      <InvestmentTransactionsTable
+        dateRange={{ start_date: '2024-01-01', end_date: '2024-12-31' }}
+        disableVirtualization
+      />,
+      { wrapper: createWrapper() },
     )
-    // jsdom virtualization renders 0 data rows; column headers must still be PII-clean.
-    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+
+    // Wait for the seeded row to actually appear in the DOM (suite rule: per-sentinel waitFor).
+    await waitFor(() => screen.getByText('AAPL Buy'))
+
+    // Sentinels for PII scan. quantity renders as toFixed(4) = '123.4567' (not $-formatted),
+    // so it needs an explicit sentinel. price/amount/fees are $-formatted and auto-caught
+    // by CURRENCY_RE. Test fails if any sentinel appears unmasked in the DOM.
+    const sentinels: PIISentinel[] = [
+      { value: '123.4567', fieldDescription: 'quantity (raw toFixed(4))' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
 
