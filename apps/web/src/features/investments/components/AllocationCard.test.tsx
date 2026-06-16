@@ -134,12 +134,20 @@ describe('AllocationCard', () => {
     expect(nextConfig.include).not.toContain('cash')
   })
 
-  it('renders Group by security type radio as initially selected', () => {
+  it('reflects config.group_by in radio checked state (security_type default)', () => {
     render(<AllocationCard config={DEFAULT_CONFIG} onConfigChange={makeOnConfigChange()} />)
     fireEvent.click(screen.getByRole('button', { name: /allocation settings/i }))
-    const securityTypeRadio = screen.getByRole('radio', { name: /security type/i })
-    // In a real RadioGroup the default is checked; in mock or real Radix this still renders
-    expect(securityTypeRadio).toBeDefined()
+    expect((screen.getByRole('radio', { name: /security type/i }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('radio', { name: /asset class/i }) as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByRole('radio', { name: /account/i }) as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('reflects config.group_by in radio checked state (account)', () => {
+    const config = { ...DEFAULT_CONFIG, group_by: 'account' as const }
+    render(<AllocationCard config={config} onConfigChange={makeOnConfigChange()} />)
+    fireEvent.click(screen.getByRole('button', { name: /allocation settings/i }))
+    expect((screen.getByRole('radio', { name: /account/i }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('radio', { name: /security type/i }) as HTMLInputElement).checked).toBe(false)
   })
 
   it('renders all three group_by options', () => {
