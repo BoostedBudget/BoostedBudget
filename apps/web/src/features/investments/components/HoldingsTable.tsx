@@ -14,7 +14,8 @@ const formatOrDefault = (value: number | null | undefined): string =>
 const formatPercentOrDefault = (value: number | null | undefined): string =>
   value != null ? formatPercent(value) : '--'
 
-const HOLDINGS_COLUMN_IDS = [
+// All column IDs including account (used in portfolio/unscoped mode)
+const PORTFOLIO_HOLDINGS_COLUMN_IDS = [
   'name',
   'ticker',
   'type',
@@ -29,7 +30,25 @@ const HOLDINGS_COLUMN_IDS = [
   'account',
 ] as const
 
+// Column IDs for scoped (single-account) mode — excludes 'account'
+const ACCOUNT_HOLDINGS_COLUMN_IDS = [
+  'name',
+  'ticker',
+  'type',
+  'quantity',
+  'price',
+  'market_value',
+  'cost_basis',
+  'gain_loss',
+  'gain_loss_pct',
+  'day_change',
+  'day_change_pct',
+] as const
+
+// name and ticker reveal portfolio composition and must be masked per posthog-pii-masking.md
 const MASKED_COLUMN_IDS = [
+  'name',
+  'ticker',
   'quantity',
   'price',
   'market_value',
@@ -41,11 +60,19 @@ const MASKED_COLUMN_IDS = [
   'account',
 ]
 
-export function HoldingsTable() {
+interface HoldingsTableProps {
+  accountId?: string
+}
+
+export function HoldingsTable({ accountId }: HoldingsTableProps = {}) {
+  const isScoped = !!accountId
+
   const [sortState, setSortState] = useState<SortState>(null)
   const [filters, setFilters] = useState<FilterState>({})
 
-  const { data: holdingsData, isLoading, isError } = useGetHoldings()
+  const { data: holdingsData, isLoading, isError } = useGetHoldings(
+    isScoped ? { account_id: accountId } : undefined,
+  )
   const { accounts } = useActiveAccounts()
 
   // Build id→name map for resolving account UUIDs to human-readable names.
@@ -55,6 +82,9 @@ export function HoldingsTable() {
     return map
   }, [accounts])
 
+  const activeColumnIds = isScoped ? ACCOUNT_HOLDINGS_COLUMN_IDS : PORTFOLIO_HOLDINGS_COLUMN_IDS
+  const tablePrefsKey = isScoped ? 'account-holdings' : 'portfolio-holdings'
+
   const {
     sizing,
     onSizingChange,
@@ -62,17 +92,20 @@ export function HoldingsTable() {
     onColumnOrderChange,
     columnVisibility,
     onColumnVisibilityChange,
-  } = useTablePreferences('portfolio-holdings', [...HOLDINGS_COLUMN_IDS])
+  } = useTablePreferences(tablePrefsKey, [...activeColumnIds])
 
   const rawHoldings = holdingsData?.holdings
 
-  // DataTable uses manualFiltering=true — apply account filter client-side.
+  // DataTable uses manualFiltering=true — apply account filter client-side (unscoped only).
+  // In scoped mode the server already filters by account_id; do not apply a client-side filter
+  // (a stale filter would hide all rows with no visible control to clear it).
   const filteredHoldings = useMemo(() => {
     const all = rawHoldings ?? []
+    if (isScoped) return all
     const accountFilter = filters['account']
     if (!accountFilter || !Array.isArray(accountFilter) || accountFilter.length === 0) return all
     return all.filter((h) => (accountFilter as string[]).includes(h.account_id))
-  }, [rawHoldings, filters])
+  }, [rawHoldings, filters, isScoped])
 
   // DataTable uses manualSorting=true — apply client-side sort before rendering.
   const sortedHoldings = useMemo(() => {
@@ -93,16 +126,18 @@ export function HoldingsTable() {
   }, [filteredHoldings, sortState])
 
   // accountOptions derived from all holdings (unfiltered) so the dropdown always shows
-  // every account even while a filter is active.
+  // every account even while a filter is active. Only used in unscoped mode.
   const holdings = rawHoldings ?? []
 
-  const accountOptions: FilterOption[] = Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
-    label: accountNameById.get(id) ?? id,
-    value: id,
-    masked: true,
-  }))
+  const accountOptions: FilterOption[] = !isScoped
+    ? Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
+        label: accountNameById.get(id) ?? id,
+        value: id,
+        masked: true,
+      }))
+    : []
 
-  const columns: ColumnDef<HoldingView>[] = [
+  const baseColumns: ColumnDef<HoldingView>[] = [
     {
       id: 'name',
       header: 'Security',
@@ -186,17 +221,22 @@ export function HoldingsTable() {
       numeric: true,
       align: 'right',
     },
-    {
-      id: 'account',
-      header: 'Account',
-      render: (r) => <span>{accountNameById.get(r.account_id) ?? r.account_id}</span>,
-      hideable: true,
-      filter:
-        accountOptions.length > 0
-          ? { type: 'select', options: accountOptions, multiSelect: true, searchable: true }
-          : undefined,
-    },
   ]
+
+  const accountColumn: ColumnDef<HoldingView> = {
+    id: 'account',
+    header: 'Account',
+    render: (r) => <span>{accountNameById.get(r.account_id) ?? r.account_id}</span>,
+    hideable: true,
+    filter:
+      accountOptions.length > 0
+        ? { type: 'select', options: accountOptions, multiSelect: true, searchable: true }
+        : undefined,
+  }
+
+  const columns: ColumnDef<HoldingView>[] = isScoped
+    ? baseColumns
+    : [...baseColumns, accountColumn]
 
   if (isLoading) {
     return (
@@ -225,7 +265,9 @@ export function HoldingsTable() {
       onFiltersChange={setFilters}
       maskedColumnIds={MASKED_COLUMN_IDS}
       emptyState={
-        <p className="text-sm text-muted-foreground p-4">No holdings found.</p>
+        <p className="text-sm text-muted-foreground p-4">
+          {isScoped ? 'No holdings synced yet for this account.' : 'No holdings found.'}
+        </p>
       }
       columnSizing={sizing}
       onColumnSizingChange={onSizingChange}
