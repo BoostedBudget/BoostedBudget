@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
-import { render, screen, waitFor, act, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { BrowserRouter } from 'react-router-dom'

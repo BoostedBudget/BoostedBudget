@@ -184,6 +184,11 @@ describe('InvestmentDetailDrawer', () => {
     expect(screen.getByTestId('account-value').hasAttribute('data-ph-mask')).toBe(true)
   })
 
+  it('applies data-ph-mask to date element (trade timing is PII)', () => {
+    renderDrawer(baseActivity, true)
+    expect(screen.getByTestId('date-value').hasAttribute('data-ph-mask')).toBe(true)
+  })
+
   it('calls onOpenChange(false) when close button is clicked', () => {
     const onOpenChange = mock((v: boolean) => v)
 

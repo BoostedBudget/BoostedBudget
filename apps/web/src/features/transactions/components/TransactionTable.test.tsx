@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
-import type { Transaction, FeedRow, BankingTransaction, InvestmentActivity } from '../types'
+import type { Transaction, BankingTransaction, InvestmentActivity } from '../types'
 import type { Account } from '../../accounts/types'
 
 // NOTE: Do NOT mock HierarchicalCategoryTreeSelect with mock.module() here.
