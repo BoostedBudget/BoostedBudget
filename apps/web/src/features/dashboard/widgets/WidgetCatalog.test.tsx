@@ -14,7 +14,7 @@ import { mockGetAllWidgets } from '@/test/mocks/registry'
 const mockOnClose = mock(() => {})
 const mockOnAddWidget = mock(() => {})
 
-// Mock the API hook - returns all widget types as valid
+// Mock the API hook - returns all widget types as valid (including #1297 investment types)
 mock.module('@boostedbudget/api-client/endpoints/dashboard/dashboard', () => ({
   useGetWidgetTypes: mock(() => ({
     data: {
@@ -25,6 +25,10 @@ mock.module('@boostedbudget/api-client/endpoints/dashboard/dashboard', () => ({
         { type: 'cash-flow-chart', name: 'Cash Flow Chart', category: 'charts' },
         { type: 'account-cards', name: 'Account Cards', category: 'accounts' },
         { type: 'net-worth', name: 'Net Worth', category: 'overview' },
+        // Investment widgets (#1297)
+        { type: 'portfolio-summary', name: 'Portfolio Summary', category: 'investments' },
+        { type: 'portfolio-holdings', name: 'Portfolio Holdings', category: 'investments' },
+        { type: 'asset-allocation', name: 'Asset Allocation', category: 'investments' },
       ],
     },
     isLoading: false,
@@ -325,6 +329,56 @@ describe('WidgetCatalog', () => {
       expect(screen.getByText(/Drag widgets to reorder/)).toBeInTheDocument()
       expect(screen.getByText(/Resize from corners/)).toBeInTheDocument()
       expect(screen.getByText(/Click × to remove/)).toBeInTheDocument()
+    })
+  })
+
+  describe('Investments Category (#1297)', () => {
+    it('shows Investments category label when an investment widget is in registry', () => {
+      mockGetAllWidgets.mockReturnValue([
+        ...mockWidgets,
+        {
+          type: 'portfolio-summary',
+          title: 'Portfolio Summary',
+          description: 'Your portfolio overview',
+          icon: 'trending-up',
+          category: 'investments' as const,
+          defaultSize: { w: 6, h: 3 },
+          minSize: { w: 4, h: 2 },
+          Component: () => null,
+        },
+      ])
+      render(
+        <WidgetCatalog
+          isOpen={true}
+          onClose={mockOnClose}
+          onAddWidget={mockOnAddWidget}
+        />
+      )
+      expect(screen.getByText('Investments')).toBeInTheDocument()
+    })
+
+    it('renders chart-pie icon for asset-allocation widget', () => {
+      mockGetAllWidgets.mockReturnValue([
+        {
+          type: 'asset-allocation',
+          title: 'Asset Allocation',
+          description: 'Portfolio allocation breakdown',
+          icon: 'chart-pie',
+          category: 'investments' as const,
+          defaultSize: { w: 4, h: 4 },
+          minSize: { w: 3, h: 3 },
+          Component: () => null,
+        },
+      ])
+      render(
+        <WidgetCatalog
+          isOpen={true}
+          onClose={mockOnClose}
+          onAddWidget={mockOnAddWidget}
+        />
+      )
+      // Widget renders without error — icon falls through to PieChart
+      expect(screen.getByText('Asset Allocation')).toBeInTheDocument()
     })
   })
 

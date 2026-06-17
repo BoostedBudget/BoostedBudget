@@ -60,7 +60,13 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
-import { mockUseGetHoldings, mockUseGetPortfolioHistory, mockUseInfiniteInvestmentTransactions, mockFetchNextInvestmentPage } from '@/test/mocks/investments-api'
+import {
+  mockUseGetHoldings,
+  mockUseGetPortfolioSummary,
+  mockUseGetPortfolioHistory,
+  mockUseInfiniteInvestmentTransactions,
+  mockFetchNextInvestmentPage,
+} from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
@@ -120,6 +126,11 @@ const { InvestmentTransactionsTable } = await import('@/features/investments/com
 const { PortfolioValueChart } = await import('@/features/investments/components/PortfolioValueChart')
 const { AllocationCard } = await import('@/features/investments/components/AllocationCard')
 
+// --- Round 14: Investment dashboard widgets (#1297) ---
+const { PortfolioSummaryWidget } = await import('@/features/dashboard/widgets/PortfolioSummaryWidget')
+const { PortfolioHoldingsWidget } = await import('@/features/dashboard/widgets/PortfolioHoldingsWidget')
+const { AssetAllocationWidget } = await import('@/features/dashboard/widgets/AssetAllocationWidget')
+
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
 const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
@@ -137,6 +148,7 @@ const SENTINEL_GOAL_NAME = 'SENTINEL_GOAL_NOPQ'
 const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
 const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
+const SENTINEL_SECURITY_NAME = 'SENTINEL_SECURITY_QRST'
 
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -1626,6 +1638,152 @@ describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () =>
         config={{ include: [], group_by: 'security_type', basis: 'assets' }}
         onConfigChange={() => {}}
       />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+// ── Round 14: Investment dashboard widgets (#1297) ──────────────────────────
+
+describe('PII coverage — Round 14: PortfolioSummaryWidget', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioSummary.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        total_gain_loss: 9999.99,
+        total_gain_loss_pct: 10.01,
+        day_change: 999.99,
+        day_change_pct: 1.01,
+        holdings_count: 3,
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // PortfolioSummaryWidget wraps PortfolioSummaryCard (already data-ph-masked in Round 13).
+  // This test ensures the widget layer does not strip those masks.
+  test('monetary values in PortfolioSummaryCard are masked (no unmasked PII)', async () => {
+    render(
+      <PortfolioSummaryWidget widgetId="w-psw" onRemove={() => {}} />,
+      { wrapper: createWrapper() }
+    )
+    // "View portfolio" link appears only in the success state
+    await waitFor(
+      () => expect(document.body.textContent).toContain('View portfolio'),
+      { timeout: 3000 }
+    )
+    const violations = scanForUnmaskedPII(document.body, [])
+    expect(violations).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 14: PortfolioHoldingsWidget (hand-built table)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+    mockUseGetHoldings.mockReturnValue({
+      data: {
+        holdings: [
+          {
+            id: 'hold-1',
+            user_id: 'user-1',
+            account_id: 'acc-1',
+            security_id: 'sec-1',
+            ticker_symbol: null,
+            security_name: SENTINEL_SECURITY_NAME,
+            quantity: 10,
+            institution_value: 99999.99,
+            day_change_pct: 1.23,
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // The compact holdings table is hand-built (not DataTable-wrapped), so each cell
+  // requires its own data-ph-mask. This test scans the full body with the security-name
+  // sentinel to ensure nothing leaks outside a masked ancestor.
+  test('scanForUnmaskedPII returns [] — security name and currency are all masked', async () => {
+    render(
+      <PortfolioHoldingsWidget widgetId="w-phw" onRemove={() => {}} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.textContent ?? '').toContain(SENTINEL_SECURITY_NAME),
+      { timeout: 3000 }
+    )
+    const violations = scanForUnmaskedPII(document.body, [
+      { value: SENTINEL_SECURITY_NAME, fieldDescription: 'security name' },
+    ])
+    expect(violations).toEqual([])
+  })
+
+  test('holding-value cell has data-ph-mask attribute', async () => {
+    render(
+      <PortfolioHoldingsWidget widgetId="w-phw" onRemove={() => {}} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.querySelector('[data-testid="holding-value"]')).not.toBeNull(),
+      { timeout: 3000 }
+    )
+    expect(document.body.querySelector('[data-testid="holding-value"][data-ph-mask]')).not.toBeNull()
+  })
+
+  test('holding-name cell has data-ph-mask attribute', async () => {
+    render(
+      <PortfolioHoldingsWidget widgetId="w-phw" onRemove={() => {}} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(
+      () => expect(document.body.querySelector('[data-testid="holding-name"]')).not.toBeNull(),
+      { timeout: 3000 }
+    )
+    expect(document.body.querySelector('[data-testid="holding-name"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+describe('PII coverage — Round 14: AssetAllocationWidget (ECharts donut)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 79999.99, percentage: 80, holding_count: 5 },
+          { security_type: 'Fixed Income', asset_class: 'bond', total_value: 19999.99, percentage: 20, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  test('donut chart canvas is wrapped in data-ph-mask element (light mode)', async () => {
+    render(
+      <AssetAllocationWidget widgetId="w-aaw" onRemove={() => {}} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+
+  test('donut chart canvas is wrapped in data-ph-mask element (dark mode)', async () => {
+    mockUseDarkMode.mockReturnValue(true)
+    render(
+      <AssetAllocationWidget widgetId="w-aaw" onRemove={() => {}} />,
       { wrapper: createWrapper() }
     )
     await waitFor(() =>

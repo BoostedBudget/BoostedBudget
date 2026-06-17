@@ -159,6 +159,11 @@ export const ANALYTICS_EVENTS = {
   PORTFOLIO_RANGE_CHANGED: 'portfolio_range_changed',
   PORTFOLIO_ALLOCATION_CONFIG_CHANGED: 'portfolio_allocation_config_changed',
 
+  // Investment dashboard widgets (#1297)
+  PORTFOLIO_SUMMARY_WIDGET_VIEWED: 'portfolio_summary_widget_viewed',
+  PORTFOLIO_HOLDINGS_WIDGET_VIEWED: 'portfolio_holdings_widget_viewed',
+  ASSET_ALLOCATION_WIDGET_VIEWED: 'asset_allocation_widget_viewed',
+
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',
