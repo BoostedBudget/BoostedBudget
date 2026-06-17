@@ -50,6 +50,7 @@ target_amount, current_amount, total_saved
 - User-authored names: budget names, rule names, savings-goal names, category names (custom only — not Plaid system categories)
 - User-authored transaction tags
 - Custom rule descriptions
+- **Security / holding names** — ticker symbols (e.g. `AAPL`), full security names (e.g. "Apple Inc."), and fund names reveal portfolio composition. The hand-built holdings table in `PortfolioHoldingsWidget` masks these per-cell via `data-ph-mask`; the `PortfolioHoldingsWidget` PII regression (Round 14 in `pii-coverage.test.tsx`) enforces this with a named sentinel (`SENTINEL_SECURITY_NAME`).
 
 ### MAY leave unmasked
 
@@ -114,7 +115,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 
 ## Known limitations
 
-- **ECharts SVG tooltips** (`NetWorthHistoryChart`, `BalanceHistoryChart`, `CashFlowChartWidget`): ECharts renders tooltips as DOM nodes inside the SVG tree. The `<EChartsChart>` wrapper already applies `data-ph-mask` to its container div, which masks all descendant tooltip content from PostHog session replay. If you add a new chart that renders financial amounts in tooltips, verify the chart's ancestor carries `data-ph-mask`.
+- **ECharts SVG tooltips** (`NetWorthHistoryChart`, `BalanceHistoryChart`, `CashFlowChartWidget`, `AllocationDonutChart`, `PortfolioValueChart`): ECharts renders tooltips as DOM nodes inside the SVG tree. The `<EChartsChart>` wrapper already applies `data-ph-mask` to its container div, which masks all descendant tooltip content from PostHog session replay. The three investment dashboard widgets (`PortfolioSummaryWidget`, `PortfolioHoldingsWidget`, `AssetAllocationWidget`) reuse `AllocationDonutChart` / `PortfolioSummaryCard` components that carry `data-ph-mask` on their containers; the masked-ancestor invariant is verified by the Round-14 PII regression tests in `pii-coverage.test.tsx`. If you add a new chart that renders financial amounts in tooltips, verify the chart's ancestor carries `data-ph-mask`.
 - ~~**`merchant_id` URL param** (`SpendingReportsPage`): The backend `/spending/by-merchant` endpoint accepts `search` but not `merchant_id`, so the merchant name is currently in the URL.~~ **Resolved** by issues #1163/#1165: a `merchants` table (migration 000075) gives every merchant a stable UUID; `GET /api/v1/analytics/spending-by-merchant` now returns `merchant_id`; `SpendingReportsPage` navigates to `/transactions?merchant_id=<uuid>` (never the name string); `GET /api/v1/transactions` accepts `merchant_id` as a filter.
 - **Shadow DOM**: `TreeWalker` does not cross Shadow DOM boundaries. The codebase uses light DOM only (Radix portals render to `document.body`). If Shadow DOM is ever adopted, this policy must be revisited.
 - **PostHog server-side**: `before_send` is client-side only. Consider a PostHog Cloud transformation pipeline as a defence-in-depth backstop.
