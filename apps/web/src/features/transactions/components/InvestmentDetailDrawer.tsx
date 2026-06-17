@@ -65,19 +65,24 @@ export function InvestmentDetailDrawer({
     date,
   } = transaction
 
+  // Resolution order (T1 — loading-race fix):
+  // 1. accountsMap (accounts already loaded — best source)
+  // 2. transaction.account (embedded by API — available on cold-load before accountsMap resolves)
+  // 3. "Unknown account" placeholder — never show the raw UUID
   const acc = accountsMap?.[account_id]
-  const accountDisplay = acc?.nickname ?? acc?.name ?? account_id
+  const accountDisplay =
+    acc?.nickname ??
+    acc?.name ??
+    transaction.account?.nickname ??
+    transaction.account?.name ??
+    'Unknown account'
 
-  // Defensive coalescing: generated API model marks investment fields optional (nullable
-  // pointers in the backend), so guard against undefined to avoid rendering "undefined".
+  // Guard against undefined/null to avoid rendering "undefined" (investment fields are optional in API)
   const securityDisplay = security_name ?? '—'
   const tickerDisplay = ticker_symbol ?? '—'
   const quantityDisplay = investment_quantity != null ? `${investment_quantity} shares` : '—'
   const priceDisplay = investment_price != null ? formatCurrencyFull(investment_price) : '—'
-  const feesDisplay =
-    investment_fees == null || investment_fees === 0
-      ? '—'
-      : formatCurrencyFull(investment_fees)
+  const feesDisplay = investment_fees == null || investment_fees === 0 ? '—' : formatCurrencyFull(investment_fees)
 
   const amountFormatted = formatTransactionAmount(amount)
 

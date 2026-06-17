@@ -101,6 +101,8 @@ function createWrapper() {
   }
 }
 
+type FeedRow = import('./types').FeedRow
+
 function configureQueries(txns: Transaction[] = [mockBankingTransaction]) {
   mockGetTransactions.mockResolvedValue({
     transactions: txns,
@@ -238,7 +240,7 @@ describe('TransactionsPage — row-click routing (#1299)', () => {
       const onRowClick = mock(() => {})
       render(
         <TransactionTable
-          transactions={[mockBankingTransaction]}
+          transactions={[mockBankingTransaction] as unknown as FeedRow[]}
           accountsMap={{}}
           onRowClick={onRowClick}
         />
@@ -256,7 +258,7 @@ describe('TransactionsPage — row-click routing (#1299)', () => {
       const { TransactionTable } = await import('./components/TransactionTable')
       render(
         <TransactionTable
-          transactions={[mockBankingTransaction]}
+          transactions={[mockBankingTransaction] as unknown as FeedRow[]}
           accountsMap={{}}
           onRowClick={mock(() => {})}
         />

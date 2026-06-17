@@ -104,16 +104,32 @@ describe('InvestmentDetailDrawer', () => {
     expect(accountEl.textContent).toContain('Brokerage Account')
   })
 
-  it('falls back to raw account_id when not found in accountsMap', () => {
+  it('shows "Unknown account" when account_id is not found in accountsMap (T1)', () => {
     renderDrawer(baseActivity, true, undefined, {})
     const accountEl = screen.getByTestId('account-value')
-    expect(accountEl.textContent).toContain('account-inv')
+    // Never render the raw UUID — show a neutral placeholder instead
+    expect(accountEl.textContent).toContain('Unknown account')
+    expect(accountEl.textContent).not.toContain('account-inv')
   })
 
-  it('falls back to raw account_id when no accountsMap provided', () => {
+  it('shows "Unknown account" when no accountsMap is provided and no embedded account (T1)', () => {
     renderDrawer(baseActivity, true)
     const accountEl = screen.getByTestId('account-value')
-    expect(accountEl.textContent).toContain('account-inv')
+    expect(accountEl.textContent).toContain('Unknown account')
+    expect(accountEl.textContent).not.toContain('account-inv')
+  })
+
+  it('uses embedded account.nickname when accountsMap is empty but account is embedded (T1)', () => {
+    // The ActivityItem API embeds the Account object; this resolves the loading-race hole
+    // where transactions resolve before accounts, leaving accountsMap empty on cold load.
+    const activityWithEmbeddedAccount = {
+      ...baseActivity,
+      account: { id: 'account-inv', name: 'Brokerage Account', nickname: 'My Brokerage' },
+    } as unknown as InvestmentActivity
+    renderDrawer(activityWithEmbeddedAccount, true, undefined, {})
+    const accountEl = screen.getByTestId('account-value')
+    expect(accountEl.textContent).toContain('My Brokerage')
+    expect(accountEl.textContent).not.toContain('account-inv')
   })
 
   it('renders date in human-readable format', () => {
@@ -128,7 +144,7 @@ describe('InvestmentDetailDrawer', () => {
     expect(feesEl.textContent).toBe('—')
   })
 
-  it('shows "—" for fees when investment_fees is null', () => {
+  it('shows "—" for fees when investment_fees is null or undefined', () => {
     renderDrawer({ ...baseActivity, investment_fees: null }, true)
     const feesEl = screen.getByTestId('fees-value')
     expect(feesEl.textContent).toBe('—')

@@ -1,4 +1,5 @@
 // Transaction types matching backend domain models and API schemas
+import type { Account } from '@/features/accounts/types'
 
 /**
  * Transaction source identifier (provider level)
@@ -127,27 +128,35 @@ export interface BankingTransaction {
 /**
  * Investment activity row in the unified feed
  * Mirrors ActivityItem from the API with source discriminator narrowed to 'investment'.
- * Investment-specific fields are required (not optional) to ensure type safety at render sites.
+ * Investment-specific fields are OPTIONAL to match the generated ActivityItem model (the
+ * backend returns nullable pointers for all investment-specific fields). Render sites must
+ * coalesce with '?? "—"' guards; the sparse-row test asserts no "undefined" leaks through.
+ *
+ * T1: `account` is included so the embedded Account object (from the API) survives the
+ * ActivityItem→FeedRow cast and resolves the accountsMap loading-race in the drawer.
+ * T2: investment fields made optional, matching the generated ActivityItem contract.
  */
 export interface InvestmentActivity {
   source: 'investment'
   id: string
   user_id: string
   account_id: string
+  /** Embedded Account object from the ActivityItem API response (resolves loading-race). */
+  account?: Account | null
   linked_item_id?: string | null
   amount: number
   date: string
   name: string
-  // Investment-specific required fields
-  ticker_symbol: string
-  security_name: string
-  activity_type: ActivityType
-  investment_quantity: number
-  investment_price: number
-  investment_fees: number | null
+  // Investment-specific fields — optional (backend returns nullable pointers)
+  ticker_symbol?: string | null
+  security_name?: string | null
+  activity_type?: ActivityType | null
+  investment_quantity?: number | null
+  investment_price?: number | null
+  investment_fees?: number | null
   // Investment-specific optional fields
-  investment_subtype?: string
-  security_id?: string
+  investment_subtype?: string | null
+  security_id?: string | null
   // Common optional fields
   pending?: boolean
   authorized_date?: string | null

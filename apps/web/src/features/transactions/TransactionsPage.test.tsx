@@ -12,9 +12,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
-import { TransactionsPage } from './TransactionsPage'
+import { TransactionsPage, computeEffectiveSort } from './TransactionsPage'
 import { isInvestmentRow } from './types'
 import type { Transaction, InvestmentActivity, FeedRow } from './types'
+import type { SortState } from '@/shared/components/DataTable'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 
@@ -806,6 +807,19 @@ describe('TransactionsPage', () => {
       // Verify it correctly classifies rows so the analytics event fires for the right rows.
       expect(isInvestmentRow({ source: 'investment' } as unknown as FeedRow)).toBe(true)
       expect(isInvestmentRow({ source: 'banking' } as unknown as FeedRow)).toBe(false)
+    })
+
+    it('computeEffectiveSort forces date column when investments included (T3)', () => {
+      // T3: when investments are included, the API is forced to sort by date;
+      // the table must receive effectiveSort with columnId:'date' so the sort
+      // indicator reflects the actual order (not the user's last non-date click).
+      const amountSort: SortState = { columnId: 'amount', direction: 'desc' }
+      expect(computeEffectiveSort(amountSort, true)).toEqual({ columnId: 'date', direction: 'desc' })
+      expect(computeEffectiveSort(amountSort, false)).toEqual(amountSort)
+      expect(computeEffectiveSort(null, true)).toBeNull()
+      // Already date — no change
+      const dateSort: SortState = { columnId: 'date', direction: 'asc' }
+      expect(computeEffectiveSort(dateSort, true)).toEqual(dateSort)
     })
 
     it('investment drawer is not open on initial render', async () => {
