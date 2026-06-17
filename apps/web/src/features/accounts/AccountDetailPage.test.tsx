@@ -20,68 +20,61 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { AccountDetailPage } from './AccountDetailPage'
 import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
-import { mockUseGetHoldings } from '@/test/mocks/investments-api'
 
 // ============================================================================
-// Test fixtures
+// Test fixtures & factory
 // ============================================================================
 
-const mockInvestmentAccount = {
-  id: 'acc-invest-1',
+const baseAccount = {
   linked_item_id: 'item-1',
-  name: 'Vanguard Brokerage',
-  official_name: 'Vanguard Brokerage Account',
-  nickname: undefined,
-  type: 'investment',
-  subtype: 'brokerage',
-  mask: '4321',
-  current_balance: 50000,
-  available_balance: undefined,
   currency_code: 'USD',
-  institution_name: 'Vanguard',
-  status: 'active',
+  status: 'active' as const,
   is_hidden: false,
   created_at: '2025-01-01T00:00:00Z',
   updated_at: '2025-01-01T00:00:00Z',
 }
 
-const mockDepositoryAccount = {
+const createAccount = (overrides: Record<string, unknown> = {}) => ({
+  ...baseAccount,
+  ...overrides,
+})
+
+const mockInvestmentAccount = createAccount({
+  id: 'acc-invest-1',
+  name: 'Vanguard Brokerage',
+  official_name: 'Vanguard Brokerage Account',
+  type: 'investment',
+  subtype: 'brokerage',
+  mask: '4321',
+  current_balance: 50000,
+  institution_name: 'Vanguard',
+})
+
+const mockDepositoryAccount = createAccount({
   id: 'acc-depository-1',
   linked_item_id: 'item-2',
   name: 'Chase Checking',
   official_name: 'Chase Total Checking',
-  nickname: undefined,
   type: 'depository',
   subtype: 'checking',
   mask: '0000',
   current_balance: 2500,
   available_balance: 2300,
-  currency_code: 'USD',
   institution_name: 'Chase',
-  status: 'active',
-  is_hidden: false,
-  created_at: '2025-01-01T00:00:00Z',
-  updated_at: '2025-01-01T00:00:00Z',
-}
+})
 
-const mockHiddenAccount = {
+const mockHiddenAccount = createAccount({
   id: 'acc-hidden-1',
   linked_item_id: 'item-3',
   name: 'Hidden Savings',
-  official_name: undefined,
   nickname: 'My Hidden Account',
   type: 'depository',
   subtype: 'savings',
   mask: '9999',
   current_balance: 10000,
-  available_balance: undefined,
-  currency_code: 'USD',
   institution_name: 'Bank of America',
-  status: 'active',
   is_hidden: true,
-  created_at: '2025-01-01T00:00:00Z',
-  updated_at: '2025-01-01T00:00:00Z',
-}
+})
 
 // ============================================================================
 // Render helper — wraps in MemoryRouter with a :accountId route
@@ -105,15 +98,6 @@ describe('AccountDetailPage', () => {
   beforeEach(() => {
     mockUseGetAccounts.mockClear()
     mockTrackEvent.mockClear()
-    mockUseGetHoldings.mockClear()
-
-    // Default: empty holdings (no table data needed for most tests)
-    mockUseGetHoldings.mockReturnValue({
-      data: { holdings: [] },
-      isLoading: false,
-      isError: false,
-      error: null,
-    })
 
     // Default: loaded state with investment + depository + hidden accounts
     mockUseGetAccounts.mockReturnValue({
@@ -153,13 +137,13 @@ describe('AccountDetailPage', () => {
 
   // 3 (extended). Does NOT show Holdings section for credit accounts
   it('does NOT show Holdings section for credit accounts', () => {
-    const creditAccount = {
+    const creditAccount = createAccount({
       ...mockDepositoryAccount,
       id: 'acc-credit-1',
       type: 'credit',
       subtype: 'credit card',
       institution_name: 'Amex',
-    }
+    })
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [creditAccount] },
       isLoading: false,
@@ -327,14 +311,13 @@ describe('AccountDetailPage', () => {
   })
 
   it('uses name as fallback when no nickname and no official_name', () => {
-    const accountNoOfficialName = {
+    const accountNoOfficialName = createAccount({
       ...mockDepositoryAccount,
       id: 'acc-noname-1',
       official_name: undefined,
-      nickname: undefined,
       institution_name: 'Wells Fargo',
       name: 'WF Checking',
-    }
+    })
     mockUseGetAccounts.mockReturnValue({
       data: { accounts: [accountNoOfficialName] },
       isLoading: false,
