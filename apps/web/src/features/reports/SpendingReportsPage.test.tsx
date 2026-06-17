@@ -11,18 +11,34 @@ import type { CustomCategory } from '@boostedbudget/api-client/models'
 
 import '@/test/mocks/shared-charts'
 import '@/test/mocks/react-router'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Mock toggle-group for DateRangePicker
+// Mock toggle-group for DateRangePicker.
+// Uses event-delegation so onValueChange fires when a ToggleGroupItem is clicked —
+// this makes the mock functional (not a hollow stub) so tests in other files that rely
+// on ToggleGroup value-change behavior (e.g. PortfolioPage.test.tsx) are not broken
+// when this mock is the last registered in the shared bun worker process.
 mock.module('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children }: { children: React.ReactNode }) =>
-    React.createElement('div', { role: 'group' }, children),
+  ToggleGroup: ({ children, onValueChange }: { children: React.ReactNode; onValueChange?: (v: string) => void }) =>
+    React.createElement('div', {
+      role: 'group',
+      'data-testid': 'toggle-group',
+      onClick: (e: React.MouseEvent<HTMLDivElement>) => {
+        const btn = (e.target as HTMLElement).closest('[data-value]') as HTMLElement | null
+        if (btn?.dataset.value) onValueChange?.(btn.dataset.value)
+      },
+    }, children),
   ToggleGroupItem: ({ children, value }: { children: React.ReactNode; value: string }) =>
     React.createElement('button', { 'data-value': value }, children),
 }))
 
-// Mock analytics
+// Re-register useTrackEvent with the preloaded mockTrackEvent reference so that
+// analytics assertions in other test files work regardless of file execution order.
+// (Previous pattern used mock(() => mock(() => {})) which is a spy-wrapped factory
+// that bun cannot properly replace when other files call mock.module to restore the
+// preloaded reference — see issue #1296 Round-4 gap fix.)
 mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: mock(() => mock(() => {})),
+  useTrackEvent: () => mockTrackEvent,
 }))
 
 
@@ -102,7 +118,7 @@ describe('SpendingReportsPage drill-down guard', () => {
   })
 
   afterEach(() => {
-    mockUseGetSpendingByCategory.mockReset()
+    mockUseGetSpendingByCategory.mockClear()
   })
 
   it('does not enter drilldown when a custom-category slice is clicked', () => {
@@ -153,8 +169,8 @@ describe('SpendingReportsPage merchant click navigation', () => {
   })
 
   afterEach(() => {
-    mockUseGetSpendingByMerchant.mockReset()
-    mockUseGetSpendingByCategory.mockReset()
+    mockUseGetSpendingByMerchant.mockClear()
+    mockUseGetSpendingByCategory.mockClear()
   })
 
   it('navigates using merchant_id (not merchant name) when id is present', () => {
@@ -209,7 +225,7 @@ describe('SpendingReportsPage custom category filter', () => {
       data: customCats,
       isLoading: false,
       error: null,
-      refetch: () => Promise.resolve(),
+      refetch: () => Promise.resolve({}),
     })
     mockUseGetSpendingByCategory.mockReturnValue({
       data: null,
@@ -229,8 +245,8 @@ describe('SpendingReportsPage custom category filter', () => {
 
   afterEach(() => {
     mockUseGetUserCategories.mockClear()
-    mockUseGetSpendingByCategory.mockReset()
-    mockUseGetSpendingByMerchant.mockReset()
+    mockUseGetSpendingByCategory.mockClear()
+    mockUseGetSpendingByMerchant.mockClear()
   })
 
   it('passes custom_category_ids to the spending query when a custom category is selected', () => {

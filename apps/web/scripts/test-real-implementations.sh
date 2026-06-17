@@ -59,6 +59,9 @@ TEST_FILES=(
     # Hangs in the full parallel suite; --timeout kills the lingering event loop
     "$FRONTEND_DIR/src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/usePreviewCategories.test.tsx"
+    # Hangs in the full parallel suite (real React Query against mocked fetcher;
+    # same pattern as useInfiniteTransactions)
+    "$FRONTEND_DIR/src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
 )
 
 # Preload files for real implementation tests (absolute paths)
@@ -70,6 +73,8 @@ PRELOAD_FILES=(
     # Clerk mock: DashboardContext → useActiveAccounts → useUser() (Issue #1109 W4-D)
     "$FRONTEND_DIR/src/test/mocks/clerk.tsx"
     "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
+    # API-level mocks for useInfiniteInvestmentTransactions (mocks fetcher, not wrapper hook)
+    "$FRONTEND_DIR/src/test/mocks/investments-api.ts"
 )
 
 # Build preload arguments

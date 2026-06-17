@@ -1146,7 +1146,8 @@ func TestInvestment_AllocationBreakdown_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := NewInvestmentAnalyticsRepository(tx)
-	result, err := repo.AllocationBreakdown(ctx, userID.String())
+	// Pass empty options — default behavior (investment-only, security_type grouping, assets basis).
+	result, err := repo.AllocationBreakdown(ctx, userID.String(), domain.AllocationOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 

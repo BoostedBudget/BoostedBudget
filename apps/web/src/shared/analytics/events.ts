@@ -154,6 +154,11 @@ export const ANALYTICS_EVENTS = {
   INSIGHTS_PAGE_VIEWED: 'insights_page_viewed',
   INSIGHTS_TAB_CHANGED: 'insights_tab_changed',
 
+  // Portfolio tab (#1296)
+  PORTFOLIO_PAGE_VIEWED: 'portfolio_page_viewed',
+  PORTFOLIO_RANGE_CHANGED: 'portfolio_range_changed',
+  PORTFOLIO_ALLOCATION_CONFIG_CHANGED: 'portfolio_allocation_config_changed',
+
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',

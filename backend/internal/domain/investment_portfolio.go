@@ -89,9 +89,76 @@ func NewHoldingView(h *Holding) *HoldingView {
 	return v
 }
 
+// AllocationGroupBy constants for the group_by query parameter.
+const (
+	AllocationGroupBySecurityType = "security_type" // default — groups by securities.type
+	AllocationGroupByAssetClass   = "asset_class"   // collapses into Investments / Cash / Liabilities
+	AllocationGroupByAccount      = "account"        // one bucket per account
+)
+
+// AllocationBasis constants for the basis query parameter.
+const (
+	AllocationBasisAssets = "assets" // default — assets-only allocation
+	AllocationBasisNet    = "net"    // net-of-liabilities allocation
+)
+
+// AllocationOptions holds the optional query parameters that control how the
+// GetPortfolioAllocationBreakdown endpoint aggregates data.
+// Zero value is the backward-compatible default: investment holdings only,
+// grouped by security type, assets basis.
+type AllocationOptions struct {
+	// Include is a list of additional asset classes to union into the result.
+	// Valid values: "cash" (depository accounts), "liabilities" (credit/loan accounts).
+	// Default (empty): investment holdings only — backward-compatible with #138 behavior.
+	Include []string
+
+	// GroupBy controls the bucketing dimension. Default: AllocationGroupBySecurityType.
+	GroupBy string
+
+	// Basis controls whether liabilities reduce the total. Default: AllocationBasisAssets.
+	Basis string
+}
+
+// EffectiveGroupBy returns the active group_by value, defaulting to AllocationGroupBySecurityType.
+func (o AllocationOptions) EffectiveGroupBy() string {
+	if o.GroupBy == "" {
+		return AllocationGroupBySecurityType
+	}
+	return o.GroupBy
+}
+
+// EffectiveBasis returns the active basis value, defaulting to AllocationBasisAssets.
+func (o AllocationOptions) EffectiveBasis() string {
+	if o.Basis == "" {
+		return AllocationBasisAssets
+	}
+	return o.Basis
+}
+
+// IncludesCash reports whether the depository (cash) accounts should be unioned in.
+func (o AllocationOptions) IncludesCash() bool {
+	for _, v := range o.Include {
+		if v == "cash" {
+			return true
+		}
+	}
+	return false
+}
+
+// IncludesLiabilities reports whether the credit/loan accounts should be unioned in.
+func (o AllocationOptions) IncludesLiabilities() bool {
+	for _, v := range o.Include {
+		if v == "liabilities" {
+			return true
+		}
+	}
+	return false
+}
+
 // AllocationItem represents one bucket in the portfolio allocation breakdown.
 type AllocationItem struct {
-	SecurityType string  `json:"security_type"` // "stock", "etf", "bond", "crypto", "cash", "other", "unknown"
+	SecurityType string  `json:"security_type"` // "stock", "etf", "bond", "crypto", "cash", "other", "unknown", "liabilities"
+	AssetClass   string  `json:"asset_class"`   // "investments", "cash", "liabilities" — populated when group_by=asset_class
 	TotalValue   float64 `json:"total_value"`
 	Percentage   float64 `json:"percentage"`
 	HoldingCount int     `json:"holding_count"`
