@@ -19,10 +19,9 @@ export function getAccountTypeLabel(
   subtype?: string | null,
   options: { surface: 'card' | 'table' } = { surface: 'card' }
 ): string {
-  if (options.surface === 'table') {
-    return _getAccountTypeLabelTable(type, subtype)
-  }
-  return _getAccountTypeLabelCard(type, subtype)
+  return options.surface === 'table'
+    ? _getAccountTypeLabelTable(type, subtype)
+    : _getAccountTypeLabelCard(type, subtype)
 }
 
 function _getAccountTypeLabelCard(type: string, subtype?: string | null): string {
@@ -36,12 +35,10 @@ function _getAccountTypeLabelCard(type: string, subtype?: string | null): string
 
   const baseLabel = typeMap[type] ?? type
 
-  if (subtype) {
-    const subtypeCapitalized = subtype.charAt(0).toUpperCase() + subtype.slice(1)
-    return `${baseLabel} - ${subtypeCapitalized}`
-  }
+  if (!subtype) return baseLabel
 
-  return baseLabel
+  const subtypeCapitalized = subtype.charAt(0).toUpperCase() + subtype.slice(1)
+  return `${baseLabel} - ${subtypeCapitalized}`
 }
 
 function _getAccountTypeLabelTable(type: string, subtype?: string | null): string {

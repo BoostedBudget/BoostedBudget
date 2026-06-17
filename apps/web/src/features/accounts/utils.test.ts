@@ -180,7 +180,7 @@ describe('formatAccountBalance', () => {
     })
 
     it('invalid currency code → Intl formats with currency code prefix', () => {
-      // Bun's Intl.NumberFormat formats unknown codes as "XYZ 100.00" (non-breaking space)
+      // Bun's Intl.NumberFormat formats unknown codes as "XYZ 100.00" (non-breaking space)
       // rather than throwing. The fallback path ("XYZ 100.00" with regular space) is only
       // reached in environments where Intl throws on invalid currency codes.
       const result = formatAccountBalance(100, 'XYZ')

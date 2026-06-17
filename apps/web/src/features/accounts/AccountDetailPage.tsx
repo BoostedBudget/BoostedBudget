@@ -46,12 +46,11 @@ export function AccountDetailPage() {
   const account = data?.accounts?.find((a) => a.id === accountId)
 
   useEffect(() => {
-    if (account) {
-      trackEvent(ANALYTICS_EVENTS.ACCOUNT_DETAIL_VIEWED, {
-        account_id: account.id,
-        account_type: account.type,
-      })
-    }
+    if (!account) return
+    trackEvent(ANALYTICS_EVENTS.ACCOUNT_DETAIL_VIEWED, {
+      account_id: account.id,
+      account_type: account.type,
+    })
     // trackEvent is stable (useCallback with empty deps in useTrackEvent)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account?.id])

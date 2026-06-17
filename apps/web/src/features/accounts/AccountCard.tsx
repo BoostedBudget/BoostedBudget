@@ -45,8 +45,6 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   const displayName = nickname || official_name || name
   const typeLabel = getAccountTypeLabel(type, subtype)
 
-  const handleDelete = () => onDelete?.(account)
-  const handleEdit = () => onEdit?.(account)
 
   return (
     <Card
@@ -107,7 +105,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         {onEdit && (
           <Button
             variant="secondary"
-            onClick={handleEdit}
+            onClick={() => onEdit(account)}
             title="Customize this account"
             aria-label="Edit account"
           >
@@ -118,7 +116,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         {onDelete && (
           <Button
             variant="destructive"
-            onClick={handleDelete}
+            onClick={() => onDelete(account)}
             title="Delete this account"
           >
             Delete Account
