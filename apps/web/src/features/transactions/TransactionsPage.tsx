@@ -65,16 +65,14 @@ export function TransactionsPage() {
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
   const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
-  const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
+  const plaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? []
 
   // Create accounts lookup map
   const accountsMap = useMemo(() => {
-    const map: Record<string, Account> = {}
-    const accs = accountsList ?? []
-    accs.forEach((acc) => {
+    return (accountsList ?? []).reduce<Record<string, Account>>((map, acc) => {
       map[acc.id] = acc
-    })
-    return map
+      return map
+    }, {})
   }, [accountsList])
 
   // Create account filter options
@@ -162,10 +160,21 @@ export function TransactionsPage() {
     if (isInvestmentRow(row as unknown as FeedRow)) {
       setSelectedInvestment(row as unknown as InvestmentActivity)
       setIsInvestmentDrawerOpen(true)
+      trackEvent(ANALYTICS_EVENTS.INVESTMENT_DETAIL_DRAWER_OPENED)
     } else {
       handleOpenEditor(row)
     }
-  }, [handleOpenEditor])
+  }, [handleOpenEditor, trackEvent])
+
+  const handleIncludeInvestmentChange = useCallback((enabled: boolean) => {
+    setIncludeInvestmentActivity(enabled)
+    trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
+  }, [setIncludeInvestmentActivity, trackEvent])
+
+  const handleActivityTypesChange = useCallback((types: Array<import('./types').ActivityType>) => {
+    setActivityTypes(types)
+    trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED, { count: types.length })
+  }, [setActivityTypes, trackEvent])
 
   const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
@@ -247,8 +256,8 @@ export function TransactionsPage() {
         onDatePresetChange={setDatePreset}
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
-        onIncludeInvestmentActivityChange={setIncludeInvestmentActivity}
-        onActivityTypesChange={setActivityTypes}
+        onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
+        onActivityTypesChange={handleActivityTypesChange}
         disabled={isLoading}
       />
 
@@ -350,6 +359,7 @@ export function TransactionsPage() {
         transaction={selectedInvestment}
         open={isInvestmentDrawerOpen}
         onOpenChange={setIsInvestmentDrawerOpen}
+        accountsMap={accountsMap}
       />
     </main>
   )

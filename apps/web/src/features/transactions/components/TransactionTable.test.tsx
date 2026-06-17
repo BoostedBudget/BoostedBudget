@@ -741,4 +741,33 @@ describe('TransactionTable', () => {
       expect(maskedTds.length).toBe(6)
     })
   })
+
+  describe('Investment row — onRowClick routing (#1299)', () => {
+    it('calls onRowClick with the investment row object when investment row is clicked', () => {
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onRowClick })
+
+      // Click the investment row's ticker·name cell (the merchant-column text)
+      const investmentCell = screen.getByText('AAPL · Apple Inc.')
+      fireEvent.click(investmentCell)
+
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      // The argument passed to onRowClick should be the investment row (source: 'investment')
+      const calledWith = (onRowClick.mock.calls[0] as unknown[])[0] as { source: string }
+      expect(calledWith.source).toBe('investment')
+    })
+
+    it('calls onRowClick with the banking row object when banking row is clicked', () => {
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onRowClick })
+
+      // Click the banking row's merchant cell
+      const bankingCell = screen.getByText('Amazon')
+      fireEvent.click(bankingCell)
+
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      const calledWith = (onRowClick.mock.calls[0] as unknown[])[0] as { source: string }
+      expect(calledWith.source).toBe('banking')
+    })
+  })
 })

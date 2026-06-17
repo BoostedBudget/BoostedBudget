@@ -33,10 +33,13 @@ const baseActivity: InvestmentActivity = {
   updated_at: '2025-10-25T10:00:00Z',
 }
 
+type AccountsMap = Record<string, { nickname?: string | null; name?: string | null }>
+
 function renderDrawer(
   transaction: InvestmentActivity | null,
   open: boolean,
   onOpenChange: (open: boolean) => void = () => {},
+  accountsMap?: AccountsMap,
 ) {
   const Wrapper = createWrapper()
   return render(
@@ -45,6 +48,7 @@ function renderDrawer(
         transaction={transaction}
         open={open}
         onOpenChange={onOpenChange}
+        accountsMap={accountsMap}
       />
     </Wrapper>,
   )
@@ -86,7 +90,27 @@ describe('InvestmentDetailDrawer', () => {
     expect(priceEl.textContent).toContain('$150.00')
   })
 
-  it('renders account id', () => {
+  it('renders account nickname when accountsMap is provided', () => {
+    const accountsMap = { 'account-inv': { nickname: 'Brokerage ••1234', name: 'Brokerage Account' } }
+    renderDrawer(baseActivity, true, undefined, accountsMap)
+    const accountEl = screen.getByTestId('account-value')
+    expect(accountEl.textContent).toContain('Brokerage ••1234')
+  })
+
+  it('falls back to account name when nickname is absent', () => {
+    const accountsMap = { 'account-inv': { nickname: null, name: 'Brokerage Account' } }
+    renderDrawer(baseActivity, true, undefined, accountsMap)
+    const accountEl = screen.getByTestId('account-value')
+    expect(accountEl.textContent).toContain('Brokerage Account')
+  })
+
+  it('falls back to raw account_id when not found in accountsMap', () => {
+    renderDrawer(baseActivity, true, undefined, {})
+    const accountEl = screen.getByTestId('account-value')
+    expect(accountEl.textContent).toContain('account-inv')
+  })
+
+  it('falls back to raw account_id when no accountsMap provided', () => {
     renderDrawer(baseActivity, true)
     const accountEl = screen.getByTestId('account-value')
     expect(accountEl.textContent).toContain('account-inv')
