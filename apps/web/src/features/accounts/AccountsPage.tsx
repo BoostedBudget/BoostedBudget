@@ -3,6 +3,7 @@ import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { getAccountTypeLabel } from './utils'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -156,19 +157,20 @@ export function AccountsPage() {
 
   const typeOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
-    const types = new Set<string>()
+    // Map from typeValue (subtype || type) → { type, subtype } for label generation
+    const seen = new Map<string, { type: string; subtype?: string }>()
     accs.forEach((acc) => {
       // Use subtype if available, otherwise type
       const typeValue = acc.subtype || acc.type
-      if (typeValue) {
-        types.add(typeValue)
+      if (typeValue && !seen.has(typeValue)) {
+        seen.set(typeValue, { type: acc.type, subtype: acc.subtype ?? undefined })
       }
     })
-    return Array.from(types)
-      .sort()
-      .map((type) => ({
-        value: type,
-        label: type.charAt(0).toUpperCase() + type.slice(1),
+    return Array.from(seen.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([typeValue, { type, subtype }]) => ({
+        value: typeValue,
+        label: getAccountTypeLabel(type, subtype, { surface: 'table' }),
       }))
   }, [accountsData?.accounts])
 

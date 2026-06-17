@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AccountIconDisplay } from './components/AccountIconDisplay'
 import type { Account, AccountIcon } from './types'
+import { getAccountTypeLabel, formatAccountBalance } from './utils'
 
 interface AccountCardProps {
   account: Account
@@ -14,48 +15,6 @@ interface AccountCardProps {
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
 }
 
-/**
- * Format currency amount with proper symbol and decimal places
- */
-function formatCurrency(amount: number | undefined, currencyCode: string): string {
-  if (amount === undefined) return 'N/A'
-
-  // Use Intl.NumberFormat for proper currency formatting
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currencyCode,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount)
-  } catch {
-    // Fallback if currency code is invalid
-    return `${currencyCode} ${amount.toFixed(2)}`
-  }
-}
-
-/**
- * Get human-readable account type label
- */
-function getAccountTypeLabel(type: string, subtype?: string): string {
-  const typeMap: Record<string, string> = {
-    depository: 'Bank Account',
-    credit: 'Credit Card',
-    loan: 'Loan',
-    investment: 'Investment',
-    other: 'Other',
-  }
-
-  const baseLabel = typeMap[type] || type
-
-  // Add subtype if available (e.g., "Bank Account - Checking")
-  if (subtype) {
-    const subtypeCapitalized = subtype.charAt(0).toUpperCase() + subtype.slice(1)
-    return `${baseLabel} - ${subtypeCapitalized}`
-  }
-
-  return baseLabel
-}
 
 export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
   const {
@@ -84,8 +43,8 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
   const typeLabel = getAccountTypeLabel(type, subtype)
-  const currentBalanceFormatted = formatCurrency(current_balance, currency_code)
-  const availableBalanceFormatted = formatCurrency(available_balance, currency_code)
+  const currentBalanceFormatted = formatAccountBalance(current_balance, currency_code)
+  const availableBalanceFormatted = formatAccountBalance(available_balance, currency_code)
 
   const handleDelete = () => onDelete?.(account)
   const handleEdit = () => onEdit?.(account)
