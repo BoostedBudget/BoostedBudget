@@ -454,6 +454,95 @@ describe('onRowClick', () => {
   })
 })
 
+describe('keyboard navigation', () => {
+  it('does not fire onRowClick when Enter is pressed on a button inside rowActions', () => {
+    const onRowClick = mock((_: Row) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onRowClick={onRowClick}
+        rowActions={() => <button type="button">Delete</button>}
+      />
+    )
+
+    const deleteBtns = screen.getAllByRole('button', { name: 'Delete' })
+    fireEvent.keyDown(deleteBtns[0], { key: 'Enter' })
+
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('does not fire onRowClick when Space is pressed on a button inside rowActions', () => {
+    const onRowClick = mock((_: Row) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onRowClick={onRowClick}
+        rowActions={() => <button type="button">Delete</button>}
+      />
+    )
+
+    const deleteBtns = screen.getAllByRole('button', { name: 'Delete' })
+    fireEvent.keyDown(deleteBtns[0], { key: ' ' })
+
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('fires onRowClick when Enter is pressed on the row itself (non-interactive cell)', () => {
+    const onRowClick = mock((_: Row) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onRowClick={onRowClick}
+      />
+    )
+
+    const trs = screen.getAllByRole('row')
+    // First row is thead; second row is first data row
+    fireEvent.keyDown(trs[1], { key: 'Enter' })
+    expect(onRowClick).toHaveBeenCalledTimes(1)
+    expect(onRowClick.mock.calls[0][0]).toEqual(rows[0])
+  })
+
+  it('fires onRowClick when Space is pressed on the row itself (non-interactive cell)', () => {
+    const onRowClick = mock((_: Row) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onRowClick={onRowClick}
+      />
+    )
+
+    const trs = screen.getAllByRole('row')
+    fireEvent.keyDown(trs[1], { key: ' ' })
+    expect(onRowClick).toHaveBeenCalledTimes(1)
+    expect(onRowClick.mock.calls[0][0]).toEqual(rows[0])
+  })
+})
+
 describe('maskedColumnIds data-ph-mask attribute', () => {
   it('column with render function + in maskedColumnIds → td has data-ph-mask', () => {
     const columns: ColumnDef<Row>[] = [

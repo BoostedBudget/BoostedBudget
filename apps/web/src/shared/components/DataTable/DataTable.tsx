@@ -676,7 +676,15 @@ export function DataTable<T,>({
                         rowClassName?.(row)
                       )}
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
-                      onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row) } } : undefined}
+                      onKeyDown={onRowClick ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          const target = e.target as HTMLElement
+                          const interactiveTags = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']
+                          if (interactiveTags.includes(target.tagName)) return
+                          e.preventDefault()
+                          onRowClick(row)
+                        }
+                      } : undefined}
                       tabIndex={onRowClick ? 0 : undefined}
                       style={{
                         position: 'absolute',
@@ -755,7 +763,15 @@ export function DataTable<T,>({
                         rowClassName?.(row)
                       )}
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
-                      onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row) } } : undefined}
+                      onKeyDown={onRowClick ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          const target = e.target as HTMLElement
+                          const interactiveTags = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']
+                          if (interactiveTags.includes(target.tagName)) return
+                          e.preventDefault()
+                          onRowClick(row)
+                        }
+                      } : undefined}
                       tabIndex={onRowClick ? 0 : undefined}
                     >
                       {renderRowCells(row)}
