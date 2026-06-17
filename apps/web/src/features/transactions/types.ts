@@ -144,7 +144,7 @@ export interface InvestmentActivity {
   activity_type: ActivityType
   investment_quantity: number
   investment_price: number
-  investment_fees: number
+  investment_fees: number | null
   // Investment-specific optional fields
   investment_subtype?: string
   security_id?: string

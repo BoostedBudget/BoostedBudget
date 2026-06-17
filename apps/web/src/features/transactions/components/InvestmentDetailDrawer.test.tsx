@@ -105,8 +105,7 @@ describe('InvestmentDetailDrawer', () => {
   })
 
   it('shows "—" for fees when investment_fees is null', () => {
-    const activity = { ...baseActivity, investment_fees: null as unknown as number }
-    renderDrawer(activity, true)
+    renderDrawer({ ...baseActivity, investment_fees: null }, true)
     const feesEl = screen.getByTestId('fees-value')
     expect(feesEl.textContent).toBe('—')
   })
@@ -118,11 +117,23 @@ describe('InvestmentDetailDrawer', () => {
     expect(feesEl.textContent).toContain('$4.99')
   })
 
-  it('renders amount with sign convention', () => {
+  it('renders inflow amount with + prefix (PFCv2: negative = inflow)', () => {
+    // baseActivity.amount = -1500 → inflow → +$1,500.00
     renderDrawer(baseActivity, true)
     const amountEl = screen.getByTestId('amount-value')
-    // amount=-1500 (inflow), should show +$1,500.00
-    expect(amountEl.textContent).toContain('1,500.00')
+    expect(amountEl.textContent).toBe('+$1,500.00')
+  })
+
+  it('renders outflow amount with - prefix (PFCv2: positive = outflow)', () => {
+    renderDrawer({ ...baseActivity, amount: 250.0 }, true)
+    const amountEl = screen.getByTestId('amount-value')
+    expect(amountEl.textContent).toBe('-$250.00')
+  })
+
+  it('renders zero amount without sign prefix', () => {
+    renderDrawer({ ...baseActivity, amount: 0 }, true)
+    const amountEl = screen.getByTestId('amount-value')
+    expect(amountEl.textContent).toBe('$0.00')
   })
 
   it('has NO edit controls — no Edit, Categorize, Save, or Tag buttons', () => {
@@ -131,6 +142,11 @@ describe('InvestmentDetailDrawer', () => {
     expect(screen.queryByRole('button', { name: /categorize/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /save/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /^tag/i })).toBeNull()
+  })
+
+  it('applies data-ph-mask to security name header (SheetDescription)', () => {
+    renderDrawer(baseActivity, true)
+    expect(screen.getByTestId('security-name-header').hasAttribute('data-ph-mask')).toBe(true)
   })
 
   it('applies data-ph-mask to security name element', () => {
