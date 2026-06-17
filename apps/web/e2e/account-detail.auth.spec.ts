@@ -72,22 +72,24 @@ const DEPOSITORY_ACCOUNT = {
 }
 
 const FIXTURE_HOLDINGS = {
+  count: 1,
   holdings: [
     {
+      id: 'holding-1',
       security_id: 'sec-1',
-      name: 'Apple Inc',
-      ticker: 'AAPL',
-      type: 'equity',
+      security_name: 'Apple Inc',
+      ticker_symbol: 'AAPL',
+      security_type: 'equity',
       quantity: 10,
-      price: 175,
-      market_value: 1750,
+      institution_price: 175,
+      institution_value: 1750,
       cost_basis: 1500,
       gain_loss: 250,
       gain_loss_pct: 16.67,
       account_id: INVESTMENT_ACCOUNT.id,
-      account_name: INVESTMENT_ACCOUNT.official_name,
       day_change: 5,
       day_change_pct: 0.29,
+      user_id: 'user-123',
     },
   ],
 }
@@ -169,11 +171,15 @@ test.describe('Account Detail Page (#1298)', () => {
     await page.waitForURL(`**/${INVESTMENT_ACCOUNT.id}`, { timeout: 10000 })
     expect(page.url()).toContain(`/accounts/${INVESTMENT_ACCOUNT.id}`)
 
-    // Account header is visible
-    await expect(page.getByText('Vanguard')).toBeVisible({ timeout: 10000 })
+    // Account header is visible — exact match avoids matching the official_name substring
+    await expect(page.getByText('Vanguard', { exact: true })).toBeVisible({ timeout: 10000 })
 
     // Holdings section heading present
     await expect(page.getByText('Holdings')).toBeVisible()
+
+    // Holdings table renders a real holding row (validates fixture field names)
+    await expect(page.getByText('AAPL')).toBeVisible()
+    await expect(page.getByText('Apple Inc')).toBeVisible()
 
     // Activity deep-link present with exact expected href
     const activityLink = page.getByRole('link', { name: /view investment activity/i })
@@ -192,8 +198,8 @@ test.describe('Account Detail Page (#1298)', () => {
     await page.goto(`/accounts/${DEPOSITORY_ACCOUNT.id}`)
     await page.waitForLoadState('networkidle')
 
-    // Account header is visible
-    await expect(page.getByText('Chase')).toBeVisible({ timeout: 10000 })
+    // Account header is visible — exact match avoids matching the official_name substring
+    await expect(page.getByText('Chase', { exact: true })).toBeVisible({ timeout: 10000 })
 
     // Holdings section heading must NOT be in the DOM at all
     await expect(page.getByText('Holdings')).toHaveCount(0)
@@ -202,5 +208,28 @@ test.describe('Account Detail Page (#1298)', () => {
     await expect(
       page.getByRole('link', { name: /view investment activity/i })
     ).toHaveCount(0)
+  })
+
+  test('investment account detail — dark theme class applied and key elements render', async ({
+    page,
+  }) => {
+    // Pre-set dark mode before page load so ThemeProvider applies it on mount
+    await page.addInitScript(() => {
+      localStorage.setItem('bb-theme', 'dark')
+    })
+
+    await mockAccountDetailDependencies(page)
+    await page.goto(`/accounts/${INVESTMENT_ACCOUNT.id}`)
+    await page.waitForLoadState('networkidle')
+
+    // ThemeProvider sets 'dark' class on <html>
+    await expect(page.locator('html')).toHaveClass(/dark/)
+
+    // Key elements still render in dark mode — exact match avoids matching official_name substring
+    await expect(page.getByText('Vanguard', { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Holdings')).toBeVisible()
+    await expect(
+      page.getByRole('link', { name: /view investment activity/i })
+    ).toBeVisible()
   })
 })
