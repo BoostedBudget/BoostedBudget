@@ -52,6 +52,7 @@ export function AccountDetailPage() {
         account_type: account.type,
       })
     }
+    // trackEvent is stable (useCallback with empty deps in useTrackEvent)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account?.id])
 
