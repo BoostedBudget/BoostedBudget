@@ -64,7 +64,7 @@ interface HoldingsTableProps {
   accountId?: string
 }
 
-export function HoldingsTable({ accountId }: HoldingsTableProps = {}) {
+export function HoldingsTable({ accountId }: HoldingsTableProps) {
   const isScoped = !!accountId
 
   const [sortState, setSortState] = useState<SortState>(null)

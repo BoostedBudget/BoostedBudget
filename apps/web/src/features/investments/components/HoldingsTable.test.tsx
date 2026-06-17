@@ -347,9 +347,7 @@ describe('HoldingsTable', () => {
         isError: false,
       })
       const { container } = render(<HoldingsTable />)
-      const maskedTds = Array.from(container.querySelectorAll('td[data-ph-mask]'))
-      // The 'name' column cell should be masked — find by position relative to its row
-      // We check that a masked td contains the security name text
+      // The 'name' column cell should be masked — confirm by finding a masked td with that text
       const nameCells = Array.from(container.querySelectorAll('td[data-ph-mask]')).filter(
         (td) => td.textContent?.includes('Apple Inc')
       )
@@ -439,6 +437,36 @@ describe('HoldingsTable', () => {
       })
       render(<HoldingsTable />)
       expect(screen.getByText('Account')).toBeDefined()
+    })
+
+    it('uses portfolio-holdings as the useTablePreferences key in unscoped mode', () => {
+      const userId = mockClerkUser.id
+      const schemaVersion =
+        'name,ticker,type,quantity,price,market_value,cost_basis,gain_loss,gain_loss_pct,day_change,day_change_pct,account'
+      // Write a pref under 'portfolio-holdings' key and confirm the component reads it
+      localStorage.setItem(
+        `bb:table-prefs:${userId}:portfolio-holdings`,
+        JSON.stringify({
+          schemaVersion,
+          sizingVersion: 'v3-compact',
+          sizing: {},
+          columnOrder: [],
+          columnVisibility: { account: false },
+        }),
+      )
+      mockUseUser.mockReturnValue(createMockClerkUser({ isSignedIn: true, user: mockClerkUser }))
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+
+      render(<HoldingsTable />)
+      // If the key is correct ('portfolio-holdings'), the hidden-account pref is picked up
+      expect(screen.queryByText('Account')).toBeNull()
+
+      mockUseUser.mockReturnValue(createMockClerkUser())
+      localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
     })
   })
 })
