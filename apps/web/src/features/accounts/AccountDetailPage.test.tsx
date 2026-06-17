@@ -265,31 +265,75 @@ describe('AccountDetailPage', () => {
     )
   })
 
+  // Helper: verify analytics event payload contains only the specified keys (order-independent)
+  function expectAnalyticsPayloadKeys(eventName: string, expectedKeys: string[]) {
+    const call = mockTrackEvent.mock.calls.find(([event]) => event === eventName)
+    expect(call).toBeDefined()
+    const payload = call![1] as Record<string, unknown>
+    expect(Object.keys(payload).sort()).toEqual([...expectedKeys].sort())
+  }
+
   // 11 (extended). Analytics payload contains ONLY account_id + account_type
   it('ACCOUNT_DETAIL_VIEWED payload contains only account_id and account_type', async () => {
     await act(async () => {
       renderDetailPage('acc-invest-1')
     })
-    const call = mockTrackEvent.mock.calls.find(
-      ([event]) => event === 'account_detail_viewed'
-    )
-    expect(call).toBeDefined()
-    const payload = call![1] as Record<string, unknown>
-    expect(Object.keys(payload)).toEqual(['account_id', 'account_type'])
+    expectAnalyticsPayloadKeys('account_detail_viewed', ['account_id', 'account_type'])
   })
 
-  // 12. ACCOUNT_INVESTMENT_ACTIVITY_CLICKED event fired when activity link clicked
-  it('fires ACCOUNT_INVESTMENT_ACTIVITY_CLICKED when activity link is clicked', () => {
+  // 12. ACCOUNT_INVESTMENT_ACTIVITY_CLICKED event fired with correct values when activity link clicked
+  it('fires ACCOUNT_INVESTMENT_ACTIVITY_CLICKED with correct payload when activity link is clicked', () => {
     renderDetailPage('acc-invest-1')
     const activityLink = screen.getByRole('link', { name: /view investment activity/i })
     fireEvent.click(activityLink)
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'account_investment_activity_clicked',
-      expect.objectContaining({
-        account_id: 'acc-invest-1',
-        account_type: 'investment',
-      })
+      { account_id: 'acc-invest-1', account_type: 'investment' }
     )
+  })
+
+  // 12 (extended). Activity-click payload contains ONLY account_id + account_type (no PII leakage)
+  it('ACCOUNT_INVESTMENT_ACTIVITY_CLICKED payload contains only account_id and account_type', () => {
+    renderDetailPage('acc-invest-1')
+    const activityLink = screen.getByRole('link', { name: /view investment activity/i })
+    fireEvent.click(activityLink)
+    expectAnalyticsPayloadKeys('account_investment_activity_clicked', ['account_id', 'account_type'])
+  })
+
+  // PII masking — current balance span carries data-ph-mask
+  it('current balance span carries data-ph-mask attribute', () => {
+    renderDetailPage('acc-invest-1')
+    // formatAccountBalance(50000, 'USD') → '$50,000.00'
+    const balanceEl = screen.getByText('$50,000.00')
+    expect(balanceEl).toHaveAttribute('data-ph-mask')
+  })
+
+  // PII masking — available balance row renders and is masked when different from current
+  it('available balance row renders with data-ph-mask when different from current balance', () => {
+    renderDetailPage('acc-depository-1')
+    // current_balance=2500, available_balance=2300 — different, so Available Balance row should show
+    expect(screen.getByText('Available Balance')).toBeInTheDocument()
+    const availableEl = screen.getByText('$2,300.00')
+    expect(availableEl).toHaveAttribute('data-ph-mask')
+  })
+
+  // PII masking — available balance row is NOT rendered when equal to current balance
+  it('does NOT show available balance row when available_balance equals current_balance', () => {
+    const sameBalanceAccount = createAccount({
+      ...mockDepositoryAccount,
+      id: 'acc-same-balance',
+      current_balance: 5000,
+      available_balance: 5000,
+    })
+    mockUseGetAccounts.mockReturnValue({
+      data: { accounts: [sameBalanceAccount] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetchAccounts,
+    })
+    renderDetailPage('acc-same-balance')
+    expect(screen.queryByText('Available Balance')).not.toBeInTheDocument()
   })
 
   // Back link
