@@ -335,7 +335,9 @@ test.describe('URL Sort — Transactions', () => {
 
   test('navigating with ?sort=amount:desc pre-applies aria-sort', async ({ page }) => {
     await mockTransactionPage(page)
-    await page.goto('/transactions?sort=amount%3Adesc')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included,
+    // so non-date aria-sort only appears when the investment toggle is off.
+    await page.goto('/transactions?sort=amount%3Adesc&include_investment_activity=false')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     await expect(amountHeader).toHaveAttribute('aria-sort', 'descending')
@@ -343,7 +345,8 @@ test.describe('URL Sort — Transactions', () => {
 
   test('clicking a sortable header adds sort to URL', async ({ page }) => {
     await mockTransactionPage(page)
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included.
+    await page.goto('/transactions?include_investment_activity=false')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
@@ -353,7 +356,8 @@ test.describe('URL Sort — Transactions', () => {
 
   test('sort persists after reload', async ({ page }) => {
     await mockTransactionPage(page)
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included.
+    await page.goto('/transactions?include_investment_activity=false')
     await page.waitForLoadState('networkidle')
     const amountHeader = page.getByRole('columnheader', { name: /amount/i })
     await amountHeader.getByRole('button', { name: /^Amount$/i }).click()
