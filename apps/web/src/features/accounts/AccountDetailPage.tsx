@@ -108,6 +108,9 @@ export function AccountDetailPage() {
           currentBalance={account.current_balance}
           availableBalance={account.available_balance}
           currencyCode={account.currency_code}
+          customEmoji={account.custom_emoji}
+          customIcon={account.custom_icon}
+          customColor={account.custom_color}
         />
 
         {/* Investment-only sections */}
