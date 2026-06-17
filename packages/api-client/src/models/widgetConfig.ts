@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { WidgetConfigSettings } from './widgetConfigSettings';
 
 export interface WidgetConfig {
   h: number;
@@ -38,6 +39,7 @@ export interface WidgetConfig {
   maxW?: number;
   minH?: number;
   minW?: number;
+  settings?: WidgetConfigSettings;
   type: string;
   w: number;
   x: number;

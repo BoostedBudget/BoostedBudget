@@ -407,4 +407,72 @@ describe('DashboardGrid', () => {
       expect(oldClassElements.length).toBe(0)
     })
   })
+
+  // Issue #1297: Settings preservation across drag/resize
+
+  describe('Settings preservation across drag/resize', () => {
+    it('should pass settings from WidgetConfig to the widget component', () => {
+      // Widget component receives settings via props
+      const capturedProps: WidgetProps[] = []
+      const MockSettingsCapture = (props: WidgetProps) => {
+        capturedProps.push(props)
+        return <div data-testid="settings-capture" />
+      }
+
+      mockGetWidget.mockImplementation((type: WidgetType) => ({
+        type,
+        title: 'Test',
+        description: 'test',
+        icon: 'test',
+        category: 'investments' as const,
+        defaultSize: { w: 6, h: 3 },
+        minSize: { w: 4, h: 2 },
+        Component: MockSettingsCapture,
+      }))
+
+      const layoutWithSettings: DashboardLayout = {
+        widgets: [
+          {
+            i: 'portfolio-holdings-1',
+            type: 'portfolio-holdings',
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 4,
+            settings: { topN: 10, sortBy: 'day_change' },
+          },
+        ],
+        version: 4,
+      }
+
+      render(
+        <DashboardGrid
+          layout={layoutWithSettings}
+          isEditing={false}
+          onLayoutChange={mockOnLayoutChange}
+          onRemoveWidget={mockOnRemoveWidget}
+        />
+      )
+
+      expect(capturedProps.length).toBeGreaterThan(0)
+      expect(capturedProps[0].settings).toEqual({ topN: 10, sortBy: 'day_change' })
+    })
+
+    it('onUpdateWidgetSettings prop is accepted without error', () => {
+      const mockOnUpdateWidgetSettings = mock(() => {})
+
+      // Should render without throwing
+      expect(() => {
+        render(
+          <DashboardGrid
+            layout={mockLayout}
+            isEditing={true}
+            onLayoutChange={mockOnLayoutChange}
+            onRemoveWidget={mockOnRemoveWidget}
+            onUpdateWidgetSettings={mockOnUpdateWidgetSettings}
+          />
+        )
+      }).not.toThrow()
+    })
+  })
 })
