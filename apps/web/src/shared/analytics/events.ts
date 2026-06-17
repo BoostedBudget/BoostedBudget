@@ -21,6 +21,8 @@ export const ANALYTICS_EVENTS = {
   PLAID_LINK_SUCCEEDED: 'plaid_link_succeeded',
   PLAID_LINK_FAILED: 'plaid_link_failed',
   ACCOUNT_REMOVED: 'account_removed',
+  ACCOUNT_DETAIL_VIEWED: 'account_detail_viewed',
+  ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
