@@ -8,44 +8,72 @@ import { useInfiniteTransactions } from './hooks/useInfiniteTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable } from './components/TransactionTable'
 import type { TransactionSortColumn, SortDirection } from './components/TransactionTable'
+import type { SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-
 import { TransactionEditor } from './components/TransactionEditor'
+import { InvestmentDetailDrawer } from './components/InvestmentDetailDrawer'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useActiveAccounts } from '@/features/accounts/hooks'
-import type { Transaction } from './types'
+import type { Transaction, FeedRow, InvestmentActivity, ActivityType } from './types'
+import { isInvestmentRow } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
+/**
+ * T3: When investment activity is included, the API is forced to sort_by=date (see
+ * getEffectiveSortBy in useInfiniteTransactions). The table must receive an effectiveSort
+ * that reflects this so the sort indicator matches the actual row order — without
+ * overwriting the user's sort preference in URL state (they see date indicator while
+ * investments are on; their original sort resumes when they toggle off investments).
+ *
+ * Exported for unit testing.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function computeEffectiveSort(
+  sort: SortState | null,
+  includeInvestments: boolean,
+): SortState | null {
+  if (!includeInvestments) return sort
+  if (!sort) return { columnId: 'date', direction: 'desc' }
+  if (sort.columnId === 'date') return sort
+  return { columnId: 'date', direction: sort.direction }
+}
+
 export function TransactionsPage() {
   const {
     filters,
     sort,
-    datePreset,
-    statusFilter,
-    activeFilterCount,
     hasActiveFilters,
     setFilter,
     setFilters,
-    clearFilter,
     clearAllFilters,
     setSort,
+    datePreset,
+    statusFilter,
     setDatePreset,
     setCustomDateRange,
     setStatusFilter,
+    setIncludeInvestmentActivity,
+    setActivityTypes,
   } = useTransactionFilters()
 
-  const sortColumn = (sort?.columnId ?? 'date') as TransactionSortColumn
-  const sortDirection = (sort?.direction ?? 'desc') as SortDirection
+  // T3: effectiveSort keeps the table sort indicator honest — it shows 'date' when the
+  // API is forced to date-sort (investment activity enabled). Does NOT mutate URL state.
+  const investmentsIncluded = filters.include_investment_activity !== false
+  const effectiveSort = computeEffectiveSort(sort, investmentsIncluded)
+  const sortColumn = (effectiveSort?.columnId ?? 'date') as TransactionSortColumn
+  const sortDirection = (effectiveSort?.direction ?? 'desc') as SortDirection
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
+  const [selectedInvestment, setSelectedInvestment] = useState<InvestmentActivity | null>(null)
+  const [isInvestmentDrawerOpen, setIsInvestmentDrawerOpen] = useState(false)
   const queryClient = useQueryClient()
   const trackEvent = useTrackEvent()
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -61,16 +89,14 @@ export function TransactionsPage() {
 
   const availableTags = (tagsData as unknown as UserTag[]) ?? []
   const availableCategories = (categoriesData as unknown as CustomCategory[]) ?? []
-  const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
+  const plaidPrimaries = (plaidPrimariesData as unknown as Primary[]) ?? []
 
   // Create accounts lookup map
   const accountsMap = useMemo(() => {
-    const map: Record<string, Account> = {}
-    const accs = accountsList ?? []
-    accs.forEach((acc) => {
+    return (accountsList ?? []).reduce<Record<string, Account>>((map, acc) => {
       map[acc.id] = acc
-    })
-    return map
+      return map
+    }, {})
   }, [accountsList])
 
   // Create account filter options
@@ -84,9 +110,7 @@ export function TransactionsPage() {
   }, [accountsList])
 
   const handleAccountFilterChange = useCallback(
-    (value: string[]) => {
-      setFilter('account_ids', value.length > 0 ? value : undefined)
-    },
+    (value: string[]) => setFilter('account_ids', value.length > 0 ? value : undefined),
     [setFilter]
   )
 
@@ -150,10 +174,32 @@ export function TransactionsPage() {
     }
   }, [isError, fetchNextPage])
 
-  const handleEditTransaction = (transaction: Transaction) => {
+  const handleOpenEditor = useCallback((transaction: Transaction) => {
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
-  }
+  }, [])
+
+  // T2: handleRowClick now takes FeedRow directly — no double-cast needed.
+  const handleRowClick = useCallback((row: FeedRow) => {
+    if (isInvestmentRow(row)) {
+      setSelectedInvestment(row)
+      setIsInvestmentDrawerOpen(true)
+      trackEvent(ANALYTICS_EVENTS.INVESTMENT_DETAIL_DRAWER_OPENED)
+    } else {
+      // row is BankingTransaction here; single narrow cast to Transaction for the editor.
+      handleOpenEditor(row as unknown as Transaction)
+    }
+  }, [handleOpenEditor, trackEvent])
+
+  const handleIncludeInvestmentChange = useCallback((enabled: boolean) => {
+    setIncludeInvestmentActivity(enabled)
+    trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
+  }, [setIncludeInvestmentActivity, trackEvent])
+
+  const handleActivityTypesChange = useCallback((types: ActivityType[]) => {
+    setActivityTypes(types)
+    trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED, { count: types.length })
+  }, [setActivityTypes, trackEvent])
 
   const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
@@ -179,11 +225,6 @@ export function TransactionsPage() {
     [queryClient]
   )
 
-  const handleCategorizeTransaction = (transaction: Transaction) => {
-    setSelectedTransaction(transaction)
-    setIsEditorOpen(true)
-  }
-
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
     setFilter('search', searchValue || undefined) // Remove if empty
@@ -196,8 +237,10 @@ export function TransactionsPage() {
     }
   }
 
-  const pendingCount = infiniteTransactions.filter((t) => t.pending).length
-
+  const pendingCount = useMemo(
+    () => infiniteTransactions.filter((t) => t.pending).length,
+    [infiniteTransactions]
+  )
 
   if (isError && !infiniteTransactions.length) {
     return (
@@ -215,8 +258,8 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = infiniteTransactions as unknown as Transaction[]
-  const isEmpty = transactions.length === 0
+  // T2: infiniteTransactions is now typed FeedRow[] via the toFeedRow boundary mapper.
+  const isEmpty = infiniteTransactions.length === 0
 
   return (
     <main className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
@@ -236,16 +279,13 @@ export function TransactionsPage() {
         filters={filters}
         datePreset={datePreset}
         statusFilter={statusFilter}
-        activeFilterCount={activeFilterCount}
-        hasActiveFilters={hasActiveFilters}
         pendingCount={pendingCount}
-        onFilterChange={setFilter}
-        onFiltersChange={setFilters}
         onDatePresetChange={setDatePreset}
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
-        onClearFilter={clearFilter}
-        onClearAllFilters={clearAllFilters}
+        onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
+        onActivityTypesChange={handleActivityTypesChange}
+        onClearAll={clearAllFilters}
         disabled={isLoading}
       />
 
@@ -276,8 +316,8 @@ export function TransactionsPage() {
               <div className="mb-4">
                 <p className="text-base text-muted-foreground m-0">
                   {hasActiveFilters
-                    ? `Showing ${transactions.length.toLocaleString()} matching transactions`
-                    : `${transactions.length.toLocaleString()} transactions loaded`}
+                    ? `Showing ${infiniteTransactions.length.toLocaleString()} matching transactions`
+                    : `${infiniteTransactions.length.toLocaleString()} transactions loaded`}
                 </p>
               </div>
               <div role="status" aria-live="polite" className="sr-only">
@@ -288,12 +328,13 @@ export function TransactionsPage() {
 
           <div className="min-h-[200px] overflow-x-auto">
             <TransactionTable
-              transactions={transactions}
+              transactions={infiniteTransactions}
               accountsMap={accountsMap}
-              onEdit={handleEditTransaction}
-              onCategorize={handleCategorizeTransaction}
+              onEdit={handleOpenEditor}
+              onCategorize={handleOpenEditor}
+              onRowClick={handleRowClick}
               loading={isLoading}
-              sort={sort}
+              sort={effectiveSort}
               onSortChange={setSort}
               accountOptions={accountOptions}
               accountFilter={filters.account_ids}
@@ -341,6 +382,13 @@ export function TransactionsPage() {
           onCategoryCreated={handleCategoryCreated}
         />
       )}
+
+      <InvestmentDetailDrawer
+        transaction={selectedInvestment}
+        open={isInvestmentDrawerOpen}
+        onOpenChange={setIsInvestmentDrawerOpen}
+        accountsMap={accountsMap}
+      />
     </main>
   )
 }
