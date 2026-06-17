@@ -58,49 +58,50 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
-      <Link
-        to={`/accounts/${account.id}`}
-        className="block hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg"
-        aria-label={`View ${displayName} account details`}
-      >
-        <AccountSummaryHeader
-          institutionName={institution_name ?? ''}
-          mask={mask}
-          displayName={displayName}
-          typeLabel={typeLabel}
-          currentBalance={current_balance}
-          availableBalance={available_balance}
-          currencyCode={currency_code}
-          customEmoji={custom_emoji}
-          customIcon={custom_icon}
-          customColor={custom_color}
-          institutionRowLeadingSlot={
-            dragHandleProps ? (
-              <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
-                <GripVertical className="h-5 w-5 text-muted-foreground" />
-              </div>
-            ) : undefined
-          }
-          institutionRowTrailingSlot={
-            (isDisconnected || is_hidden) ? (
-              <>
-                {isDisconnected && (
-                  <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
-                    <Unplug className="h-3 w-3" />
-                    <span>Disconnected</span>
-                  </Badge>
-                )}
-                {is_hidden && (
-                  <Badge variant="secondary" title="Hidden account">
-                    <EyeOff className="h-3 w-3" />
-                    <span>Hidden</span>
-                  </Badge>
-                )}
-              </>
-            ) : undefined
-          }
-        />
-      </Link>
+      {/* Drag handle is a sibling of the Link — keeping it outside avoids nested interactive controls */}
+      <div className="flex items-start gap-2">
+        {dragHandleProps && (
+          <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors mt-1 shrink-0" {...dragHandleProps}>
+            <GripVertical className="h-5 w-5 text-muted-foreground" />
+          </div>
+        )}
+        <Link
+          to={`/accounts/${account.id}`}
+          className="flex-1 block hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg"
+          aria-label={`View ${displayName} account details`}
+        >
+          <AccountSummaryHeader
+            institutionName={institution_name ?? ''}
+            mask={mask}
+            displayName={displayName}
+            typeLabel={typeLabel}
+            currentBalance={current_balance}
+            availableBalance={available_balance}
+            currencyCode={currency_code}
+            customEmoji={custom_emoji}
+            customIcon={custom_icon}
+            customColor={custom_color}
+            institutionRowTrailingSlot={
+              (isDisconnected || is_hidden) ? (
+                <>
+                  {isDisconnected && (
+                    <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
+                      <Unplug className="h-3 w-3" />
+                      <span>Disconnected</span>
+                    </Badge>
+                  )}
+                  {is_hidden && (
+                    <Badge variant="secondary" title="Hidden account">
+                      <EyeOff className="h-3 w-3" />
+                      <span>Hidden</span>
+                    </Badge>
+                  )}
+                </>
+              ) : undefined
+            }
+          />
+        </Link>
+      </div>
 
       <div className="flex gap-3 mt-4 pt-4 border-t border-border">
         {onEdit && (
