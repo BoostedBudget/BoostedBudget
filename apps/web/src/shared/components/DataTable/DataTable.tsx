@@ -678,9 +678,7 @@ export function DataTable<T,>({
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
                       onKeyDown={onRowClick ? (e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
-                          const target = e.target as HTMLElement
-                          const interactiveTags = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']
-                          if (interactiveTags.includes(target.tagName)) return
+                          if ((e.target as HTMLElement).closest('button, a, input, select, textarea')) return
                           e.preventDefault()
                           onRowClick(row)
                         }
@@ -765,9 +763,7 @@ export function DataTable<T,>({
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
                       onKeyDown={onRowClick ? (e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
-                          const target = e.target as HTMLElement
-                          const interactiveTags = ['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']
-                          if (interactiveTags.includes(target.tagName)) return
+                          if ((e.target as HTMLElement).closest('button, a, input, select, textarea')) return
                           e.preventDefault()
                           onRowClick(row)
                         }

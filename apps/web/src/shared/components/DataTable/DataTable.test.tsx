@@ -499,6 +499,33 @@ describe('keyboard navigation', () => {
     expect(onRowClick).not.toHaveBeenCalled()
   })
 
+  it('does not fire onRowClick when Enter is pressed on a span nested inside a button', () => {
+    const onRowClick = mock((_: Row) => {})
+    render(
+      <DataTable<Row>
+        data={rows}
+        columns={baseColumns}
+        rowKey={(r) => r.id}
+        sort={null}
+        onSortChange={noopSort()}
+        filters={{}}
+        onFiltersChange={noopFilters()}
+        onRowClick={onRowClick}
+        rowActions={() => (
+          <button type="button">
+            <span>Delete</span>
+          </button>
+        )}
+      />
+    )
+
+    const spans = screen.getAllByText('Delete')
+    const spanInButton = spans.find((span) => span.tagName === 'SPAN')!
+    fireEvent.keyDown(spanInButton, { key: 'Enter' })
+
+    expect(onRowClick).not.toHaveBeenCalled()
+  })
+
   it('fires onRowClick when Enter is pressed on the row itself (non-interactive cell)', () => {
     const onRowClick = mock((_: Row) => {})
     render(
