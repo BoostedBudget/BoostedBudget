@@ -150,7 +150,27 @@ export type WidgetType =
   | 'account-cards'
   | 'budget-overview'
   | 'net-worth'
-  | 'savings-impact';
+  | 'savings-impact'
+  // Issue #1297: Investment widgets
+  | 'portfolio-summary'
+  | 'portfolio-holdings'
+  | 'asset-allocation';
+
+// Per-widget settings types (typed on FE; opaque {[key:string]:unknown} on backend)
+
+/** Settings for the Portfolio Holdings widget */
+export interface PortfolioHoldingsSettings {
+  topN: 5 | 10 | 20;
+  sortBy: 'value' | 'day_change';
+}
+
+/** Settings for the Asset Allocation widget */
+export interface AssetAllocationSettings {
+  groupBy: 'security_type' | 'asset_class' | 'account';
+}
+
+/** Union of all typed per-widget settings values (as returned by normalizeWidgetSettings). */
+export type WidgetSettings = PortfolioHoldingsSettings | AssetAllocationSettings;
 
 export interface WidgetConfig {
   i: string;          // Unique widget instance ID (react-grid-layout uses 'i')
@@ -164,6 +184,9 @@ export interface WidgetConfig {
   maxW?: number;      // Maximum width
   maxH?: number;      // Maximum height
   static?: boolean;   // Prevent drag/resize
+  /** Per-widget configuration blob, persisted server-side (opaque — aligned with generated WidgetConfigSettings).
+   *  Use normalizeWidgetSettings() to read typed values; never access raw keys directly. */
+  settings?: Record<string, unknown>;
 }
 
 export interface DashboardLayout {
@@ -180,6 +203,12 @@ export interface DashboardPreferencesResponse {
 export interface WidgetProps {
   widgetId: string;
   onRemove: () => void;
+  /** Per-widget settings (normalized via normalizeWidgetSettings). Present only for configurable widgets. */
+  settings?: WidgetSettings;
+  /** Callback invoked when the widget wants to persist new settings. Gated to edit mode by DashboardGrid. */
+  onSettingsChange?: (settings: WidgetSettings) => void;
+  /** True when the dashboard is in edit mode. Controls visibility of settings controls. */
+  isEditing?: boolean;
 }
 
 // Empty state configuration for widgets
@@ -197,7 +226,7 @@ export interface WidgetDefinition {
   title: string;
   description: string;
   icon: string;  // Icon name for catalog
-  category: 'overview' | 'charts' | 'accounts';
+  category: 'overview' | 'charts' | 'accounts' | 'investments';
   defaultSize: { w: number; h: number };
   minSize: { w: number; h: number };
   maxSize?: { w: number; h: number };

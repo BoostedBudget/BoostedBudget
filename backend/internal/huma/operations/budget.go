@@ -16,20 +16,22 @@ import (
 // BudgetHandler handles budget-related HTTP requests.
 // Issue #28: Budget management
 type BudgetHandler struct {
-	service            services.BudgetService
-	syncService        services.BudgetSyncService
-	transactionService services.TransactionService
-	idempotencyRepo    repository.IdempotencyRepository // optional; nil disables dedup
-	db                 repository.DB
-	mcpAuditRepo       repository.MCPAuditRepository
-	mcpWorkerSecret    string
+	service              services.BudgetService
+	syncService          services.BudgetSyncService
+	transactionService   services.TransactionService
+	idempotencyRepo      repository.IdempotencyRepository // optional; nil disables dedup
+	db                   repository.DB
+	mcpAuditRepo         repository.MCPAuditRepository
+	mcpWorkerSecret      string
+	goalOwnershipChecker services.GoalOwnershipChecker // R5-1: wired into MCP-path txBudgetService
 }
 
 type BudgetHandlerDeps struct {
-	IdempotencyRepo repository.IdempotencyRepository
-	DB              repository.DB
-	MCPAuditRepo    repository.MCPAuditRepository
-	MCPWorkerSecret string
+	IdempotencyRepo      repository.IdempotencyRepository
+	DB                   repository.DB
+	MCPAuditRepo         repository.MCPAuditRepository
+	MCPWorkerSecret      string
+	GoalOwnershipChecker services.GoalOwnershipChecker // R5-1: ownership guard for MCP CreateBudget
 }
 
 // NewBudgetHandler creates a new BudgetHandler instance.
@@ -46,6 +48,7 @@ func NewBudgetHandler(service services.BudgetService, syncService services.Budge
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
 		h.mcpWorkerSecret = deps[0].MCPWorkerSecret
+		h.goalOwnershipChecker = deps[0].GoalOwnershipChecker // R5-1
 	}
 	return h
 }
@@ -197,10 +200,19 @@ func (h *BudgetHandler) CreateBudget(ctx context.Context, input *CreateBudgetInp
 		}
 		defer rollbackMCPAuditTx(ctx, tx)
 
-		// CreateBudget only uses budgetRepo; other service deps (customCategoryRepo, plaidCategoryRepo)
-		// are not called during a create and can be left as-is from the outer service.
+		// txBudgetService runs inside the idempotency transaction. goalRepo (savings carry-forward)
+		// is intentionally omitted here: carry-forward is best-effort and must NOT run inside the
+		// transaction (Issue #1300 plan flag B). MCP-created budgets pick up savings categories
+		// on the next sync via BackfillManagedCategories.
 		txBudgetRepo := repository.NewBudgetRepository(tx)
 		txBudgetService := services.NewBudgetService(txBudgetRepo, nil, nil, slog.Default())
+		// R5-1: wire the ownership checker so the per-category savings-goal IDOR guard
+		// (R4-3) runs on the MCP path. Without this call, goalOwnershipChecker is nil
+		// and the service degrades to a WARN-log no-op — silently allowing cross-user
+		// savings_goal_id references.
+		if h.goalOwnershipChecker != nil {
+			txBudgetService.SetGoalOwnershipChecker(h.goalOwnershipChecker)
+		}
 
 		if h.idempotencyRepo != nil && input.IdempotencyKey != "" {
 			var budget *domain.Budget

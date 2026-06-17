@@ -99,6 +99,22 @@ export function createApiClient(mutator: FetchMutator) {
       getUnusualSpend(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/analytics/unusual-spend', method: 'GET', params, signal })
       },
+      /** GET /api/v1/investments/portfolio/allocation */
+      getPortfolioAllocationBreakdown(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/allocation', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/gain-loss */
+      getInvestmentGainLossSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/gain-loss', method: 'GET', signal })
+      },
+      /** GET /api/v1/investments/portfolio/income */
+      getInvestmentIncomeSummary(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/income', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/top-movers */
+      getTopMovers(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/top-movers', method: 'GET', params, signal })
+      },
     } as const,
     autoCategorization: {
       /** GET /api/v1/auto-categorization */
@@ -252,6 +268,24 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/dashboard/widget-types', method: 'GET', signal })
       },
     } as const,
+    investments: {
+      /** GET /api/v1/investments/holdings */
+      getHoldings(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/holdings', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/investment-transactions */
+      getInvestmentTransactions(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/investment-transactions', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/history */
+      getPortfolioHistory(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/history', method: 'GET', params, signal })
+      },
+      /** GET /api/v1/investments/portfolio/summary */
+      getPortfolioSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/summary', method: 'GET', signal })
+      },
+    } as const,
     mcpRecipes: {
       /** GET /api/v1/mcp/recipes */
       listMCPRecipes(signal?: AbortSignal): Promise<unknown> {
@@ -326,6 +360,30 @@ export function createApiClient(mutator: FetchMutator) {
       /** GET /api/v1/savings-goals/active */
       getActiveSavingsGoals(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/savings-goals/active', method: 'GET', signal })
+      },
+      /** GET /api/v1/savings-goals/progress-summary */
+      getSavingsProgressSummary(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/savings-goals/progress-summary', method: 'GET', signal })
+      },
+      /** GET /api/v1/savings-goals/{goalID}/contributions */
+      listSavingsGoalContributions(goalID: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'GET', signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions */
+      logSavingsGoalContribution(goalID: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions`, method: 'POST', data, signal })
+      },
+      /** DELETE /api/v1/savings-goals/{goalID}/contributions/{id} */
+      deleteSavingsGoalContribution(goalID: string, id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}`, method: 'DELETE', signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/confirm */
+      confirmSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/confirm`, method: 'POST', data, signal })
+      },
+      /** POST /api/v1/savings-goals/{goalID}/contributions/{id}/reject */
+      rejectSavingsGoalContribution(goalID: string, id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/savings-goals/${goalID}/contributions/${id}/reject`, method: 'POST', data, signal })
       },
       /** GET /api/v1/savings-goals/{id} */
       getSavingsGoal(id: string, signal?: AbortSignal): Promise<unknown> {

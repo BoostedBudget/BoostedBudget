@@ -21,6 +21,8 @@ export const ANALYTICS_EVENTS = {
   PLAID_LINK_SUCCEEDED: 'plaid_link_succeeded',
   PLAID_LINK_FAILED: 'plaid_link_failed',
   ACCOUNT_REMOVED: 'account_removed',
+  ACCOUNT_DETAIL_VIEWED: 'account_detail_viewed',
+  ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
 
   // Transactions
   TRANSACTIONS_VIEWED: 'transactions_viewed',
@@ -91,13 +93,21 @@ export const ANALYTICS_EVENTS = {
   NET_WORTH_PAGE_VIEWED: 'net_worth_page_viewed',
   NET_WORTH_RANGE_CHANGED: 'net_worth_range_changed',
 
-  // Savings Goals (#954)
+  // Savings Goals (#954, #1300)
   SAVINGS_PAGE_VIEWED: 'savings_page_viewed',
   SAVINGS_GOAL_CREATED: 'savings_goal_created',
   SAVINGS_GOAL_EDITED: 'savings_goal_edited',
   SAVINGS_GOAL_DELETED: 'savings_goal_deleted',
   SAVINGS_FILTER_CHANGED: 'savings_filter_changed',
   SAVINGS_SORT_CHANGED: 'savings_sort_changed',
+  SAVINGS_GOAL_PROGRESS_BASIS_CHANGED: 'savings_goal_progress_basis_changed', // #1300 G1
+
+  // Savings contributions (#1300 M21 / R3-7)
+  SAVINGS_CONTRIBUTIONS_VIEWED: 'savings_contributions_viewed',
+  SAVINGS_CONTRIBUTION_LOGGED: 'savings_contribution_logged',
+  SAVINGS_CONTRIBUTION_CONFIRMED: 'savings_contribution_confirmed',
+  SAVINGS_CONTRIBUTION_REJECTED: 'savings_contribution_rejected', // R3-7 sticky tombstone
+  SAVINGS_CONTRIBUTION_DELETED: 'savings_contribution_deleted',
 
   ACCOUNT_REPLACED_FILTERED: 'account_replaced_filtered',
 
@@ -132,10 +142,29 @@ export const ANALYTICS_EVENTS = {
   REVIEW_UNDO: 'review_undo',
   REVIEW_ALL_CAUGHT_UP: 'review_all_caught_up',
 
-  // Boosts (#1267)
+  // Boosts (#1267, #1300)
   BOOSTS_PAGE_VIEWED: 'boosts_page_viewed',
   BOOSTS_TAB_CHANGED: 'boosts_tab_changed',
   BOOSTS_FILTER_CHANGED: 'boosts_filter_changed',
+  BOOSTS_CREATE_CLICKED: 'boosts_create_clicked', // #1300: always-visible header button
+
+  // Planning tab (#1300)
+  PLANNING_PAGE_VIEWED: 'planning_page_viewed',
+  PLANNING_TAB_CHANGED: 'planning_tab_changed',
+
+  // Insights tab (#1300)
+  INSIGHTS_PAGE_VIEWED: 'insights_page_viewed',
+  INSIGHTS_TAB_CHANGED: 'insights_tab_changed',
+
+  // Portfolio tab (#1296)
+  PORTFOLIO_PAGE_VIEWED: 'portfolio_page_viewed',
+  PORTFOLIO_RANGE_CHANGED: 'portfolio_range_changed',
+  PORTFOLIO_ALLOCATION_CONFIG_CHANGED: 'portfolio_allocation_config_changed',
+
+  // Investment dashboard widgets (#1297)
+  PORTFOLIO_SUMMARY_WIDGET_VIEWED: 'portfolio_summary_widget_viewed',
+  PORTFOLIO_HOLDINGS_WIDGET_VIEWED: 'portfolio_holdings_widget_viewed',
+  ASSET_ALLOCATION_WIDGET_VIEWED: 'asset_allocation_widget_viewed',
 
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',

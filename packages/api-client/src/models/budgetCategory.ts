@@ -35,6 +35,7 @@ export interface BudgetCategory {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   allocated_amount: number;
+  auto_created: boolean;
   budget_id: string;
   category_kind: string;
   created_at: string;
@@ -42,11 +43,14 @@ export interface BudgetCategory {
   custom_parent_id?: string;
   custom_parent_pfc_primary?: string;
   id: string;
+  managed_by_goal_id?: string;
   match_logic: string;
   pfc_detailed?: string;
   pfc_detailed_display?: string;
   pfc_primary?: string;
   pfc_primary_display?: string;
+  savings_goal_id?: string;
+  savings_goal_name?: string;
   spent_amount: number;
   /** @nullable */
   tags: string[] | null;

@@ -10,13 +10,17 @@ import (
 type WidgetType string
 
 const (
-	WidgetTypeBalanceOverview WidgetType = "balance-overview"
-	WidgetTypeBalanceHistory  WidgetType = "balance-history"
-	WidgetTypeCashFlowSummary WidgetType = "cash-flow-summary"
-	WidgetTypeCashFlowChart   WidgetType = "cash-flow-chart"
-	WidgetTypeAccountCards    WidgetType = "account-cards"
-	WidgetTypeNetWorth        WidgetType = "net-worth"
-	WidgetTypeSavingsImpact   WidgetType = "savings-impact"
+	WidgetTypeBalanceOverview   WidgetType = "balance-overview"
+	WidgetTypeBalanceHistory    WidgetType = "balance-history"
+	WidgetTypeCashFlowSummary   WidgetType = "cash-flow-summary"
+	WidgetTypeCashFlowChart     WidgetType = "cash-flow-chart"
+	WidgetTypeAccountCards      WidgetType = "account-cards"
+	WidgetTypeNetWorth          WidgetType = "net-worth"
+	WidgetTypeSavingsImpact     WidgetType = "savings-impact"
+	// Issue #1297: Investment widgets
+	WidgetTypePortfolioSummary  WidgetType = "portfolio-summary"
+	WidgetTypePortfolioHoldings WidgetType = "portfolio-holdings"
+	WidgetTypeAssetAllocation   WidgetType = "asset-allocation"
 )
 
 // ValidWidgetTypes returns a set of valid widget types
@@ -42,6 +46,11 @@ type WidgetConfig struct {
 	MinH *int       `json:"minH,omitempty"` // Minimum height
 	MaxW *int       `json:"maxW,omitempty"` // Maximum width
 	MaxH *int       `json:"maxH,omitempty"` // Maximum height
+	// Settings is an opaque per-widget configuration blob persisted as JSONB.
+	// The backend treats it as generic key-value data and does not validate its contents —
+	// widget-specific validation happens on the frontend.
+	// Issue #1297: Added to support configurable investment widgets.
+	Settings map[string]any `json:"settings,omitempty"` // Per-widget configuration
 }
 
 // Validate checks that the WidgetConfig has valid values

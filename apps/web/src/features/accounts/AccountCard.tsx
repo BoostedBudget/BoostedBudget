@@ -1,10 +1,12 @@
 import { Pencil, EyeOff, GripVertical, Unplug } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { AccountIconDisplay } from './components/AccountIconDisplay'
-import type { Account, AccountIcon } from './types'
+import { AccountSummaryHeader } from './components/AccountSummaryHeader'
+import type { Account } from './types'
+import { getAccountTypeLabel } from './utils'
 
 interface AccountCardProps {
   account: Account
@@ -14,48 +16,6 @@ interface AccountCardProps {
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
 }
 
-/**
- * Format currency amount with proper symbol and decimal places
- */
-function formatCurrency(amount: number | undefined, currencyCode: string): string {
-  if (amount === undefined) return 'N/A'
-
-  // Use Intl.NumberFormat for proper currency formatting
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currencyCode,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount)
-  } catch {
-    // Fallback if currency code is invalid
-    return `${currencyCode} ${amount.toFixed(2)}`
-  }
-}
-
-/**
- * Get human-readable account type label
- */
-function getAccountTypeLabel(type: string, subtype?: string): string {
-  const typeMap: Record<string, string> = {
-    depository: 'Bank Account',
-    credit: 'Credit Card',
-    loan: 'Loan',
-    investment: 'Investment',
-    other: 'Other',
-  }
-
-  const baseLabel = typeMap[type] || type
-
-  // Add subtype if available (e.g., "Bank Account - Checking")
-  if (subtype) {
-    const subtypeCapitalized = subtype.charAt(0).toUpperCase() + subtype.slice(1)
-    return `${baseLabel} - ${subtypeCapitalized}`
-  }
-
-  return baseLabel
-}
 
 export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleProps }: AccountCardProps) {
   const {
@@ -84,11 +44,7 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
   // Display name: nickname > official_name > name
   const displayName = nickname || official_name || name
   const typeLabel = getAccountTypeLabel(type, subtype)
-  const currentBalanceFormatted = formatCurrency(current_balance, currency_code)
-  const availableBalanceFormatted = formatCurrency(available_balance, currency_code)
 
-  const handleDelete = () => onDelete?.(account)
-  const handleEdit = () => onEdit?.(account)
 
   return (
     <Card
@@ -100,102 +56,72 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
-      <div className="flex items-center gap-3 mb-4 pb-3 border-b border-border">
+      {/* Drag handle is a sibling of the Link — keeping it outside avoids nested interactive controls */}
+      <div className="flex items-start gap-2">
         {dragHandleProps && (
-          <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
+          <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors mt-1 shrink-0" {...dragHandleProps}>
             <GripVertical className="h-5 w-5 text-muted-foreground" />
           </div>
         )}
-
-        <div className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex-1">
-          <span data-ph-mask>{institution_name || 'Unknown Bank'}</span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {isDisconnected && (
-            <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
-              <Unplug className="h-3 w-3" />
-              <span>Disconnected</span>
-            </Badge>
-          )}
-          {is_hidden && (
-            <Badge variant="secondary" title="Hidden account">
-              <EyeOff className="h-3 w-3" />
-              <span>Hidden</span>
-            </Badge>
-          )}
-          {mask && (
-            <div className="font-mono text-sm text-muted-foreground" data-ph-mask>
-              ****{mask}
-            </div>
-          )}
-        </div>
+        <Link
+          to={`/accounts/${account.id}`}
+          className="flex-1 block hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg"
+          aria-label={`View ${displayName} account details`}
+        >
+          <AccountSummaryHeader
+            institutionName={institution_name ?? ''}
+            mask={mask}
+            displayName={displayName}
+            typeLabel={typeLabel}
+            currentBalance={current_balance}
+            availableBalance={available_balance}
+            currencyCode={currency_code}
+            customEmoji={custom_emoji}
+            customIcon={custom_icon}
+            customColor={custom_color}
+            institutionRowTrailingSlot={
+              (isDisconnected || is_hidden) ? (
+                <>
+                  {isDisconnected && (
+                    <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
+                      <Unplug className="h-3 w-3" />
+                      <span>Disconnected</span>
+                    </Badge>
+                  )}
+                  {is_hidden && (
+                    <Badge variant="secondary" title="Hidden account">
+                      <EyeOff className="h-3 w-3" />
+                      <span>Hidden</span>
+                    </Badge>
+                  )}
+                </>
+              ) : undefined
+            }
+          />
+        </Link>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-            {custom_emoji ? (
-            <span className="text-xl leading-none" aria-label="Custom emoji">
-              {custom_emoji}
-            </span>
-          ) : custom_icon ? (
-            <span
-              className="flex items-center justify-center"
-              style={custom_color ? { color: custom_color } : undefined}
-            >
-              <AccountIconDisplay icon={custom_icon as AccountIcon} className="h-5 w-5" />
-            </span>
-          ) : null}
-
-          <h3
-            className="text-xl font-semibold text-foreground m-0"
-            style={custom_color ? { color: custom_color } : undefined}
+      <div className="flex gap-3 mt-4 pt-4 border-t border-border">
+        {onEdit && (
+          <Button
+            variant="secondary"
+            onClick={() => onEdit(account)}
+            title="Customize this account"
+            aria-label="Edit account"
           >
-            <span data-ph-mask>{displayName}</span>
-          </h3>
-        </div>
-
-        <p className="text-sm text-muted-foreground m-0">{typeLabel}</p>
-
-        <div className="mt-4 flex flex-col gap-3">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-muted-foreground">Current Balance</span>
-            <span className="text-lg font-semibold text-primary" data-ph-mask>
-              {currentBalanceFormatted}
-            </span>
-          </div>
-          {available_balance !== undefined && available_balance !== current_balance && (
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Available Balance</span>
-              <span className="text-lg font-semibold text-primary" data-ph-mask>
-                {availableBalanceFormatted}
-              </span>
-            </div>
-          )}
-        </div>
-
-        <div className="flex gap-3 mt-4 pt-4 border-t border-border">
-          {onEdit && (
-            <Button
-              variant="secondary"
-              onClick={handleEdit}
-              title="Customize this account"
-              aria-label="Edit account"
-            >
-              <Pencil className="h-4 w-4" />
-              <span>Edit</span>
-            </Button>
-          )}
-          {onDelete && (
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              title="Delete this account"
-            >
-              Delete Account
-            </Button>
-          )}
-        </div>
+            <Pencil className="h-4 w-4" />
+            <span>Edit</span>
+          </Button>
+        )}
+        {onDelete && (
+          <Button
+            variant="destructive"
+            onClick={() => onDelete(account)}
+            title="Delete this account"
+          >
+            Delete Account
+          </Button>
+        )}
       </div>
     </Card>
   )

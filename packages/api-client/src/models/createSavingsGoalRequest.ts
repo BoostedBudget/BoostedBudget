@@ -35,10 +35,12 @@ export interface CreateSavingsGoalRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   account_id: string;
+  account_percentage?: number;
   currency_code?: string;
   current_amount?: number;
   deadline?: string;
   description?: string;
   name: string;
+  progress_basis?: string;
   target_amount: number;
 }

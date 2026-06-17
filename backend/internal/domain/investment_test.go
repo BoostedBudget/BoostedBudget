@@ -297,3 +297,242 @@ func TestInvestmentTransactionSyncResult_Counts(t *testing.T) {
 	assert.Equal(t, 2, result.PagesProcessed)
 }
 
+// --- Holding compute methods ---
+
+func TestHolding_GainLoss(t *testing.T) {
+	tests := []struct {
+		name     string
+		holding  Holding
+		wantNil  bool
+		wantVal  float64
+	}{
+		{
+			name: "returns gain when both values present",
+			holding: Holding{
+				InstitutionValue: float64Ptr(1750.00),
+				CostBasis:        float64Ptr(1500.00),
+			},
+			wantNil: false,
+			wantVal: 250.00,
+		},
+		{
+			name: "returns loss when institution_value < cost_basis",
+			holding: Holding{
+				InstitutionValue: float64Ptr(900.00),
+				CostBasis:        float64Ptr(1000.00),
+			},
+			wantNil: false,
+			wantVal: -100.00,
+		},
+		{
+			name: "returns nil when cost_basis is nil",
+			holding: Holding{
+				InstitutionValue: float64Ptr(1750.00),
+				CostBasis:        nil,
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when institution_value is nil",
+			holding: Holding{
+				InstitutionValue: nil,
+				CostBasis:        float64Ptr(1500.00),
+			},
+			wantNil: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.holding.GainLoss()
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.NotNil(t, got)
+				assert.InDelta(t, tt.wantVal, *got, 0.001)
+			}
+		})
+	}
+}
+
+func TestHolding_GainLossPct(t *testing.T) {
+	tests := []struct {
+		name    string
+		holding Holding
+		wantNil bool
+		wantVal float64
+	}{
+		{
+			name: "returns percentage when both values present",
+			holding: Holding{
+				InstitutionValue: float64Ptr(1750.00),
+				CostBasis:        float64Ptr(1400.00),
+			},
+			wantNil: false,
+			wantVal: 25.0, // (350/1400)*100
+		},
+		{
+			name: "returns nil when cost_basis is nil",
+			holding: Holding{
+				InstitutionValue: float64Ptr(1750.00),
+				CostBasis:        nil,
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when cost_basis is zero (avoid div-by-zero)",
+			holding: Holding{
+				InstitutionValue: float64Ptr(1750.00),
+				CostBasis:        float64Ptr(0.00),
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when institution_value is nil",
+			holding: Holding{
+				InstitutionValue: nil,
+				CostBasis:        float64Ptr(1500.00),
+			},
+			wantNil: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.holding.GainLossPct()
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.NotNil(t, got)
+				assert.InDelta(t, tt.wantVal, *got, 0.001)
+			}
+		})
+	}
+}
+
+func TestHolding_DayChange(t *testing.T) {
+	tests := []struct {
+		name     string
+		holding  Holding
+		security *Security
+		wantNil  bool
+		wantVal  float64
+	}{
+		{
+			name: "returns day change when all prices present",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: float64Ptr(175.50), // current price (from holdings)
+				Security: &Security{
+					ClosePrice: float64Ptr(173.00), // prior close (from securities)
+				},
+			},
+			wantNil: false,
+			wantVal: 25.00, // 10 * (175.50 - 173.00)
+		},
+		{
+			name: "returns nil when institution_price is nil",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: nil,
+				Security: &Security{
+					ClosePrice: float64Ptr(173.00),
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when security close_price is nil (private/illiquid)",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: float64Ptr(175.50),
+				Security: &Security{
+					ClosePrice: nil,
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name:    "returns nil when Security is nil",
+			holding: Holding{Quantity: 10.0, InstitutionPrice: float64Ptr(175.50)},
+			wantNil: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.security != nil {
+				tt.holding.Security = tt.security
+			}
+			got := tt.holding.DayChange()
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.NotNil(t, got)
+				assert.InDelta(t, tt.wantVal, *got, 0.001)
+			}
+		})
+	}
+}
+
+func TestHolding_DayChangePct(t *testing.T) {
+	tests := []struct {
+		name    string
+		holding Holding
+		wantNil bool
+		wantVal float64
+	}{
+		{
+			name: "returns day change pct",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: float64Ptr(175.50),
+				InstitutionValue: float64Ptr(1755.00),
+				Security: &Security{
+					ClosePrice: float64Ptr(170.00),
+				},
+			},
+			wantNil: false,
+			wantVal: (10 * (175.50 - 170.00)) / 1755.00 * 100,
+		},
+		{
+			name: "returns nil when institution_value is nil",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: float64Ptr(175.50),
+				InstitutionValue: nil,
+				Security:         &Security{ClosePrice: float64Ptr(170.00)},
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when institution_value is zero",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: float64Ptr(175.50),
+				InstitutionValue: float64Ptr(0.0),
+				Security:         &Security{ClosePrice: float64Ptr(170.00)},
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when DayChange is nil",
+			holding: Holding{
+				Quantity:         10.0,
+				InstitutionPrice: nil,
+				InstitutionValue: float64Ptr(1755.00),
+				Security:         &Security{ClosePrice: float64Ptr(170.00)},
+			},
+			wantNil: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.holding.DayChangePct()
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.NotNil(t, got)
+				assert.InDelta(t, tt.wantVal, *got, 0.001)
+			}
+		})
+	}
+}
+

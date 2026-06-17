@@ -210,4 +210,24 @@ describe('BoostsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
     expect(mockSavingsRefetch).toHaveBeenCalledTimes(1)
   })
+
+  // Issue #1300: always-visible Create Boost button + tab rename
+  it('renders the "Create Boost" button in the page header', () => {
+    renderBoostsPage()
+    const createBtn = screen.getByRole('button', { name: /create new boost/i })
+    expect(createBtn).toBeTruthy()
+  })
+
+  it('fires BOOSTS_CREATE_CLICKED analytics when Create Boost is clicked', async () => {
+    renderBoostsPage()
+    const createBtn = screen.getByRole('button', { name: /create new boost/i })
+    fireEvent.click(createBtn)
+    await act(async () => {})
+    expect(mockTrackEvent).toHaveBeenCalledWith('boosts_create_clicked', { source: 'page_header' })
+  })
+
+  it('renames the management tab to "Manage Boosts" for discoverability', () => {
+    renderBoostsPage()
+    expect(screen.getByRole('tab', { name: /manage boosts/i })).toBeTruthy()
+  })
 })

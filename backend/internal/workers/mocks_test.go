@@ -319,7 +319,15 @@ func (m *MockTransactionRepository) GetByUserIDKeyset(ctx context.Context, userI
 	return nil, nil, nil
 }
 
+func (m *MockTransactionRepository) GetByUserIDKeysetUnified(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+	return nil, nil, nil
+}
+
 func (m *MockTransactionRepository) GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
+func (m *MockTransactionRepository) GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error) {
 	return nil, nil
 }
 

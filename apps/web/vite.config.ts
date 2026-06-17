@@ -93,8 +93,8 @@ export default defineConfig({
             },
             {
               name: 'shared',
-              test: /\/apps\/web\/src\/(shared|components|lib)\/|\/apps\/web\/src\/features\/categories\/utils\//,
-              priority: 7, // App-wide utilities, hooks, UI primitives
+              test: /\/apps\/web\/src\/(shared|components|lib)\/|\/apps\/web\/src\/features\/(categories\/utils|tags)\//,
+              priority: 7, // App-wide utilities, hooks, UI primitives (incl. tags — used across features)
             },
 
             // ── per-feature route splits ─────────────────────────────────────
@@ -162,6 +162,23 @@ export default defineConfig({
             {
               name: 'profile',
               test: /\/apps\/web\/src\/features\/(profile|deletion)\//,
+              priority: 5,
+            },
+            // Issue #1300: consolidated Planning + Insights tabs
+            {
+              name: 'planning',
+              test: /\/apps\/web\/src\/features\/planning\//,
+              priority: 5,
+            },
+            {
+              name: 'insights',
+              test: /\/apps\/web\/src\/features\/insights\//,
+              priority: 5,
+            },
+            // Issue #1296: Portfolio tab — investments feature code
+            {
+              name: 'investments',
+              test: /\/apps\/web\/src\/features\/investments\//,
               priority: 5,
             },
           ],

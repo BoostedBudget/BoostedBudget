@@ -106,6 +106,7 @@ DECLARE
     v_savings_id UUID;
     v_credit_id UUID;
     v_budget_id UUID;
+    v_series_id UUID := gen_random_uuid();
 BEGIN
     -- Get the user ID
     SELECT id INTO v_user_id FROM users WHERE clerk_user_id = '__E2E_CLERK_USER_ID__';
@@ -365,9 +366,10 @@ BEGIN
     -- Step 7: Create E2E fixture budget + categories (description='e2e-fixture-v1' marker)
     -- =============================================================================
     INSERT INTO budgets (
-        user_id, name, description, period, start_date, amount, currency_code,
-        income_amount, income_sources, expected_income, is_active
+        id, user_id, name, description, period, start_date, amount, currency_code,
+        income_amount, income_sources, expected_income, is_active, series_id
     ) VALUES (
+        v_series_id,
         v_user_id,
         'E2E Monthly Budget',
         'e2e-fixture-v1',
@@ -378,7 +380,8 @@ BEGIN
         0,
         '[]'::jsonb,
         7000.00,
-        true
+        true,
+        v_series_id
     )
     ON CONFLICT (user_id, name) DO UPDATE SET
         description = EXCLUDED.description,

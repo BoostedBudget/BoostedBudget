@@ -1,8 +1,9 @@
 /**
  * computeBudgetMetrics top-level-only totals (Issue #1203).
+ * formatBudgetCategoryLabel — savings kind (#1300).
  */
 import { describe, it, expect } from 'bun:test'
-import { computeBudgetMetrics, type Budget, type BudgetCategory } from './types'
+import { computeBudgetMetrics, formatBudgetCategoryLabel, type Budget, type BudgetCategory } from './types'
 
 const baseCat = {
   budget_id: 'b1',
@@ -30,6 +31,23 @@ function budget(categories: BudgetCategory[]): Budget {
     expected_income: 1000,
   } as Budget
 }
+
+describe('formatBudgetCategoryLabel — savings kind (#1300)', () => {
+  it('returns savings_goal_name when present', () => {
+    const cat = {
+      category_kind: 'savings',
+      savings_goal_name: 'House Down Payment',
+    } as Partial<BudgetCategory> as BudgetCategory
+    expect(formatBudgetCategoryLabel(cat)).toBe('House Down Payment')
+  })
+
+  it('returns "Savings Goal" fallback when savings_goal_name absent', () => {
+    const cat = {
+      category_kind: 'savings',
+    } as Partial<BudgetCategory> as BudgetCategory
+    expect(formatBudgetCategoryLabel(cat)).toBe('Savings Goal')
+  })
+})
 
 describe('computeBudgetMetrics — top-level-only totals', () => {
   it('excludes a PFC detailed sub-allocation when its primary is also budgeted', () => {

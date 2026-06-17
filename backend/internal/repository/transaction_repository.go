@@ -179,6 +179,28 @@ type TransactionRepository interface {
 	// Used by TransferCorrelationService to match transfer suggestions.
 	// Issue #972: Savings transfer automation.
 	GetRecentInflowsByUserID(ctx context.Context, userID string, since time.Time) ([]*domain.Transaction, error)
+
+	// GetInflowTransactionsForAccount returns posted inflow transactions
+	// (amount < 0 under PFCv2) for a specific account within [start, end].
+	// Chain-aware: expands to include transactions from all accounts in the re-link
+	// chain via user_account_id (Issue #1109 pattern).
+	// Returns lightweight projections with ABS(amount) as Magnitude — always positive.
+	// Used by the savings progress service to detect and propose contributions
+	// (Issue #1300 plan section 1D).
+	GetInflowTransactionsForAccount(ctx context.Context, userID, accountID string, start, end time.Time) ([]*domain.SavingsInflowTransaction, error)
+
+	// GetByUserIDKeysetUnified returns a merged feed of banking transactions and investment
+	// transactions using a 3-part keyset (sort_date DESC, source ASC, id ASC).
+	// Issue #138: unified activity feed with cursor-correct UNION ALL.
+	// Requires filters.SortBy = "date" (enforced at service layer).
+	// Returns V:2 cursor; nil cursor = end of list.
+	GetByUserIDKeysetUnified(
+		ctx context.Context,
+		userID string,
+		filters domain.TransactionFilters,
+		cursor *domain.TransactionCursor,
+		limit int,
+	) ([]*domain.ActivityItem, *domain.TransactionCursor, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -2077,6 +2099,51 @@ func effDateStr(tx domain.Transaction) string {
 	return tx.Date.Format(time.DateOnly)
 }
 
+// GetInflowTransactionsForAccount returns posted inflow transactions (amount < 0 under
+// PFCv2) for a specific account within [start, end].  Chain-aware via user_account_id
+// (Issue #1109). Returns lightweight projections; Magnitude = ABS(amount) (always
+// positive — #1303 sign-inversion guard, Issue #1300 plan section 1D).
+func (r *transactionRepository) GetInflowTransactionsForAccount(
+	ctx context.Context,
+	userID, accountID string,
+	start, end time.Time,
+) ([]*domain.SavingsInflowTransaction, error) {
+	query := `
+		SELECT t.id::text, ABS(t.amount) AS magnitude, t.date::text
+		FROM transactions t
+		WHERE t.user_id = $1
+		  AND (
+		      t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $2 AND user_account_id IS NOT NULL)
+		      OR (t.account_id = $2 AND t.user_account_id IS NULL)
+		  )
+		  AND t.amount < 0
+		  AND t.pending = false
+		  AND t.date >= $3::date
+		  AND t.date <= $4::date
+		ORDER BY t.date ASC
+	`
+
+	rows, err := r.db.Query(ctx, query, userID, accountID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query inflow transactions for account: %w", err)
+	}
+	defer rows.Close()
+
+	var inflows []*domain.SavingsInflowTransaction
+	for rows.Next() {
+		inflow := &domain.SavingsInflowTransaction{}
+		if err := rows.Scan(&inflow.ID, &inflow.Magnitude, &inflow.Date); err != nil {
+			return nil, fmt.Errorf("failed to scan inflow transaction: %w", err)
+		}
+		inflows = append(inflows, inflow)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating inflow transactions: %w", err)
+	}
+
+	return inflows, nil
+}
+
 // GetRecentInflowsByUserID returns posted (non-pending) inflow transactions
 // (amount < 0 under PFCv2) for a user with a date on or after since.
 // Only the fields required for correlation matching are populated.
@@ -2120,4 +2187,564 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 	}
 
 	return transactions, nil
+}
+
+// =============================================================================
+// Issue #138: Unified activity feed (banking + investment UNION ALL)
+// =============================================================================
+
+// GetByUserIDKeysetUnified returns a merged, cursor-paginated feed of banking and
+// investment transactions using a UNION ALL with a 3-part keyset
+// (sort_date DESC, source ASC, id ASC).
+//
+// Banking sort_date  = COALESCE(authorized_date, date)::date
+// Investment sort_date = date::date
+//
+// The V:2 cursor carries Src ("banking"|"investment") + Inc=true so the service
+// layer can detect flag-toggle mid-scroll and return 400 (cursor mismatch).
+// Note: external_transaction_id from banking rows is encrypted; we decrypt it
+// inline after scanning.
+func (r *transactionRepository) GetByUserIDKeysetUnified(
+	ctx context.Context,
+	userID string,
+	filters domain.TransactionFilters,
+	cursor *domain.TransactionCursor,
+	limit int,
+) ([]*domain.ActivityItem, *domain.TransactionCursor, error) {
+	args := []any{userID}
+	argIdx := 2
+
+	// ── Shared filters (both branches use the same $N) ────────────────────────
+
+	// Account filter (chain-expanded via user_account_id).
+	// AccountIDs (multi-value) is not supported in the unified path; use AccountID.
+	bankingAcctFilter := ""
+	investAcctFilter := ""
+	if filters.AccountID != nil {
+		bankingAcctFilter = fmt.Sprintf(`
+			AND (
+				(t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL))
+				OR (t.account_id = $%d AND t.user_account_id IS NULL)
+			)`, argIdx, argIdx+1)
+		investAcctFilter = fmt.Sprintf(`
+			AND (
+				(it.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL))
+				OR (it.account_id = $%d AND it.user_account_id IS NULL)
+			)`, argIdx, argIdx+1)
+		args = append(args, *filters.AccountID, *filters.AccountID)
+		argIdx += 2
+	}
+
+	// Date range — applies to both branches (same $N).
+	bankingDateFilter := ""
+	investDateFilter := ""
+	if filters.StartDate != nil {
+		bankingDateFilter += fmt.Sprintf(" AND t.date >= $%d", argIdx)
+		investDateFilter += fmt.Sprintf(" AND it.date >= $%d", argIdx)
+		args = append(args, *filters.StartDate)
+		argIdx++
+	}
+	if filters.EndDate != nil {
+		bankingDateFilter += fmt.Sprintf(" AND t.date <= $%d", argIdx)
+		investDateFilter += fmt.Sprintf(" AND it.date <= $%d", argIdx)
+		args = append(args, *filters.EndDate)
+		argIdx++
+	}
+
+	// Search — same pattern $N for both branches.
+	// Banking: name OR merchant_name; Investment: name OR ticker_symbol OR security_name.
+	bankingSearchFilter := ""
+	investSearchFilter := ""
+	if filters.Search != nil {
+		pattern := "%" + *filters.Search + "%"
+		bankingSearchFilter = fmt.Sprintf(
+			" AND (t.name ILIKE $%d OR t.merchant_name ILIKE $%d)",
+			argIdx, argIdx)
+		investSearchFilter = fmt.Sprintf(
+			" AND (it.name ILIKE $%d OR sec.ticker_symbol ILIKE $%d OR sec.name ILIKE $%d)",
+			argIdx, argIdx, argIdx)
+		args = append(args, pattern)
+		argIdx++
+	}
+
+	// ── Banking-only filters ──────────────────────────────────────────────────
+	// These filters apply to the banking branch only.  When any of them is set we
+	// also append AND FALSE to the investment branch so that investment rows are
+	// excluded rather than silently over-returned.
+
+	bankingExtraFilter := ""
+	investBankingOnlyFilter := "" // zeroes out investment rows when a banking-only filter is active
+	hasBankingOnlyFilter := false
+
+	if filters.Pending != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.pending = $%d", argIdx)
+		args = append(args, *filters.Pending)
+		argIdx++
+		hasBankingOnlyFilter = true
+	}
+	if filters.Reviewed != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.reviewed = $%d", argIdx)
+		args = append(args, *filters.Reviewed)
+		argIdx++
+		hasBankingOnlyFilter = true
+	}
+	if filters.AmountType != nil {
+		switch *filters.AmountType {
+		case "income":
+			bankingExtraFilter += " AND t.amount < 0"
+		case "expense":
+			bankingExtraFilter += " AND t.amount > 0"
+		}
+		hasBankingOnlyFilter = true
+	}
+	if filters.MinAmount != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND ABS(t.amount) >= $%d", argIdx)
+		args = append(args, *filters.MinAmount)
+		argIdx++
+		hasBankingOnlyFilter = true
+	}
+	if filters.MaxAmount != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND ABS(t.amount) <= $%d", argIdx)
+		args = append(args, *filters.MaxAmount)
+		argIdx++
+		hasBankingOnlyFilter = true
+	}
+	if hasBankingOnlyFilter {
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// PFC / custom-category filters (banking only).
+	if len(filters.PFCPrimaries) > 0 || len(filters.PFCDetaileds) > 0 {
+		var orParts []string
+		var primPHs, detPHs []string
+		for _, p := range filters.PFCPrimaries {
+			primPHs = append(primPHs, fmt.Sprintf("$%d", argIdx))
+			args = append(args, p)
+			argIdx++
+		}
+		for _, d := range filters.PFCDetaileds {
+			detPHs = append(detPHs, fmt.Sprintf("$%d", argIdx))
+			args = append(args, d)
+			argIdx++
+		}
+		if len(primPHs) > 0 {
+			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(primPHs, ", ")+")")
+		}
+		if len(detPHs) > 0 {
+			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(detPHs, ", ")+")")
+		}
+		if len(orParts) > 0 {
+			bankingExtraFilter += " AND (" + strings.Join(orParts, " OR ") + ")"
+			investBankingOnlyFilter = " AND FALSE"
+		}
+	}
+
+	// AccountIDs (multi-value) — chain-expanded via user_account_id on both branches.
+	if len(filters.AccountIDs) > 0 {
+		bPHs := make([]string, len(filters.AccountIDs))
+		iPHs := make([]string, len(filters.AccountIDs))
+		bFbPHs := make([]string, len(filters.AccountIDs))
+		iFbPHs := make([]string, len(filters.AccountIDs))
+		for i, id := range filters.AccountIDs {
+			bPHs[i] = fmt.Sprintf("$%d", argIdx)
+			bFbPHs[i] = fmt.Sprintf("$%d", argIdx+1)
+			iPHs[i] = fmt.Sprintf("$%d", argIdx+2)
+			iFbPHs[i] = fmt.Sprintf("$%d", argIdx+3)
+			args = append(args, id, id, id, id)
+			argIdx += 4
+		}
+		bankingExtraFilter += fmt.Sprintf(
+			" AND (t.user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (t.account_id IN (%s) AND t.user_account_id IS NULL))",
+			strings.Join(bPHs, ", "), strings.Join(bFbPHs, ", "),
+		)
+		investAcctFilter += fmt.Sprintf(
+			" AND (it.user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (it.account_id IN (%s) AND it.user_account_id IS NULL))",
+			strings.Join(iPHs, ", "), strings.Join(iFbPHs, ", "),
+		)
+	}
+
+	// UserAccountID — stable logical account identity across re-links (both branches).
+	if filters.UserAccountID != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.user_account_id = $%d", argIdx)
+		investAcctFilter += fmt.Sprintf(" AND it.user_account_id = $%d", argIdx)
+		args = append(args, *filters.UserAccountID)
+		argIdx++
+	}
+
+	// MerchantID — banking rows only; investment rows have no merchant → zero them out.
+	if filters.MerchantID != nil {
+		bankingExtraFilter += fmt.Sprintf(" AND t.merchant_id = $%d", argIdx)
+		args = append(args, *filters.MerchantID)
+		argIdx++
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// CategorySources — banking rows only; investment rows have no category_source → zero them out.
+	if len(filters.CategorySources) > 0 {
+		phs := make([]string, len(filters.CategorySources))
+		for i, s := range filters.CategorySources {
+			phs[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, s)
+			argIdx++
+		}
+		bankingExtraFilter += " AND t.category_source IN (" + strings.Join(phs, ", ") + ")"
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// CustomCategoryIDs — rolls up children (parent_id), banking rows only → zero out investment.
+	if len(filters.CustomCategoryIDs) > 0 {
+		phs := make([]string, len(filters.CustomCategoryIDs))
+		for i, id := range filters.CustomCategoryIDs {
+			phs[i] = fmt.Sprintf("$%d", argIdx)
+			args = append(args, id)
+			argIdx++
+		}
+		idList := strings.Join(phs, ", ")
+		bankingExtraFilter += fmt.Sprintf(
+			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
+				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+			idList, idList,
+		)
+		investBankingOnlyFilter = " AND FALSE"
+	}
+
+	// ── Investment-only filters ───────────────────────────────────────────────
+
+	// bankingActivityFilter zeroes the banking branch when an activity_types filter is active:
+	// banking rows carry no activity_type and must not bleed into an investment-activity-scoped result.
+	// When TradeTypeToSQLPredicate returns an empty clause (all types unrecognized), both branches
+	// return zero rows — consistent empty result rather than asymmetric (all invest, no banking).
+	var bankingActivityFilter, investActivityFilter string
+	if len(filters.ActivityTypes) > 0 {
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
+		if clause != "" {
+			renumbered := renumberPlaceholders(clause, argIdx)
+			investActivityFilter = " AND (" + renumbered + ")"
+			args = append(args, typeArgs...)
+			argIdx += len(typeArgs)
+		} else {
+			// Unrecognized activity types → zero both branches (consistent empty result).
+			investActivityFilter = " AND FALSE"
+		}
+		bankingActivityFilter = " AND FALSE"
+	}
+
+	// ── Keyset predicate: 3-part (sort_date DESC, source ASC, id ASC) ─────────
+	// Banking source = 'banking', Investment source = 'investment'.
+	// 'banking' < 'investment' lexicographically, so for same sort_date:
+	//   banking rows come first (source ASC), then investment rows.
+	//
+	// Predicate for next page after cursor (D, S, I):
+	//   sort_date < D
+	//   OR (sort_date = D AND source > S)
+	//   OR (sort_date = D AND source = S AND id > I)
+	//
+	// Simplified per branch (source is a constant):
+	//
+	// Banking (source = 'banking'):
+	//   cursor.Src = "banking":  sort_date < D OR (sort_date = D AND id > I)
+	//   cursor.Src = "investment": sort_date < D
+	//
+	// Investment (source = 'investment'):
+	//   cursor.Src = "banking":  sort_date <= D   (because 'investment' > 'banking')
+	//   cursor.Src = "investment": sort_date < D OR (sort_date = D AND id > I)
+
+	bankingCursorFilter := ""
+	investCursorFilter := ""
+	if cursor != nil {
+		// cursor.SVT is the sort_date of the last-seen item.
+		// SVT is always populated for K="date" cursors by DecodeTransactionCursor;
+		// guard here defensively to avoid a nil-pointer on tampered/malformed cursors.
+		if cursor.SVT == nil {
+			return nil, nil, fmt.Errorf("cursor: missing sort date — restart pagination")
+		}
+		// We add: cursorDate, cursorDate, cursorID to args (3 slots).
+		// Both branches can reference argIdx..(argIdx+2) as needed.
+		args = append(args, *cursor.SVT, *cursor.SVT, cursor.ID.String())
+		dPH := argIdx
+		idPH := argIdx + 2
+
+		switch cursor.Src {
+		case domain.FeedSourceInvestment:
+			// Banking: sort_date < D
+			bankingCursorFilter = fmt.Sprintf(
+				" AND COALESCE(t.authorized_date, t.date)::date < $%d::date", dPH)
+			// Investment: sort_date < D OR (sort_date = D AND id > I)
+			investCursorFilter = fmt.Sprintf(
+				" AND (it.date::date < $%d::date OR (it.date::date = $%d::date AND it.id::text > $%d))",
+				dPH, dPH+1, idPH)
+		default: // "banking" or "" (first-page with Src unset falls through to no predicate)
+			if cursor.Src != "" {
+				// Banking: sort_date < D OR (sort_date = D AND id > I)
+				bankingCursorFilter = fmt.Sprintf(
+					" AND (COALESCE(t.authorized_date, t.date)::date < $%d::date"+
+						" OR (COALESCE(t.authorized_date, t.date)::date = $%d::date AND t.id::text > $%d))",
+					dPH, dPH+1, idPH)
+				// Investment: sort_date <= D (all investment rows on same date come after banking)
+				investCursorFilter = fmt.Sprintf(
+					" AND it.date::date <= $%d::date", dPH)
+			}
+		}
+		argIdx += 3
+	}
+
+	// LIMIT placeholder.
+	args = append(args, limit+1)
+	limitPH := argIdx
+
+	// ── Build UNION ALL query ─────────────────────────────────────────────────
+
+	query := fmt.Sprintf(`
+		SELECT
+			t.id::text,
+			t.user_id::text,
+			t.account_id::text,
+			COALESCE(t.authorized_date, t.date)::date   AS sort_date,
+			'banking'::text                              AS source_disc,
+			t.date,
+			t.amount,
+			t.name,
+			t.user_account_id::text,
+			t.linked_item_id::text,
+			t.authorized_date,
+			t.merchant_name,
+			t.merchant_id::text,
+			t.source                                     AS data_source,
+			t.external_transaction_id,
+			t.pfc_primary,
+			t.pfc_detailed,
+			t.pfc_confidence_level,
+			t.pfc_category_icon_url,
+			t.pfc_primary_override,
+			t.pfc_detailed_override,
+			t.custom_category_override_id::text,
+			t.payment_channel,
+			t.pending,
+			t.user_notes,
+			t.category_override_kind,
+			t.effective_pfc_primary,
+			t.effective_pfc_detailed,
+			t.effective_category_name,
+			t.reviewed,
+			t.reviewed_at,
+			t.tags,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::float8,
+			NULL::float8,
+			NULL::float8
+		FROM transactions t
+		JOIN accounts a ON a.id = t.account_id AND a.status = 'active'
+		WHERE t.user_id = $1
+		%s%s%s%s%s%s
+
+		UNION ALL
+
+		SELECT
+			it.id::text,
+			it.user_id::text,
+			it.account_id::text,
+			it.date::date                                AS sort_date,
+			'investment'::text                           AS source_disc,
+			it.date,
+			it.amount,
+			it.name,
+			it.user_account_id::text,
+			NULL::text,
+			NULL::date,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,   -- pfc_primary_override
+			NULL::text,   -- pfc_detailed_override
+			NULL::text,   -- custom_category_override_id
+			NULL::text,
+			NULL::bool,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::text,
+			NULL::bool,
+			NULL::timestamptz,
+			NULL::jsonb,
+			it.security_id::text,
+			sec.ticker_symbol,
+			sec.name,
+			it.type,
+			it.subtype,
+			it.quantity,
+			it.price,
+			it.fees
+		FROM investment_transactions it
+		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
+		LEFT JOIN securities sec ON sec.id = it.security_id
+		WHERE it.user_id = $1
+		%s%s%s%s%s%s
+
+		ORDER BY sort_date DESC, source_disc ASC, id ASC
+		LIMIT $%d
+	`,
+		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
+		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
+		limitPH,
+	)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: %w", err)
+	}
+	defer rows.Close()
+
+	var items []*domain.ActivityItem
+	for rows.Next() {
+		var (
+			id, userIDCol, accountID, sourceDisc, name string
+			sortDate, date                             time.Time
+			amount                                     float64
+			userAccountID, linkedItemID                *string
+			authorizedDate                             *time.Time
+			merchantName, merchantID, dataSource       *string
+			externalTxnID                              *string
+			pfcPrimary, pfcDetailed                    *string
+			pfcConfidenceLevel, pfcCategoryIconURL     *string
+			pfcPrimaryOverride, pfcDetailedOverride    *string
+			customCategoryOverrideID                   *string
+			paymentChannel                             *string
+			pending                                    *bool
+			userNotes, categoryOverrideKind            *string
+			effectivePFCPrimary, effectivePFCDetailed  *string
+			effectiveCategoryName                      *string
+			reviewed                                   *bool
+			reviewedAt                                 *time.Time
+			tagsJSON                                   []byte
+			securityID, tickerSymbol, securityName     *string
+			invType, invSubtype                        *string
+			invQuantity, invPrice, invFees             *float64
+		)
+
+		if err := rows.Scan(
+			&id, &userIDCol, &accountID,
+			&sortDate, &sourceDisc,
+			&date, &amount, &name,
+			&userAccountID, &linkedItemID, &authorizedDate,
+			&merchantName, &merchantID, &dataSource,
+			&externalTxnID,
+			&pfcPrimary, &pfcDetailed, &pfcConfidenceLevel, &pfcCategoryIconURL,
+			&pfcPrimaryOverride, &pfcDetailedOverride, &customCategoryOverrideID,
+			&paymentChannel, &pending, &userNotes,
+			&categoryOverrideKind,
+			&effectivePFCPrimary, &effectivePFCDetailed, &effectiveCategoryName,
+			&reviewed, &reviewedAt,
+			&tagsJSON,
+			&securityID, &tickerSymbol, &securityName,
+			&invType, &invSubtype,
+			&invQuantity, &invPrice, &invFees,
+		); err != nil {
+			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
+		}
+
+		item := &domain.ActivityItem{
+			Source:                sourceDisc,
+			SortDate:              sortDate,
+			ID:                    id,
+			UserID:                userIDCol,
+			AccountID:             accountID,
+			Date:                  date,
+			Amount:                amount,
+			Name:                  name,
+			UserAccountID:         userAccountID,
+			LinkedItemID:          linkedItemID,
+			AuthorizedDate:        authorizedDate,
+			MerchantName:          merchantName,
+			MerchantID:            merchantID,
+			DataSource:            dataSource,
+			PFCPrimary:               pfcPrimary,
+			PFCDetailed:              pfcDetailed,
+			PFCConfidenceLevel:       pfcConfidenceLevel,
+			PFCCategoryIconURL:       pfcCategoryIconURL,
+			PFCPrimaryOverride:       pfcPrimaryOverride,
+			PFCDetailedOverride:      pfcDetailedOverride,
+			CustomCategoryOverrideID: customCategoryOverrideID,
+			PaymentChannel:           paymentChannel,
+			Pending:               pending,
+			UserNotes:             userNotes,
+			CategoryOverrideKind:  categoryOverrideKind,
+			EffectivePFCPrimary:   effectivePFCPrimary,
+			EffectivePFCDetailed:  effectivePFCDetailed,
+			EffectiveCategoryName: effectiveCategoryName,
+			Reviewed:              reviewed,
+			ReviewedAt:            reviewedAt,
+			SecurityID:            securityID,
+			TickerSymbol:          tickerSymbol,
+			SecurityName:          securityName,
+			InvestmentSubtype:     invSubtype,
+			InvestmentQuantity:    invQuantity,
+			InvestmentPrice:       invPrice,
+			InvestmentFees:        invFees,
+		}
+
+		// Normalize ActivityType from raw Plaid type/subtype for investment rows.
+		if invType != nil {
+			at := domain.NormalizeTradeType(*invType, invSubtype)
+			item.ActivityType = &at
+		}
+
+		// Decrypt external_transaction_id (encrypted in DB for banking rows).
+		if externalTxnID != nil {
+			decrypted, decErr := r.enc.DecryptNullableString(externalTxnID)
+			if decErr != nil {
+				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified decrypt: %w", decErr)
+			}
+			item.ExternalTransactionID = decrypted
+		}
+
+		// Unmarshal tags JSONB (banking rows only; investment rows get NULL::jsonb → nil slice).
+		if len(tagsJSON) > 0 {
+			var tags []string
+			if err := json.Unmarshal(tagsJSON, &tags); err != nil {
+				return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified unmarshal tags: %w", err)
+			}
+			item.Tags = tags
+		}
+
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified rows: %w", rows.Err())
+	}
+
+	// Build next-page cursor from the limit+1 probe row.
+	if len(items) == limit+1 {
+		last := items[limit-1]
+		lastID, err := uuid.Parse(last.ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("GetByUserIDKeysetUnified: invalid id %q: %w", last.ID, err)
+		}
+		svt := last.SortDate
+		sv := last.SortDate.Format(time.DateOnly)
+		nextCursor := &domain.TransactionCursor{
+			V:   2,
+			K:   "date",
+			D:   "desc",
+			SV:  &sv,
+			SVT: &svt,
+			ID:  lastID,
+			Src: last.Source,
+			Inc: true,
+		}
+		return items[:limit], nextCursor, nil
+	}
+
+	return items, nil, nil
 }

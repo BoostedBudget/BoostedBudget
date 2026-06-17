@@ -452,7 +452,10 @@ type mockTx struct {
 	rolledBack bool
 }
 
-func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error)       { return m, nil }
+// Begin returns a fresh child mockTx (savepoint semantics).
+// Returning a new struct keeps the outer tx's committed/rolledBack flags independent
+// of inner tx commits (e.g. CreateWithCategories' internal Begin→Commit).
+func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error) { return &mockTx{}, nil }
 func (m *mockTx) Commit(_ context.Context) error                { m.committed = true; return nil }
 func (m *mockTx) Rollback(_ context.Context) error              { m.rolledBack = true; return nil }
 func (m *mockTx) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {

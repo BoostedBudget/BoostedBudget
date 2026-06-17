@@ -46,6 +46,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AllocationBreakdown,
   AverageMonthlySpendResponse,
   BudgetVsActualResponse,
   CashFlowHistoryResponse,
@@ -54,6 +55,7 @@ import type {
   CategoryTotalResponse,
   ErrorModel,
   FinancialSummaryResponse,
+  GainLossSummary,
   GetAverageMonthlySpendParams,
   GetBudgetVsActualParams,
   GetCashFlowHistoryParams,
@@ -62,16 +64,20 @@ import type {
   GetCategoryTotalForPeriodParams,
   GetFinancialSummaryParams,
   GetIncomeSourceBreakdownParams,
+  GetInvestmentIncomeSummaryParams,
   GetLargestTransactionsForPeriodParams,
   GetMonthOverMonthSpendingChangeParams,
   GetNetWorthTrendParams,
+  GetPortfolioAllocationBreakdownParams,
   GetSavingsRateForPeriodParams,
   GetSpendingByCategoryParams,
   GetSpendingByMerchantParams,
   GetSpendingTrendsParams,
   GetTopExpenseParams,
+  GetTopMoversParams,
   GetUnusualSpendParams,
   IncomeSourceBreakdownResponse,
+  IncomeSummary,
   LargestTransactionsResponse,
   MonthOverMonthResponse,
   NetWorthTrendResponse,
@@ -81,6 +87,7 @@ import type {
   SpendingByMerchantResponse,
   SpendingTrendsResponse,
   TopExpenseResponse,
+  TopMovers,
   UnusualSpendResponse
 } from '../../models';
 
@@ -1772,6 +1779,393 @@ export function useGetUnusualSpend<TData = Awaited<ReturnType<typeof getUnusualS
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetUnusualSpendQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns portfolio value grouped by bucket type. By default (no params) returns investment holdings only, grouped by security type — backward-compatible with the #138 behavior.
+ *
+ * Optional query parameters:
+ * - include (csv): additional asset classes to union into the result.
+ *   Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
+ *   Example: include=cash,liabilities
+ * - group_by: bucketing dimension.
+ *   Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+ * - basis: whether liabilities reduce the grand total.
+ *   Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
+ *
+ * Each bucket includes: security_type, asset_class (when group_by=asset_class), total_value, percentage, holding_count.
+ * Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get portfolio allocation breakdown
+ */
+export const getPortfolioAllocationBreakdown = (
+    params?: GetPortfolioAllocationBreakdownParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<AllocationBreakdown>(
+      {url: `/api/v1/investments/portfolio/allocation`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetPortfolioAllocationBreakdownQueryKey = (params?: GetPortfolioAllocationBreakdownParams,) => {
+    return [
+    `/api/v1/investments/portfolio/allocation`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetPortfolioAllocationBreakdownQueryOptions = <TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetPortfolioAllocationBreakdownQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>> = ({ signal }) => getPortfolioAllocationBreakdown(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetPortfolioAllocationBreakdownQueryResult = NonNullable<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>>
+export type GetPortfolioAllocationBreakdownQueryError = ErrorType<ErrorModel>
+
+
+export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetPortfolioAllocationBreakdownParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>,
+          TError,
+          Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>,
+          TError,
+          Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get portfolio allocation breakdown
+ */
+
+export function useGetPortfolioAllocationBreakdown<TData = Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError = ErrorType<ErrorModel>>(
+ params?: GetPortfolioAllocationBreakdownParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioAllocationBreakdown>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetPortfolioAllocationBreakdownQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns unrealized gain/loss totals and a per-account breakdown. realized_gain_loss_supported is always false — Plaid does not provide per-lot cost basis and the 2-year transaction lookback truncates buy history. Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get investment gain/loss summary
+ */
+export const getInvestmentGainLossSummary = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<GainLossSummary>(
+      {url: `/api/v1/investments/portfolio/gain-loss`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetInvestmentGainLossSummaryQueryKey = () => {
+    return [
+    `/api/v1/investments/portfolio/gain-loss`
+    ] as const;
+    }
+
+
+export const getGetInvestmentGainLossSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetInvestmentGainLossSummaryQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>> = ({ signal }) => getInvestmentGainLossSummary(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetInvestmentGainLossSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>>
+export type GetInvestmentGainLossSummaryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetInvestmentGainLossSummary<TData = Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInvestmentGainLossSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getInvestmentGainLossSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetInvestmentGainLossSummary<TData = Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInvestmentGainLossSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getInvestmentGainLossSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetInvestmentGainLossSummary<TData = Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get investment gain/loss summary
+ */
+
+export function useGetInvestmentGainLossSummary<TData = Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentGainLossSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetInvestmentGainLossSummaryQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns investment income (dividends, interest, and reinvested dividends/interest — all economically income) within a date range, grouped by normalized income type. Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get investment income summary
+ */
+export const getInvestmentIncomeSummary = (
+    params: GetInvestmentIncomeSummaryParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<IncomeSummary>(
+      {url: `/api/v1/investments/portfolio/income`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetInvestmentIncomeSummaryQueryKey = (params?: GetInvestmentIncomeSummaryParams,) => {
+    return [
+    `/api/v1/investments/portfolio/income`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetInvestmentIncomeSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError = ErrorType<ErrorModel>>(params: GetInvestmentIncomeSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetInvestmentIncomeSummaryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>> = ({ signal }) => getInvestmentIncomeSummary(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetInvestmentIncomeSummaryQueryResult = NonNullable<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>>
+export type GetInvestmentIncomeSummaryQueryError = ErrorType<ErrorModel>
+
+
+export function useGetInvestmentIncomeSummary<TData = Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError = ErrorType<ErrorModel>>(
+ params: GetInvestmentIncomeSummaryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInvestmentIncomeSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getInvestmentIncomeSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetInvestmentIncomeSummary<TData = Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError = ErrorType<ErrorModel>>(
+ params: GetInvestmentIncomeSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getInvestmentIncomeSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getInvestmentIncomeSummary>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetInvestmentIncomeSummary<TData = Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError = ErrorType<ErrorModel>>(
+ params: GetInvestmentIncomeSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get investment income summary
+ */
+
+export function useGetInvestmentIncomeSummary<TData = Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError = ErrorType<ErrorModel>>(
+ params: GetInvestmentIncomeSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getInvestmentIncomeSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetInvestmentIncomeSummaryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
+ * Returns the top N gainers and losers by day_change (today's institution_price vs prior close_price). Holdings with NULL close_price are excluded. Default limit is 5; max is 20. Single DB round-trip; designed as an AI-tool-callable function.
+ * @summary Get top portfolio movers
+ */
+export const getTopMovers = (
+    params?: GetTopMoversParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<TopMovers>(
+      {url: `/api/v1/investments/portfolio/top-movers`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetTopMoversQueryKey = (params?: GetTopMoversParams,) => {
+    return [
+    `/api/v1/investments/portfolio/top-movers`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetTopMoversQueryOptions = <TData = Awaited<ReturnType<typeof getTopMovers>>, TError = ErrorType<ErrorModel>>(params?: GetTopMoversParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetTopMoversQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTopMovers>>> = ({ signal }) => getTopMovers(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetTopMoversQueryResult = NonNullable<Awaited<ReturnType<typeof getTopMovers>>>
+export type GetTopMoversQueryError = ErrorType<ErrorModel>
+
+
+export function useGetTopMovers<TData = Awaited<ReturnType<typeof getTopMovers>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  GetTopMoversParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTopMovers>>,
+          TError,
+          Awaited<ReturnType<typeof getTopMovers>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTopMovers<TData = Awaited<ReturnType<typeof getTopMovers>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTopMoversParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getTopMovers>>,
+          TError,
+          Awaited<ReturnType<typeof getTopMovers>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetTopMovers<TData = Awaited<ReturnType<typeof getTopMovers>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTopMoversParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get top portfolio movers
+ */
+
+export function useGetTopMovers<TData = Awaited<ReturnType<typeof getTopMovers>>, TError = ErrorType<ErrorModel>>(
+ params?: GetTopMoversParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTopMovers>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetTopMoversQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

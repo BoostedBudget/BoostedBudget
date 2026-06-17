@@ -60,12 +60,30 @@ type TransferCorrelationService interface {
 	CorrelateForUser(ctx context.Context, userID string) error
 }
 
+// CorrelationGoalResolver finds active savings goals so boost-match can resolve
+// which goal a completed suggestion targets (M19 D6 source-c / Issue #1300 RG1).
+// Defined here to avoid import cycles; satisfies the same contract as SyncContributionsBasisGoalReader.
+type CorrelationGoalResolver interface {
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.SavingsGoal, error)
+}
+
+// CorrelationConfirmedContributionUpserter creates or promotes a confirmed contribution
+// when a boost-match completes (M19 D6 source-c / Issue #1300 RG1).
+// An existing proposed row for the same (txn, goal) is promoted to confirmed via
+// the ON CONFLICT clause (not duplicated).
+type CorrelationConfirmedContributionUpserter interface {
+	UpsertFromTransaction(ctx context.Context, userID, goalID, transactionID string, amount float64, source string) error
+}
+
 // transferCorrelationService implements TransferCorrelationService.
 type transferCorrelationService struct {
-	suggestionRepo ActiveSuggestionRepository
-	txnRepo        RecentTransactionRepository
-	notifRepo      CorrelationNotificationRepository
-	analytics      phclient.Analytics
+	suggestionRepo   ActiveSuggestionRepository
+	txnRepo          RecentTransactionRepository
+	notifRepo        CorrelationNotificationRepository
+	analytics        phclient.Analytics
+	// Issue #1300 M19: optional boost-match contribution wiring (all nil = skip)
+	correlationGoalResolver   CorrelationGoalResolver
+	correlationContribUpserter CorrelationConfirmedContributionUpserter
 }
 
 // NewTransferCorrelationService creates a new TransferCorrelationService.
@@ -85,6 +103,17 @@ func NewTransferCorrelationService(
 // SetAnalytics sets the analytics client for event capture.
 func (s *transferCorrelationService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetBoostMatchContributionServices wires in the D6 source-c boost-match contribution services.
+// Both parameters are optional; if either is nil, boost-match contribution creation is skipped.
+// Issue #1300 M19 / RG1.
+func (s *transferCorrelationService) SetBoostMatchContributionServices(
+	goalResolver CorrelationGoalResolver,
+	contribUpserter CorrelationConfirmedContributionUpserter,
+) {
+	s.correlationGoalResolver = goalResolver
+	s.correlationContribUpserter = contribUpserter
 }
 
 // CorrelateForUser loads active suggestions and recent inflow transactions for the
@@ -170,6 +199,10 @@ func (s *transferCorrelationService) CorrelateForUser(ctx context.Context, userI
 				if err := s.notifRepo.Create(ctx, notif); err != nil {
 					return fmt.Errorf("failed to create match notification: %w", err)
 				}
+
+				// Issue #1300 M19 / D6 source-c: create/promote a confirmed contribution for
+				// the savings goal linked to this suggestion's destination account (non-fatal).
+				s.createBoostMatchContribution(ctx, userID, suggestion, txn.ID, actualAmount)
 
 				// Fire analytics event
 				if s.analytics != nil {
@@ -316,4 +349,55 @@ func (s *transferCorrelationService) referenceDate(suggestion *domain.TransferSu
 		return *suggestion.UserActionAt
 	}
 	return suggestion.CreatedAt
+}
+
+// createBoostMatchContribution creates or promotes a confirmed "boost_match" contribution for the
+// savings goal linked to the suggestion's destination account (D6 source-c / Issue #1300 M19 RG1).
+// Non-fatal: errors are logged and ignored — a missing contribution row is recoverable at next sync.
+// The UpsertFromTransaction ON CONFLICT promotes a pre-existing proposed row to confirmed so that
+// the M18-created proposed row is not left dangling after the boost match completes.
+func (s *transferCorrelationService) createBoostMatchContribution(
+	ctx context.Context,
+	userID string,
+	suggestion *domain.TransferSuggestion,
+	txnID string,
+	amount float64,
+) {
+	if s.correlationGoalResolver == nil || s.correlationContribUpserter == nil {
+		return
+	}
+
+	// Resolve the savings goal whose AccountID matches the suggestion's destination account.
+	// suggestion.ToAccountID is an internal account UUID (not a Plaid account ID).
+	goals, err := s.correlationGoalResolver.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		slog.Warn("createBoostMatchContribution: failed to load goals (skipping)",
+			"user_id", userID, "suggestion_id", suggestion.ID, "error", err)
+		return
+	}
+
+	if suggestion.ToAccountID == nil {
+		return
+	}
+	toAccountID := *suggestion.ToAccountID
+
+	for _, goal := range goals {
+		if goal.ProgressBasis != domain.ProgressBasisContributions {
+			continue
+		}
+		if goal.AccountID != toAccountID {
+			continue
+		}
+
+		// Found the matching contributions-basis goal. Upsert a confirmed contribution.
+		// UpsertFromTransaction uses ON CONFLICT to promote any pre-existing proposed row.
+		if err := s.correlationContribUpserter.UpsertFromTransaction(
+			ctx, userID, goal.ID, txnID, amount, "boost_match",
+		); err != nil {
+			slog.Warn("createBoostMatchContribution: upsert confirmed contribution failed (skipping)",
+				"goal_id", goal.ID, "txn_id", txnID, "amount", amount, "error", err)
+		}
+		// Only one goal per account — stop after the first match.
+		return
+	}
 }

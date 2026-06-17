@@ -15,9 +15,12 @@ export interface SavingsGoalsGridProps {
   onDelete: (goalId: string) => void
   /** Shown when goals array is empty due to filtering (not the zero-goals state) */
   emptyMessage?: string
+  /** Called when any contribution action (confirm/reject/delete/log) changes data.
+   *  Forwarded to each SavingsGoalCard so the parent goal list refreshes (R3-5). */
+  onContributionChanged?: () => void
 }
 
-export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage }: SavingsGoalsGridProps) {
+export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage, onContributionChanged }: SavingsGoalsGridProps) {
   if (goals.length === 0 && emptyMessage) {
     return <EmptyState size="compact" icon={<SearchX />} title={emptyMessage} />
   }
@@ -30,6 +33,7 @@ export function SavingsGoalsGrid({ goals, onEdit, onDelete, emptyMessage }: Savi
           goal={goal}
           onEdit={onEdit}
           onDelete={onDelete}
+          onContributionChanged={onContributionChanged}
         />
       ))}
     </div>

@@ -15,33 +15,45 @@ func notEmpty(s *string) bool {
 	return s != nil && *s != ""
 }
 
+// populatePFCDisplayInternal fills in PFC display fields from the pfc registry.
+// Used by both Transaction and ActivityItem (which share identical PFC field layouts).
+func populatePFCDisplayInternal(primary, detailed, primaryOverride, detailedOverride *string) (*string, *string, *string, *string) {
+	var primaryDisplay, detailedDisplay, primaryOverrideDisplay, detailedOverrideDisplay *string
+
+	if notEmpty(primary) {
+		d := pfc.PrimaryDisplayName(*primary)
+		primaryDisplay = &d
+	}
+	if notEmpty(primary) && notEmpty(detailed) {
+		d := pfc.DetailedDisplayName(*primary, *detailed)
+		detailedDisplay = &d
+	}
+	if notEmpty(primaryOverride) {
+		d := pfc.PrimaryDisplayName(*primaryOverride)
+		primaryOverrideDisplay = &d
+	}
+	if notEmpty(primaryOverride) && notEmpty(detailedOverride) {
+		d := pfc.DetailedDisplayName(*primaryOverride, *detailedOverride)
+		detailedOverrideDisplay = &d
+	}
+
+	return primaryDisplay, detailedDisplay, primaryOverrideDisplay, detailedOverrideDisplay
+}
+
 // PopulatePFCDisplay fills in PFCPrimaryDisplay, PFCDetailedDisplay,
 // PFCPrimaryOverrideDisplay, and PFCDetailedOverrideDisplay from the pfc registry.
 func (t *Transaction) PopulatePFCDisplay() {
-	if notEmpty(t.PFCPrimary) {
-		d := pfc.PrimaryDisplayName(*t.PFCPrimary)
-		t.PFCPrimaryDisplay = &d
-	} else {
-		t.PFCPrimaryDisplay = nil
-	}
-	if notEmpty(t.PFCPrimary) && notEmpty(t.PFCDetailed) {
-		d := pfc.DetailedDisplayName(*t.PFCPrimary, *t.PFCDetailed)
-		t.PFCDetailedDisplay = &d
-	} else {
-		t.PFCDetailedDisplay = nil
-	}
-	if notEmpty(t.PFCPrimaryOverride) {
-		d := pfc.PrimaryDisplayName(*t.PFCPrimaryOverride)
-		t.PFCPrimaryOverrideDisplay = &d
-	} else {
-		t.PFCPrimaryOverrideDisplay = nil
-	}
-	if notEmpty(t.PFCPrimaryOverride) && notEmpty(t.PFCDetailedOverride) {
-		d := pfc.DetailedDisplayName(*t.PFCPrimaryOverride, *t.PFCDetailedOverride)
-		t.PFCDetailedOverrideDisplay = &d
-	} else {
-		t.PFCDetailedOverrideDisplay = nil
-	}
+	t.PFCPrimaryDisplay, t.PFCDetailedDisplay, t.PFCPrimaryOverrideDisplay, t.PFCDetailedOverrideDisplay =
+		populatePFCDisplayInternal(t.PFCPrimary, t.PFCDetailed, t.PFCPrimaryOverride, t.PFCDetailedOverride)
+}
+
+// PopulatePFCDisplay fills in PFCPrimaryDisplay, PFCDetailedDisplay,
+// PFCPrimaryOverrideDisplay, and PFCDetailedOverrideDisplay from the pfc registry.
+// Must only be called for banking ActivityItems (source=="banking") — investment rows
+// have no PFC fields so calling it would be a no-op at best.
+func (item *ActivityItem) PopulatePFCDisplay() {
+	item.PFCPrimaryDisplay, item.PFCDetailedDisplay, item.PFCPrimaryOverrideDisplay, item.PFCDetailedOverrideDisplay =
+		populatePFCDisplayInternal(item.PFCPrimary, item.PFCDetailed, item.PFCPrimaryOverride, item.PFCDetailedOverride)
 }
 
 // PopulatePFCDisplay fills in PFCPrimaryDisplay and PFCDetailedDisplay
