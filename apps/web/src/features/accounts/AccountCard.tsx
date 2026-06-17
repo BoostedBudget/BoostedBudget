@@ -57,31 +57,6 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
       )}
       style={custom_color ? { borderLeftColor: custom_color, borderLeftWidth: '4px', borderLeftStyle: 'solid' } : undefined}
     >
-      {/* Drag handle and status badges sit above the AccountSummaryHeader institution row */}
-      {(dragHandleProps || isDisconnected || is_hidden) && (
-        <div className="flex items-center gap-3 mb-2">
-          {dragHandleProps && (
-            <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
-              <GripVertical className="h-5 w-5 text-muted-foreground" />
-            </div>
-          )}
-          <div className="flex items-center gap-3 ml-auto">
-            {isDisconnected && (
-              <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
-                <Unplug className="h-3 w-3" />
-                <span>Disconnected</span>
-              </Badge>
-            )}
-            {is_hidden && (
-              <Badge variant="secondary" title="Hidden account">
-                <EyeOff className="h-3 w-3" />
-                <span>Hidden</span>
-              </Badge>
-            )}
-          </div>
-        </div>
-      )}
-
       <AccountSummaryHeader
         institutionName={institution_name ?? ''}
         mask={mask}
@@ -93,6 +68,31 @@ export function AccountCard({ account, onDelete, onEdit, isDragging, dragHandleP
         customEmoji={custom_emoji}
         customIcon={custom_icon}
         customColor={custom_color}
+        institutionRowLeadingSlot={
+          dragHandleProps ? (
+            <div className="cursor-grab p-1 rounded hover:bg-black/5 transition-colors" {...dragHandleProps}>
+              <GripVertical className="h-5 w-5 text-muted-foreground" />
+            </div>
+          ) : undefined
+        }
+        institutionRowTrailingSlot={
+          (isDisconnected || is_hidden) ? (
+            <>
+              {isDisconnected && (
+                <Badge variant="warning" title="Account disconnected - resubscribe to reconnect">
+                  <Unplug className="h-3 w-3" />
+                  <span>Disconnected</span>
+                </Badge>
+              )}
+              {is_hidden && (
+                <Badge variant="secondary" title="Hidden account">
+                  <EyeOff className="h-3 w-3" />
+                  <span>Hidden</span>
+                </Badge>
+              )}
+            </>
+          ) : undefined
+        }
       />
 
       <div className="flex gap-3 mt-4 pt-4 border-t border-border">
