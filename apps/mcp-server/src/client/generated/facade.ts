@@ -100,8 +100,8 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/analytics/unusual-spend', method: 'GET', params, signal })
       },
       /** GET /api/v1/investments/portfolio/allocation */
-      getPortfolioAllocationBreakdown(signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: '/api/v1/investments/portfolio/allocation', method: 'GET', signal })
+      getPortfolioAllocationBreakdown(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/allocation', method: 'GET', params, signal })
       },
       /** GET /api/v1/investments/portfolio/gain-loss */
       getInvestmentGainLossSummary(signal?: AbortSignal): Promise<unknown> {

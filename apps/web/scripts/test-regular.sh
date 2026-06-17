@@ -65,6 +65,9 @@ EXCLUDE_PATTERNS=(
     "src/features/categories/hooks/useCategoryMutations.test.tsx"
     "src/features/transactions/hooks/useReviewMutations.test.tsx"
     "src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
+    # Hangs in full suite (real React Query against mocked fetcher; same pattern as
+    # useInfiniteTransactions — runs via test-real-implementations.sh instead)
+    "src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
     "src/features/budgets/hooks/usePreviewCategories.test.tsx"
     "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )

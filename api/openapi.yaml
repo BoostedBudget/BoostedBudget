@@ -661,6 +661,8 @@ components:
     AllocationItem:
       additionalProperties: false
       properties:
+        asset_class:
+          type: string
         holding_count:
           format: int64
           type: integer
@@ -674,6 +676,7 @@ components:
           type: number
       required:
         - security_type
+        - asset_class
         - total_value
         - percentage
         - holding_count
@@ -10309,8 +10312,50 @@ paths:
         - Investments
   /api/v1/investments/portfolio/allocation:
     get:
-      description: Returns portfolio value grouped by security type (stock, etf, bond, crypto, cash, other, unknown). Each bucket includes total value, percentage, and holding count. Single DB round-trip; designed as an AI-tool-callable function.
+      description: |-
+        Returns portfolio value grouped by bucket type. By default (no params) returns investment holdings only, grouped by security type — backward-compatible with the #138 behavior.
+
+        Optional query parameters:
+        - include (csv): additional asset classes to union into the result.
+          Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
+          Example: include=cash,liabilities
+        - group_by: bucketing dimension.
+          Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+        - basis: whether liabilities reduce the grand total.
+          Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
+
+        Each bucket includes: security_type, asset_class (when group_by=asset_class), total_value, percentage, holding_count.
+        Single DB round-trip; designed as an AI-tool-callable function.
       operationId: getPortfolioAllocationBreakdown
+      parameters:
+        - description: "Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible)."
+          explode: false
+          in: query
+          name: include
+          schema:
+            description: "Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible)."
+            type: string
+        - description: "How to bucket the result. Default: 'security_type'."
+          explode: false
+          in: query
+          name: group_by
+          schema:
+            description: "How to bucket the result. Default: 'security_type'."
+            enum:
+              - security_type
+              - asset_class
+              - account
+            type: string
+        - description: "Whether liabilities reduce the total. Default: 'assets'."
+          explode: false
+          in: query
+          name: basis
+          schema:
+            description: "Whether liabilities reduce the total. Default: 'assets'."
+            enum:
+              - assets
+              - net
+            type: string
       responses:
         "200":
           content:

@@ -175,6 +175,12 @@ export default defineConfig({
               test: /\/apps\/web\/src\/features\/insights\//,
               priority: 5,
             },
+            // Issue #1296: Portfolio tab — investments feature code
+            {
+              name: 'investments',
+              test: /\/apps\/web\/src\/features\/investments\//,
+              priority: 5,
+            },
           ],
         },
       },

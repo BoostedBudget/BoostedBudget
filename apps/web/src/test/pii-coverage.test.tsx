@@ -50,6 +50,7 @@ import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
   mockUseGetCashFlowSummary,
+  mockUseGetPortfolioAllocationBreakdown,
 } from '@/test/mocks/analytics-api'
 import { mockUseGetBoosts } from '@/test/mocks/boosts-api'
 import { mockUseGetUserRules } from '@/test/mocks/auto-categorization-api'
@@ -59,14 +60,14 @@ import {
   mockUseGetCategoryTransactions,
 } from '@/test/mocks/budgets-api'
 import { mockUseNetWorthData } from '@/test/mocks/net-worth-hooks'
+import { mockUseGetHoldings, mockUseGetPortfolioHistory, mockUseInfiniteInvestmentTransactions, mockFetchNextInvestmentPage } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
-
-// --- Silence analytics in all tests (PostHog is no-op without POSTHOG_KEY) ---
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mock(() => {}),
-}))
+// EChartsChart mock — must be imported before any chart component dynamic imports
+// so that mock.module('@/shared/charts') is registered at load time.
+import '@/test/mocks/shared-charts'
+import { mockUseDarkMode } from '@/test/mocks/shared-charts'
 
 // --- Page imports (static — mocks are preloaded before module resolution) ---
 const { TransactionTable } = await import('@/features/transactions/components/TransactionTable')
@@ -85,7 +86,6 @@ const { SavingsImpactWidget } = await import(
   '@/features/dashboard/widgets/SavingsImpactWidget'
 )
 
-// --- Phase A component imports (currency surface PII coverage) ---
 const { CashFlowSummaryWidget } = await import('@/features/dashboard/widgets/CashFlowSummaryWidget')
 const { BudgetOverviewWidget } = await import('@/features/dashboard/widgets/BudgetOverviewWidget')
 const { AccountBalanceCards } = await import('@/features/dashboard/components/AccountBalanceCards')
@@ -95,39 +95,36 @@ const { IncomeSourceItem } = await import('@/features/budgets/components/income/
 const { IncomeSourceConfig } = await import('@/features/budgets/components/income/IncomeSourceConfig')
 const { DashboardContext } = await import('@/features/dashboard/context/DashboardContext')
 
-// --- Phase P1 Round-4 component imports (unconverted currency surfaces) ---
 const { AccountTypeFilter } = await import('@/features/dashboard/components/AccountTypeFilter')
 const { BudgetIncomeSection } = await import('@/features/budgets/components/budget-detail/BudgetIncomeSection')
 const { BudgetCategoryForm } = await import('@/features/budgets/components/category-management/BudgetCategoryForm')
 
-// --- Round 7 component imports (BalanceOverview + NetWorthSparkline) ---
 const { BalanceOverview } = await import('@/features/dashboard/components/BalanceOverview')
 const { NetWorthSparkline } = await import('@/features/dashboard/components/NetWorthSparkline')
 
-// --- Round 8 component imports (billing — personal charge surfaces) ---
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
 
-// --- Round 10 component imports (card↔table PII consistency) ---
 const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
 )
 
-// --- Round 11 component imports (aria-label currency leak) ---
 const { ChangeIndicator } = await import('@/features/net-worth/components/ChangeIndicator')
 
-// --- Round 12 component imports (SearchableSelect account-option PII leak) ---
 const { SearchableSelect } = await import('@/shared/components/SearchableSelect/SearchableSelect')
 
-// --- Round 9 component imports (non-currency PII: names in text, attributes, <option> text) ---
+// --- Round 13 component imports (#1296: Portfolio monetary surfaces) ---
+const { PortfolioSummaryCard } = await import('@/features/investments/components/PortfolioSummaryCard')
+const { HoldingsTable } = await import('@/features/investments/components/HoldingsTable')
+const { InvestmentTransactionsTable } = await import('@/features/investments/components/InvestmentTransactionsTable')
+const { PortfolioValueChart } = await import('@/features/investments/components/PortfolioValueChart')
+const { AllocationCard } = await import('@/features/investments/components/AllocationCard')
+
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
 const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
 const { CreateSavingsGoalDialog } = await import('@/features/savings/components/CreateSavingsGoalDialog')
 
-// ---------------------------------------------------------------
-// Sentinel constants
-// ---------------------------------------------------------------
 const SENTINEL_MERCHANT = 'SENTINEL_MERCHANT_XYZ'
 const SENTINEL_NICKNAME = 'SENTINEL_NICKNAME_ABC'
 const SENTINEL_DESC = 'SENTINEL_DESC_QRS'
@@ -141,9 +138,6 @@ const SENTINEL_CATEGORY_NAME = 'SENTINEL_CATEGORY_RSTU'
 const SENTINEL_EMAIL = 'sentinel@pii-test.invalid'
 const SENTINEL_ACCOUNT_NAME = 'SENTINEL_ACCOUNT_ZXCV'
 
-// ---------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------
 function createWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -210,9 +204,6 @@ async function waitForSentinels(sentinels: PIISentinel[]) {
   }
 }
 
-// ---------------------------------------------------------------
-// 1. Transactions page
-// ---------------------------------------------------------------
 describe('PII coverage — Transactions page', () => {
   beforeEach(() => {
     cleanup()
@@ -266,9 +257,6 @@ describe('PII coverage — Transactions page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 2. Accounts page
-// ---------------------------------------------------------------
 describe('PII coverage — Accounts page', () => {
   beforeEach(() => {
     cleanup()
@@ -317,9 +305,6 @@ describe('PII coverage — Accounts page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 3. Net Worth page
-// ---------------------------------------------------------------
 describe('PII coverage — Net Worth page', () => {
   beforeEach(() => {
     cleanup()
@@ -368,9 +353,6 @@ describe('PII coverage — Net Worth page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 4. Savings page
-// ---------------------------------------------------------------
 describe('PII coverage — Savings page', () => {
   const sentinelGoal = {
     id: 'goal-sentinel',
@@ -417,9 +399,6 @@ describe('PII coverage — Savings page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 5. Profile page
-// ---------------------------------------------------------------
 describe('PII coverage — Profile page', () => {
   beforeEach(() => {
     cleanup()
@@ -454,9 +433,6 @@ describe('PII coverage — Profile page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 6. Categories component (no dedicated route — rendered directly)
-// ---------------------------------------------------------------
 describe('PII coverage — CategoryEditor component', () => {
   const sentinelCategory = {
     id: 'cat-sentinel',
@@ -500,9 +476,6 @@ describe('PII coverage — CategoryEditor component', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 7. Budgets list page
-// ---------------------------------------------------------------
 describe('PII coverage — Budgets list page', () => {
   beforeEach(() => {
     cleanup()
@@ -543,9 +516,6 @@ describe('PII coverage — Budgets list page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 8. Automation Rules page
-// ---------------------------------------------------------------
 describe('PII coverage — Rules page', () => {
   beforeEach(() => {
     cleanup()
@@ -578,9 +548,6 @@ describe('PII coverage — Rules page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 9. Auto-categorization rules page
-// ---------------------------------------------------------------
 describe('PII coverage — Auto-categorization rules page', () => {
   beforeEach(() => {
     cleanup()
@@ -614,9 +581,6 @@ describe('PII coverage — Auto-categorization rules page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 10. Reports / Spending page
-// ---------------------------------------------------------------
 describe('PII coverage — Spending Reports page', () => {
   beforeEach(() => {
     cleanup()
@@ -652,9 +616,6 @@ describe('PII coverage — Spending Reports page', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 11. SavingsImpactWidget — destination account name (GAP CC)
-// ---------------------------------------------------------------
 describe('PII coverage — SavingsImpactWidget destination name', () => {
   beforeEach(() => {
     cleanup()
@@ -703,9 +664,6 @@ describe('PII coverage — SavingsImpactWidget destination name', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 12. Currency surface PII coverage (Phase A — Round 2 gap remediation #1285)
-// ---------------------------------------------------------------
 describe('PII coverage — currency surfaces (widgets + sub-components)', () => {
   beforeEach(() => {
     cleanup()
@@ -927,9 +885,6 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
   })
 })
 
-// ---------------------------------------------------------------
-// 13. Round 4 — unconverted currency surfaces (P1 gap remediation #1285)
-// ---------------------------------------------------------------
 describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / BudgetCategoryForm', () => {
   beforeEach(() => {
     cleanup()
@@ -1017,7 +972,6 @@ describe('PII coverage — Round 4: AccountTypeFilter / BudgetIncomeSection / Bu
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 })
-
 describe('PII coverage — Round 8: billing components (personal charge surfaces)', () => {
   beforeEach(() => {
     cleanup()
@@ -1143,10 +1097,6 @@ describe('PII coverage — Round 7: BalanceOverview / NetWorthSparkline', () => 
   })
 })
 
-// ---------------------------------------------------------------
-// 16. Round 9 — non-currency PII: account/institution/merchant names
-//     in DOM text, DOM attributes, and <option> text
-// ---------------------------------------------------------------
 describe('PII coverage — Round 9: account/institution/merchant names in text, attributes, <option> text', () => {
   beforeEach(() => {
     cleanup()
@@ -1301,11 +1251,6 @@ describe('PII coverage — Round 9: account/institution/merchant names in text, 
   })
 })
 
-// ---------------------------------------------------------------
-// 17. Round 10 — card↔table PII consistency: AutoCategorizationRuleTable
-//     The page (test #9) renders in cards view (masked). The TABLE view
-//     was never imported by this gate — this case closes that gap.
-// ---------------------------------------------------------------
 describe('PII coverage — Round 10: AutoCategorizationRuleTable name + description', () => {
   beforeEach(() => {
     cleanup()
@@ -1345,9 +1290,6 @@ describe('PII coverage — Round 10: AutoCategorizationRuleTable name + descript
   })
 })
 
-// ---------------------------------------------------------------
-// 18. Round 11 — aria-label currency leak (ChangeIndicator)
-// ---------------------------------------------------------------
 describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
   beforeEach(() => {
     cleanup()
@@ -1364,13 +1306,42 @@ describe('PII coverage — Round 11: ChangeIndicator aria-label', () => {
   })
 })
 
-// ---------------------------------------------------------------
-// 19. Round 12 — SearchableSelect account-option PII leak
-//     The dropdown <ul role="listbox"> renders only when isOpen.
-//     Prior gate tests never opened it — this case closes that gap.
-//     account name (∈ PII_PROPERTY_DENYLIST) + ••••mask (ACCOUNT_MASK_RE)
-//     must be masked once the dropdown is open.
-// ---------------------------------------------------------------
+describe('PII coverage — Portfolio: PortfolioSummaryCard', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  test('masks total_value, total_gain_loss, and day_change', async () => {
+    const summary = {
+      total_value: 99999.99,
+      total_cost_basis: 80000.0,
+      total_gain_loss: 19999.99,
+      total_gain_loss_pct: 24.99,
+      day_change: 1234.56,
+      day_change_pct: 1.23,
+      holdings_count: 5,
+    }
+    render(<PortfolioSummaryCard summary={summary as any} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Total Value'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('null day_change renders "--" without leaking currency', async () => {
+    const summary = {
+      total_value: 99999.99,
+      total_cost_basis: 80000.0,
+      total_gain_loss: 19999.99,
+      total_gain_loss_pct: 24.99,
+      day_change: null,
+      day_change_pct: null,
+      holdings_count: 5,
+    }
+    render(<PortfolioSummaryCard summary={summary as any} />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('Total Value'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
 describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
   beforeEach(() => {
     cleanup()
@@ -1400,5 +1371,266 @@ describe('PII coverage — Round 12: SearchableSelect maskOptions', () => {
     ]
     // SENTINEL_ACCOUNT_NAME must be masked; ••••9999 is auto-flagged by ACCOUNT_MASK_RE.
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 13 extended: HoldingsTable monetary surfaces', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
+  const holdingFixture = {
+    id: 'h-pii-1',
+    account_id: 'acct-1',
+    user_id: 'user-1',
+    security_id: 'sec-1',
+    quantity: 10,
+    security_name: 'Apple Inc',
+    ticker_symbol: 'AAPL',
+    security_type: 'equity',
+    institution_value: 99999.99,
+    institution_price: 9999.99,
+    cost_basis: 88888.88,
+    gain_loss: 11111.11,
+    gain_loss_pct: 12.5,
+    day_change: 222.22,
+    day_change_pct: 0.22,
+  }
+
+  test('monetary holding columns are inside data-ph-mask td cells', async () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { count: 1, holdings: [holdingFixture] },
+      isLoading: false,
+      isError: false,
+    })
+    render(<HoldingsTable />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('AAPL'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+
+  test('account name in Account cell and filter dropdown option is masked', async () => {
+    // HoldingsTable must mask account names — convention (all 3 other name-bearing
+    // DataTables do: AccountBreakdownTable, TransactionTable, AccountTable).
+    // Seed accounts so accountNameById resolves 'acct-1' → SENTINEL_ACCOUNT_NAME.
+    const user = userEvent.setup()
+    mockUseGetAccounts.mockReturnValue({
+      data: {
+        accounts: [{ id: 'acct-1', name: SENTINEL_ACCOUNT_NAME, status: 'active', user_account_id: 'ua-1' }],
+      },
+      isLoading: false,
+      error: null,
+      refetch: mock(() => {}),
+    })
+    mockUseGetHoldings.mockReturnValue({
+      data: { count: 1, holdings: [holdingFixture] },
+      isLoading: false,
+      isError: false,
+    })
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_ACCOUNT_NAME, fieldDescription: 'account name in HoldingsTable Account cell' },
+    ]
+    render(<HoldingsTable />, { wrapper: createWrapper() })
+    await waitForSentinels(sentinels)
+
+    // Open account filter so Radix portal mounts option labels into document.body.
+    // Without this the scanner never sees portaled filter labels.
+    await user.click(screen.getByRole('button', { name: /filter by account/i }))
+    const listbox = await waitFor(
+      () => screen.getByRole('listbox'),
+      { timeout: 3000 },
+    )
+    // Confirm sentinel is present in the portal before asserting it is masked.
+    expect(within(listbox).getByText(SENTINEL_ACCOUNT_NAME)).toBeInTheDocument()
+
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+    // Dismiss dropdown so Radix portal unmounts cleanly before bun worker teardown.
+    await user.keyboard('{Escape}')
+  })
+})
+
+describe('PII coverage — Round 13 extended: InvestmentTransactionsTable', () => {
+  beforeEach(() => {
+    cleanup()
+    mockFetchNextInvestmentPage.mockClear()
+    mockUseInfiniteInvestmentTransactions.mockClear()
+  })
+
+  test('financial cells (quantity, price, amount, fees) are masked and no sentinel leaks unmasked', async () => {
+    // CRITICAL: seed the WRAPPER hook mock (not the raw API fetcher).
+    // InvestmentTransactionsTable imports useInfiniteInvestmentTransactions which is
+    // globally preloaded-mocked (investments-hooks.ts). Default returns transactions: [].
+    // The raw API fetcher (mockGetInvestmentTransactions) is never called by the component.
+    mockUseInfiniteInvestmentTransactions.mockReturnValue({
+      transactions: [
+        {
+          id: 'pii-txn-1',
+          user_id: 'user-1',
+          account_id: 'acct-1',
+          plaid_investment_transaction_id: 'plaid-1',
+          date: '2024-06-01',
+          name: 'AAPL Buy',
+          // Sentinel values — must NOT appear as raw text in the DOM
+          amount: 99999.99,      // → '$99,999.99'
+          quantity: 123.4567,    // → '123.4567' (not currency-formatted)
+          price: 810.45,         // → '$810.45'
+          fees: 4.99,            // → '$4.99'
+          type: 'buy',
+          created_at: '2024-06-01T10:00:00Z',
+        },
+      ],
+      fetchNextPage: mockFetchNextInvestmentPage,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+    })
+
+    // disableVirtualization=true forces DataTable to render real rows (no jsdom layout needed).
+    // This is the documented test seam for the pii-coverage suite; production always uses
+    // virtualization (disableVirtualization defaults to false).
+    render(
+      <InvestmentTransactionsTable
+        dateRange={{ start_date: '2024-01-01', end_date: '2024-12-31' }}
+        disableVirtualization
+      />,
+      { wrapper: createWrapper() },
+    )
+
+    // Wait for the seeded row to actually appear in the DOM (suite rule: per-sentinel waitFor).
+    await waitFor(() => screen.getByText('AAPL Buy'))
+
+    // Sentinels for PII scan. quantity renders as toFixed(4) = '123.4567' (not $-formatted),
+    // so it needs an explicit sentinel. price/amount/fees are $-formatted and auto-caught
+    // by CURRENCY_RE. Test fails if any sentinel appears unmasked in the DOM.
+    const sentinels: PIISentinel[] = [
+      { value: '123.4567', fieldDescription: 'quantity (raw toFixed(4))' },
+    ]
+    expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Round 13 extended: PortfolioValueChart', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+  })
+
+  // PortfolioValueChart is pure-canvas: currency values render in ECharts canvas, not DOM text.
+  // Guard: verify EChartsChart wrapper has data-ph-mask (EChartsChart.tsx:31).
+  test('chart canvas is wrapped in data-ph-mask element (light mode)', async () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2024-01-01', total_value: 99999.99 },
+          { date: '2024-06-01', total_value: 109999.99 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(
+      <PortfolioValueChart dateRange={{ start_date: '2024-01-01', end_date: '2024-06-01' }} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+describe('PII coverage — Round 13 extended: PortfolioValueChart (dark mode)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(true)
+  })
+
+  // Verify data-ph-mask persists in dark mode (isDark=true should not strip it).
+  test('chart canvas is wrapped in data-ph-mask element (dark mode)', async () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: {
+        history: [
+          { date: '2024-01-01', total_value: 99999.99 },
+          { date: '2024-06-01', total_value: 109999.99 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+    render(
+      <PortfolioValueChart dateRange={{ start_date: '2024-01-01', end_date: '2024-06-01' }} />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+describe('PII coverage — Round 13 extended: AllocationCard', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 79999.99, percentage: 80, holding_count: 5 },
+          { security_type: 'Fixed Income', asset_class: 'bond', total_value: 19999.99, percentage: 20, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // AllocationCard is pure-canvas via ECharts. Guard: verify data-ph-mask wraps the canvas.
+  test('donut chart canvas is wrapped in data-ph-mask element (light mode)', async () => {
+    render(
+      <AllocationCard
+        config={{ include: [], group_by: 'security_type', basis: 'assets' }}
+        onConfigChange={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
+  })
+})
+
+describe('PII coverage — Round 13 extended: AllocationCard (dark mode)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(true)
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: {
+        total_value: 99999.99,
+        buckets: [
+          { security_type: 'Equity', asset_class: 'stock', total_value: 79999.99, percentage: 80, holding_count: 5 },
+          { security_type: 'Fixed Income', asset_class: 'bond', total_value: 19999.99, percentage: 20, holding_count: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    })
+  })
+
+  // Verify data-ph-mask persists in dark mode (isDark=true should not strip it).
+  test('donut chart canvas is wrapped in data-ph-mask element (dark mode)', async () => {
+    render(
+      <AllocationCard
+        config={{ include: [], group_by: 'security_type', basis: 'assets' }}
+        onConfigChange={() => {}}
+      />,
+      { wrapper: createWrapper() }
+    )
+    await waitFor(() =>
+      expect(document.body.querySelector('[data-testid="echarts-chart"]')).not.toBeNull()
+    )
+    expect(document.body.querySelector('[data-testid="echarts-chart"][data-ph-mask]')).not.toBeNull()
   })
 })

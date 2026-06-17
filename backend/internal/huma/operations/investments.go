@@ -108,8 +108,29 @@ type GetInvestmentTransactionsOutput struct {
 // ============================================================================
 
 // GetPortfolioAllocationBreakdownInput is the input for GET /investments/portfolio/allocation.
+//
+// New optional params (#1296 — holistic configurable allocation):
+//   - include  (csv): which additional asset classes to union in.
+//     Allowed values: "cash" (depository accounts), "liabilities" (credit/loan accounts).
+//     Default: empty — investment holdings only (backward-compatible with #138).
+//   - group_by: how to bucket the result.
+//     Allowed values: "security_type" (default), "asset_class", "account".
+//   - basis:    whether liabilities are netted out of the total.
+//     Allowed values: "assets" (default), "net".
+//
+// Unknown values for group_by or basis return HTTP 422. Unknown values in include also return 422.
 type GetPortfolioAllocationBreakdownInput struct {
 	inputs.AuthenticatedInput
+	// Include is a comma-separated list of additional asset classes to union into the breakdown.
+	// Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts).
+	// Default: empty — investment holdings only (backward-compatible with existing consumers).
+	Include string `query:"include" doc:"Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible)."`
+	// GroupBy controls how the results are bucketed.
+	// Default: 'security_type'. Allowed values: 'security_type', 'asset_class', 'account'.
+	GroupBy string `query:"group_by" doc:"How to bucket the result. Default: 'security_type'." enum:"security_type,asset_class,account"`
+	// Basis controls whether liabilities are netted against assets in the headline total.
+	// Default: 'assets'. Allowed values: 'assets' (gross assets), 'net' (assets minus liabilities).
+	Basis string `query:"basis" doc:"Whether liabilities reduce the total. Default: 'assets'." enum:"assets,net"`
 }
 
 // GetPortfolioAllocationBreakdownOutput is the response for GET /investments/portfolio/allocation.
@@ -278,9 +299,56 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 // Handlers — Analytics operations
 // ============================================================================
 
+// validAllocationGroupByValues is the set of accepted group_by values.
+var validAllocationGroupByValues = map[string]bool{
+	domain.AllocationGroupBySecurityType: true,
+	domain.AllocationGroupByAssetClass:   true,
+	domain.AllocationGroupByAccount:      true,
+}
+
+// validAllocationBasisValues is the set of accepted basis values.
+var validAllocationBasisValues = map[string]bool{
+	domain.AllocationBasisAssets: true,
+	domain.AllocationBasisNet:    true,
+}
+
+// validAllocationIncludeValues is the set of accepted include values.
+var validAllocationIncludeValues = map[string]bool{
+	"cash":        true,
+	"liabilities": true,
+}
+
 // GetPortfolioAllocationBreakdown handles GET /api/v1/investments/portfolio/allocation.
+// Supports optional include/group_by/basis query params (#1296).
 func (h *InvestmentHandler) GetPortfolioAllocationBreakdown(ctx context.Context, input *GetPortfolioAllocationBreakdownInput) (*GetPortfolioAllocationBreakdownOutput, error) {
-	result, err := h.analyticsService.GetAllocationBreakdown(ctx, input.UserID)
+	// Build and validate AllocationOptions from query params.
+	opts := domain.AllocationOptions{}
+
+	if input.GroupBy != "" {
+		if !validAllocationGroupByValues[input.GroupBy] {
+			return nil, huma.Error422UnprocessableEntity("invalid group_by value '"+input.GroupBy+"': must be one of security_type, asset_class, account", nil)
+		}
+		opts.GroupBy = input.GroupBy
+	}
+
+	if input.Basis != "" {
+		if !validAllocationBasisValues[input.Basis] {
+			return nil, huma.Error422UnprocessableEntity("invalid basis value '"+input.Basis+"': must be one of assets, net", nil)
+		}
+		opts.Basis = input.Basis
+	}
+
+	if input.Include != "" {
+		includeValues := parseCommaSeparated(input.Include)
+		for _, v := range includeValues {
+			if !validAllocationIncludeValues[v] {
+				return nil, huma.Error422UnprocessableEntity("invalid include value '"+v+"': must be one of cash, liabilities", nil)
+			}
+		}
+		opts.Include = includeValues
+	}
+
+	result, err := h.analyticsService.GetAllocationBreakdown(ctx, input.UserID, opts)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -386,15 +454,27 @@ func RegisterInvestmentRoutes(api huma.API, handler *InvestmentHandler) {
 
 	// ---- Analytics helpers: Analytics tag (load-bearing for MCP parity test) ----
 
-	// GET /api/v1/investments/portfolio/allocation — allocation breakdown by security type.
+	// GET /api/v1/investments/portfolio/allocation — configurable allocation breakdown.
 	huma.Register(api, huma.Operation{
 		OperationID: "getPortfolioAllocationBreakdown",
 		Method:      http.MethodGet,
 		Path:        "/api/v1/investments/portfolio/allocation",
 		Summary:     "Get portfolio allocation breakdown",
-		Description: "Returns portfolio value grouped by security type (stock, etf, bond, crypto, cash, other, unknown). Each bucket includes total value, percentage, and holding count. Single DB round-trip; designed as an AI-tool-callable function.",
-		Tags:        []string{"Analytics"},
-		Security:    []map[string][]string{{"clerk": {}}},
+		Description: `Returns portfolio value grouped by bucket type. By default (no params) returns investment holdings only, grouped by security type — backward-compatible with the #138 behavior.
+
+Optional query parameters:
+- include (csv): additional asset classes to union into the result.
+  Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
+  Example: include=cash,liabilities
+- group_by: bucketing dimension.
+  Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+- basis: whether liabilities reduce the grand total.
+  Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
+
+Each bucket includes: security_type, asset_class (when group_by=asset_class), total_value, percentage, holding_count.
+Single DB round-trip; designed as an AI-tool-callable function.`,
+		Tags:     []string{"Analytics"},
+		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.GetPortfolioAllocationBreakdown)
 
 	// GET /api/v1/investments/portfolio/top-movers — top N gainers and losers by day_change.
