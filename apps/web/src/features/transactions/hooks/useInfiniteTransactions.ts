@@ -42,12 +42,29 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.max_amount !== undefined && { max_amount: String(filters.max_amount) }),
     ...(filters.amount_type && filters.amount_type !== 'all' && { amount_type: filters.amount_type }),
     ...(filters.merchant_id && { merchant_id: filters.merchant_id }),
-    // Issue #1299: Investment activity filters
-    ...(filters.include_investment_activity !== undefined && {
-      include_investment_activity: String(filters.include_investment_activity),
+    // Issue #1299: Investment activity canonicalization rules:
+    // 1. include_investment_activity defaults true — omit when true (or undefined), send 'false' only when explicitly disabled
+    ...(filters.include_investment_activity === false && { include_investment_activity: 'false' }),
+    // 2. activity_types: only send when investment activity is included AND types are selected; sort for stable cache key
+    ...(filters.include_investment_activity !== false && filters.activity_types?.length && {
+      activity_types: [...filters.activity_types].sort().join(','),
     }),
-    ...(filters.activity_types?.length && { activity_types: filters.activity_types.join(',') }),
   };
+}
+
+function getEffectiveSortBy(
+  sortBy: SortBy,
+  filters: TransactionFiltersState,
+): SortBy {
+  // Issue #1299: The backend requires sort_by=date when investment activity is merged into the
+  // unified feed. Investment rows and banking rows have incompatible sort semantics for non-date
+  // fields (e.g. 'amount' on an investment row has different meaning), so the backend enforces
+  // date ordering when merging. Override the user's sort preference in the API call only —
+  // do NOT mutate URL state so the user's preference is preserved when they toggle off investments.
+  if (filters.include_investment_activity !== false) {
+    return 'date';
+  }
+  return sortBy;
 }
 
 export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
@@ -70,7 +87,7 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
         {
           cursor: pageParam,
           limit,
-          sort_by: opts.sortBy,
+          sort_by: getEffectiveSortBy(opts.sortBy, opts.filters),
           sort_dir: opts.sortDir,
           ...flattenFilters(opts.filters),
         },

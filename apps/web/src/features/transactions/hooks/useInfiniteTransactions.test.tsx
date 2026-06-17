@@ -262,28 +262,130 @@ describe('useInfiniteTransactions', () => {
     it('forwards pfc_primaries filter to getTransactions API call', async () => {
       mockGetTransactions.mockResolvedValue(page1Response)
 
-      const filtersWithPfcPrimaries = {
-        pfc_primaries: ['FOOD_AND_DRINK', 'TRANSPORTATION'],
-      }
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: { pfc_primaries: ['FOOD_AND_DRINK', 'TRANSPORTATION'] },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(mockGetTransactions).toHaveBeenCalled()
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.pfc_primaries).toBe('FOOD_AND_DRINK,TRANSPORTATION')
+    })
+  })
+
+  describe('flattenFilters canonicalization (Issue #1299)', () => {
+    it('omits include_investment_activity when undefined (default true)', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () => useInfiniteTransactions({ ...defaultOpts, filters: {} }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.include_investment_activity).toBeUndefined()
+    })
+
+    it('sends include_investment_activity=false when explicitly disabled', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
 
       const { result } = renderHook(
         () =>
           useInfiniteTransactions({
             ...defaultOpts,
-            filters: filtersWithPfcPrimaries,
+            filters: { include_investment_activity: false },
           }),
-        {
-          wrapper: createWrapper(),
-        },
+        { wrapper: createWrapper() },
       )
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-      // Verify that getTransactions was called with the pfc_primaries filter
-      // joined as a comma-separated string
-      expect(mockGetTransactions).toHaveBeenCalled()
       const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
-      expect(callParams.pfc_primaries).toBe('FOOD_AND_DRINK,TRANSPORTATION')
+      expect(callParams.include_investment_activity).toBe('false')
+    })
+
+    it('omits activity_types when include_investment_activity is false', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: { include_investment_activity: false, activity_types: ['buy', 'sell'] },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.activity_types).toBeUndefined()
+    })
+
+    it('sends sorted activity_types when include is true and types are selected', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: { activity_types: ['sell', 'buy', 'dividend'] },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      // sorted: buy, dividend, sell
+      expect(callParams.activity_types).toBe('buy,dividend,sell')
+    })
+
+    it('forces sort_by=date when investment activity is included (undefined = default true)', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            sortBy: 'amount' as const,
+            filters: {},
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      // Must override user sort to 'date' when investment activity is active
+      expect(callParams.sort_by).toBe('date')
+    })
+
+    it('respects user sort_by when include_investment_activity is false', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            sortBy: 'amount' as const,
+            filters: { include_investment_activity: false },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.sort_by).toBe('amount')
     })
   })
 
