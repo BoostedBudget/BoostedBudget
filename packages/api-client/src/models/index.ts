@@ -337,5 +337,6 @@ export * from './webhookEventTypeStats';
 export * from './webhookReplayResponse';
 export * from './webhookStatsResponse';
 export * from './widgetConfig';
+export * from './widgetConfigSettings';
 export * from './widgetTypeInfo';
 export * from './widgetTypesResponse';

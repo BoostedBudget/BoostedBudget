@@ -31,7 +31,7 @@ function DashboardContent() {
     trackEvent(ANALYTICS_EVENTS.DASHBOARD_VIEWED)
   }, [trackEvent])
 
-  const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, resetToDefault, saveNow } = useDashboardLayout({
+  const { layout, loading, error, saving, updateLayout, addWidget, removeWidget, updateWidgetSettings, resetToDefault, saveNow } = useDashboardLayout({
     getAccessToken: async () => {
       try {
         return await getToken({ template: 'BoostedBudget' })
@@ -230,6 +230,7 @@ function DashboardContent() {
           isEditing={isEditing}
           onLayoutChange={updateLayout}
           onRemoveWidget={handleRemoveWidget}
+          onUpdateWidgetSettings={updateWidgetSettings}
         />
       </div>
 

@@ -6670,6 +6670,9 @@ components:
         minW:
           format: int64
           type: integer
+        settings:
+          additionalProperties: {}
+          type: object
         type:
           type: string
         w:

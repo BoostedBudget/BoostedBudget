@@ -40,6 +40,10 @@ interface UseDashboardLayoutResult {
   updateLayout: (newLayout: DashboardLayout) => void;
   addWidget: (type: WidgetType, x?: number, y?: number) => void;
   removeWidget: (widgetId: string) => void;
+  /** Issue #1297: Update per-widget settings (e.g. topN, sortBy, groupBy).
+   *  Uses functional state to avoid stale-closure overwrites with concurrent drag events.
+   *  No-op when settings are deep-equal to the current value. */
+  updateWidgetSettings: (widgetId: string, settings: Record<string, unknown>) => void;
   resetToDefault: () => Promise<boolean>;
   saveNow: () => Promise<void>;
 }
@@ -227,6 +231,35 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     [layout, updateLayout]
   );
 
+  // Issue #1297: Update per-widget settings (e.g. topN, sortBy, groupBy).
+  // Uses functional setLayout to avoid stale-closure overwrites with concurrent drag/resize events.
+  // No-op when serialized settings are identical to current value (prevents redundant debounced saves).
+  const updateWidgetSettings = useCallback(
+    (widgetId: string, settings: Record<string, unknown>) => {
+      setLayout((prev) => {
+        // Find current widget settings for no-op check
+        const existing = prev.widgets.find((w) => w.i === widgetId);
+        if (
+          existing &&
+          JSON.stringify(existing.settings ?? {}) === JSON.stringify(settings)
+        ) {
+          return prev; // no change — skip state update entirely
+        }
+
+        const newLayout: DashboardLayout = {
+          ...prev,
+          widgets: prev.widgets.map((w) =>
+            w.i === widgetId ? { ...w, settings } : w
+          ),
+        };
+
+        scheduleSave(newLayout);
+        return newLayout;
+      });
+    },
+    [scheduleSave]
+  );
+
   // Reset to default layout - uses mutation
   // Issue #449: Uses fetched default layout from API
   const resetToDefault = useCallback(async (): Promise<boolean> => {
@@ -340,6 +373,7 @@ export function useDashboardLayout(options?: UseDashboardLayoutOptions): UseDash
     updateLayout,
     addWidget,
     removeWidget,
+    updateWidgetSettings,
     resetToDefault,
     saveNow,
   };
