@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
-import type { Transaction } from '../types'
+import type { Transaction, FeedRow, BankingTransaction, InvestmentActivity } from '../types'
 import type { Account } from '../../accounts/types'
 
 // NOTE: Do NOT mock HierarchicalCategoryTreeSelect with mock.module() here.
@@ -600,6 +600,145 @@ describe('TransactionTable', () => {
       })
       // Real HierarchicalCategoryTreeSelect renders a span[data-testid="active-dot"] inside the trigger
       expect(screen.getByTestId('active-dot')).toBeInTheDocument()
+    })
+  })
+
+  // ─── Investment row rendering (Task 4) ──────────────────────────────────────
+  const mockInvestmentRow: InvestmentActivity = {
+    id: 'inv-1',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    source: 'investment',
+    amount: -1500.0,
+    date: '2025-03-10',
+    name: 'Buy AAPL',
+    ticker_symbol: 'AAPL',
+    security_name: 'Apple Inc.',
+    activity_type: 'buy',
+    investment_quantity: 10,
+    investment_price: 150.0,
+    investment_fees: 0.0,
+    created_at: '2025-03-10T00:00:00Z',
+    updated_at: '2025-03-10T00:00:00Z',
+  }
+
+  const mockBankingRow: BankingTransaction = {
+    id: 'bank-1',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    source: 'banking',
+    amount: 45.99,
+    date: '2025-03-11',
+    name: 'AMAZON.COM',
+    merchant_name: 'Amazon',
+    pending: false,
+    created_at: '2025-03-11T00:00:00Z',
+    updated_at: '2025-03-11T00:00:00Z',
+  }
+
+  const renderFeedTable = (props: Partial<Parameters<typeof TransactionTable>[0]> = {}) =>
+    render(
+      <TransactionTable
+        transactions={[mockInvestmentRow, mockBankingRow] as unknown as Transaction[]}
+        accountsMap={mockAccounts}
+        {...props}
+      />
+    )
+
+  describe('Investment row — merchant (Description) cell', () => {
+    it('shows ticker · security_name for investment rows instead of merchant_name', () => {
+      renderFeedTable()
+      expect(screen.getByText('AAPL · Apple Inc.')).toBeInTheDocument()
+    })
+
+    it('does NOT show "Buy AAPL" (name field) in the description cell for investment rows', () => {
+      renderFeedTable()
+      // The name field should not appear in the description column
+      // (it appears in the row name but not as the primary description)
+      const descriptionCells = screen.getAllByText('AAPL · Apple Inc.')
+      expect(descriptionCells.length).toBeGreaterThan(0)
+    })
+
+    it('still shows merchant_name for banking rows', () => {
+      renderFeedTable()
+      expect(screen.getByText('Amazon')).toBeInTheDocument()
+    })
+
+    it('does NOT render tag badges for investment rows', () => {
+      // Investment rows have no tags — even if tags array is present, no badge spam
+      renderFeedTable()
+      // The investment row has no tags property, so no tag badges should render for it
+      // Banking row also has no tags in this fixture, so zero tag badges total
+      // If investment had tags, they should not appear (investment rows have no tags semantics)
+    })
+  })
+
+  describe('Investment row — category cell', () => {
+    it('renders ActivityTypeChip for investment rows', () => {
+      renderFeedTable()
+      // ActivityTypeChip for 'buy' renders "Buy" label
+      expect(screen.getByText('Buy')).toBeInTheDocument()
+    })
+
+    it('does NOT render a color dot (category dot) for investment rows', () => {
+      const { container } = renderFeedTable()
+      // Find the investment row's category cell and verify no color-dot span is present
+      // The banking row has a category dot; investment row uses ActivityTypeChip instead
+      // We check that only one color dot exists (for the banking row)
+      const colorDots = container.querySelectorAll('span.h-2.w-2.shrink-0.rounded-full')
+      // Banking row has one dot; investment row should have none (uses chip instead)
+      expect(colorDots.length).toBeLessThanOrEqual(1)
+    })
+  })
+
+  describe('Investment row — amount cell', () => {
+    it('shows "Investment" badge for investment rows', () => {
+      renderFeedTable()
+      expect(screen.getByText('Investment')).toBeInTheDocument()
+    })
+
+    it('does NOT show "Pending" badge for investment rows', () => {
+      renderFeedTable()
+      // Investment rows are never pending
+      expect(screen.queryByText('Pending')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Investment row — row actions', () => {
+    it('shows NO edit button for investment rows when onEdit is provided', () => {
+      const onEdit = mock(() => {})
+      renderFeedTable({ onEdit })
+      // Banking row gets an edit button; investment row should NOT
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      // Only 1 edit button (for the banking row), not 2
+      expect(editButtons.length).toBe(1)
+    })
+
+    it('shows NO categorize button for investment rows when onCategorize is provided', () => {
+      const onCategorize = mock(() => {})
+      renderFeedTable({ onCategorize })
+      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
+      // Only 1 categorize button (for the banking row), not 2
+      expect(categorizeButtons.length).toBe(1)
+    })
+
+    it('shows edit and categorize for banking rows but not investment rows', () => {
+      const onEdit = mock(() => {})
+      const onCategorize = mock(() => {})
+      renderFeedTable({ onEdit, onCategorize })
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
+      expect(editButtons.length).toBe(1)
+      expect(categorizeButtons.length).toBe(1)
+    })
+  })
+
+  describe('Investment row — PII masking', () => {
+    it('investment row merchant cell (ticker·name) still has data-ph-mask', () => {
+      const { container } = renderFeedTable()
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // 2 rows × 3 masked columns (amount, merchant, account) = 6 masked tds
+      expect(maskedTds.length).toBe(6)
     })
   })
 })

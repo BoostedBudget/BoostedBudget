@@ -3,7 +3,9 @@ import { Edit, Tag, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
-import type { Transaction } from '../types'
+import type { Transaction, FeedRow, InvestmentActivity } from '../types'
+import { isInvestmentRow } from '../types'
+import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
@@ -156,22 +158,32 @@ export function TransactionTable({
       reorderable: true,
       defaultSize: 240,
       minSize: 160,
-      render: (row) => (
-        <div>
-          <div className="font-medium text-foreground">
-            {row.merchant_name || row.name}
-          </div>
-          {row.tags && row.tags.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {row.tags.map((tag) => (
-                <Badge key={`${row.id}-${tag}`} variant="info" size="sm">
-                  {tag}
-                </Badge>
-              ))}
+      render: (row) => {
+        if (isInvestmentRow(row as unknown as FeedRow)) {
+          const inv = row as unknown as InvestmentActivity
+          return (
+            <div className="font-medium text-foreground">
+              {inv.ticker_symbol} · {inv.security_name}
             </div>
-          )}
-        </div>
-      ),
+          )
+        }
+        return (
+          <div>
+            <div className="font-medium text-foreground">
+              {row.merchant_name || row.name}
+            </div>
+            {row.tags && row.tags.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {row.tags.map((tag) => (
+                  <Badge key={`${row.id}-${tag}`} variant="info" size="sm">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      },
     },
     {
       id: 'account',
@@ -215,6 +227,10 @@ export function TransactionTable({
       minSize: 120,
       maxSize: 280,
       render: (row) => {
+        const feedRow = row as unknown as FeedRow
+        if (isInvestmentRow(feedRow)) {
+          return <ActivityTypeChip activityType={feedRow.activity_type} />
+        }
         const eff = getEffectiveCategory(row)
         const categoryLabel = getEffectiveCategoryLabel(eff)
         // For a custom category, show its icon + color (Issue #1203) when we can
@@ -297,28 +313,33 @@ export function TransactionTable({
       defaultSize: 140,
       minSize: 110,
       maxSize: 200,
-      render: (row) => (
-        <div className="flex flex-col items-end gap-1">
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              isOutflow(row.amount)
-                ? 'transaction-table__amount--debit text-destructive'
-                : row.amount < 0
-                  ? 'transaction-table__amount--credit text-success'
-                  : 'text-foreground'
-            )}
-          >
-            {formatTransactionAmount(row.amount).text}
-          </span>
-          {row.pending && (
-            <Badge variant="warning" size="sm">
-              <Clock className="h-2.5 w-2.5" aria-hidden="true" />
-              Pending
-            </Badge>
-          )}
-        </div>
-      ),
+      render: (row) => {
+        const isInvestment = isInvestmentRow(row as unknown as FeedRow)
+        return (
+          <div className="flex flex-col items-end gap-1">
+            <span
+              className={cn(
+                'font-semibold tabular-nums',
+                isOutflow(row.amount)
+                  ? 'transaction-table__amount--debit text-destructive'
+                  : row.amount < 0
+                    ? 'transaction-table__amount--credit text-success'
+                    : 'text-foreground'
+              )}
+            >
+              {formatTransactionAmount(row.amount).text}
+            </span>
+            {isInvestment ? (
+              <Badge variant="info" size="sm">Investment</Badge>
+            ) : row.pending ? (
+              <Badge variant="warning" size="sm">
+                <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+                Pending
+              </Badge>
+            ) : null}
+          </div>
+        )
+      },
       filter: onAmountRangeChange ? { type: 'range', unit: 'currency' } : undefined,
     },
   ]
@@ -370,38 +391,41 @@ export function TransactionTable({
       }
       rowActions={
         hasActions
-          ? (row) => (
-              <div className="flex items-center justify-end gap-2">
-                {onEdit && (
-                  <ReadOnlyGuard message="Resubscribe to edit transactions">
-                    <button
-                      type="button"
-                      onClick={() => onEdit(row)}
-                      disabled={loading}
-                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                      aria-label="Edit transaction"
-                      title="Edit transaction"
-                    >
-                      <Edit aria-hidden="true" />
-                    </button>
-                  </ReadOnlyGuard>
-                )}
-                {onCategorize && (
-                  <ReadOnlyGuard message="Resubscribe to categorize transactions">
-                    <button
-                      type="button"
-                      onClick={() => onCategorize(row)}
-                      disabled={loading}
-                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                      aria-label="Categorize transaction"
-                      title="Categorize transaction"
-                    >
-                      <Tag aria-hidden="true" />
-                    </button>
-                  </ReadOnlyGuard>
-                )}
-              </div>
-            )
+          ? (row) => {
+              if (isInvestmentRow(row as unknown as FeedRow)) return null
+              return (
+                <div className="flex items-center justify-end gap-2">
+                  {onEdit && (
+                    <ReadOnlyGuard message="Resubscribe to edit transactions">
+                      <button
+                        type="button"
+                        onClick={() => onEdit(row)}
+                        disabled={loading}
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                        aria-label="Edit transaction"
+                        title="Edit transaction"
+                      >
+                        <Edit aria-hidden="true" />
+                      </button>
+                    </ReadOnlyGuard>
+                  )}
+                  {onCategorize && (
+                    <ReadOnlyGuard message="Resubscribe to categorize transactions">
+                      <button
+                        type="button"
+                        onClick={() => onCategorize(row)}
+                        disabled={loading}
+                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                        aria-label="Categorize transaction"
+                        title="Categorize transaction"
+                      >
+                        <Tag aria-hidden="true" />
+                      </button>
+                    </ReadOnlyGuard>
+                  )}
+                </div>
+              )
+            }
           : undefined
       }
     />
