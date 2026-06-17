@@ -5,7 +5,7 @@
  * Issue #590: Simplified - Account/Category/Amount filters moved inline to table headers
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { ChevronDownIcon, XMarkIcon, FunnelIcon } from '@heroicons/react/24/outline'
 import {
   Sheet,
@@ -127,42 +127,44 @@ export function TransactionFilterPanel({
     onActivityTypesChange([])
   }
 
-  // Get display values for filter pills
-  const getDateDisplayValue = () => {
-    if (datePreset === 'all') return null
-    if (datePreset === 'custom' && filters.start_date && filters.end_date) {
-      return `${filters.start_date} - ${filters.end_date}`
+  const filterPillsProps = useMemo<FilterPillsSectionProps>(() => {
+    const types = (filters.activity_types ?? []) as ActivityType[]
+
+    const getDateDisplayValue = (): string | null => {
+      if (datePreset === 'all') return null
+      if (datePreset === 'custom' && filters.start_date && filters.end_date) {
+        return `${filters.start_date} - ${filters.end_date}`
+      }
+      const match = PRESETS.find((p) => p.value === datePreset)
+      return match?.label ?? datePreset
     }
-    const match = PRESETS.find((p) => p.value === datePreset)
-    return match?.label ?? datePreset
-  }
 
-  const getStatusDisplayValue = () => {
-    if (statusFilter === 'all') return null
-    return statusFilter === 'posted' ? 'Posted' : 'Pending'
-  }
+    const getStatusDisplayValue = (): string | null => {
+      if (statusFilter === 'all') return null
+      return statusFilter === 'posted' ? 'Posted' : 'Pending'
+    }
 
-  const getInvestmentDisplayValue = () => {
-    if (includeInvestmentActivity) return null
-    return 'Hidden'
-  }
+    const getInvestmentDisplayValue = (): string | null => {
+      if (includeInvestmentActivity) return null
+      return 'Hidden'
+    }
 
-  const getActivityTypesDisplayValue = () => {
-    if (!activityTypes.length) return null
-    return activityTypes.length === 1 ? activityTypes[0] : `${activityTypes.length} types`
-  }
+    const getActivityTypesDisplayValue = (): string | null => {
+      if (!types.length) return null
+      return types.length === 1 ? types[0] : `${types.length} types`
+    }
 
-  // Prepare filter pills props
-  const filterPillsProps: FilterPillsSectionProps = {
-    dateDisplayValue: getDateDisplayValue(),
-    statusDisplayValue: getStatusDisplayValue(),
-    investmentDisplayValue: getInvestmentDisplayValue(),
-    activityTypesDisplayValue: getActivityTypesDisplayValue(),
-    onDatePresetChange,
-    onStatusFilterChange,
-    onIncludeInvestmentActivityChange,
-    onActivityTypesChange,
-  }
+    return {
+      dateDisplayValue: getDateDisplayValue(),
+      statusDisplayValue: getStatusDisplayValue(),
+      investmentDisplayValue: getInvestmentDisplayValue(),
+      activityTypesDisplayValue: getActivityTypesDisplayValue(),
+      onDatePresetChange,
+      onStatusFilterChange,
+      onIncludeInvestmentActivityChange,
+      onActivityTypesChange,
+    }
+  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange])
 
   // Calculate active count for date/status/investment filters
   const investmentActiveCount = (!includeInvestmentActivity ? 1 : 0) + (activityTypes.length > 0 ? 1 : 0)
@@ -182,7 +184,7 @@ export function TransactionFilterPanel({
             >
               <div className="flex items-center gap-2">
                 <FunnelIcon className="w-5 h-5 text-muted-foreground" />
-                <span className="font-medium text-foreground">Date & Status</span>
+                <span className="font-medium text-foreground">Filters</span>
                 {dateStatusActiveCount > 0 && (
                   <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded-full">
                     {dateStatusActiveCount}
