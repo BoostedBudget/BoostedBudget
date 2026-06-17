@@ -18,7 +18,7 @@ import {
 
 describe('MASKED_COLUMN_IDS', () => {
   it('equals the expected set of financial columns', () => {
-    expect(MASKED_COLUMN_IDS).toEqual(['quantity', 'price', 'amount', 'fees'])
+    expect(MASKED_COLUMN_IDS).toEqual(['security', 'quantity', 'price', 'amount', 'fees'])
   })
 })
 
