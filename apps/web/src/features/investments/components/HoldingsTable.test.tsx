@@ -336,4 +336,137 @@ describe('HoldingsTable', () => {
       expect(maskedTds.length).toBeGreaterThan(0)
     })
   })
+
+  // ── PII masking fix: name + ticker (applies to both scoped and unscoped) ──────
+
+  describe('name and ticker PII masking', () => {
+    it('name column td carries data-ph-mask', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      const { container } = render(<HoldingsTable />)
+      // The 'name' column cell should be masked — confirm by finding a masked td with that text
+      const nameCells = Array.from(container.querySelectorAll('td[data-ph-mask]')).filter(
+        (td) => td.textContent?.includes('Apple Inc')
+      )
+      expect(nameCells.length).toBeGreaterThan(0)
+    })
+
+    it('ticker column td carries data-ph-mask', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      const { container } = render(<HoldingsTable />)
+      const maskedTds = Array.from(container.querySelectorAll('td[data-ph-mask]')).filter(
+        (td) => td.textContent?.includes('AAPL')
+      )
+      expect(maskedTds.length).toBeGreaterThan(0)
+    })
+  })
+
+  // ── Scoped mode (accountId provided) ─────────────────────────────────────────
+
+  describe('scoped mode (accountId provided)', () => {
+    it('calls useGetHoldings with { account_id } when accountId prop is given', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [], count: 0 },
+        isLoading: false,
+        isError: false,
+      })
+      mockUseGetHoldings.mockClear()
+      render(<HoldingsTable accountId="test-account-id" />)
+      expect(mockUseGetHoldings.mock.calls.length).toBeGreaterThan(0)
+      expect(mockUseGetHoldings.mock.calls[0][0]).toEqual({ account_id: 'test-account-id' })
+    })
+
+    it('does NOT render the Account column header when scoped', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable accountId="acct-alpha" />)
+      expect(screen.queryByText('Account')).toBeNull()
+    })
+
+    it('does NOT render the Account filter dropdown when scoped', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable accountId="acct-alpha" />)
+      expect(screen.queryByRole('button', { name: /filter by account/i })).toBeNull()
+    })
+
+    it('shows account-specific empty state when scoped and holdings = []', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [], count: 0 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable accountId="acct-alpha" />)
+      expect(screen.getByText(/no holdings synced yet for this account/i)).toBeDefined()
+    })
+  })
+
+  // ── Unscoped regression ───────────────────────────────────────────────────────
+
+  describe('unscoped mode regression', () => {
+    it('calls useGetHoldings with no params (undefined) when accountId is not provided', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [], count: 0 },
+        isLoading: false,
+        isError: false,
+      })
+      mockUseGetHoldings.mockClear()
+      render(<HoldingsTable />)
+      expect(mockUseGetHoldings.mock.calls.length).toBeGreaterThan(0)
+      expect(mockUseGetHoldings.mock.calls[0][0]).toBeUndefined()
+    })
+
+    it('renders the Account column header in unscoped mode', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Account')).toBeDefined()
+    })
+
+    it('uses portfolio-holdings as the useTablePreferences key in unscoped mode', () => {
+      const userId = mockClerkUser.id
+      const schemaVersion =
+        'name,ticker,type,quantity,price,market_value,cost_basis,gain_loss,gain_loss_pct,day_change,day_change_pct,account'
+      // Write a pref under 'portfolio-holdings' key and confirm the component reads it
+      localStorage.setItem(
+        `bb:table-prefs:${userId}:portfolio-holdings`,
+        JSON.stringify({
+          schemaVersion,
+          sizingVersion: 'v3-compact',
+          sizing: {},
+          columnOrder: [],
+          columnVisibility: { account: false },
+        }),
+      )
+      mockUseUser.mockReturnValue(createMockClerkUser({ isSignedIn: true, user: mockClerkUser }))
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [holdingA], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+
+      render(<HoldingsTable />)
+      // If the key is correct ('portfolio-holdings'), the hidden-account pref is picked up
+      expect(screen.queryByText('Account')).toBeNull()
+
+      mockUseUser.mockReturnValue(createMockClerkUser())
+      localStorage.removeItem(`bb:table-prefs:${userId}:portfolio-holdings`)
+    })
+  })
 })

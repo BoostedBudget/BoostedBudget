@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Landmark } from 'lucide-react'
+import { getAccountTypeLabel } from './utils'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -42,6 +44,7 @@ function getInitialView(): ListView {
 
 export function AccountsPage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [showHidden, setShowHidden] = useState(false)
   const [view, setView] = useState<ListView>(getInitialView)
@@ -134,18 +137,15 @@ export function AccountsPage() {
   const handleEditAccount = useCallback((account: Account) => {
     setSelectedAccount(account)
     setIsModalOpen(true)
-  }, [])
+  }, []) // No deps — setters are stable
 
 
   const institutionOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
-    const institutions = new Set<string>()
-    accs.forEach((acc) => {
-      if (acc.institution_name) {
-        institutions.add(acc.institution_name)
-      }
-    })
-    return Array.from(institutions)
+    const institutions = Array.from(
+      new Set(accs.map((a) => a.institution_name).filter((x): x is string => x != null && x !== ''))
+    )
+    return institutions
       .sort()
       .map((inst) => ({
         value: inst,
@@ -156,36 +156,37 @@ export function AccountsPage() {
 
   const typeOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
-    const types = new Set<string>()
+    // Map from typeValue (subtype || type) → { type, subtype } for label generation
+    const seen = new Map<string, { type: string; subtype?: string }>()
     accs.forEach((acc) => {
       // Use subtype if available, otherwise type
       const typeValue = acc.subtype || acc.type
-      if (typeValue) {
-        types.add(typeValue)
+      if (typeValue && !seen.has(typeValue)) {
+        seen.set(typeValue, { type: acc.type, subtype: acc.subtype ?? undefined })
       }
     })
-    return Array.from(types)
-      .sort()
-      .map((type) => ({
-        value: type,
-        label: type.charAt(0).toUpperCase() + type.slice(1),
+    return Array.from(seen.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([typeValue, { type, subtype }]) => ({
+        value: typeValue,
+        label: getAccountTypeLabel(type, subtype, { surface: 'table' }),
       }))
   }, [accountsData?.accounts])
 
   const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(account, changes)
-    if (updatedAccount) {
-      // Optimistically update the query cache
-      queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
-        if (!oldData) return oldData
-        return {
-          ...oldData,
-          accounts: oldData.accounts.map(acc =>
-            acc.id === account.id ? updatedAccount : acc
-          ),
-        }
-      })
-    }
+    if (!updatedAccount) return
+
+    // Optimistically update the query cache
+    queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+      if (!oldData) return oldData
+      return {
+        ...oldData,
+        accounts: oldData.accounts.map(acc =>
+          acc.id === account.id ? updatedAccount : acc
+        ),
+      }
+    })
   }, [updateAccount, queryClient, accountsQueryKey])
 
   const displayedAccounts = useMemo(() => {
@@ -371,6 +372,7 @@ export function AccountsPage() {
               loading={loading || tiersLoading}
               onEdit={handleEditAccount}
               onDelete={(account) => setAccountToDelete(account)}
+              onRowClick={(account) => navigate(`/accounts/${account.id}`)}
               sort={sort}
               onSortChange={setSort}
               institutionOptions={institutionOptions}

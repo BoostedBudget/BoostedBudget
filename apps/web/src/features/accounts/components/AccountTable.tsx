@@ -7,6 +7,7 @@ import type { Account } from '@boostedbudget/api-client/models'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
+import { getAccountTypeLabel, formatAccountBalance } from '../utils'
 
 export type SortColumn = 'institution' | 'name' | 'type' | 'balance'
 export type SortDirection = 'asc' | 'desc'
@@ -41,46 +42,6 @@ export interface AccountTableProps {
   onBalanceRangeChange?: (value: RangeValue | null) => void
 }
 
-function formatBalance(balance: number | undefined): string {
-  if (balance === undefined || balance === null) return '—'
-  const absBalance = Math.abs(balance)
-  const formatted = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(absBalance)
-  return balance < 0 ? `-${formatted}` : formatted
-}
-
-function getAccountTypeLabel(type: string, subtype?: string): string {
-  if (subtype) {
-    switch (subtype.toLowerCase()) {
-      case 'checking': return 'Checking'
-      case 'savings': return 'Savings'
-      case 'credit card': return 'Credit Card'
-      case 'money market': return 'Money Market'
-      case 'cd': return 'CD'
-      case 'paypal': return 'PayPal'
-      case 'brokerage': return 'Brokerage'
-      case '401k': return '401(k)'
-      case 'ira': return 'IRA'
-      case 'roth': return 'Roth IRA'
-      case 'mortgage': return 'Mortgage'
-      case 'auto': return 'Auto Loan'
-      case 'student': return 'Student Loan'
-      default: return subtype.charAt(0).toUpperCase() + subtype.slice(1)
-    }
-  }
-  switch (type.toLowerCase()) {
-    case 'depository': return 'Bank Account'
-    case 'credit': return 'Credit'
-    case 'investment': return 'Investment'
-    case 'loan': return 'Loan'
-    case 'other': return 'Other'
-    default: return type.charAt(0).toUpperCase() + type.slice(1)
-  }
-}
 
 export function AccountTable({
   accounts,
@@ -200,7 +161,7 @@ export function AccountTable({
       defaultSize: 140,
       minSize: 100,
       maxSize: 200,
-      render: (row) => <>{getAccountTypeLabel(row.type, row.subtype)}</>,
+      render: (row) => <>{getAccountTypeLabel(row.type, row.subtype, { surface: 'table' })}</>,
       filter:
         typeOptions && onTypeFilterChange
           ? { type: 'select', options: typeOptions, multiSelect: true }
@@ -241,7 +202,7 @@ export function AccountTable({
                 : 'account-table__balance--positive text-foreground'
             )}
           >
-            {formatBalance(row.current_balance)}
+            {formatAccountBalance(row.current_balance, row.currency_code, { empty: '—' })}
           </span>
         )
       },

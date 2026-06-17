@@ -58,6 +58,9 @@ const CheckoutSuccessPage = lazy(() =>
 const AccountsPage = lazy(() =>
   import('./features/accounts/AccountsPage').then(m => ({ default: m.AccountsPage }))
 )
+const AccountDetailPage = lazy(() =>
+  import('./features/accounts/AccountDetailPage').then(m => ({ default: m.AccountDetailPage }))
+)
 const PlaidOAuthCallback = lazy(() =>
   import('./features/accounts/PlaidOAuthCallback').then(m => ({ default: m.PlaidOAuthCallback }))
 )
@@ -267,6 +270,18 @@ function App() {
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <AccountsPage />
+                    </Suspense>
+                  </PremiumRoute>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/accounts/:accountId"
+              element={
+                <ProtectedRoute>
+                  <PremiumRoute>
+                    <Suspense fallback={<PageSkeleton />}>
+                      <AccountDetailPage />
                     </Suspense>
                   </PremiumRoute>
                 </ProtectedRoute>
