@@ -770,4 +770,57 @@ describe('TransactionTable', () => {
       expect(calledWith.source).toBe('banking')
     })
   })
+
+  // R3 — type-soundness: sparse investment row (API fields may be null pointers)
+  describe('Investment row — sparse fields graceful rendering (R3)', () => {
+    const sparseRow: InvestmentActivity = {
+      id: 'inv-sparse',
+      user_id: 'user-1',
+      account_id: 'acc-1',
+      source: 'investment',
+      amount: 0,
+      date: '2025-03-10',
+      name: 'Unknown investment',
+      // investment-specific fields absent (simulates sparse API response)
+      ticker_symbol: undefined,
+      security_name: undefined,
+      activity_type: undefined,
+      investment_quantity: undefined,
+      investment_price: undefined,
+      investment_fees: undefined,
+      created_at: '2025-03-10T00:00:00Z',
+      updated_at: '2025-03-10T00:00:00Z',
+    }
+
+    it('renders "—" placeholders and never renders the literal string "undefined"', () => {
+      render(
+        <TransactionTable
+          transactions={[sparseRow] as unknown as Transaction[]}
+          accountsMap={mockAccounts}
+        />
+      )
+      // The literal string "undefined" must never appear in the DOM
+      expect(screen.queryByText(/\bundefined\b/)).not.toBeInTheDocument()
+      // Fallback separator renders for missing ticker/security
+      expect(screen.getByText('— · —')).toBeInTheDocument()
+    })
+  })
+
+  // R4 — read-only: mutation callbacks (onEdit/onCategorize) never fire for investment rows
+  describe('Investment row — read-only: mutation callbacks not triggered (R4)', () => {
+    it('onEdit and onCategorize are NOT called when an investment row is clicked', () => {
+      const onEdit = mock(() => {})
+      const onCategorize = mock(() => {})
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onEdit, onCategorize, onRowClick })
+
+      fireEvent.click(screen.getByText('AAPL · Apple Inc.'))
+
+      // onRowClick fires (page routes to drawer)
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      // onEdit and onCategorize must NEVER be triggered for an investment row
+      expect(onEdit).not.toHaveBeenCalled()
+      expect(onCategorize).not.toHaveBeenCalled()
+    })
+  })
 })

@@ -783,6 +783,24 @@ describe('TransactionsPage', () => {
       )
     })
 
+    it('fires INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED when an activity type is toggled (R2)', async () => {
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      // Expand the filter panel
+      const filtersBtn = screen.getByRole('button', { name: /filters/i })
+      await user.click(filtersBtn)
+
+      // Activity-type checkboxes are visible by default (include-investment toggle is ON by default)
+      const buyCheckbox = screen.getByRole('checkbox', { name: /^buy$/i })
+      await user.click(buyCheckbox)
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED,
+        { count: 1 },
+      )
+    })
+
     it('INVESTMENT_DETAIL_DRAWER_OPENED is wired: type guard correctly identifies investment rows', () => {
       // isInvestmentRow is the predicate that gates the trackEvent call in handleRowClick.
       // Verify it correctly classifies rows so the analytics event fires for the right rows.

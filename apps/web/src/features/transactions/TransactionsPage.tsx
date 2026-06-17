@@ -9,7 +9,6 @@ import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable } from './components/TransactionTable'
 import type { TransactionSortColumn, SortDirection } from './components/TransactionTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
-
 import { TransactionEditor } from './components/TransactionEditor'
 import { InvestmentDetailDrawer } from './components/InvestmentDetailDrawer'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
@@ -17,7 +16,7 @@ import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-clien
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useActiveAccounts } from '@/features/accounts/hooks'
-import type { Transaction, FeedRow, InvestmentActivity } from './types'
+import type { Transaction, FeedRow, InvestmentActivity, ActivityType } from './types'
 import { isInvestmentRow } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
@@ -171,7 +170,7 @@ export function TransactionsPage() {
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
   }, [setIncludeInvestmentActivity, trackEvent])
 
-  const handleActivityTypesChange = useCallback((types: Array<import('./types').ActivityType>) => {
+  const handleActivityTypesChange = useCallback((types: ActivityType[]) => {
     setActivityTypes(types)
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED, { count: types.length })
   }, [setActivityTypes, trackEvent])
