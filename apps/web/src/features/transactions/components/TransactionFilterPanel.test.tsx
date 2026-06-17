@@ -48,6 +48,8 @@ const defaultProps = {
   onDatePresetChange: () => {},
   onCustomDateChange: () => {},
   onStatusFilterChange: () => {},
+  onIncludeInvestmentActivityChange: () => {},
+  onActivityTypesChange: () => {},
   onClearFilter: () => {},
   onClearAllFilters: () => {},
 }
@@ -65,7 +67,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
     const { container } = render(<TransactionFilterPanel {...defaultProps} />)
 
     // Expand the panel to reveal the filter controls
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // Bug #1193: sm:grid-cols-2 causes the DateRangePicker ToggleGroup (~826px) to
@@ -78,7 +80,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   it('all 8 date preset buttons are present in the DOM when panel is expanded', () => {
     render(<TransactionFilterPanel {...defaultProps} />)
 
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // These three were previously hidden behind the Status section at 1024px
@@ -95,7 +97,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   it('Status filter buttons are present alongside Date presets when expanded', () => {
     render(<TransactionFilterPanel {...defaultProps} />)
 
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // Status buttons must co-exist in DOM with date presets (not covered)

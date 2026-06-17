@@ -29,18 +29,18 @@ export function TransactionsPage() {
   const {
     filters,
     sort,
-    datePreset,
-    statusFilter,
-    activeFilterCount,
     hasActiveFilters,
     setFilter,
     setFilters,
-    clearFilter,
     clearAllFilters,
     setSort,
+    datePreset,
+    statusFilter,
     setDatePreset,
     setCustomDateRange,
     setStatusFilter,
+    setIncludeInvestmentActivity,
+    setActivityTypes,
   } = useTransactionFilters()
 
   const sortColumn = (sort?.columnId ?? 'date') as TransactionSortColumn
@@ -245,16 +245,12 @@ export function TransactionsPage() {
         filters={filters}
         datePreset={datePreset}
         statusFilter={statusFilter}
-        activeFilterCount={activeFilterCount}
-        hasActiveFilters={hasActiveFilters}
         pendingCount={pendingCount}
-        onFilterChange={setFilter}
-        onFiltersChange={setFilters}
         onDatePresetChange={setDatePreset}
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
-        onClearFilter={clearFilter}
-        onClearAllFilters={clearAllFilters}
+        onIncludeInvestmentActivityChange={setIncludeInvestmentActivity}
+        onActivityTypesChange={setActivityTypes}
         disabled={isLoading}
       />
 
