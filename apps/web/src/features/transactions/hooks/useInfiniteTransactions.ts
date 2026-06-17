@@ -42,6 +42,11 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.max_amount !== undefined && { max_amount: String(filters.max_amount) }),
     ...(filters.amount_type && filters.amount_type !== 'all' && { amount_type: filters.amount_type }),
     ...(filters.merchant_id && { merchant_id: filters.merchant_id }),
+    // Issue #1299: Investment activity filters
+    ...(filters.include_investment_activity !== undefined && {
+      include_investment_activity: String(filters.include_investment_activity),
+    }),
+    ...(filters.activity_types?.length && { activity_types: filters.activity_types.join(',') }),
   };
 }
 
@@ -88,9 +93,7 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
   const updateTransaction = useCallback(
     async (updated: ApiTransaction) => {
       await queryClient.cancelQueries({ queryKey });
-      // The API now returns ActivityItem (superset of Transaction). Spread the banking
-      // fields from the updated Transaction into the existing ActivityItem to preserve
-      // investment-specific fields (source, ticker, etc.) that the caller doesn't own.
+      // Merge updated fields into existing ActivityItem to preserve investment-specific fields.
       queryClient.setQueryData<InfiniteData<GetTransactionsOutputBody>>(
         queryKey,
         (old): InfiniteData<GetTransactionsOutputBody> | undefined => {

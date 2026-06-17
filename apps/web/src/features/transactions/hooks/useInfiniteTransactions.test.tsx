@@ -12,9 +12,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useInfiniteTransactions } from './useInfiniteTransactions'
 import type { TransactionFiltersState } from './useInfiniteTransactions'
-import { mockGetTransactions } from '@/test/mocks/transactions-api'
+import { mockGetTransactions, makeInvestmentActivityFixture } from '@/test/mocks/transactions-api'
 import type { GetTransactionsOutputBody } from '@boostedbudget/api-client/models/getTransactionsOutputBody'
-import type { Transaction } from '../types'
+import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem'
+import type { Transaction, InvestmentActivity } from '../types'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -220,6 +221,44 @@ describe('useInfiniteTransactions', () => {
       expect(callParams.pfc_detaileds).toBe('FOOD_AND_DRINK_COFFEE,FOOD_AND_DRINK_RESTAURANT')
     })
 
+    it('forwards include_investment_activity filter to getTransactions API call', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: { include_investment_activity: false },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(mockGetTransactions).toHaveBeenCalled()
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.include_investment_activity).toBe('false')
+    })
+
+    it('forwards activity_types filter to getTransactions API call as comma-separated string', async () => {
+      mockGetTransactions.mockResolvedValue(page1Response)
+
+      const { result } = renderHook(
+        () =>
+          useInfiniteTransactions({
+            ...defaultOpts,
+            filters: { activity_types: ['buy', 'dividend'] },
+          }),
+        { wrapper: createWrapper() },
+      )
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(mockGetTransactions).toHaveBeenCalled()
+      const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
+      expect(callParams.activity_types).toBe('buy,dividend')
+    })
+
     it('forwards pfc_primaries filter to getTransactions API call', async () => {
       mockGetTransactions.mockResolvedValue(page1Response)
 
@@ -245,6 +284,67 @@ describe('useInfiniteTransactions', () => {
       expect(mockGetTransactions).toHaveBeenCalled()
       const callParams = mockGetTransactions.mock.calls[0][0] as Record<string, unknown>
       expect(callParams.pfc_primaries).toBe('FOOD_AND_DRINK,TRANSPORTATION')
+    })
+  })
+
+  describe('FeedRow — investment activity in pages', () => {
+    it('returns investment rows alongside banking rows when mock returns mixed page', async () => {
+      const investmentItem = makeInvestmentActivityFixture('inv-1')
+      const mixedPageResponse: GetTransactionsOutputBody = {
+        transactions: [makeTxn('txn-1') as unknown as ActivityItem, investmentItem as unknown as ActivityItem],
+        limit: 50,
+        next_cursor: undefined,
+      }
+      mockGetTransactions.mockResolvedValue(mixedPageResponse)
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      expect(result.current.transactions).toHaveLength(2)
+      const invRow = result.current.transactions.find((t) => t.id === 'inv-1')
+      expect(invRow?.source).toBe('investment')
+    })
+
+    it('preserves investment-specific fields when updateTransaction is called on a banking row', async () => {
+      // Verify that updating a banking transaction does NOT clobber investment fields
+      // on other rows in the same page (spread order: {...t, ...updated} preserves t's fields
+      // when updated does not own them).
+      const investmentItem = makeInvestmentActivityFixture('inv-2')
+      const pageWithMixed: GetTransactionsOutputBody = {
+        transactions: [makeTxn('txn-A') as unknown as ActivityItem, investmentItem as unknown as ActivityItem],
+        limit: 50,
+        next_cursor: undefined,
+      }
+      mockGetTransactions.mockResolvedValue(pageWithMixed)
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(result.current.transactions).toHaveLength(2)
+
+      // Update the banking row — investment row's fields must be untouched
+      const updatedBanking = { ...makeTxn('txn-A'), name: 'Updated Banking Row' } as Parameters<typeof result.current.updateTransaction>[0]
+      await act(async () => {
+        await result.current.updateTransaction(updatedBanking)
+      })
+
+      await waitFor(() => {
+        const banking = result.current.transactions.find((t) => t.id === 'txn-A')
+        expect(banking?.name).toBe('Updated Banking Row')
+
+        const inv = result.current.transactions.find((t) => t.id === 'inv-2')
+        expect(inv?.source).toBe('investment')
+        // Investment-specific fields preserved
+        const invAsInv = inv as InvestmentActivity
+        expect(invAsInv.ticker_symbol).toBe('AAPL')
+        expect(invAsInv.investment_quantity).toBe(10)
+        expect(invAsInv.investment_price).toBe(150.0)
+      })
     })
   })
 
