@@ -130,6 +130,13 @@ describe('PortfolioHoldingsWidget', () => {
       mockUseGetHoldings.mockReturnValue({ ...defaultQueryState, data: mockData })
     })
 
+    it('renders Ticker / Value / Day % column headers', () => {
+      renderWidget()
+      expect(screen.getByText('Ticker')).toBeInTheDocument()
+      expect(screen.getByText('Value')).toBeInTheDocument()
+      expect(screen.getByText('Day %')).toBeInTheDocument()
+    })
+
     it('renders top 5 holdings by default (topN=5)', () => {
       renderWidget()
       const rows = document.querySelectorAll('[data-testid="holding-row"]')
