@@ -9,8 +9,13 @@
 
 import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { AccountCard } from './AccountCard'
 import type { Account } from './types'
+
+function renderWithRouter(ui: React.ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>)
+}
 
 describe('AccountCard', () => {
   const mockAccount: Account = {
@@ -33,7 +38,7 @@ describe('AccountCard', () => {
   }
 
   it('should render account information', () => {
-    render(<AccountCard account={mockAccount} />)
+    renderWithRouter(<AccountCard account={mockAccount} />)
 
     // Check institution name
     expect(screen.getByText('Chase')).toBeInTheDocument()
@@ -60,7 +65,7 @@ describe('AccountCard', () => {
       official_name: undefined,
     }
 
-    render(<AccountCard account={accountWithoutOfficialName} />)
+    renderWithRouter(<AccountCard account={accountWithoutOfficialName} />)
 
     expect(screen.getByText('Chase Checking')).toBeInTheDocument()
   })
@@ -71,7 +76,7 @@ describe('AccountCard', () => {
       institution_name: undefined,
     }
 
-    render(<AccountCard account={accountWithoutInstitution} />)
+    renderWithRouter(<AccountCard account={accountWithoutInstitution} />)
 
     expect(screen.getByText('Unknown Bank')).toBeInTheDocument()
   })
@@ -82,7 +87,7 @@ describe('AccountCard', () => {
       mask: undefined,
     }
 
-    const { container } = render(<AccountCard account={accountWithoutMask} />)
+    const { container } = renderWithRouter(<AccountCard account={accountWithoutMask} />)
 
     expect(container.textContent).not.toContain('****')
   })
@@ -94,7 +99,7 @@ describe('AccountCard', () => {
       available_balance: undefined,
     }
 
-    render(<AccountCard account={accountWithoutBalances} />)
+    renderWithRouter(<AccountCard account={accountWithoutBalances} />)
 
     const balanceElements = screen.getAllByText('N/A')
     expect(balanceElements.length).toBeGreaterThan(0)
@@ -107,7 +112,7 @@ describe('AccountCard', () => {
       available_balance: 2500.50,
     }
 
-    render(<AccountCard account={accountWithSameBalances} />)
+    renderWithRouter(<AccountCard account={accountWithSameBalances} />)
 
     // Only one instance of $2,500.50 should appear (current balance)
     const balances = screen.getAllByText('$2,500.50')
@@ -122,7 +127,7 @@ describe('AccountCard', () => {
       name: 'Chase Freedom',
     }
 
-    render(<AccountCard account={creditCardAccount} />)
+    renderWithRouter(<AccountCard account={creditCardAccount} />)
 
     expect(screen.getByText('Credit Card - Credit card')).toBeInTheDocument()
   })
@@ -135,7 +140,7 @@ describe('AccountCard', () => {
       name: 'Home Mortgage',
     }
 
-    render(<AccountCard account={loanAccount} />)
+    renderWithRouter(<AccountCard account={loanAccount} />)
 
     expect(screen.getByText('Loan - Mortgage')).toBeInTheDocument()
   })
@@ -148,7 +153,7 @@ describe('AccountCard', () => {
       name: 'Retirement Account',
     }
 
-    render(<AccountCard account={investmentAccount} />)
+    renderWithRouter(<AccountCard account={investmentAccount} />)
 
     expect(screen.getByText('Investment - 401k')).toBeInTheDocument()
   })
@@ -159,7 +164,7 @@ describe('AccountCard', () => {
       subtype: undefined,
     }
 
-    render(<AccountCard account={accountWithoutSubtype} />)
+    renderWithRouter(<AccountCard account={accountWithoutSubtype} />)
 
     expect(screen.getByText('Bank Account')).toBeInTheDocument()
   })
@@ -171,10 +176,49 @@ describe('AccountCard', () => {
       current_balance: 1500.75,
     }
 
-    render(<AccountCard account={eurAccount} />)
+    renderWithRouter(<AccountCard account={eurAccount} />)
 
     // EUR symbol should be present
     expect(screen.getByText(/€1,500.75/)).toBeInTheDocument()
+  })
+
+  describe('summary region link (Task 6)', () => {
+    it('renders a link to /accounts/:id wrapping the summary region', () => {
+      renderWithRouter(<AccountCard account={mockAccount} />)
+
+      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      expect(link).toBeInTheDocument()
+      expect(link).toHaveAttribute('href', `/accounts/${mockAccount.id}`)
+    })
+
+    it('Edit and Delete buttons are NOT nested inside the summary link', () => {
+      renderWithRouter(
+        <AccountCard account={mockAccount} onEdit={mock(() => {})} onDelete={mock(() => {})} />
+      )
+
+      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      // Buttons should be outside the link element
+      expect(link.querySelector('button')).toBeNull()
+    })
+
+    it('Edit button is present as a sibling outside the link', () => {
+      const onEdit = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onEdit={onEdit} />)
+
+      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const editButton = screen.getByRole('button', { name: /edit account/i })
+      // The edit button should not be a descendant of the link
+      expect(link.contains(editButton)).toBe(false)
+    })
+
+    it('Delete button is present as a sibling outside the link', () => {
+      const onDelete = mock(() => {})
+      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
+
+      const link = screen.getByRole('link', { name: /view chase total checking account details/i })
+      const deleteButton = screen.getByText('Delete Account')
+      expect(link.contains(deleteButton)).toBe(false)
+    })
   })
 
   describe('onDelete behavior (Task 8: remove window.confirm)', () => {
@@ -190,7 +234,7 @@ describe('AccountCard', () => {
 
     it('calls onDelete with the full account object when Delete Account is clicked', () => {
       const onDelete = mock(() => {})
-      render(<AccountCard account={mockAccount} onDelete={onDelete} />)
+      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
 
       fireEvent.click(screen.getByText('Delete Account'))
 
@@ -200,7 +244,7 @@ describe('AccountCard', () => {
 
     it('does NOT call window.confirm when Delete Account is clicked', () => {
       const onDelete = mock(() => {})
-      render(<AccountCard account={mockAccount} onDelete={onDelete} />)
+      renderWithRouter(<AccountCard account={mockAccount} onDelete={onDelete} />)
 
       fireEvent.click(screen.getByText('Delete Account'))
 
