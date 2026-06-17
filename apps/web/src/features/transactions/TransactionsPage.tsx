@@ -281,6 +281,7 @@ export function TransactionsPage() {
         onStatusFilterChange={setStatusFilter}
         onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
         onActivityTypesChange={handleActivityTypesChange}
+        onClearAll={clearAllFilters}
         disabled={isLoading}
       />
 

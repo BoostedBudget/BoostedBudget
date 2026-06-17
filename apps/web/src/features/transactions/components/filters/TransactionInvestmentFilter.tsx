@@ -8,7 +8,8 @@ import { Switch } from '@/components/ui/switch'
 import { ACTIVITY_TYPE_CONFIG } from '@/shared/components/ActivityTypeChip'
 import type { ActivityType } from '../../types'
 
-const ACTIVITY_TYPES = Object.keys(ACTIVITY_TYPE_CONFIG) as ActivityType[]
+// Static array avoids Object.keys() at module level — cross-chunk TDZ in Rolldown prod bundle.
+const ACTIVITY_TYPES: ActivityType[] = ['buy', 'sell', 'dividend', 'reinvest', 'fee', 'cash', 'other']
 
 interface TransactionInvestmentFilterProps {
   includeInvestmentActivity: boolean

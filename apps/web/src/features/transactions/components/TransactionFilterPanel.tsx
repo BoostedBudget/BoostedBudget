@@ -35,6 +35,7 @@ interface TransactionFilterPanelProps {
   onStatusFilterChange: (status: StatusFilter) => void
   onIncludeInvestmentActivityChange: (val: boolean) => void
   onActivityTypesChange: (types: ActivityType[]) => void
+  onClearAll?: () => void
   disabled?: boolean
 }
 
@@ -102,6 +103,7 @@ export function TransactionFilterPanel({
   onStatusFilterChange,
   onIncludeInvestmentActivityChange,
   onActivityTypesChange,
+  onClearAll,
   disabled,
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -111,8 +113,14 @@ export function TransactionFilterPanel({
   const includeInvestmentActivity = filters.include_investment_activity ?? true
   const activityTypes = (filters.activity_types ?? []) as ActivityType[]
 
-  // Consolidated clear all handler
+  // Consolidated clear all handler — use atomic onClearAll (single setSearchParams) when
+  // provided to avoid the multi-call race where the last setSearchParams overwrites earlier
+  // ones if they all read from the same original URL state.
   const handleClearAllFilters = () => {
+    if (onClearAll) {
+      onClearAll()
+      return
+    }
     onDatePresetChange('all')
     onStatusFilterChange('all')
     onIncludeInvestmentActivityChange(true)
