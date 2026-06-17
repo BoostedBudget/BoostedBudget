@@ -8,6 +8,7 @@ import {
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { formatCurrencyFull } from '@/shared/charts/formatters'
+import type { Account } from '@/features/accounts/types'
 import type { InvestmentActivity } from '../types'
 import { formatDate } from '@/shared/transactions/dates'
 
@@ -15,6 +16,8 @@ interface InvestmentDetailDrawerProps {
   transaction: InvestmentActivity | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Optional lookup map (account_id → Account) to resolve nickname/name. Falls back to raw id. */
+  accountsMap?: Record<string, Account>
 }
 
 
@@ -46,6 +49,7 @@ export function InvestmentDetailDrawer({
   transaction,
   open,
   onOpenChange,
+  accountsMap,
 }: InvestmentDetailDrawerProps) {
   if (!transaction) return null
 
@@ -60,6 +64,9 @@ export function InvestmentDetailDrawer({
     account_id,
     date,
   } = transaction
+
+  const acc = accountsMap?.[account_id]
+  const accountDisplay = acc?.nickname ?? acc?.name ?? account_id
 
   const feesDisplay =
     investment_fees == null || investment_fees === 0
@@ -123,7 +130,7 @@ export function InvestmentDetailDrawer({
 
           <DetailRow label="Account">
             <span data-ph-mask="" data-testid="account-value">
-              {account_id}
+              {accountDisplay}
             </span>
           </DetailRow>
 

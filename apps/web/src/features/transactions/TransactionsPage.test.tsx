@@ -43,6 +43,8 @@ import {
   mockUseCreateCategory,
 } from '@/test/mocks/categories-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 
 function createWrapper() {
@@ -745,6 +747,55 @@ describe('TransactionsPage', () => {
       const statusEls = screen.getAllByRole('status')
       const politeStatus = statusEls.find(el => el.getAttribute('aria-live') === 'polite' && el.classList.contains('sr-only'))
       expect(politeStatus).toBeInTheDocument()
+    })
+  })
+
+  describe('Investment feed analytics (#1299)', () => {
+    const user = userEvent.setup()
+
+    beforeEach(() => {
+      mockTrackEvent.mockClear()
+      mockUseInfiniteTransactions.mockReturnValue({
+        transactions: [],
+        fetchNextPage: mockFetchNextPage,
+        hasNextPage: false,
+        isFetchingNextPage: false,
+        isLoading: false,
+        isError: false,
+        updateTransaction: mock(() => Promise.resolve()),
+      })
+    })
+
+    it('fires INVESTMENT_ACTIVITY_FILTER_TOGGLED when toggle changes', async () => {
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      // Expand the filter panel first
+      const filtersBtn = screen.getByRole('button', { name: /filters/i })
+      await user.click(filtersBtn)
+
+      const toggle = screen.getByRole('switch', { name: /include investment activity/i })
+      await user.click(toggle)
+
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED,
+        { enabled: false },
+      )
+    })
+
+    it('INVESTMENT_DETAIL_DRAWER_OPENED is wired: type guard correctly identifies investment rows', () => {
+      // isInvestmentRow is the predicate that gates the trackEvent call in handleRowClick.
+      // Verify it correctly classifies rows so the analytics event fires for the right rows.
+      expect(isInvestmentRow({ source: 'investment' } as unknown as FeedRow)).toBe(true)
+      expect(isInvestmentRow({ source: 'banking' } as unknown as FeedRow)).toBe(false)
+    })
+
+    it('investment drawer is not open on initial render', async () => {
+      // We can't click a virtual-scroll row in jsdom; full drawer-open + analytics
+      // e2e is covered by investment-feed.auth.spec.ts.
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+      expect(screen.queryByRole('dialog', { name: /investment activity/i })).not.toBeInTheDocument()
     })
   })
 

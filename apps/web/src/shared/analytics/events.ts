@@ -166,6 +166,11 @@ export const ANALYTICS_EVENTS = {
   PORTFOLIO_HOLDINGS_WIDGET_VIEWED: 'portfolio_holdings_widget_viewed',
   ASSET_ALLOCATION_WIDGET_VIEWED: 'asset_allocation_widget_viewed',
 
+  // Unified investment feed (#1299)
+  INVESTMENT_ACTIVITY_FILTER_TOGGLED: 'investment_activity_filter_toggled',
+  INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
+  INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
+
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',
