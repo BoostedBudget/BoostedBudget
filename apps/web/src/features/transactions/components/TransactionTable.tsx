@@ -150,7 +150,7 @@ export function TransactionTable({
           const inv = row as unknown as InvestmentActivity
           return (
             <div className="font-medium text-foreground">
-              {inv.ticker_symbol} · {inv.security_name}
+              {inv.ticker_symbol ?? '—'} · {inv.security_name ?? '—'}
             </div>
           )
         }

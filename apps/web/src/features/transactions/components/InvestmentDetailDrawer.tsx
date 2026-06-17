@@ -68,6 +68,12 @@ export function InvestmentDetailDrawer({
   const acc = accountsMap?.[account_id]
   const accountDisplay = acc?.nickname ?? acc?.name ?? account_id
 
+  // Defensive coalescing: generated API model marks investment fields optional (nullable
+  // pointers in the backend), so guard against undefined to avoid rendering "undefined".
+  const securityDisplay = security_name ?? '—'
+  const tickerDisplay = ticker_symbol ?? '—'
+  const quantityDisplay = investment_quantity != null ? `${investment_quantity} shares` : '—'
+  const priceDisplay = investment_price != null ? formatCurrencyFull(investment_price) : '—'
   const feesDisplay =
     investment_fees == null || investment_fees === 0
       ? '—'
@@ -81,18 +87,18 @@ export function InvestmentDetailDrawer({
         <SheetHeader>
           <SheetTitle>Investment Activity</SheetTitle>
           <SheetDescription data-ph-mask="" data-testid="security-name-header">
-            {security_name}
+            {securityDisplay}
           </SheetDescription>
         </SheetHeader>
 
         <div className="flex flex-col px-4 pb-4 overflow-y-auto">
           <DetailRow label="Security">
             <span data-ph-mask="" data-testid="security-name-value">
-              {security_name}
+              {securityDisplay}
             </span>
             {' '}
             <span data-ph-mask="" data-testid="ticker-symbol-value" className="text-muted-foreground">
-              ({ticker_symbol})
+              ({tickerDisplay})
             </span>
           </DetailRow>
 
@@ -102,13 +108,13 @@ export function InvestmentDetailDrawer({
 
           <DetailRow label="Quantity">
             <span data-ph-mask="" data-testid="quantity-value">
-              {investment_quantity} shares
+              {quantityDisplay}
             </span>
           </DetailRow>
 
           <DetailRow label="Price/share">
             <span data-ph-mask="" data-testid="price-value">
-              {formatCurrencyFull(investment_price)}
+              {priceDisplay}
             </span>
           </DetailRow>
 
