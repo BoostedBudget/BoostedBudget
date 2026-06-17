@@ -53,6 +53,20 @@ function setViewportWidth(width: number) {
   window.dispatchEvent(new Event('resize'))
 }
 
+describe('TransactionFilterPanel — mobile label consistency (F4)', () => {
+  beforeEach(() => setViewportWidth(375))
+  afterEach(() => setViewportWidth(0))
+
+  it('mobile trigger button is labeled "Filters", not "Date & Status"', () => {
+    render(<TransactionFilterPanel {...defaultProps} />)
+    // The mobile Sheet trigger must say "Filters" — consistent with desktop header
+    // and mobile SheetTitle. "Date & Status" is stale now that the investment filter
+    // is also inside the sheet.
+    expect(screen.getByText('Filters')).toBeInTheDocument()
+    expect(screen.queryByText('Date & Status')).not.toBeInTheDocument()
+  })
+})
+
 describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   beforeEach(() => setViewportWidth(1280))
   afterEach(() => setViewportWidth(0))

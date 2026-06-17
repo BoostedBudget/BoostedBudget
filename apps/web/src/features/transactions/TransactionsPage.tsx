@@ -39,7 +39,9 @@ export function computeEffectiveSort(
   sort: SortState | null,
   includeInvestments: boolean,
 ): SortState | null {
-  if (!sort || !includeInvestments || sort.columnId === 'date') return sort
+  if (!includeInvestments) return sort
+  if (!sort) return { columnId: 'date', direction: 'desc' }
+  if (sort.columnId === 'date') return sort
   return { columnId: 'date', direction: sort.direction }
 }
 
@@ -235,8 +237,10 @@ export function TransactionsPage() {
     }
   }
 
-  const pendingCount = infiniteTransactions.filter((t) => t.pending).length
-
+  const pendingCount = useMemo(
+    () => infiniteTransactions.filter((t) => t.pending).length,
+    [infiniteTransactions]
+  )
 
   if (isError && !infiniteTransactions.length) {
     return (

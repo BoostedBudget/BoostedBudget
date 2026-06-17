@@ -108,10 +108,14 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       merchant_id:   state.filters.merchant_id,
       // Issue #1299: include_investment_activity — undefined means default (true)
       include_investment_activity: state.filters.include_investment_activity,
-      // activity_types cleared when include=false (canonicalization rule)
-      activity_types: state.filters.activity_types.length > 0
-        ? state.filters.activity_types as ActivityType[]
-        : undefined,
+      // activity_types is meaningless when investment activity is disabled (include=false).
+      // Suppress in derived state so deep-linked URLs (?include=false&activity_types=buy)
+      // don't count stale types in activeFilterCount or show phantom filter pills (F2).
+      activity_types:
+        state.filters.include_investment_activity !== false &&
+        state.filters.activity_types.length > 0
+          ? state.filters.activity_types as ActivityType[]
+          : undefined,
     }),
     [state.filters],
   )

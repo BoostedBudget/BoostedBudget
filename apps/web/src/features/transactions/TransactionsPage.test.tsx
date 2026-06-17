@@ -816,7 +816,10 @@ describe('TransactionsPage', () => {
       const amountSort: SortState = { columnId: 'amount', direction: 'desc' }
       expect(computeEffectiveSort(amountSort, true)).toEqual({ columnId: 'date', direction: 'desc' })
       expect(computeEffectiveSort(amountSort, false)).toEqual(amountSort)
-      expect(computeEffectiveSort(null, true)).toBeNull()
+      // null sort + investments ON → force date:desc (F1: null-sort case missed by T3)
+      expect(computeEffectiveSort(null, true)).toEqual({ columnId: 'date', direction: 'desc' })
+      // null sort + investments OFF → pass through null
+      expect(computeEffectiveSort(null, false)).toBeNull()
       // Already date — no change
       const dateSort: SortState = { columnId: 'date', direction: 'asc' }
       expect(computeEffectiveSort(dateSort, true)).toEqual(dateSort)
