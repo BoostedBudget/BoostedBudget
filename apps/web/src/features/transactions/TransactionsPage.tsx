@@ -11,12 +11,13 @@ import type { TransactionSortColumn, SortDirection } from './components/Transact
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 import { TransactionEditor } from './components/TransactionEditor'
+import { InvestmentDetailDrawer } from './components/InvestmentDetailDrawer'
 import { TransactionFilterPanel } from './components/TransactionFilterPanel'
 import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-client/endpoints/tags/tags'
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useActiveAccounts } from '@/features/accounts/hooks'
-import type { Transaction, FeedRow } from './types'
+import type { Transaction, FeedRow, InvestmentActivity } from './types'
 import { isInvestmentRow } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
@@ -47,6 +48,8 @@ export function TransactionsPage() {
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
+  const [selectedInvestment, setSelectedInvestment] = useState<InvestmentActivity | null>(null)
+  const [isInvestmentDrawerOpen, setIsInvestmentDrawerOpen] = useState(false)
   const queryClient = useQueryClient()
   const trackEvent = useTrackEvent()
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -156,6 +159,15 @@ export function TransactionsPage() {
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
   }, [])
+
+  const handleRowClick = useCallback((row: Transaction) => {
+    if (isInvestmentRow(row as unknown as FeedRow)) {
+      setSelectedInvestment(row as unknown as InvestmentActivity)
+      setIsInvestmentDrawerOpen(true)
+    } else {
+      handleOpenEditor(row)
+    }
+  }, [handleOpenEditor])
 
   const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
@@ -289,6 +301,7 @@ export function TransactionsPage() {
               accountsMap={accountsMap}
               onEdit={handleOpenEditor}
               onCategorize={handleOpenEditor}
+              onRowClick={handleRowClick}
               loading={isLoading}
               sort={sort}
               onSortChange={setSort}
@@ -338,6 +351,12 @@ export function TransactionsPage() {
           onCategoryCreated={handleCategoryCreated}
         />
       )}
+
+      <InvestmentDetailDrawer
+        transaction={selectedInvestment}
+        open={isInvestmentDrawerOpen}
+        onOpenChange={setIsInvestmentDrawerOpen}
+      />
     </main>
   )
 }
