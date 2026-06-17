@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'
@@ -43,6 +44,7 @@ function getInitialView(): ListView {
 
 export function AccountsPage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [showHidden, setShowHidden] = useState(false)
   const [view, setView] = useState<ListView>(getInitialView)
@@ -373,6 +375,7 @@ export function AccountsPage() {
               loading={loading || tiersLoading}
               onEdit={handleEditAccount}
               onDelete={(account) => setAccountToDelete(account)}
+              onRowClick={(account) => navigate(`/accounts/${account.id}`)}
               sort={sort}
               onSortChange={setSort}
               institutionOptions={institutionOptions}
