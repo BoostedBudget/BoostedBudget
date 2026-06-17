@@ -4,10 +4,12 @@
  * Purely presentational header region extracted from AccountCard.
  * Renders: institution row, icon+name row, type label, and balance rows.
  *
- * Intentionally free of hooks, side effects, drag handles, badges, and action buttons.
- * Those concerns stay in AccountCard.
+ * Intentionally free of hooks, side effects, and action buttons.
+ * Drag handles and status badges stay in AccountCard; they are injected via
+ * the `institutionRowLeadingSlot` and `institutionRowTrailingSlot` render props
+ * so the institution row remains a single horizontal flex row (preserving layout).
  *
- * Issue #1298: Investment account holdings detail
+ * Issue #1298: Extract AccountSummaryHeader from AccountCard
  */
 
 import { AccountIconDisplay } from './AccountIconDisplay'
@@ -25,6 +27,16 @@ export interface AccountSummaryHeaderProps {
   customEmoji?: string | null
   customIcon?: string | null
   customColor?: string | null
+  /**
+   * Optional content rendered at the start of the institution row (before institution name).
+   * AccountCard uses this for the drag handle.
+   */
+  institutionRowLeadingSlot?: React.ReactNode
+  /**
+   * Optional content rendered at the end of the institution row (after mask).
+   * AccountCard uses this for Hidden/Disconnected badges.
+   */
+  institutionRowTrailingSlot?: React.ReactNode
 }
 
 export function AccountSummaryHeader({
@@ -38,22 +50,30 @@ export function AccountSummaryHeader({
   customEmoji,
   customIcon,
   customColor,
+  institutionRowLeadingSlot,
+  institutionRowTrailingSlot,
 }: AccountSummaryHeaderProps) {
   const currentBalanceFormatted = formatAccountBalance(currentBalance, currencyCode, { empty: 'N/A' })
   const availableBalanceFormatted = formatAccountBalance(availableBalance, currencyCode, { empty: 'N/A' })
 
   return (
     <>
-      {/* Institution row */}
-      <div className="flex items-center justify-between mb-4 pb-3 border-b border-border">
+      {/* Institution row: leading slot (drag handle) | institution name | mask | trailing slot (badges) */}
+      <div className="flex items-center gap-3 mb-4 pb-3 border-b border-border">
+        {institutionRowLeadingSlot}
+
         <div className="font-semibold text-sm text-muted-foreground uppercase tracking-wide flex-1">
           <span data-ph-mask>{institutionName || 'Unknown Bank'}</span>
         </div>
-        {mask && (
-          <div className="font-mono text-sm text-muted-foreground" data-ph-mask>
-            ****{mask}
-          </div>
-        )}
+
+        <div className="flex items-center gap-3">
+          {institutionRowTrailingSlot}
+          {mask && (
+            <div className="font-mono text-sm text-muted-foreground" data-ph-mask>
+              ****{mask}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Icon + name row */}
@@ -91,7 +111,7 @@ export function AccountSummaryHeader({
               {currentBalanceFormatted}
             </span>
           </div>
-          {availableBalance !== undefined && availableBalance !== null && availableBalance !== currentBalance && (
+          {availableBalance !== undefined && availableBalance !== currentBalance && (
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Available Balance</span>
               <span className="text-lg font-semibold text-primary" data-ph-mask>

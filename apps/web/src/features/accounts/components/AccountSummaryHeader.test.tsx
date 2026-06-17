@@ -89,14 +89,16 @@ describe('AccountSummaryHeader', () => {
     expect(screen.queryByText('Available Balance')).toBeNull()
   })
 
-  it('does NOT render available balance when null', () => {
+  it('renders available balance as N/A when null (null treated as defined, differs from current)', () => {
+    // null !== undefined, null !== currentBalance — so the row is shown with N/A
     render(
       <AccountSummaryHeader
         {...baseProps}
         availableBalance={null}
       />
     )
-    expect(screen.queryByText('Available Balance')).toBeNull()
+    expect(screen.getByText('Available Balance')).toBeInTheDocument()
+    expect(screen.getByText('N/A')).toBeInTheDocument()
   })
 
   it('renders N/A for undefined current balance', () => {
@@ -146,5 +148,27 @@ describe('AccountSummaryHeader', () => {
   it('renders "Unknown Bank" when institutionName is empty string', () => {
     render(<AccountSummaryHeader {...baseProps} institutionName="" />)
     expect(screen.getByText('Unknown Bank')).toBeInTheDocument()
+  })
+
+  it('renders institutionRowLeadingSlot inside the institution row', () => {
+    render(
+      <AccountSummaryHeader
+        {...baseProps}
+        institutionRowLeadingSlot={<span data-testid="drag-handle">drag</span>}
+      />
+    )
+    expect(screen.getByTestId('drag-handle')).toBeInTheDocument()
+  })
+
+  it('renders institutionRowTrailingSlot inside the institution row alongside mask', () => {
+    render(
+      <AccountSummaryHeader
+        {...baseProps}
+        mask="9999"
+        institutionRowTrailingSlot={<span data-testid="badge">Hidden</span>}
+      />
+    )
+    expect(screen.getByTestId('badge')).toBeInTheDocument()
+    expect(screen.getByText('****9999')).toBeInTheDocument()
   })
 })
