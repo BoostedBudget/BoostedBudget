@@ -127,6 +127,12 @@ type Budget struct {
 	// IncomeAmount remains for backward compatibility and tracks actual income received.
 	ExpectedIncome float64 `json:"expected_income" db:"expected_income"`
 
+	// SeriesID groups recurring budget periods together (Issue #1300 G5 / migration 000098).
+	// When a budget is standalone it is its own series (SeriesID == ID). When a budget is
+	// created as a continuation of a prior period, SeriesID is inherited from the ancestor
+	// so savings-goal detach tombstones persist across the whole series rather than per-period.
+	SeriesID string `json:"series_id" db:"series_id"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
 }
@@ -337,15 +343,22 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 }
 
 // BudgetCategory represents a category allocation within a budget.
-// Uses a discriminated union: category_kind='pfc' (pfc_primary required) or
-// category_kind='custom' (custom_category_id required).
+// Uses a discriminated union: category_kind='pfc' (pfc_primary required),
+// category_kind='custom' (custom_category_id required), or
+// category_kind='savings' (savings_goal_id required — Issue #1300).
 type BudgetCategory struct {
 	ID               string    `json:"id" db:"id"`
 	BudgetID         string    `json:"budget_id" db:"budget_id"`
-	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc" or "custom"
+	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
 	PFCPrimary       *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
 	PFCDetailed      *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
 	CustomCategoryID *string   `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	// SavingsGoalID links this category to a SavingsGoal (required when kind=savings — Issue #1300).
+	SavingsGoalID *string `json:"savings_goal_id,omitempty" db:"savings_goal_id"`
+	// AutoCreated marks categories automatically created when a savings goal was created.
+	AutoCreated bool `json:"auto_created" db:"auto_created"`
+	// ManagedByGoalID is the goal ID that auto-created this category (populated when AutoCreated=true).
+	ManagedByGoalID *string   `json:"managed_by_goal_id,omitempty" db:"managed_by_goal_id"`
 	AllocatedAmount  float64   `json:"allocated_amount" db:"allocated_amount"`
 	SpentAmount      float64   `json:"spent_amount" db:"spent_amount"`
 	CreatedAt        time.Time `json:"created_at" db:"created_at"`
@@ -360,6 +373,11 @@ type BudgetCategory struct {
 	// (a child whose parent is also budgeted) so totals aren't double-counted.
 	CustomParentID         *string `json:"custom_parent_id,omitempty" db:"-"`
 	CustomParentPFCPrimary *string `json:"custom_parent_pfc_primary,omitempty" db:"-"`
+
+	// SavingsGoalName is the display name of the linked savings goal, populated
+	// via a JOIN when categories are loaded (Issue #1300). Not stored in the
+	// budget_categories table — sourced from savings_goals.name on read.
+	SavingsGoalName *string `json:"savings_goal_name,omitempty" db:"-"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags" db:"-"`
@@ -411,6 +429,9 @@ func (bc *BudgetCategory) Validate() error {
 		if bc.CustomCategoryID != nil {
 			return errors.New("custom_category_id must not be set when category_kind is pfc")
 		}
+		if bc.SavingsGoalID != nil {
+			return errors.New("savings_goal_id must not be set when category_kind is pfc")
+		}
 	case "custom":
 		if bc.CustomCategoryID == nil || *bc.CustomCategoryID == "" {
 			return errors.New("custom_category_id is required when category_kind is custom")
@@ -418,9 +439,23 @@ func (bc *BudgetCategory) Validate() error {
 		if bc.PFCPrimary != nil || bc.PFCDetailed != nil {
 			return errors.New("pfc_primary and pfc_detailed must not be set when category_kind is custom")
 		}
+		if bc.SavingsGoalID != nil {
+			return errors.New("savings_goal_id must not be set when category_kind is custom")
+		}
+	case "savings":
+		// Savings categories link to a savings goal; PFC/custom fields must be absent.
+		if bc.SavingsGoalID == nil || *bc.SavingsGoalID == "" {
+			return errors.New("savings_goal_id is required when category_kind is savings")
+		}
+		if bc.PFCPrimary != nil || bc.PFCDetailed != nil {
+			return errors.New("pfc_primary and pfc_detailed must not be set when category_kind is savings")
+		}
+		if bc.CustomCategoryID != nil {
+			return errors.New("custom_category_id must not be set when category_kind is savings")
+		}
 	default:
 		if bc.MatchLogic != MatchLogicTagOnly {
-			return errors.New("category_kind must be pfc or custom")
+			return errors.New("category_kind must be pfc, custom, or savings")
 		}
 	}
 
@@ -491,14 +526,21 @@ type CreateBudgetRequest struct {
 
 	// ExpectedIncome is optional; when nil the service falls back to Amount (Issue #1048).
 	ExpectedIncome *float64 `json:"expected_income,omitempty" validate:"omitempty,gt=0"`
+
+	// FromBudgetID, when set, causes the new budget to inherit the ancestor's SeriesID
+	// so savings-goal detach tombstones (keyed by series_id) persist across budget periods
+	// (Issue #1300 M22 / RG3). Must be a budget owned by the same user.
+	FromBudgetID *string `json:"from_budget_id,omitempty" validate:"omitempty,uuid"`
 }
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	CategoryKind     string  `json:"category_kind" validate:"required,oneof=pfc custom"`
+	CategoryKind     string  `json:"category_kind" validate:"required,oneof=pfc custom savings"`
 	PFCPrimary       *string `json:"pfc_primary,omitempty"`
 	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
 	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
+	// SavingsGoalID is required when CategoryKind = "savings" (Issue #1300).
+	SavingsGoalID *string `json:"savings_goal_id,omitempty" validate:"omitempty,uuid"`
 	AllocatedAmount  float64 `json:"allocated_amount" validate:"required,gte=0"`
 
 	// Flexible matching fields (Issue #491)

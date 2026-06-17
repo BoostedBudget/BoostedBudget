@@ -1090,7 +1090,7 @@ func (m *mockSavingsGoalRepository) GetByAccountID(ctx context.Context, accountI
 	return result, nil
 }
 
-func (m *mockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64) error {
+func (m *mockSavingsGoalRepository) UpdateCurrentAmount(ctx context.Context, goalID string, currentAmount float64, lastCalculatedAt time.Time, balanceAsOf *time.Time) error {
 	for _, g := range m.goals {
 		if g.ID == goalID {
 			g.CurrentAmount = currentAmount

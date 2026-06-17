@@ -13,9 +13,11 @@ import { useMemo, useCallback } from 'react';
 import { XIcon, Plus } from 'lucide-react';
 import {
   BarChart3,
+  BarChart2,
   DollarSign,
   CreditCard,
   TrendingUp,
+  PieChart,
 } from 'lucide-react';
 import {
   Dialog,
@@ -44,6 +46,12 @@ function WidgetIcon({ iconName, className }: { iconName: string; className?: str
       return <DollarSign className={className} />;
     case 'credit-card':
       return <CreditCard className={className} />;
+    case 'chart-pie':
+      return <PieChart className={className} />;
+    case 'bar-chart':
+      return <BarChart2 className={className} />;
+    case 'trending-up':
+      return <TrendingUp className={className} />;
     case 'chart-bar':
     default:
       return <BarChart3 className={className} />;
@@ -160,6 +168,7 @@ export function WidgetCatalog({
     overview: 'Overview',
     charts: 'Charts',
     accounts: 'Accounts',
+    investments: 'Investments',
   };
 
   return (

@@ -1,7 +1,10 @@
+// API hooks are mocked via bunfig.toml preloads (categories-api.ts, savings-goals-api.ts).
+// Do NOT add mock.module() for those here — it leaks across test files in bun:test.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models'
+import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,
@@ -106,6 +109,11 @@ describe('BudgetCategoryForm', () => {
     ...overrides,
   })
 
+  const defaultSavingsGoals = [
+    { id: 'goal-1', name: 'House Down Payment', target_amount: 50000, current_amount: 12000 },
+    { id: 'goal-2', name: 'Emergency Fund', target_amount: 10000, current_amount: 5000 },
+  ]
+
   beforeEach(() => {
     mockOnClose.mockClear()
     mockOnSubmit.mockClear()
@@ -121,6 +129,10 @@ describe('BudgetCategoryForm', () => {
       data: defaultUserCategories,
       isLoading: false,
       error: null,
+    })
+    mockUseGetSavingsGoals.mockReturnValue({
+      data: defaultSavingsGoals,
+      isLoading: false,
     })
   })
 
@@ -1180,6 +1192,60 @@ describe('BudgetCategoryForm', () => {
         expect(preview).toHaveTextContent(/transaction totaling/i)
         expect(preview).not.toHaveTextContent(/transactions totaling/i)
       })
+    })
+  })
+
+  describe('Savings Goal kind (#1300)', () => {
+    const renderSavingsForm = () =>
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableTags={mockAvailableTags}
+        />
+      )
+
+    it('renders a "Savings Goal" kind button', () => {
+      renderSavingsForm()
+      expect(screen.getByRole('button', { name: /savings goal/i })).toBeTruthy()
+    })
+
+    it('shows SavingsGoalSelect when Savings Goal kind is clicked', async () => {
+      const user = userEvent.setup()
+      renderSavingsForm()
+      await user.click(screen.getByRole('button', { name: /savings goal/i }))
+      // SavingsGoalSelect renders a combobox
+      expect(screen.getByRole('combobox')).toBeTruthy()
+      expect(screen.getByText('House Down Payment')).toBeTruthy()
+    })
+
+    it('hides match logic config for savings kind', async () => {
+      const user = userEvent.setup()
+      renderSavingsForm()
+      await user.click(screen.getByRole('button', { name: /savings goal/i }))
+      // CategoryMatchConfig label shouldn't be visible
+      expect(screen.queryByText(/match logic/i)).toBeNull()
+    })
+
+    it('submits savings_goal_id and category_kind=savings', async () => {
+      const user = userEvent.setup({ delay: null })
+      renderSavingsForm()
+      await user.click(screen.getByRole('button', { name: /savings goal/i }))
+      const goalSelect = screen.getByRole('combobox')
+      await user.selectOptions(goalSelect, 'goal-1')
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      await user.clear(amountInput)
+      await user.type(amountInput, '200')
+      // Submit via form element to avoid button label ambiguity with "Savings Goal" button
+      // Dialog renders in Radix portal — use document.querySelector
+      const form = document.querySelector('form')
+      fireEvent.submit(form!)
+      await waitFor(() => expect(mockOnSubmit).toHaveBeenCalled())
+      const submitted = mockOnSubmit.mock.calls[0][0]
+      expect(submitted.category_kind).toBe('savings')
+      expect(submitted.savings_goal_id).toBe('goal-1')
     })
   })
 })

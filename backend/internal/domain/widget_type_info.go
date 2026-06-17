@@ -4,9 +4,10 @@ package domain
 type WidgetCategory string
 
 const (
-	WidgetCategoryOverview WidgetCategory = "overview"
-	WidgetCategoryCharts   WidgetCategory = "charts"
-	WidgetCategoryAccounts WidgetCategory = "accounts"
+	WidgetCategoryOverview     WidgetCategory = "overview"
+	WidgetCategoryCharts       WidgetCategory = "charts"
+	WidgetCategoryAccounts     WidgetCategory = "accounts"
+	WidgetCategoryInvestments  WidgetCategory = "investments"
 )
 
 // WidgetTypeInfo contains metadata for a widget type
@@ -102,6 +103,37 @@ func AllWidgetTypes() []WidgetTypeInfo {
 			Category:      WidgetCategoryOverview,
 			DefaultWidth:  4,
 			DefaultHeight: 3,
+			MinWidth:      3,
+			MinHeight:     3,
+		},
+		// Issue #1297: Investment widgets
+		{
+			Type:          WidgetTypePortfolioSummary,
+			Name:          "Portfolio Summary",
+			Description:   "Total portfolio value, gain/loss, and day change at a glance.",
+			Category:      WidgetCategoryInvestments,
+			DefaultWidth:  6,
+			DefaultHeight: 3,
+			MinWidth:      4,
+			MinHeight:     2,
+		},
+		{
+			Type:          WidgetTypePortfolioHoldings,
+			Name:          "Portfolio Holdings",
+			Description:   "Top holdings by market value with day change percentage.",
+			Category:      WidgetCategoryInvestments,
+			DefaultWidth:  6,
+			DefaultHeight: 4,
+			MinWidth:      4,
+			MinHeight:     3,
+		},
+		{
+			Type:          WidgetTypeAssetAllocation,
+			Name:          "Asset Allocation",
+			Description:   "Donut chart of portfolio breakdown by asset type.",
+			Category:      WidgetCategoryInvestments,
+			DefaultWidth:  4,
+			DefaultHeight: 4,
 			MinWidth:      3,
 			MinHeight:     3,
 		},

@@ -193,6 +193,7 @@ export function SavingsPage() {
         onEdit={setEditingGoal}
         onDelete={handleDeleteClick}
         emptyMessage={emptyMessage}
+        onContributionChanged={() => void refetch()}
       />
 
       <CreateSavingsGoalDialog

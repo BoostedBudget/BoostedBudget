@@ -32,6 +32,7 @@ export {
   formatCurrency,
   formatCurrencyCompact,
   formatCurrencyFull,
+  formatPercent,
 } from './formatters';
 
 // Utilities

@@ -40,6 +40,7 @@ export interface CreateBudgetCategoryRequest {
   match_logic?: string;
   pfc_detailed?: string;
   pfc_primary?: string;
+  savings_goal_id?: string;
   /** @nullable */
   tags?: string[] | null;
 }

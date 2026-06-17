@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,16 @@ type HoldingRepository interface {
 	// GetByUserAccountID returns all holdings for a logical account (all chain members)
 	// identified by the stable user_account_id that survives Plaid re-links.
 	GetByUserAccountID(ctx context.Context, userAccountID string) ([]domain.Holding, error)
+
+	// GetByUserIDWithSecurities returns all holdings for a user with security metadata
+	// joined (LEFT JOIN securities). If accountID is non-nil, filters to that account
+	// (chain-expanded via user_account_id). Populates Holding.Security. Results are
+	// ordered by account_id, securities.type, holdings.institution_value DESC.
+	GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error)
+
+	// GetDistinctUserIDsWithHoldings returns all distinct user IDs that currently have
+	// at least one holding. Used by the daily portfolio snapshot cron to enumerate users.
+	GetDistinctUserIDsWithHoldings(ctx context.Context) ([]string, error)
 }
 
 type holdingRepository struct {
@@ -61,17 +72,19 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 		h.CreatedAt = now
 		h.UpdatedAt = now
 
+		// user_account_id is the stable chain-expansion key that survives Plaid re-links (Issue #1109).
 		insertQuery := `
 			INSERT INTO holdings (
-				id, user_id, account_id, security_id,
+				id, user_id, account_id, user_account_id, security_id,
 				quantity, cost_basis, institution_value, institution_price,
 				created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`
 		if _, err := tx.Exec(ctx, insertQuery,
 			h.ID,
 			h.UserID,
 			h.AccountID,
+			h.UserAccountID,
 			h.SecurityID,
 			h.Quantity,
 			h.CostBasis,
@@ -227,4 +240,110 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 		return []domain.Holding{}, nil
 	}
 	return holdings, nil
+}
+
+// GetByUserIDWithSecurities returns holdings for a user with security metadata joined.
+// Optionally filters to a single account (chain-expanded via user_account_id).
+// Populates Holding.Security for name/ticker/type/close_price; institution_price comes from the holding row.
+// Note: securities.institution_price is a dead column (always NULL from Plaid) — do not use it.
+func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("investments_with_securities").Inc()
+
+	args := []any{userID}
+	accountFilter := ""
+	if accountID != nil {
+		accountFilter = `AND (
+			(h.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $2 AND user_account_id IS NOT NULL))
+			OR (h.account_id = $2 AND h.user_account_id IS NULL)
+		)`
+		args = append(args, *accountID)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			h.id, h.user_id, h.account_id, h.user_account_id, h.security_id,
+			h.quantity, h.cost_basis, h.institution_value, h.institution_price,
+			h.created_at, h.updated_at,
+			-- security metadata
+			sec.id, sec.plaid_security_id, sec.ticker_symbol, sec.name, sec.type,
+			sec.institution_price, sec.institution_price_as_of,
+			sec.close_price, sec.close_price_as_of
+		FROM holdings h
+		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		LEFT JOIN securities sec ON sec.id = h.security_id
+		WHERE h.user_id = $1
+		%s
+		ORDER BY h.account_id, sec.type NULLS LAST, h.institution_value DESC NULLS LAST
+	`, accountFilter)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var holdings []domain.Holding
+	for rows.Next() {
+		h := domain.Holding{}
+		sec := domain.Security{}
+		var secClosePriceAsOf *string
+		if err := rows.Scan(
+			&h.ID, &h.UserID, &h.AccountID, &h.UserAccountID, &h.SecurityID,
+			&h.Quantity, &h.CostBasis, &h.InstitutionValue, &h.InstitutionPrice,
+			&h.CreatedAt, &h.UpdatedAt,
+			&sec.ID, &sec.PlaidSecurityID, &sec.TickerSymbol, &sec.Name, &sec.Type,
+			&sec.InstitutionPrice, &sec.InstitutionPriceAsOf,
+			&sec.ClosePrice, &secClosePriceAsOf,
+		); err != nil {
+			return nil, err
+		}
+		if secClosePriceAsOf != nil {
+			sec.ClosePriceAsOf = secClosePriceAsOf
+		}
+		secCopy := sec
+		h.Security = &secCopy
+		holdings = append(holdings, h)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	if holdings == nil {
+		holdings = []domain.Holding{}
+	}
+	return holdings, nil
+}
+
+// GetDistinctUserIDsWithHoldings returns all distinct user_ids that have at least one holding
+// on an active account. Inactive/replaced accounts are excluded so ghost holdings from
+// disconnected institutions don't generate misleading snapshot totals.
+// Used by the daily portfolio snapshot cron to enumerate users needing a snapshot update.
+func (r *holdingRepository) GetDistinctUserIDsWithHoldings(ctx context.Context) ([]string, error) {
+	query := `
+		SELECT DISTINCT h.user_id::text
+		FROM holdings h
+		JOIN accounts a ON a.id = h.account_id AND a.status = 'active'
+		ORDER BY h.user_id::text
+	`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("GetDistinctUserIDsWithHoldings: %w", err)
+	}
+	defer rows.Close()
+
+	var userIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("GetDistinctUserIDsWithHoldings scan: %w", err)
+		}
+		userIDs = append(userIDs, id)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("GetDistinctUserIDsWithHoldings rows: %w", rows.Err())
+	}
+	if userIDs == nil {
+		userIDs = []string{}
+	}
+	return userIDs, nil
 }

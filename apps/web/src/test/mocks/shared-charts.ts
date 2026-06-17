@@ -127,13 +127,17 @@ const EChartsChartMockComponent = ({
     'div',
     {
       'data-testid': 'echarts-chart',
+      // Mirrors EChartsChart.tsx:31 — the real component wraps chart canvas in data-ph-mask.
+      // Including it here lets pii-coverage tests assert the masking wrapper is present
+      // without needing currency text in the DOM (charts render to canvas, not DOM text).
+      'data-ph-mask': '',
       'data-series-count': visibleSeries.length,
       'data-series-names': JSON.stringify(visibleSeries.map((s) => s.name)),
       'data-series-types': JSON.stringify(visibleSeries.map((s) => s.type)),
       'data-has-markline': hasMarkline ? 'true' : 'false',
       'data-markline-series': JSON.stringify(marklineSeries),
       'data-renderer': 'svg',
-      'data-is-dark': isDark ? 'true' : 'false',
+      'data-is-dark': String(isDark),
       style,
     },
     'ECharts Mock',
@@ -142,8 +146,9 @@ const EChartsChartMockComponent = ({
 }
 export const MockEChartsChart = mock(EChartsChartMockComponent)
 
-// escapeHtml is a pure utility — pass through the real implementation, no mock needed
+// Pure utilities: pass through real implementations (cannot mock at module level)
 import { escapeHtml } from '../../shared/charts/escapeHtml'
+import { formatPercent } from '../../shared/charts/formatters'
 
 // === Mock the module ===
 mock.module('@/shared/charts', () => ({
@@ -161,5 +166,6 @@ mock.module('@/shared/charts', () => ({
   formatCurrency: mockFormatCurrency,
   formatCurrencyCompact: mockFormatCurrencyCompact,
   formatCurrencyFull: mockFormatCurrencyFull,
+  formatPercent,
   escapeHtml,
 }))

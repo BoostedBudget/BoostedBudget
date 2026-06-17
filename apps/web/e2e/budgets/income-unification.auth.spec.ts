@@ -88,7 +88,7 @@ test.describe('Budget income unification (#1048)', () => {
     await page.getByRole('button', { name: /^create budget$/i }).click()
 
     await page.waitForLoadState('networkidle')
-    await expect(page.getByText(RUN_BUDGET_NAME)).toBeVisible()
+    await expect(page.locator('[data-testid="budget-card"]').filter({ hasText: RUN_BUDGET_NAME })).toBeVisible()
   })
 
   test('Budget list shows budget cards with income progress', async ({ page }) => {

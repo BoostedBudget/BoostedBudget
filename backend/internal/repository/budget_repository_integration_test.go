@@ -15,15 +15,16 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewBudgetRepository(pool)
 	ctx := context.Background()
 
 	// Wrap all seed data in a transaction that rolls back automatically.
@@ -102,4 +103,77 @@ func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 		assert.Nil(t, cat)
 		assert.Contains(t, err.Error(), "category not found or not owned by user")
 	})
+}
+
+// TestBudgetRepository_CreateWithCategories_RollsBackOnCategoryFailure verifies that
+// CreateWithCategories is atomic: when a mid-loop category INSERT fails (here via a
+// duplicate PK on the second category), the budget row is also rolled back (R5-3).
+//
+// Run with: DATABASE_URL=postgres://... go test ./internal/repository/... -run TestBudgetRepository_CreateWithCategories_RollsBackOnCategoryFailure -tags integration -v
+func TestBudgetRepository_CreateWithCategories_RollsBackOnCategoryFailure(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	// ── seed: one user ────────────────────────────────────────────────────────
+	userID := uuid.New()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO users (id, clerk_id, email, created_at, updated_at)
+		VALUES ($1, $2, $3, now(), now())
+	`, userID, "test|"+userID.String(), "cwc-rollback-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+	t.Cleanup(func() {
+		pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) //nolint:errcheck
+	})
+
+	// ── prepare: budget ───────────────────────────────────────────────────────
+	budgetID := uuid.New()
+	budget := &domain.Budget{
+		ID:             budgetID.String(),
+		UserID:         userID.String(),
+		Name:           "Atomic Test Budget",
+		Period:         domain.BudgetPeriodMonthly,
+		StartDate:      time.Now(),
+		Amount:         1000.00,
+		CurrencyCode:   "USD",
+		IsActive:       true,
+		ExpectedIncome: 1000.00,
+		SeriesID:       budgetID.String(),
+	}
+
+	// ── prepare: two categories — cat2 has the SAME ID as cat1 (duplicate PK) ─
+	catID := uuid.New()
+	pfcPrimary := "FOOD_AND_DRINK"
+	cat1 := &domain.BudgetCategory{
+		ID:              catID.String(),
+		BudgetID:        budgetID.String(),
+		CategoryKind:    "pfc",
+		PFCPrimary:      &pfcPrimary,
+		AllocatedAmount: 200.00,
+	}
+	cat2 := &domain.BudgetCategory{
+		ID:              catID.String(), // duplicate → triggers PK violation mid-loop
+		BudgetID:        budgetID.String(),
+		CategoryKind:    "pfc",
+		PFCPrimary:      &pfcPrimary,
+		AllocatedAmount: 300.00,
+	}
+
+	// ── call ──────────────────────────────────────────────────────────────────
+	repo := NewBudgetRepository(pool)
+	createErr := repo.CreateWithCategories(ctx, budget, []*domain.BudgetCategory{cat1, cat2})
+
+	// ── assert: error was returned ────────────────────────────────────────────
+	assert.Error(t, createErr, "CreateWithCategories must return error on mid-loop category failure")
+
+	// ── assert: budget row was rolled back ────────────────────────────────────
+	var budgetCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM budgets WHERE id = $1`, budgetID).Scan(&budgetCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, budgetCount, "budget row must be rolled back when category insert fails")
+
+	// ── assert: no stray category rows ───────────────────────────────────────
+	var categoryCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM budget_categories WHERE budget_id = $1`, budgetID).Scan(&categoryCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, categoryCount, "category rows must be rolled back when insert fails mid-loop")
 }

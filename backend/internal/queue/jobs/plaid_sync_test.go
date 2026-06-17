@@ -45,6 +45,20 @@ func (m *MockTransactionSyncService) SetTransferCorrelationService(svc services.
 	m.Called(svc)
 }
 
+// SetSavingsProgressServices implements the TransactionSyncService interface.
+// Issue #1300 G2: Added to fix mock after SetSavingsProgressServices was added to the interface.
+func (m *MockTransactionSyncService) SetSavingsProgressServices(
+	contribCleaner services.SyncContributionCleaner,
+	progressUpdater services.SyncGoalProgressUpdater,
+	categoryBackfiller services.SyncManagedCategoryBackfiller,
+) {
+	m.Called(contribCleaner, progressUpdater, categoryBackfiller)
+}
+
+// SetSavingsDetectionServices satisfies the TransactionSyncService interface (Issue #1300 M18 RG1).
+func (m *MockTransactionSyncService) SetSavingsDetectionServices(_ services.SyncContributionsBasisGoalReader, _ services.SyncProposedContributionUpserter, _ repository.TransactionRepository) {
+}
+
 // MockLinkedItemRepository mocks the LinkedItemRepository interface
 type MockLinkedItemRepository struct {
 	mock.Mock

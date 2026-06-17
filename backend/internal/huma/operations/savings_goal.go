@@ -17,6 +17,7 @@ import (
 // Issue #28: Savings goals
 type SavingsGoalHandler struct {
 	service         services.SavingsGoalService
+	progressService services.SavingsProgressService // optional; nil disables progress-summary endpoint
 	idempotencyRepo repository.IdempotencyRepository // optional; nil disables dedup
 	db              repository.DB
 	mcpAuditRepo    repository.MCPAuditRepository
@@ -25,6 +26,7 @@ type SavingsGoalHandler struct {
 }
 
 type SavingsGoalHandlerDeps struct {
+	ProgressService services.SavingsProgressService
 	IdempotencyRepo repository.IdempotencyRepository
 	DB              repository.DB
 	MCPAuditRepo    repository.MCPAuditRepository
@@ -38,6 +40,7 @@ type SavingsGoalHandlerDeps struct {
 func NewSavingsGoalHandler(service services.SavingsGoalService, deps ...SavingsGoalHandlerDeps) *SavingsGoalHandler {
 	h := &SavingsGoalHandler{service: service}
 	if len(deps) > 0 {
+		h.progressService = deps[0].ProgressService
 		h.idempotencyRepo = deps[0].IdempotencyRepo
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
@@ -109,6 +112,17 @@ type UpdateSavingsGoalOutput struct {
 type DeleteSavingsGoalInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Savings goal ID"`
+}
+
+// GetSavingsProgressSummaryInput represents the input for the progress-summary analytics endpoint.
+type GetSavingsProgressSummaryInput struct {
+	inputs.AuthenticatedInput
+	inputs.MCPContextInput
+}
+
+// GetSavingsProgressSummaryOutput represents the response for the progress-summary analytics endpoint.
+type GetSavingsProgressSummaryOutput struct {
+	Body *domain.SavingsProgressSummary
 }
 
 // --- Handler Methods ---
@@ -249,6 +263,20 @@ func (h *SavingsGoalHandler) DeleteGoal(ctx context.Context, input *DeleteSaving
 	return nil, nil
 }
 
+// GetProgressSummary handles GET /api/v1/savings-goals/progress-summary requests.
+// Returns basis-aware savings progress for all active goals plus portfolio totals.
+// Tagged Analytics so MCP/LLM consumers get a single-round-trip aggregate (Codex C11).
+func (h *SavingsGoalHandler) GetProgressSummary(ctx context.Context, input *GetSavingsProgressSummaryInput) (*GetSavingsProgressSummaryOutput, error) {
+	if h.progressService == nil {
+		return nil, huma.Error503ServiceUnavailable("progress service not configured")
+	}
+	summary, err := h.progressService.GetProgressSummary(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetSavingsProgressSummaryOutput{Body: summary}, nil
+}
+
 // RegisterSavingsGoalRoutes registers savings goal routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
@@ -285,6 +313,19 @@ func RegisterSavingsGoalRoutes(api huma.API, handler *SavingsGoalHandler) {
 		Tags:        []string{"Savings Goals"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetActiveGoals)
+
+	// GET /api/v1/savings-goals/progress-summary - Basis-aware progress analytics (must be before :id route)
+	huma.Register(api, huma.Operation{
+		OperationID: "getSavingsProgressSummary",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/savings-goals/progress-summary",
+		Summary:     "Get savings progress summary",
+		Description: "Returns basis-aware savings progress for all active goals plus portfolio totals. " +
+			"Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total " +
+			"so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).",
+		Tags:     []string{"Savings Goals", "Analytics"},
+		Security: []map[string][]string{{"clerk": {}}},
+	}, handler.GetProgressSummary)
 
 	// GET /api/v1/savings-goals/:id - Get specific savings goal
 	huma.Register(api, huma.Operation{

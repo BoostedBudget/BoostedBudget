@@ -91,6 +91,17 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('updateMCPRecipe', { idempotent: true }),
   write('deleteMCPRecipe', { destructive: true }),
 
+  // ── Investments (Issue #138: portfolio snapshots + API endpoints) ────────
+  read('getHoldings'),                        // holdings list with security metadata
+  read('getPortfolioSummary'),                // live portfolio summary + day_change
+  read('getPortfolioHistory'),                // portfolio value time series
+  read('getInvestmentTransactions'),          // keyset-paginated investment transactions
+  // Analytics helpers (tagged "Analytics" — load-bearing for MCP parity test)
+  read('getPortfolioAllocationBreakdown'),    // allocation by security type; AI-tool-callable
+  read('getTopMovers'),                       // top N gainers/losers by day_change; AI-tool-callable
+  read('getInvestmentGainLossSummary'),       // unrealized gain/loss (realized unsupported)
+  read('getInvestmentIncomeSummary'),         // dividends + reinvested income; AI-tool-callable
+
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),
   read('getCashFlowSummary'),
@@ -228,9 +239,16 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSavingsGoals'),
   read('getActiveSavingsGoals'),
   read('getSavingsGoal'),
+  read('getSavingsProgressSummary'),  // #1300: basis-aware analytics (Codex C11)
   write('createSavingsGoal'),
   write('updateSavingsGoal', { idempotent: true }),
   write('deleteSavingsGoal', { destructive: true }),
+  // #1300 M20: contribution ledger
+  read('listSavingsGoalContributions'),
+  write('logSavingsGoalContribution'),
+  write('confirmSavingsGoalContribution', { idempotent: true }),
+  write('rejectSavingsGoalContribution', { idempotent: true }), // R3-7: sticky tombstone
+  write('deleteSavingsGoalContribution', { destructive: true }),
 
   // ── Subscription ─────────────────────────────────────────────────────────
   read('get-current-subscription'),

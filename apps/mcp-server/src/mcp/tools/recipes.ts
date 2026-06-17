@@ -93,6 +93,16 @@ export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
       { operationId: 'getBoostExecutions', pathParams: { id: '{{BOOST_ID}}' } },
     ],
   },
+  // Issue #138: Investment portfolio recipe
+  {
+    name: 'Portfolio Review',
+    description: 'Investment portfolio health check: live summary (total value, day_change, unrealized gain/loss), allocation breakdown by security type, and top movers.',
+    calls: [
+      { operationId: 'getPortfolioSummary' },
+      { operationId: 'getPortfolioAllocationBreakdown' },
+      { operationId: 'getTopMovers', params: { limit: 5 } },
+    ],
+  },
 ]
 
 export interface SaveRecipeInput {

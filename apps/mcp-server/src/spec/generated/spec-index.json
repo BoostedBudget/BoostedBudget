@@ -2162,6 +2162,223 @@
       "description": "Returns all available widget types with their metadata for the widget catalog. Public endpoint."
     },
     {
+      "operationId": "getHoldings",
+      "method": "GET",
+      "path": "/api/v1/investments/holdings",
+      "summary": "List portfolio holdings",
+      "tags": [
+        "Investments"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns all holdings for the authenticated user, joined with security metadata (ticker, name, type) and pre-computed gain/loss and day_change values. Optionally filter to a single account via account_id.",
+      "parameters": [
+        {
+          "name": "account_id",
+          "in": "query",
+          "description": "Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getInvestmentTransactions",
+      "method": "GET",
+      "path": "/api/v1/investments/investment-transactions",
+      "summary": "List investment transactions",
+      "tags": [
+        "Investments"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.",
+      "parameters": [
+        {
+          "name": "cursor",
+          "in": "query",
+          "description": "Opaque cursor from previous page's next_cursor; omit for first page",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of transactions to return (1-100)",
+          "type": "integer"
+        },
+        {
+          "name": "account_id",
+          "in": "query",
+          "description": "Filter by account ID (chain-expanded)",
+          "type": "string"
+        },
+        {
+          "name": "security_id",
+          "in": "query",
+          "description": "Filter by security ID",
+          "type": "string"
+        },
+        {
+          "name": "activity_types",
+          "in": "query",
+          "description": "Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)",
+          "type": "string"
+        },
+        {
+          "name": "start_date",
+          "in": "query",
+          "description": "Filter transactions on or after this date (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "description": "Filter transactions on or before this date (YYYY-MM-DD)",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getPortfolioAllocationBreakdown",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/allocation",
+      "summary": "Get portfolio allocation breakdown",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns portfolio value grouped by bucket type. By default (no params) returns investment holdings only, grouped by security type — backward-compatible with the #138 behavior.\n\nOptional query parameters:\n- include (csv): additional asset classes to union into the result.\n  Values: \"cash\" (depository/checking/savings account balances), \"liabilities\" (credit card + loan balances as absolute value).\n  Example: include=cash,liabilities\n- group_by: bucketing dimension.\n  Values: \"security_type\" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), \"asset_class\" (collapses into investments/cash/liabilities), \"account\".\n- basis: whether liabilities reduce the grand total.\n  Values: \"assets\" (default — show asset-side allocation only), \"net\" (net of liabilities).\n\nEach bucket includes: security_type, asset_class (when group_by=asset_class), total_value, percentage, holding_count.\nSingle DB round-trip; designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "include",
+          "in": "query",
+          "description": "Comma-separated list of additional asset classes to include. Each element must be one of: 'cash' (depository accounts), 'liabilities' (credit/loan accounts). Default: empty (investment holdings only, backward-compatible).",
+          "type": "string"
+        },
+        {
+          "name": "group_by",
+          "in": "query",
+          "description": "How to bucket the result. Default: 'security_type'.",
+          "enum": [
+            "security_type",
+            "asset_class",
+            "account"
+          ],
+          "type": "string"
+        },
+        {
+          "name": "basis",
+          "in": "query",
+          "description": "Whether liabilities reduce the total. Default: 'assets'.",
+          "enum": [
+            "assets",
+            "net"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getInvestmentGainLossSummary",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/gain-loss",
+      "summary": "Get investment gain/loss summary",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns unrealized gain/loss totals and a per-account breakdown. realized_gain_loss_supported is always false — Plaid does not provide per-lot cost basis and the 2-year transaction lookback truncates buy history. Single DB round-trip; designed as an AI-tool-callable function."
+    },
+    {
+      "operationId": "getPortfolioHistory",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/history",
+      "summary": "Get portfolio value history",
+      "tags": [
+        "Investments"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns portfolio value snapshots between start_date and end_date (inclusive), ordered by date ascending. Each point is one daily portfolio_snapshots row. Use for chart data.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getInvestmentIncomeSummary",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/income",
+      "summary": "Get investment income summary",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns investment income (dividends, interest, and reinvested dividends/interest — all economically income) within a date range, grouped by normalized income type. Single DB round-trip; designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "required": true,
+          "description": "Start of date range (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "required": true,
+          "description": "End of date range (YYYY-MM-DD, inclusive)",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getPortfolioSummary",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/summary",
+      "summary": "Get portfolio summary",
+      "tags": [
+        "Investments"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists."
+    },
+    {
+      "operationId": "getTopMovers",
+      "method": "GET",
+      "path": "/api/v1/investments/portfolio/top-movers",
+      "summary": "Get top portfolio movers",
+      "tags": [
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the top N gainers and losers by day_change (today's institution_price vs prior close_price). Holdings with NULL close_price are excluded. Default limit is 5; max is 20. Single DB round-trip; designed as an AI-tool-callable function.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "description": "Number of top gainers and losers to return (default 5, max 20)",
+          "type": "integer"
+        }
+      ]
+    },
+    {
       "operationId": "disconnectInstitution",
       "method": "DELETE",
       "path": "/api/v1/linked-items/{id}",
@@ -2447,6 +2664,150 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all active (not completed) savings goals for the authenticated user."
+    },
+    {
+      "operationId": "getSavingsProgressSummary",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/progress-summary",
+      "summary": "Get savings progress summary",
+      "tags": [
+        "Savings Goals",
+        "Analytics"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11)."
+    },
+    {
+      "operationId": "listSavingsGoalContributions",
+      "method": "GET",
+      "path": "/api/v1/savings-goals/{goalID}/contributions",
+      "summary": "List savings goal contributions",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns all confirmed and proposed contributions for a savings goal, newest first.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "logSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions",
+      "summary": "Log a savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Manually records a confirmed contribution for a savings goal (D6 source-a). Optionally links to an existing transaction. Triggers goal progress recomputation.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "deleteSavingsGoalContribution",
+      "method": "DELETE",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}",
+      "summary": "Delete a savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Removes a contribution (proposed or confirmed). Triggers goal progress recomputation.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "confirmSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}/confirm",
+      "summary": "Confirm a proposed savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Promotes a proposed contribution to confirmed status. Re-checks allocation capacity under a transaction-level lock before committing (Codex C2).",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "rejectSavingsGoalContribution",
+      "method": "POST",
+      "path": "/api/v1/savings-goals/{goalID}/contributions/{id}/reject",
+      "summary": "Reject a proposed savings goal contribution",
+      "tags": [
+        "Savings Goals",
+        "Contributions"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Sets a proposed contribution to 'rejected' status. The row is retained as a sticky tombstone so future Plaid syncs do not re-propose the same transfer-in (R3-7). Only proposed contributions can be rejected; confirmed contributions must be deleted.",
+      "parameters": [
+        {
+          "name": "goalID",
+          "in": "path",
+          "required": true,
+          "description": "Savings goal ID",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Contribution ID",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getSavingsGoal",
@@ -2857,6 +3218,18 @@
             "asc",
             "desc"
           ],
+          "type": "string"
+        },
+        {
+          "name": "include_investment_activity",
+          "in": "query",
+          "description": "Merge investment transactions into feed (true/false, default true). When omitted with a non-date sort, silently degrades to false. Explicit true with non-date sort returns 400. Requires sort_by=date for explicit merge.",
+          "type": "string"
+        },
+        {
+          "name": "activity_types",
+          "in": "query",
+          "description": "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.",
           "type": "string"
         }
       ]

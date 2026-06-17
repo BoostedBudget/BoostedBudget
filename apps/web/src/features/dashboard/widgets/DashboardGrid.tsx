@@ -35,6 +35,8 @@ interface DashboardGridProps {
   onLayoutChange: (layout: DashboardLayout) => void;
   onRemoveWidget: (widgetId: string) => void;
   onDropWidget?: (widgetType: WidgetType, x: number, y: number) => void;
+  /** Issue #1297: Called when a widget wants to persist new settings. */
+  onUpdateWidgetSettings?: (widgetId: string, settings: Record<string, unknown>) => void;
 }
 
 export function DashboardGrid({
@@ -43,6 +45,7 @@ export function DashboardGrid({
   onLayoutChange,
   onRemoveWidget,
   onDropWidget,
+  onUpdateWidgetSettings,
 }: DashboardGridProps) {
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<GridStack | null>(null);
@@ -128,7 +131,11 @@ export function DashboardGrid({
           // Issue #476: Skip invalid intermediate states (e.g., during resize drag)
           if (w < 1 || h < 1) return;
 
+          // Issue #1297: Spread the original WidgetConfig first so non-geometry fields
+          // (settings, static, etc.) are preserved across drag/resize events.
+          const original = currentLayout.widgets.find((w) => w.i === id);
           const widget: WidgetConfig = {
+            ...original,   // preserves settings and any future fields
             i: id,
             type: typeMap.get(id)!,
             x,
@@ -316,6 +323,13 @@ export function DashboardGrid({
                   <WidgetComponent
                     widgetId={widget.i}
                     onRemove={() => onRemoveWidget(widget.i)}
+                    settings={widget.settings as import('../types').WidgetSettings | undefined}
+                    onSettingsChange={
+                      onUpdateWidgetSettings
+                        ? (s) => onUpdateWidgetSettings(widget.i, s as unknown as Record<string, unknown>)
+                        : undefined
+                    }
+                    isEditing={isEditing}
                   />
                 ) : (
                   <div className="flex items-center justify-center h-full text-muted-foreground">

@@ -65,6 +65,10 @@ func TestSavingsGoalRepository_Create(t *testing.T) {
 		goal.CompletedAt,
 		pgxmock.AnyArg(), // created_at
 		pgxmock.AnyArg(), // updated_at
+		pgxmock.AnyArg(), // progress_basis
+		pgxmock.AnyArg(), // account_percentage
+		pgxmock.AnyArg(), // last_calculated_at
+		pgxmock.AnyArg(), // balance_as_of
 	).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err := repo.Create(ctx, goal)
@@ -97,6 +101,10 @@ func TestSavingsGoalRepository_Create_DuplicateName(t *testing.T) {
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
+		pgxmock.AnyArg(), // progress_basis
+		pgxmock.AnyArg(), // account_percentage
+		pgxmock.AnyArg(), // last_calculated_at
+		pgxmock.AnyArg(), // balance_as_of
 	).WillReturnError(pgx.ErrNoRows) // Simulating constraint violation
 
 	err := repo.Create(ctx, goal)
@@ -122,6 +130,7 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
 		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
+		"progress_basis", "account_percentage", "last_calculated_at", "balance_as_of",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -141,6 +150,10 @@ func TestSavingsGoalRepository_GetByID(t *testing.T) {
 			nil,
 			now,
 			now,
+			"manual", // progress_basis
+			nil,      // account_percentage
+			nil,      // last_calculated_at
+			nil,      // balance_as_of
 		))
 
 	goal, err := repo.GetByID(ctx, goalID)
@@ -189,6 +202,7 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
 		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
+		"progress_basis", "account_percentage", "last_calculated_at", "balance_as_of",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -209,6 +223,10 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				nil,
 				now,
 				now,
+				"manual", // progress_basis
+				nil,      // account_percentage
+				nil,      // last_calculated_at
+				nil,      // balance_as_of
 			).
 			AddRow(
 				uuid.New().String(),
@@ -225,6 +243,10 @@ func TestSavingsGoalRepository_GetByUserID(t *testing.T) {
 				nil,
 				now,
 				now,
+				"manual", // progress_basis
+				nil,      // account_percentage
+				nil,      // last_calculated_at
+				nil,      // balance_as_of
 			))
 
 	goals, err := repo.GetByUserID(ctx, userID)
@@ -248,6 +270,7 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
 		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
+		"progress_basis", "account_percentage", "last_calculated_at", "balance_as_of",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -267,6 +290,10 @@ func TestSavingsGoalRepository_GetActiveByUserID(t *testing.T) {
 			nil,
 			now,
 			now,
+			"manual", // progress_basis
+			nil,      // account_percentage
+			nil,      // last_calculated_at
+			nil,      // balance_as_of
 		))
 
 	goals, err := repo.GetActiveByUserID(ctx, userID)
@@ -292,6 +319,7 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
 		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
+		"progress_basis", "account_percentage", "last_calculated_at", "balance_as_of",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -312,6 +340,10 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				nil,
 				now,
 				now,
+				"manual", // progress_basis
+				nil,      // account_percentage
+				nil,      // last_calculated_at
+				nil,      // balance_as_of
 			).
 			AddRow(
 				uuid.New().String(),
@@ -328,6 +360,10 @@ func TestSavingsGoalRepository_GetByAccountID(t *testing.T) {
 				nil,
 				now,
 				now,
+				"manual", // progress_basis
+				nil,      // account_percentage
+				nil,      // last_calculated_at
+				nil,      // balance_as_of
 			))
 
 	goals, err := repo.GetByAccountID(ctx, accountID)
@@ -352,20 +388,24 @@ func TestSavingsGoalRepository_Update(t *testing.T) {
 	uaID := "ua-stable-123"
 	goal.UserAccountID = &uaID
 
-	// user_account_id must be bound as $11, preceding id ($12) and user_id ($13).
+	// user_account_id must be bound as $11, preceding progress_basis ($12)…balance_as_of ($15), id ($16) and user_id ($17).
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
 		WithArgs(
 			goal.Name,
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
-			pgxmock.AnyArg(),
+			pgxmock.AnyArg(), // description
+			pgxmock.AnyArg(), // target_amount
+			pgxmock.AnyArg(), // current_amount
+			pgxmock.AnyArg(), // currency_code
+			pgxmock.AnyArg(), // account_id
+			pgxmock.AnyArg(), // deadline
+			pgxmock.AnyArg(), // is_completed
+			pgxmock.AnyArg(), // completed_at
+			pgxmock.AnyArg(), // updated_at
 			goal.UserAccountID, // $11 user_account_id — must be persisted
+			pgxmock.AnyArg(), // progress_basis
+			pgxmock.AnyArg(), // account_percentage
+			pgxmock.AnyArg(), // last_calculated_at
+			pgxmock.AnyArg(), // balance_as_of
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -403,7 +443,11 @@ func TestSavingsGoalRepository_Update_UserAccountIDPersisted(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
-			&uaIDB, // must be chain B's id, not chain A's
+			&uaIDB,           // $11 must be chain B's id, not chain A's
+			pgxmock.AnyArg(), // progress_basis
+			pgxmock.AnyArg(), // account_percentage
+			pgxmock.AnyArg(), // last_calculated_at
+			pgxmock.AnyArg(), // balance_as_of
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -435,6 +479,10 @@ func TestSavingsGoalRepository_Update_NotFound(t *testing.T) {
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(), // user_account_id
+			pgxmock.AnyArg(), // progress_basis
+			pgxmock.AnyArg(), // account_percentage
+			pgxmock.AnyArg(), // last_calculated_at
+			pgxmock.AnyArg(), // balance_as_of
 			goal.ID,
 			goal.UserID,
 		).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
@@ -504,7 +552,7 @@ func TestSavingsGoalRepository_CountByUserID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestSavingsGoalRepository_UpdateCurrentAmount tests current amount update
+// TestSavingsGoalRepository_UpdateCurrentAmount tests current amount update (Issue #1300)
 func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 	mock, repo := setupSavingsGoalMockDB(t)
 	defer mock.Close()
@@ -512,12 +560,13 @@ func TestSavingsGoalRepository_UpdateCurrentAmount(t *testing.T) {
 	ctx := context.Background()
 	goalID := uuid.New().String()
 	newCurrentAmount := 2500.00
+	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(newCurrentAmount, goalID).
+		WithArgs(newCurrentAmount, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, newCurrentAmount)
+	err := repo.UpdateCurrentAmount(ctx, goalID, newCurrentAmount, now, nil)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -530,12 +579,13 @@ func TestSavingsGoalRepository_UpdateCurrentAmount_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 	goalID := uuid.New().String()
+	now := time.Now()
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE savings_goals`)).
-		WithArgs(2500.00, goalID).
+		WithArgs(2500.00, pgxmock.AnyArg(), pgxmock.AnyArg(), goalID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	err := repo.UpdateCurrentAmount(ctx, goalID, 2500.00)
+	err := repo.UpdateCurrentAmount(ctx, goalID, 2500.00, now, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, domain.ErrSavingsGoalNotFound, err)
@@ -597,6 +647,7 @@ func TestSavingsGoalRepository_GetByAccountID_ChainExpand(t *testing.T) {
 		"id", "user_id", "name", "description", "target_amount", "current_amount",
 		"currency_code", "account_id", "user_account_id", "deadline", "is_completed", "completed_at",
 		"created_at", "updated_at",
+		"progress_basis", "account_percentage", "last_calculated_at", "balance_as_of",
 	}
 
 	// Goal is linked to the replaced account but has the stable user_account_id.
@@ -619,6 +670,10 @@ func TestSavingsGoalRepository_GetByAccountID_ChainExpand(t *testing.T) {
 				nil,
 				now,
 				now,
+				"manual", // progress_basis
+				nil,      // account_percentage
+				nil,      // last_calculated_at
+				nil,      // balance_as_of
 			))
 
 	goals, err := repo.GetByAccountID(ctx, activeAccountID)
