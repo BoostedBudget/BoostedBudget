@@ -13,7 +13,8 @@ import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { TransactionsPage } from './TransactionsPage'
-import type { Transaction } from './types'
+import { isInvestmentRow } from './types'
+import type { Transaction, InvestmentActivity, FeedRow } from './types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 
@@ -572,6 +573,69 @@ describe('TransactionsPage', () => {
 
       // useGetPlaidPrimaryCategories must have been called (curated source is wired up)
       expect(mockUseGetPlaidPrimaryCategories).toHaveBeenCalled()
+    })
+  })
+
+  // ─── assertEditable guard — mutation layer (Task 4b) ────────────────────────
+  describe('assertEditable guard — investment rows are read-only', () => {
+    const mockInvestmentTransaction: InvestmentActivity = {
+      id: 'inv-guard-1',
+      user_id: 'user-123',
+      account_id: 'account-456',
+      source: 'investment',
+      amount: -1500.0,
+      date: '2025-10-25',
+      name: 'Buy AAPL',
+      ticker_symbol: 'AAPL',
+      security_name: 'Apple Inc.',
+      activity_type: 'buy',
+      investment_quantity: 10,
+      investment_price: 150.0,
+      investment_fees: 0.0,
+      created_at: '2025-10-25T10:00:00Z',
+      updated_at: '2025-10-25T10:00:00Z',
+    }
+
+    it('isInvestmentRow returns true for investment source rows', () => {
+      expect(isInvestmentRow(mockInvestmentTransaction)).toBe(true)
+    })
+
+    it('isInvestmentRow returns false for banking source rows', () => {
+      const bankingRow: FeedRow = {
+        id: 'bank-1',
+        user_id: 'user-123',
+        account_id: 'account-456',
+        source: 'banking',
+        amount: 25.0,
+        date: '2025-10-25',
+        name: 'Starbucks',
+        pending: false,
+        created_at: '2025-10-25T10:00:00Z',
+        updated_at: '2025-10-25T10:00:00Z',
+      }
+      expect(isInvestmentRow(bankingRow)).toBe(false)
+    })
+
+    it('TransactionTable passes NO edit button for investment rows — guard at UI layer', async () => {
+      // Wire up the raw fetcher mock with one investment row
+      // (TransactionsPage uses the real useInfiniteTransactions hook which calls getTransactions)
+      mockGetTransactions.mockResolvedValue({
+        transactions: [mockInvestmentTransaction],
+        limit: 50,
+        next_cursor: undefined,
+      })
+
+      const Wrapper = createWrapper()
+      render(<TransactionsPage />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        // The investment row renders without errors — count text confirms load
+        expect(screen.getByText(/1 transactions loaded/i)).toBeInTheDocument()
+      })
+
+      // Investment rows have no edit or categorize buttons (rowActions returns null)
+      expect(screen.queryByRole('button', { name: /edit transaction/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /categorize transaction/i })).not.toBeInTheDocument()
     })
   })
 

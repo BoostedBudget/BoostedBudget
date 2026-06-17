@@ -16,7 +16,8 @@ import { useGetUserTags, getGetUserTagsQueryKey } from '@boostedbudget/api-clien
 import { useGetUserCategories, getGetUserCategoriesQueryKey, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { useActiveAccounts } from '@/features/accounts/hooks'
-import type { Transaction } from './types'
+import type { Transaction, FeedRow } from './types'
+import { isInvestmentRow } from './types'
 import type { Account } from '../accounts/types'
 import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
@@ -150,10 +151,11 @@ export function TransactionsPage() {
     }
   }, [isError, fetchNextPage])
 
-  const handleEditTransaction = (transaction: Transaction) => {
+  const handleOpenEditor = useCallback((transaction: Transaction) => {
+    if (isInvestmentRow(transaction as unknown as FeedRow)) return
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
-  }
+  }, [])
 
   const handleEditorClose = useCallback(() => {
     setIsEditorOpen(false)
@@ -178,11 +180,6 @@ export function TransactionsPage() {
     },
     [queryClient]
   )
-
-  const handleCategorizeTransaction = (transaction: Transaction) => {
-    setSelectedTransaction(transaction)
-    setIsEditorOpen(true)
-  }
 
   function handleSearchChange(event: React.ChangeEvent<HTMLInputElement>) {
     const searchValue = event.target.value
@@ -290,8 +287,8 @@ export function TransactionsPage() {
             <TransactionTable
               transactions={transactions}
               accountsMap={accountsMap}
-              onEdit={handleEditTransaction}
-              onCategorize={handleCategorizeTransaction}
+              onEdit={handleOpenEditor}
+              onCategorize={handleOpenEditor}
               loading={isLoading}
               sort={sort}
               onSortChange={setSort}
