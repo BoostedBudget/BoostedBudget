@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
-import type { Transaction, BankingTransaction, InvestmentActivity } from '../types'
+import type { Transaction, BankingTransaction, InvestmentActivity, FeedRow } from '../types'
 import type { Account } from '../../accounts/types'
 
 // NOTE: Do NOT mock HierarchicalCategoryTreeSelect with mock.module() here.
@@ -107,10 +107,12 @@ const mockTransactions: Transaction[] = [
 ]
 
 describe('TransactionTable', () => {
-  const renderTable = (props = {}) =>
+  // T2: TransactionTable.transactions is now FeedRow[]; mock fixtures use Transaction (source: 'plaid').
+  // Single cast at the test boundary — real production data flows through the toFeedRow mapper.
+  const renderTable = (props: Partial<Parameters<typeof TransactionTable>[0]> = {}) =>
     render(
       <TransactionTable
-        transactions={mockTransactions}
+        transactions={mockTransactions as unknown as FeedRow[]}
         accountsMap={mockAccounts}
         {...props}
       />
@@ -547,7 +549,7 @@ describe('TransactionTable', () => {
       }
       render(
         <TransactionTable
-          transactions={[txnWithDetailed]}
+          transactions={[txnWithDetailed] as unknown as FeedRow[]}
           accountsMap={mockAccounts}
         />
       )
@@ -566,7 +568,7 @@ describe('TransactionTable', () => {
       }
       render(
         <TransactionTable
-          transactions={[txnNoDetailed]}
+          transactions={[txnNoDetailed] as unknown as FeedRow[]}
           accountsMap={mockAccounts}
         />
       )
@@ -639,7 +641,7 @@ describe('TransactionTable', () => {
   const renderFeedTable = (props: Partial<Parameters<typeof TransactionTable>[0]> = {}) =>
     render(
       <TransactionTable
-        transactions={[mockInvestmentRow, mockBankingRow] as unknown as Transaction[]}
+        transactions={[mockInvestmentRow, mockBankingRow]}
         accountsMap={mockAccounts}
         {...props}
       />
@@ -795,7 +797,7 @@ describe('TransactionTable', () => {
     it('renders "—" placeholders and never renders the literal string "undefined"', () => {
       render(
         <TransactionTable
-          transactions={[sparseRow] as unknown as Transaction[]}
+          transactions={[sparseRow]}
           accountsMap={mockAccounts}
         />
       )

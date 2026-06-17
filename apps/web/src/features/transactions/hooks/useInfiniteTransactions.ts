@@ -12,7 +12,7 @@ import type { GetTransactionsSortBy } from '@boostedbudget/api-client/models/get
 import type { GetTransactionsSortDir } from '@boostedbudget/api-client/models/getTransactionsSortDir';
 import type { Transaction as ApiTransaction } from '@boostedbudget/api-client/models/transaction';
 import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem';
-import type { TransactionFilters } from '../types';
+import type { TransactionFilters, FeedRow } from '../types';
 
 export type TransactionFiltersState = TransactionFilters;
 export type SortBy = GetTransactionsSortBy;
@@ -23,6 +23,16 @@ export interface UseInfiniteTransactionsOptions {
   sortBy: SortBy;
   sortDir: SortDir;
   limit?: number;
+}
+
+/**
+ * Boundary mapper — the ONE place where ActivityItem is cast to FeedRow (T2).
+ * The API guarantees `source` is 'banking' | 'investment'; the generated model uses
+ * `string` because OpenAPI enum inference is limited. A single typed cast here lets
+ * all downstream consumers use the discriminated union without double-casting.
+ */
+function toFeedRow(item: ActivityItem): FeedRow {
+  return item as unknown as FeedRow;
 }
 
 function flattenFilters(filters: TransactionFiltersState): Record<string, string | undefined> {
@@ -102,8 +112,8 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     refetchOnWindowFocus: false,
   });
 
-  const transactions = useMemo(
-    () => query.data?.pages.flatMap((p) => p.transactions ?? []) ?? [],
+  const transactions: FeedRow[] = useMemo(
+    () => (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? []).map(toFeedRow),
     [query.data],
   );
 

@@ -3,7 +3,7 @@ import { Edit, Tag, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
-import type { Transaction, FeedRow, InvestmentActivity } from '../types'
+import type { Transaction, FeedRow } from '../types'
 import { isInvestmentRow } from '../types'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
@@ -35,11 +35,11 @@ export const TRANSACTION_SORTABLE_COLUMNS = new Set([
 ] as const)
 
 export interface TransactionTableProps {
-  transactions: Transaction[]
+  transactions: FeedRow[]
   accountsMap: Record<string, Account>
   onEdit?: (transaction: Transaction) => void
   onCategorize?: (transaction: Transaction) => void
-  onRowClick?: (transaction: Transaction) => void
+  onRowClick?: (row: FeedRow) => void
   loading?: boolean
   sort?: SortState
   onSortChange?: (sort: SortState) => void
@@ -121,7 +121,7 @@ export function TransactionTable({
     [filters.account, filters.amount, filters.sub_category, onAccountFilterChange, onAmountRangeChange, onDetailedsChange]
   )
 
-  const columns: ColumnDef<Transaction>[] = [
+  const columns: ColumnDef<FeedRow>[] = [
     {
       id: 'date',
       header: 'Date',
@@ -146,11 +146,10 @@ export function TransactionTable({
       defaultSize: 240,
       minSize: 160,
       render: (row) => {
-        if (isInvestmentRow(row as unknown as FeedRow)) {
-          const inv = row as unknown as InvestmentActivity
+        if (isInvestmentRow(row)) {
           return (
             <div className="font-medium text-foreground">
-              {inv.ticker_symbol ?? '—'} · {inv.security_name ?? '—'}
+              {row.ticker_symbol ?? '—'} · {row.security_name ?? '—'}
             </div>
           )
         }
@@ -214,11 +213,11 @@ export function TransactionTable({
       minSize: 120,
       maxSize: 280,
       render: (row) => {
-        const feedRow = row as unknown as FeedRow
-        if (isInvestmentRow(feedRow)) {
-          return <ActivityTypeChip activityType={feedRow.activity_type} />
+        if (isInvestmentRow(row)) {
+          return <ActivityTypeChip activityType={row.activity_type} />
         }
-        const eff = getEffectiveCategory(row)
+        const txn = row as unknown as Transaction
+        const eff = getEffectiveCategory(txn)
         const categoryLabel = getEffectiveCategoryLabel(eff)
         // For a custom category, show its icon + color (Issue #1203) when we can
         // resolve it from the loaded custom categories; otherwise fall back to the
@@ -279,7 +278,8 @@ export function TransactionTable({
       minSize: 100,
       maxSize: 260,
       render: (row) => {
-        const detailed = getEffectiveDetailedCategory(row)
+        const txn = row as unknown as Transaction
+        const detailed = getEffectiveDetailedCategory(txn)
         if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>
         const label = getDetailedLabel(detailed) ?? detailed
         return <span className="text-sm text-muted-foreground">{label}</span>
@@ -301,7 +301,7 @@ export function TransactionTable({
       minSize: 110,
       maxSize: 200,
       render: (row) => {
-        const isInvestment = isInvestmentRow(row as unknown as FeedRow)
+        const isInvestment = isInvestmentRow(row)
         return (
           <div className="flex flex-col items-end gap-1">
             <span
@@ -332,7 +332,7 @@ export function TransactionTable({
   ]
 
   return (
-    <DataTable<Transaction>
+    <DataTable<FeedRow>
       data={transactions}
       columns={columns}
       rowKey={(row) => row.id}
@@ -379,14 +379,14 @@ export function TransactionTable({
       rowActions={
         hasActions
           ? (row) => {
-              if (isInvestmentRow(row as unknown as FeedRow)) return null
+              if (isInvestmentRow(row)) return null
               return (
                 <div className="flex items-center justify-end gap-2">
                   {onEdit && (
                     <ReadOnlyGuard message="Resubscribe to edit transactions">
                       <button
                         type="button"
-                        onClick={() => onEdit(row)}
+                        onClick={() => onEdit(row as unknown as Transaction)}
                         disabled={loading}
                         className={ACTION_BUTTON_CLASS}
                         aria-label="Edit transaction"
@@ -400,7 +400,7 @@ export function TransactionTable({
                     <ReadOnlyGuard message="Resubscribe to categorize transactions">
                       <button
                         type="button"
-                        onClick={() => onCategorize(row)}
+                        onClick={() => onCategorize(row as unknown as Transaction)}
                         disabled={loading}
                         className={ACTION_BUTTON_CLASS}
                         aria-label="Categorize transaction"

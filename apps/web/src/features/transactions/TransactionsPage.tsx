@@ -8,6 +8,7 @@ import { useInfiniteTransactions } from './hooks/useInfiniteTransactions'
 import { useTransactionFilters } from './hooks/useTransactionFilters'
 import { TransactionTable } from './components/TransactionTable'
 import type { TransactionSortColumn, SortDirection } from './components/TransactionTable'
+import type { SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import { TransactionEditor } from './components/TransactionEditor'
 import { InvestmentDetailDrawer } from './components/InvestmentDetailDrawer'
@@ -23,6 +24,24 @@ import type { UserTag } from '../tags/types'
 import type { CustomCategory } from '../categories/types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
+
+/**
+ * T3: When investment activity is included, the API is forced to sort_by=date (see
+ * getEffectiveSortBy in useInfiniteTransactions). The table must receive an effectiveSort
+ * that reflects this so the sort indicator matches the actual row order — without
+ * overwriting the user's sort preference in URL state (they see date indicator while
+ * investments are on; their original sort resumes when they toggle off investments).
+ *
+ * Exported for unit testing.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function computeEffectiveSort(
+  sort: SortState | null,
+  includeInvestments: boolean,
+): SortState | null {
+  if (!sort || !includeInvestments || sort.columnId === 'date') return sort
+  return { columnId: 'date', direction: sort.direction }
+}
 
 export function TransactionsPage() {
   const {
@@ -42,8 +61,12 @@ export function TransactionsPage() {
     setActivityTypes,
   } = useTransactionFilters()
 
-  const sortColumn = (sort?.columnId ?? 'date') as TransactionSortColumn
-  const sortDirection = (sort?.direction ?? 'desc') as SortDirection
+  // T3: effectiveSort keeps the table sort indicator honest — it shows 'date' when the
+  // API is forced to date-sort (investment activity enabled). Does NOT mutate URL state.
+  const investmentsIncluded = filters.include_investment_activity !== false
+  const effectiveSort = computeEffectiveSort(sort, investmentsIncluded)
+  const sortColumn = (effectiveSort?.columnId ?? 'date') as TransactionSortColumn
+  const sortDirection = (effectiveSort?.direction ?? 'desc') as SortDirection
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isEditorOpen, setIsEditorOpen] = useState(false)
@@ -150,18 +173,19 @@ export function TransactionsPage() {
   }, [isError, fetchNextPage])
 
   const handleOpenEditor = useCallback((transaction: Transaction) => {
-    if (isInvestmentRow(transaction as unknown as FeedRow)) return
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
   }, [])
 
-  const handleRowClick = useCallback((row: Transaction) => {
-    if (isInvestmentRow(row as unknown as FeedRow)) {
-      setSelectedInvestment(row as unknown as InvestmentActivity)
+  // T2: handleRowClick now takes FeedRow directly — no double-cast needed.
+  const handleRowClick = useCallback((row: FeedRow) => {
+    if (isInvestmentRow(row)) {
+      setSelectedInvestment(row)
       setIsInvestmentDrawerOpen(true)
       trackEvent(ANALYTICS_EVENTS.INVESTMENT_DETAIL_DRAWER_OPENED)
     } else {
-      handleOpenEditor(row)
+      // row is BankingTransaction here; single narrow cast to Transaction for the editor.
+      handleOpenEditor(row as unknown as Transaction)
     }
   }, [handleOpenEditor, trackEvent])
 
@@ -230,8 +254,8 @@ export function TransactionsPage() {
     )
   }
 
-  const transactions = infiniteTransactions as unknown as Transaction[]
-  const isEmpty = transactions.length === 0
+  // T2: infiniteTransactions is now typed FeedRow[] via the toFeedRow boundary mapper.
+  const isEmpty = infiniteTransactions.length === 0
 
   return (
     <main className="p-8 max-w-[1200px] mx-auto max-sm:p-4">
@@ -287,8 +311,8 @@ export function TransactionsPage() {
               <div className="mb-4">
                 <p className="text-base text-muted-foreground m-0">
                   {hasActiveFilters
-                    ? `Showing ${transactions.length.toLocaleString()} matching transactions`
-                    : `${transactions.length.toLocaleString()} transactions loaded`}
+                    ? `Showing ${infiniteTransactions.length.toLocaleString()} matching transactions`
+                    : `${infiniteTransactions.length.toLocaleString()} transactions loaded`}
                 </p>
               </div>
               <div role="status" aria-live="polite" className="sr-only">
@@ -299,13 +323,13 @@ export function TransactionsPage() {
 
           <div className="min-h-[200px] overflow-x-auto">
             <TransactionTable
-              transactions={transactions}
+              transactions={infiniteTransactions}
               accountsMap={accountsMap}
               onEdit={handleOpenEditor}
               onCategorize={handleOpenEditor}
               onRowClick={handleRowClick}
               loading={isLoading}
-              sort={sort}
+              sort={effectiveSort}
               onSortChange={setSort}
               accountOptions={accountOptions}
               accountFilter={filters.account_ids}
