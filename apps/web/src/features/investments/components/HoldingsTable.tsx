@@ -10,7 +10,6 @@ import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 const formatOrDefault = (value: number | null | undefined): string =>
   value != null ? formatCurrency(value) : '--'
 
-// Backend returns percentage values already (e.g. 25.0 means 25%); no /100 conversion needed
 const formatPercentOrDefault = (value: number | null | undefined): string =>
   value != null ? formatPercent(value) : '--'
 
@@ -77,8 +76,9 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
 
   // Build id→name map for resolving account UUIDs to human-readable names.
   const accountNameById = useMemo(() => {
-    const map = new Map<string, string>()
-    accounts?.forEach((a) => map.set(a.id, a.nickname ?? a.name))
+    const map = new Map<string, string>(
+      accounts?.map((a) => [a.id, a.nickname ?? a.name]) ?? []
+    )
     return map
   }, [accounts])
 
@@ -110,6 +110,7 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
   // DataTable uses manualSorting=true — apply client-side sort before rendering.
   const sortedHoldings = useMemo(() => {
     if (!sortState) return filteredHoldings
+
     const accessors: Partial<Record<string, (r: HoldingView) => number>> = {
       market_value: (r) => r.institution_value ?? 0,
       gain_loss: (r) => r.gain_loss ?? 0,
@@ -117,20 +118,21 @@ export function HoldingsTable({ accountId }: HoldingsTableProps) {
       day_change: (r) => r.day_change ?? 0,
       day_change_pct: (r) => r.day_change_pct ?? 0,
     }
+
     const accessor = accessors[sortState.columnId]
     if (!accessor) return filteredHoldings
-    return [...filteredHoldings].sort((a, b) => {
+
+    const sorted = [...filteredHoldings].sort((a, b) => {
       const cmp = accessor(a) < accessor(b) ? -1 : accessor(a) > accessor(b) ? 1 : 0
       return sortState.direction === 'asc' ? cmp : -cmp
     })
+    return sorted
   }, [filteredHoldings, sortState])
 
   // accountOptions derived from all holdings (unfiltered) so the dropdown always shows
   // every account even while a filter is active. Only used in unscoped mode.
-  const holdings = rawHoldings ?? []
-
   const accountOptions: FilterOption[] = !isScoped
-    ? Array.from(new Set(holdings.map((h) => h.account_id))).map((id) => ({
+    ? Array.from(new Set((rawHoldings ?? []).map((h) => h.account_id))).map((id) => ({
         label: accountNameById.get(id) ?? id,
         value: id,
         masked: true,

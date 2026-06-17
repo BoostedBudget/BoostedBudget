@@ -137,18 +137,15 @@ export function AccountsPage() {
   const handleEditAccount = useCallback((account: Account) => {
     setSelectedAccount(account)
     setIsModalOpen(true)
-  }, [])
+  }, []) // No deps — setters are stable
 
 
   const institutionOptions = useMemo<FilterOption[]>(() => {
     const accs = accountsData?.accounts ?? []
-    const institutions = new Set<string>()
-    accs.forEach((acc) => {
-      if (acc.institution_name) {
-        institutions.add(acc.institution_name)
-      }
-    })
-    return Array.from(institutions)
+    const institutions = Array.from(
+      new Set(accs.map((a) => a.institution_name).filter((x): x is string => x != null && x !== ''))
+    )
+    return institutions
       .sort()
       .map((inst) => ({
         value: inst,
@@ -178,18 +175,18 @@ export function AccountsPage() {
 
   const handleSaveAccount = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
     const updatedAccount = await updateAccount(account, changes)
-    if (updatedAccount) {
-      // Optimistically update the query cache
-      queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
-        if (!oldData) return oldData
-        return {
-          ...oldData,
-          accounts: oldData.accounts.map(acc =>
-            acc.id === account.id ? updatedAccount : acc
-          ),
-        }
-      })
-    }
+    if (!updatedAccount) return
+
+    // Optimistically update the query cache
+    queryClient.setQueryData(accountsQueryKey, (oldData: { accounts: Account[] } | undefined) => {
+      if (!oldData) return oldData
+      return {
+        ...oldData,
+        accounts: oldData.accounts.map(acc =>
+          acc.id === account.id ? updatedAccount : acc
+        ),
+      }
+    })
   }, [updateAccount, queryClient, accountsQueryKey])
 
   const displayedAccounts = useMemo(() => {
