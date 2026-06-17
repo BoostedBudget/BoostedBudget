@@ -9,25 +9,12 @@ import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { formatCurrencyFull } from '@/shared/charts/formatters'
 import type { InvestmentActivity } from '../types'
+import { formatDate } from '@/shared/transactions/dates'
 
 interface InvestmentDetailDrawerProps {
   transaction: InvestmentActivity | null
   open: boolean
   onOpenChange: (open: boolean) => void
-}
-
-/**
- * Format a YYYY-MM-DD date string as "MMM D, YYYY" (e.g. "Oct 25, 2025").
- * Parses locally (no UTC shift) to match TransactionTable's formatDate convention.
- */
-function formatDate(dateStr: string): string {
-  const [year, month, day] = dateStr.split('T')[0].split('-').map(Number)
-  const d = new Date(year, month - 1, day)
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(d)
 }
 
 
@@ -141,7 +128,7 @@ export function InvestmentDetailDrawer({
           </DetailRow>
 
           <DetailRow label="Date">
-            <span data-testid="date-value">{formatDate(date)}</span>
+            <span data-ph-mask="" data-testid="date-value">{formatDate(date)}</span>
           </DetailRow>
         </div>
       </SheetContent>

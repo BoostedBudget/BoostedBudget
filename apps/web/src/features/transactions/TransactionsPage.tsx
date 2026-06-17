@@ -88,9 +88,7 @@ export function TransactionsPage() {
   }, [accountsList])
 
   const handleAccountFilterChange = useCallback(
-    (value: string[]) => {
-      setFilter('account_ids', value.length > 0 ? value : undefined)
-    },
+    (value: string[]) => setFilter('account_ids', value.length > 0 ? value : undefined),
     [setFilter]
   )
 

@@ -14,12 +14,14 @@ import { HierarchicalCategoryTreeSelect } from '@/shared/components/Hierarchical
 import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
 import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
+import { formatDate } from '@/shared/transactions/dates'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'sub_category', 'amount'] as const
+const ACTION_BUTTON_CLASS = 'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4'
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -63,21 +65,6 @@ export interface TransactionTableProps {
   hasMore?: boolean
   /** Infinite scroll: whether a fetch is in progress */
   isFetchingMore?: boolean
-}
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr || typeof dateStr !== 'string') return 'Invalid Date'
-  const datePortion = dateStr.split('T')[0]
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) return 'Invalid Date'
-  const [year, month, day] = datePortion.split('-').map(Number)
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return 'Invalid Date'
-  const transactionDate = new Date(year, month - 1, day)
-  if (isNaN(transactionDate.getTime())) return 'Invalid Date'
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(transactionDate)
 }
 
 export function TransactionTable({
@@ -401,7 +388,7 @@ export function TransactionTable({
                         type="button"
                         onClick={() => onEdit(row)}
                         disabled={loading}
-                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                        className={ACTION_BUTTON_CLASS}
                         aria-label="Edit transaction"
                         title="Edit transaction"
                       >
@@ -415,7 +402,7 @@ export function TransactionTable({
                         type="button"
                         onClick={() => onCategorize(row)}
                         disabled={loading}
-                        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
+                        className={ACTION_BUTTON_CLASS}
                         aria-label="Categorize transaction"
                         title="Categorize transaction"
                       >
