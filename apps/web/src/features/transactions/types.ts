@@ -1,10 +1,15 @@
 // Transaction types matching backend domain models and API schemas
 
 /**
- * Transaction source identifier
- * Indicates where the transaction data originated from
+ * Transaction source identifier (provider level)
+ * Indicates which data provider the transaction came from
  */
 export type TransactionSource = 'plaid' | 'manual' | 'teller' | 'finicity' | 'yodlee'
+
+/**
+ * Investment activity type — mirrors backend InvestmentActivity domain.
+ */
+export type ActivityType = 'buy' | 'sell' | 'dividend' | 'reinvest' | 'fee' | 'cash' | 'other'
 
 /**
  * Category source identifier
@@ -13,12 +18,11 @@ export type TransactionSource = 'plaid' | 'manual' | 'teller' | 'finicity' | 'yo
 export type CategorySource = 'plaid' | 'rule' | 'manual'
 
 /**
- * Tag source tracking
- * Tracks where each tag on a transaction came from
+ * Tag source tracking — identifies where each tag originated (manual, rule, etc.)
  */
 export interface TagSource {
   tag: string
-  source: string // 'manual', 'rule', etc.
+  source: string
 }
 
 /**
@@ -69,6 +73,100 @@ export interface Transaction {
 }
 
 /**
+ * Banking transaction row in the unified feed
+ * Mirrors ActivityItem from the API with source discriminator narrowed to 'banking'.
+ * All fields correspond to ActivityItem in packages/api-client/src/models/activityItem.ts.
+ */
+export interface BankingTransaction {
+  source: 'banking'
+  id: string
+  user_id: string
+  account_id: string
+  linked_item_id?: string | null
+  amount: number
+  date: string
+  name: string
+  merchant_name?: string | null
+  merchant_id?: string | null
+  pending: boolean
+  authorized_date?: string | null
+  payment_channel?: string | null
+  pfc_primary?: string | null
+  pfc_detailed?: string | null
+  pfc_primary_display?: string | null
+  pfc_detailed_display?: string | null
+  pfc_confidence_level?: string | null
+  pfc_category_icon_url?: string | null
+  pfc_primary_override?: string | null
+  pfc_detailed_override?: string | null
+  pfc_primary_override_display?: string | null
+  pfc_detailed_override_display?: string | null
+  effective_pfc_primary?: string | null
+  effective_pfc_detailed?: string | null
+  effective_category_name?: string | null
+  category_override_kind?: string | null
+  custom_category_override_id?: string | null
+  custom_category_override_display?: string | null
+  external_transaction_id?: string | null
+  reviewed?: boolean
+  reviewed_at?: string | null
+  user_notes?: string | null
+  tags?: string[] | null
+  data_source?: string | null
+  sort_date?: string
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Investment activity row in the unified feed
+ * Mirrors ActivityItem from the API with source discriminator narrowed to 'investment'.
+ * Investment-specific fields are required (not optional) to ensure type safety at render sites.
+ */
+export interface InvestmentActivity {
+  source: 'investment'
+  id: string
+  user_id: string
+  account_id: string
+  linked_item_id?: string | null
+  amount: number
+  date: string
+  name: string
+  // Investment-specific required fields
+  ticker_symbol: string
+  security_name: string
+  activity_type: ActivityType
+  investment_quantity: number
+  investment_price: number
+  investment_fees: number
+  // Investment-specific optional fields
+  investment_subtype?: string
+  security_id?: string
+  // Common optional fields
+  pending?: boolean
+  authorized_date?: string | null
+  sort_date?: string
+  data_source?: string | null
+  user_notes?: string | null
+  tags?: string[] | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Unified feed row — discriminated union of banking and investment activity.
+ * Use isInvestmentRow() to narrow to InvestmentActivity.
+ */
+export type FeedRow = BankingTransaction | InvestmentActivity
+
+/**
+ * Type guard: narrows FeedRow to InvestmentActivity when source === 'investment'
+ */
+export function isInvestmentRow(t: FeedRow): t is InvestmentActivity {
+  return t.source === 'investment'
+}
+
+/**
  * Optional filters for querying transactions
  * All fields are optional - null/undefined means no filter
  */
@@ -88,6 +186,9 @@ export interface TransactionFilters {
   max_amount?: number // Maximum absolute transaction amount
   amount_type?: 'income' | 'expense' | 'all' // Transaction type filter
   merchant_id?: string // Filter by merchant UUID
+  // Issue #1299: Investment transactions in unified feed
+  include_investment_activity?: boolean // default: true (absence means true)
+  activity_types?: ActivityType[] // Filter by investment activity type
 }
 
 /**

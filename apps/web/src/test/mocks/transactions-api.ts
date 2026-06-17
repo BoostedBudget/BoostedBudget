@@ -3,6 +3,26 @@
 
 import { mock } from 'bun:test'
 import * as RealTransactionsModule from '@boostedbudget/api-client/endpoints/transactions/transactions'
+import type { InvestmentActivity } from '@/features/transactions/types'
+
+// === Investment activity fixture (#1299) ===
+export const makeInvestmentActivityFixture = (id: string): InvestmentActivity => ({
+  id,
+  user_id: 'user-123',
+  account_id: 'account-inv',
+  source: 'investment' as const,
+  amount: -1500.0,
+  date: '2025-10-25',
+  name: `Buy AAPL (${id})`,
+  ticker_symbol: 'AAPL',
+  security_name: 'Apple Inc.',
+  activity_type: 'buy',
+  investment_quantity: 10,
+  investment_price: 150.0,
+  investment_fees: 0.0,
+  created_at: '2025-10-25T10:00:00Z',
+  updated_at: '2025-10-25T10:00:00Z',
+})
 
 // === getTransactions (raw fetcher — used by useInfiniteTransactions) ===
 export const mockGetTransactions = mock(() => Promise.resolve({ transactions: [], limit: 50 }))
