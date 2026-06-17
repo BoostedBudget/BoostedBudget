@@ -41,21 +41,31 @@ const defaultProps = {
   filters: defaultFilters,
   datePreset: 'all' as const,
   statusFilter: 'all' as const,
-  activeFilterCount: 0,
-  hasActiveFilters: false,
-  onFilterChange: () => {},
-  onFiltersChange: () => {},
   onDatePresetChange: () => {},
   onCustomDateChange: () => {},
   onStatusFilterChange: () => {},
-  onClearFilter: () => {},
-  onClearAllFilters: () => {},
+  onIncludeInvestmentActivityChange: () => {},
+  onActivityTypesChange: () => {},
 }
 
 function setViewportWidth(width: number) {
   Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width })
   window.dispatchEvent(new Event('resize'))
 }
+
+describe('TransactionFilterPanel — mobile label consistency (F4)', () => {
+  beforeEach(() => setViewportWidth(375))
+  afterEach(() => setViewportWidth(0))
+
+  it('mobile trigger button is labeled "Filters", not "Date & Status"', () => {
+    render(<TransactionFilterPanel {...defaultProps} />)
+    // The mobile Sheet trigger must say "Filters" — consistent with desktop header
+    // and mobile SheetTitle. "Date & Status" is stale now that the investment filter
+    // is also inside the sheet.
+    expect(screen.getByText('Filters')).toBeInTheDocument()
+    expect(screen.queryByText('Date & Status')).not.toBeInTheDocument()
+  })
+})
 
 describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   beforeEach(() => setViewportWidth(1280))
@@ -65,7 +75,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
     const { container } = render(<TransactionFilterPanel {...defaultProps} />)
 
     // Expand the panel to reveal the filter controls
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // Bug #1193: sm:grid-cols-2 causes the DateRangePicker ToggleGroup (~826px) to
@@ -78,7 +88,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   it('all 8 date preset buttons are present in the DOM when panel is expanded', () => {
     render(<TransactionFilterPanel {...defaultProps} />)
 
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // These three were previously hidden behind the Status section at 1024px
@@ -95,7 +105,7 @@ describe('TransactionFilterPanel - Bug #1193 layout fix', () => {
   it('Status filter buttons are present alongside Date presets when expanded', () => {
     render(<TransactionFilterPanel {...defaultProps} />)
 
-    const expandBtn = screen.getByRole('button', { name: /Date & Status/i })
+    const expandBtn = screen.getByRole('button', { name: /Filters/i })
     fireEvent.click(expandBtn)
 
     // Status buttons must co-exist in DOM with date presets (not covered)

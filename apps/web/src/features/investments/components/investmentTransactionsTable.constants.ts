@@ -22,16 +22,7 @@ export type TxnColumnId = (typeof TXN_COLUMN_IDS)[number]
  * DataTable applies masking automatically when a column id appears here.
  * IMPORTANT: keep in sync with the columns definition in InvestmentTransactionsTable.tsx.
  */
-export const MASKED_COLUMN_IDS: string[] = ['quantity', 'price', 'amount', 'fees']
-
-/**
- * Safely capitalizes the first letter of a transaction type string.
- * Returns '--' for empty / nullish input (guards against malformed API responses).
- */
-export function formatTransactionType(type: string | null | undefined): string {
-  if (!type) return '--'
-  return type[0].toUpperCase() + type.slice(1)
-}
+export const MASKED_COLUMN_IDS: string[] = ['security', 'quantity', 'price', 'amount', 'fees']
 
 /**
  * Builds the DataTable virtualization config from the infinite-scroll hook values.

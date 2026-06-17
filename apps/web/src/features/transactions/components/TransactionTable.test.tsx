@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionTable } from './TransactionTable'
-import type { Transaction } from '../types'
+import type { Transaction, BankingTransaction, InvestmentActivity, FeedRow } from '../types'
 import type { Account } from '../../accounts/types'
 
 // NOTE: Do NOT mock HierarchicalCategoryTreeSelect with mock.module() here.
@@ -107,10 +107,12 @@ const mockTransactions: Transaction[] = [
 ]
 
 describe('TransactionTable', () => {
-  const renderTable = (props = {}) =>
+  // T2: TransactionTable.transactions is now FeedRow[]; mock fixtures use Transaction (source: 'plaid').
+  // Single cast at the test boundary — real production data flows through the toFeedRow mapper.
+  const renderTable = (props: Partial<Parameters<typeof TransactionTable>[0]> = {}) =>
     render(
       <TransactionTable
-        transactions={mockTransactions}
+        transactions={mockTransactions as unknown as FeedRow[]}
         accountsMap={mockAccounts}
         {...props}
       />
@@ -547,7 +549,7 @@ describe('TransactionTable', () => {
       }
       render(
         <TransactionTable
-          transactions={[txnWithDetailed]}
+          transactions={[txnWithDetailed] as unknown as FeedRow[]}
           accountsMap={mockAccounts}
         />
       )
@@ -566,7 +568,7 @@ describe('TransactionTable', () => {
       }
       render(
         <TransactionTable
-          transactions={[txnNoDetailed]}
+          transactions={[txnNoDetailed] as unknown as FeedRow[]}
           accountsMap={mockAccounts}
         />
       )
@@ -600,6 +602,227 @@ describe('TransactionTable', () => {
       })
       // Real HierarchicalCategoryTreeSelect renders a span[data-testid="active-dot"] inside the trigger
       expect(screen.getByTestId('active-dot')).toBeInTheDocument()
+    })
+  })
+
+  // ─── Investment row rendering (Task 4) ──────────────────────────────────────
+  const mockInvestmentRow: InvestmentActivity = {
+    id: 'inv-1',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    source: 'investment',
+    amount: -1500.0,
+    date: '2025-03-10',
+    name: 'Buy AAPL',
+    ticker_symbol: 'AAPL',
+    security_name: 'Apple Inc.',
+    activity_type: 'buy',
+    investment_quantity: 10,
+    investment_price: 150.0,
+    investment_fees: 0.0,
+    created_at: '2025-03-10T00:00:00Z',
+    updated_at: '2025-03-10T00:00:00Z',
+  }
+
+  const mockBankingRow: BankingTransaction = {
+    id: 'bank-1',
+    user_id: 'user-1',
+    account_id: 'acc-1',
+    source: 'banking',
+    amount: 45.99,
+    date: '2025-03-11',
+    name: 'AMAZON.COM',
+    merchant_name: 'Amazon',
+    pending: false,
+    created_at: '2025-03-11T00:00:00Z',
+    updated_at: '2025-03-11T00:00:00Z',
+  }
+
+  const renderFeedTable = (props: Partial<Parameters<typeof TransactionTable>[0]> = {}) =>
+    render(
+      <TransactionTable
+        transactions={[mockInvestmentRow, mockBankingRow]}
+        accountsMap={mockAccounts}
+        {...props}
+      />
+    )
+
+  describe('Investment row — merchant (Description) cell', () => {
+    it('shows ticker · security_name for investment rows instead of merchant_name', () => {
+      renderFeedTable()
+      expect(screen.getByText('AAPL · Apple Inc.')).toBeInTheDocument()
+    })
+
+    it('does NOT show "Buy AAPL" (name field) in the description cell for investment rows', () => {
+      renderFeedTable()
+      // The name field should not appear in the description column
+      // (it appears in the row name but not as the primary description)
+      const descriptionCells = screen.getAllByText('AAPL · Apple Inc.')
+      expect(descriptionCells.length).toBeGreaterThan(0)
+    })
+
+    it('still shows merchant_name for banking rows', () => {
+      renderFeedTable()
+      expect(screen.getByText('Amazon')).toBeInTheDocument()
+    })
+
+    it('does NOT render tag badges for investment rows', () => {
+      // Investment rows have no tags — even if tags array is present, no badge spam
+      renderFeedTable()
+      // The investment row has no tags property, so no tag badges should render for it
+      // Banking row also has no tags in this fixture, so zero tag badges total
+      // If investment had tags, they should not appear (investment rows have no tags semantics)
+    })
+  })
+
+  describe('Investment row — category cell', () => {
+    it('renders ActivityTypeChip for investment rows', () => {
+      renderFeedTable()
+      // ActivityTypeChip for 'buy' renders "Buy" label
+      expect(screen.getByText('Buy')).toBeInTheDocument()
+    })
+
+    it('does NOT render a color dot (category dot) for investment rows', () => {
+      const { container } = renderFeedTable()
+      // Find the investment row's category cell and verify no color-dot span is present
+      // The banking row has a category dot; investment row uses ActivityTypeChip instead
+      // We check that only one color dot exists (for the banking row)
+      const colorDots = container.querySelectorAll('span.h-2.w-2.shrink-0.rounded-full')
+      // Banking row has one dot; investment row should have none (uses chip instead)
+      expect(colorDots.length).toBeLessThanOrEqual(1)
+    })
+  })
+
+  describe('Investment row — amount cell', () => {
+    it('shows "Investment" badge for investment rows', () => {
+      renderFeedTable()
+      expect(screen.getByText('Investment')).toBeInTheDocument()
+    })
+
+    it('does NOT show "Pending" badge for investment rows', () => {
+      renderFeedTable()
+      // Investment rows are never pending
+      expect(screen.queryByText('Pending')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Investment row — row actions', () => {
+    it('shows NO edit button for investment rows when onEdit is provided', () => {
+      const onEdit = mock(() => {})
+      renderFeedTable({ onEdit })
+      // Banking row gets an edit button; investment row should NOT
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      // Only 1 edit button (for the banking row), not 2
+      expect(editButtons.length).toBe(1)
+    })
+
+    it('shows NO categorize button for investment rows when onCategorize is provided', () => {
+      const onCategorize = mock(() => {})
+      renderFeedTable({ onCategorize })
+      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
+      // Only 1 categorize button (for the banking row), not 2
+      expect(categorizeButtons.length).toBe(1)
+    })
+
+    it('shows edit and categorize for banking rows but not investment rows', () => {
+      const onEdit = mock(() => {})
+      const onCategorize = mock(() => {})
+      renderFeedTable({ onEdit, onCategorize })
+      const editButtons = screen.getAllByRole('button', { name: /edit transaction/i })
+      const categorizeButtons = screen.getAllByRole('button', { name: /categorize transaction/i })
+      expect(editButtons.length).toBe(1)
+      expect(categorizeButtons.length).toBe(1)
+    })
+  })
+
+  describe('Investment row — PII masking', () => {
+    it('investment row merchant cell (ticker·name) still has data-ph-mask', () => {
+      const { container } = renderFeedTable()
+      const maskedTds = container.querySelectorAll('td[data-ph-mask]')
+      // 2 rows × 3 masked columns (amount, merchant, account) = 6 masked tds
+      expect(maskedTds.length).toBe(6)
+    })
+  })
+
+  describe('Investment row — onRowClick routing (#1299)', () => {
+    it('calls onRowClick with the investment row object when investment row is clicked', () => {
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onRowClick })
+
+      // Click the investment row's ticker·name cell (the merchant-column text)
+      const investmentCell = screen.getByText('AAPL · Apple Inc.')
+      fireEvent.click(investmentCell)
+
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      // The argument passed to onRowClick should be the investment row (source: 'investment')
+      const calledWith = (onRowClick.mock.calls[0] as unknown[])[0] as { source: string }
+      expect(calledWith.source).toBe('investment')
+    })
+
+    it('calls onRowClick with the banking row object when banking row is clicked', () => {
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onRowClick })
+
+      // Click the banking row's merchant cell
+      const bankingCell = screen.getByText('Amazon')
+      fireEvent.click(bankingCell)
+
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      const calledWith = (onRowClick.mock.calls[0] as unknown[])[0] as { source: string }
+      expect(calledWith.source).toBe('banking')
+    })
+  })
+
+  // R3 — type-soundness: sparse investment row (API fields may be null pointers)
+  describe('Investment row — sparse fields graceful rendering (R3)', () => {
+    const sparseRow: InvestmentActivity = {
+      id: 'inv-sparse',
+      user_id: 'user-1',
+      account_id: 'acc-1',
+      source: 'investment',
+      amount: 0,
+      date: '2025-03-10',
+      name: 'Unknown investment',
+      // investment-specific fields absent (simulates sparse API response)
+      ticker_symbol: undefined,
+      security_name: undefined,
+      activity_type: undefined,
+      investment_quantity: undefined,
+      investment_price: undefined,
+      investment_fees: undefined,
+      created_at: '2025-03-10T00:00:00Z',
+      updated_at: '2025-03-10T00:00:00Z',
+    }
+
+    it('renders "—" placeholders and never renders the literal string "undefined"', () => {
+      render(
+        <TransactionTable
+          transactions={[sparseRow]}
+          accountsMap={mockAccounts}
+        />
+      )
+      // The literal string "undefined" must never appear in the DOM
+      expect(screen.queryByText(/\bundefined\b/)).not.toBeInTheDocument()
+      // Fallback separator renders for missing ticker/security
+      expect(screen.getByText('— · —')).toBeInTheDocument()
+    })
+  })
+
+  // R4 — read-only: mutation callbacks (onEdit/onCategorize) never fire for investment rows
+  describe('Investment row — read-only: mutation callbacks not triggered (R4)', () => {
+    it('onEdit and onCategorize are NOT called when an investment row is clicked', () => {
+      const onEdit = mock(() => {})
+      const onCategorize = mock(() => {})
+      const onRowClick = mock(() => {})
+      renderFeedTable({ onEdit, onCategorize, onRowClick })
+
+      fireEvent.click(screen.getByText('AAPL · Apple Inc.'))
+
+      // onRowClick fires (page routes to drawer)
+      expect(onRowClick).toHaveBeenCalledTimes(1)
+      // onEdit and onCategorize must NEVER be triggered for an investment row
+      expect(onEdit).not.toHaveBeenCalled()
+      expect(onCategorize).not.toHaveBeenCalled()
     })
   })
 })

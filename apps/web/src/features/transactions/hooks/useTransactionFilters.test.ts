@@ -656,4 +656,76 @@ describe('useTransactionFilters', () => {
       expect(result.current.isDefaultSort).toBe(true)
     })
   })
+
+  describe('include_investment_activity filter', () => {
+    it('defaults to true (not present in URL) when no URL param', () => {
+      window.history.replaceState({}, '', '/')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      // include_investment_activity is true by default — must be absent from URL
+      expect(new URLSearchParams(window.location.search).get('include_investment_activity')).toBeNull()
+      // The hook exposes undefined (falsy default handled by consumer as true)
+      expect(result.current.filters.include_investment_activity).toBeUndefined()
+    })
+
+    it('setting to false serializes to URL as "false"', () => {
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setIncludeInvestmentActivity(false)
+      })
+      expect(result.current.filters.include_investment_activity).toBe(false)
+      expect(new URLSearchParams(window.location.search).get('include_investment_activity')).toBe('false')
+    })
+
+    it('setting back to true removes the URL param', () => {
+      window.history.replaceState({}, '', '/?include_investment_activity=false')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setIncludeInvestmentActivity(true)
+      })
+      expect(new URLSearchParams(window.location.search).get('include_investment_activity')).toBeNull()
+    })
+
+    it('setting activity_types when include=false immediately clears them', () => {
+      window.history.replaceState({}, '', '/?include_investment_activity=false')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setActivityTypes(['buy', 'dividend'])
+      })
+      // activity_types must be absent (cleared because include=false)
+      expect(result.current.filters.activity_types).toBeUndefined()
+      expect(new URLSearchParams(window.location.search).get('activity_types')).toBeNull()
+    })
+
+    it('setting activity_types when include is true persists them', () => {
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+      act(() => {
+        result.current.setActivityTypes(['sell', 'fee'])
+      })
+      expect(result.current.filters.activity_types).toEqual(['sell', 'fee'])
+      expect(new URLSearchParams(window.location.search).get('activity_types')).toBe('sell,fee')
+    })
+
+    it('deep-linked URL with include=false + activity_types → activity_types suppressed in derived state (F2)', () => {
+      // A user shares a URL like ?include_investment_activity=false&activity_types=buy — this
+      // bypasses both setters. The derived filters object must canonicalize: activity_types is
+      // meaningless when investments are excluded, so suppress it and don't count it.
+      window.history.replaceState({}, '', '/?include_investment_activity=false&activity_types=buy')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      // Derived filters must suppress activity_types when investments are off
+      expect(result.current.filters.activity_types).toBeUndefined()
+      // activeFilterCount = 1 (include=false) — activity_types must NOT add to the count
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+
+    it('deep-linked URL with include absent + activity_types → activity_types counted normally', () => {
+      // Investments ON (default) — activity_types should pass through
+      window.history.replaceState({}, '', '/?activity_types=buy,dividend')
+      const { result } = renderHook(() => useTransactionFilters(), { wrapper: createWrapper() })
+
+      expect(result.current.filters.activity_types).toEqual(['buy', 'dividend'])
+      // activeFilterCount = 1 (activity_types group)
+      expect(result.current.activeFilterCount).toBe(1)
+    })
+  })
 })

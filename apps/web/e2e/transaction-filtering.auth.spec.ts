@@ -320,8 +320,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Issue #615: Panel renamed to "Date & Status" (Account/Category/Type/Amount moved to table headers)
-      await expect(page.getByText('Date & Status')).toBeVisible()
+      // #1299: Panel renamed to "Filters" (now includes investment activity toggle alongside date/status)
+      await expect(page.getByRole('button', { name: /Filters/ })).toBeVisible()
     })
 
     test('should expand filter panel when clicking toggle', async ({ page }) => {
@@ -329,8 +329,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Click to expand (Issue #615: renamed from "Filters")
-      await page.getByText('Date & Status').click()
+      // Click to expand
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Filter controls should be visible (only Date Range and Status per Issue #615)
       await expect(page.getByText('Date Range')).toBeVisible()
@@ -343,11 +343,11 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.waitForLoadState('domcontentloaded')
 
       // Expand
-      await page.getByText('Date & Status').click()
+      await page.getByRole('button', { name: /Filters/ }).click()
       await expect(page.getByText('Date Range')).toBeVisible()
 
       // Collapse
-      await page.getByText('Date & Status').click()
+      await page.getByRole('button', { name: /Filters/ }).click()
       await expect(page.getByText('Date Range')).not.toBeVisible()
     })
 
@@ -419,8 +419,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Click Pending button
       await page.getByRole('button', { name: 'Pending' }).click()
@@ -435,8 +435,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Click Posted button
       await page.getByRole('button', { name: 'Posted' }).click()
@@ -457,8 +457,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Apply status filter (Status filter remains in panel)
       await page.getByRole('button', { name: 'Posted' }).click()
@@ -472,8 +472,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       await page.goto('/transactions')
       await page.waitForLoadState('domcontentloaded')
 
-      // Expand and apply status filter (Issue #615: Type filter moved inline)
-      await page.getByText('Date & Status').click()
+      // Expand and apply status filter
+      await page.getByRole('button', { name: /Filters/ }).click()
       await page.getByRole('button', { name: 'Posted' }).click()
 
       // Reload page
@@ -638,8 +638,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Date presets should be visible (Issue #953: migrated to shared calendar-aligned presets)
       // ToggleGroup renders radio items (Radix single toggle group), not buttons
@@ -659,8 +659,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Click This Month preset (Issue #953: migrated from '30 days' to calendar-aligned presets)
       await page.getByRole('radio', { name: 'This Month' }).click()
@@ -683,8 +683,8 @@ test.describe('Transaction Filtering - Authenticated User', () => {
       // Dismiss cookie consent if it reappears after navigation
       await acceptCookieConsent(page)
 
-      // Expand filters (Issue #615: renamed to "Date & Status")
-      await page.getByText('Date & Status').click()
+      // Expand filters (#1299: labeled "Filters")
+      await page.getByRole('button', { name: /Filters/ }).click()
 
       // Custom date inputs should appear because the inferred preset is 'custom'
       await expect(page.getByText('Start Date')).toBeVisible()

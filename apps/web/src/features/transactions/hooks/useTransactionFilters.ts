@@ -5,7 +5,7 @@ import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState, serializeSortParam } from '@/shared/hooks/useSortUrlState'
 import { useFilterState, type FilterSpec } from '@/shared/hooks/useFilterState'
 import { TRANSACTION_SORTABLE_COLUMNS } from '../components/TransactionTable'
-import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
+import type { TransactionFilters, DatePreset, StatusFilter, ActivityType } from '../types'
 
 const DEFAULT_SORT: SortState = { columnId: 'date', direction: 'desc' }
 
@@ -27,6 +27,8 @@ export interface UseTransactionFiltersResult {
   setCustomDateRange: (startDate: string, endDate: string) => void
   statusFilter: StatusFilter
   setStatusFilter: (status: StatusFilter) => void
+  setIncludeInvestmentActivity: (val: boolean) => void
+  setActivityTypes: (types: ActivityType[]) => void
 }
 
 const SPEC = {
@@ -34,6 +36,7 @@ const SPEC = {
   pfc_primaries:      { kind: 'multi-select' },
   pfc_detaileds:      { kind: 'multi-select' },
   custom_category_ids: { kind: 'multi-select' },
+  activity_types:     { kind: 'multi-select' },
   min_amount:    { kind: 'scalar', codec: 'number' as const },
   max_amount:    { kind: 'scalar', codec: 'number' as const },
   start_date:    { kind: 'scalar', codec: 'string' as const },
@@ -43,6 +46,13 @@ const SPEC = {
   pending:       { kind: 'scalar', codec: 'boolean' as const },
   reviewed:      { kind: 'scalar', codec: 'boolean' as const },
   merchant_id:   { kind: 'scalar', codec: 'string' as const },
+  // Issue #1299: include_investment_activity defaults true — omit from URL when true to
+  // avoid noise; serialize false only when explicitly disabled (canonicalization rule).
+  include_investment_activity: {
+    kind: 'scalar',
+    codec: 'boolean' as const,
+    activeWhen: (v: unknown) => v === false,
+  },
 } as const satisfies FilterSpec
 
 export function useTransactionFilters(): UseTransactionFiltersResult {
@@ -96,24 +106,37 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
       max_amount:    state.filters.max_amount,
       amount_type:   state.filters.amount_type as TransactionFilters['amount_type'],
       merchant_id:   state.filters.merchant_id,
+      // Issue #1299: include_investment_activity — undefined means default (true)
+      include_investment_activity: state.filters.include_investment_activity,
+      // activity_types is meaningless when investment activity is disabled (include=false).
+      // Suppress in derived state so deep-linked URLs (?include=false&activity_types=buy)
+      // don't count stale types in activeFilterCount or show phantom filter pills (F2).
+      activity_types:
+        state.filters.include_investment_activity !== false &&
+        state.filters.activity_types.length > 0
+          ? state.filters.activity_types as ActivityType[]
+          : undefined,
     }),
     [state.filters],
   )
 
   const activeFilterCount = useMemo(() => {
-    let count = 0
-    if (filters.account_ids && filters.account_ids.length > 0) count++
-    if (state.filters.pfc_primaries.length > 0) count++
-    if (state.filters.pfc_detaileds.length > 0) count++
-    if (state.filters.custom_category_ids.length > 0) count++
-    if (filters.start_date || filters.end_date) count++
-    if (filters.search) count++
-    if (filters.pending !== undefined) count++
-    if (filters.reviewed !== undefined) count++
-    if (filters.min_amount !== undefined || filters.max_amount !== undefined) count++
-    if (filters.amount_type && filters.amount_type !== 'all') count++
-    if (filters.merchant_id) count++
-    return count
+    const countIf = (condition: unknown) => condition ? 1 : 0
+    return (
+      countIf(filters.account_ids && filters.account_ids.length > 0) +
+      countIf(state.filters.pfc_primaries.length > 0) +
+      countIf(state.filters.pfc_detaileds.length > 0) +
+      countIf(state.filters.custom_category_ids.length > 0) +
+      countIf(filters.start_date || filters.end_date) +
+      countIf(filters.search !== undefined) +
+      countIf(filters.pending !== undefined) +
+      countIf(filters.reviewed !== undefined) +
+      countIf(filters.min_amount !== undefined || filters.max_amount !== undefined) +
+      countIf(filters.amount_type && filters.amount_type !== 'all') +
+      countIf(filters.merchant_id !== undefined) +
+      countIf(filters.include_investment_activity === false) +
+      countIf(filters.activity_types && filters.activity_types.length > 0)
+    )
   }, [filters, state.filters.pfc_primaries, state.filters.pfc_detaileds, state.filters.custom_category_ids])
 
   const datePreset = useMemo<DatePreset>(
@@ -156,6 +179,33 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     [setFilter, clearFilter],
   )
 
+  // Issue #1299: Investment activity setters with canonicalization
+  // Setting to true removes the URL param (default); false serializes explicitly.
+  const setIncludeInvestmentActivity = useCallback(
+    (val: boolean) => {
+      if (val) {
+        // Restore default: remove param + clear stale activity_types
+        setFilters({ include_investment_activity: undefined, activity_types: [] })
+      } else {
+        // Explicitly disabled: serialize false, clear activity_types (canonicalization)
+        setFilters({ include_investment_activity: false, activity_types: [] })
+      }
+    },
+    [setFilters],
+  )
+
+  // Setting activity types is a no-op when investment activity is disabled
+  const setActivityTypes = useCallback(
+    (types: ActivityType[]) => {
+      if (filters.include_investment_activity === false) {
+        // Canonicalization: ignore writes when investment activity is off
+        return
+      }
+      setFilter('activity_types', types as string[])
+    },
+    [setFilter, filters.include_investment_activity],
+  )
+
   return {
     filters,
     sort,
@@ -174,5 +224,7 @@ export function useTransactionFilters(): UseTransactionFiltersResult {
     setCustomDateRange,
     statusFilter,
     setStatusFilter,
+    setIncludeInvestmentActivity,
+    setActivityTypes,
   }
 }

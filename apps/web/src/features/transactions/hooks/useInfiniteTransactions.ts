@@ -12,7 +12,7 @@ import type { GetTransactionsSortBy } from '@boostedbudget/api-client/models/get
 import type { GetTransactionsSortDir } from '@boostedbudget/api-client/models/getTransactionsSortDir';
 import type { Transaction as ApiTransaction } from '@boostedbudget/api-client/models/transaction';
 import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem';
-import type { TransactionFilters } from '../types';
+import type { TransactionFilters, FeedRow } from '../types';
 
 export type TransactionFiltersState = TransactionFilters;
 export type SortBy = GetTransactionsSortBy;
@@ -23,6 +23,16 @@ export interface UseInfiniteTransactionsOptions {
   sortBy: SortBy;
   sortDir: SortDir;
   limit?: number;
+}
+
+/**
+ * Boundary mapper — the ONE place where ActivityItem is cast to FeedRow (T2).
+ * The API guarantees `source` is 'banking' | 'investment'; the generated model uses
+ * `string` because OpenAPI enum inference is limited. A single typed cast here lets
+ * all downstream consumers use the discriminated union without double-casting.
+ */
+function toFeedRow(item: ActivityItem): FeedRow {
+  return item as unknown as FeedRow;
 }
 
 function flattenFilters(filters: TransactionFiltersState): Record<string, string | undefined> {
@@ -42,7 +52,29 @@ function flattenFilters(filters: TransactionFiltersState): Record<string, string
     ...(filters.max_amount !== undefined && { max_amount: String(filters.max_amount) }),
     ...(filters.amount_type && filters.amount_type !== 'all' && { amount_type: filters.amount_type }),
     ...(filters.merchant_id && { merchant_id: filters.merchant_id }),
+    // Issue #1299: Investment activity canonicalization rules:
+    // 1. include_investment_activity defaults true — omit when true (or undefined), send 'false' only when explicitly disabled
+    ...(filters.include_investment_activity === false && { include_investment_activity: 'false' }),
+    // 2. activity_types: only send when investment activity is included AND types are selected; sort for stable cache key
+    ...(filters.include_investment_activity !== false && filters.activity_types?.length && {
+      activity_types: [...filters.activity_types].sort().join(','),
+    }),
   };
+}
+
+function getEffectiveSortBy(
+  sortBy: SortBy,
+  filters: TransactionFiltersState,
+): SortBy {
+  // Issue #1299: The backend requires sort_by=date when investment activity is merged into the
+  // unified feed. Investment rows and banking rows have incompatible sort semantics for non-date
+  // fields (e.g. 'amount' on an investment row has different meaning), so the backend enforces
+  // date ordering when merging. Override the user's sort preference in the API call only —
+  // do NOT mutate URL state so the user's preference is preserved when they toggle off investments.
+  if (filters.include_investment_activity !== false) {
+    return 'date';
+  }
+  return sortBy;
 }
 
 export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
@@ -65,7 +97,7 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
         {
           cursor: pageParam,
           limit,
-          sort_by: opts.sortBy,
+          sort_by: getEffectiveSortBy(opts.sortBy, opts.filters),
           sort_dir: opts.sortDir,
           ...flattenFilters(opts.filters),
         },
@@ -80,17 +112,15 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     refetchOnWindowFocus: false,
   });
 
-  const transactions = useMemo(
-    () => query.data?.pages.flatMap((p) => p.transactions ?? []) ?? [],
+  const transactions: FeedRow[] = useMemo(
+    () => (query.data?.pages.flatMap((p) => p.transactions ?? []) ?? []).map(toFeedRow),
     [query.data],
   );
 
   const updateTransaction = useCallback(
     async (updated: ApiTransaction) => {
       await queryClient.cancelQueries({ queryKey });
-      // The API now returns ActivityItem (superset of Transaction). Spread the banking
-      // fields from the updated Transaction into the existing ActivityItem to preserve
-      // investment-specific fields (source, ticker, etc.) that the caller doesn't own.
+      // Merge updated fields into existing ActivityItem to preserve investment-specific fields.
       queryClient.setQueryData<InfiniteData<GetTransactionsOutputBody>>(
         queryKey,
         (old): InfiniteData<GetTransactionsOutputBody> | undefined => {
