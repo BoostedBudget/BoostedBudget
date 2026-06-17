@@ -5,7 +5,7 @@
  * Issue #590: Simplified - Account/Category/Amount filters moved inline to table headers
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { ChevronDownIcon, XMarkIcon, FunnelIcon } from '@heroicons/react/24/outline'
 import {
   Sheet,
@@ -16,10 +16,11 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet'
 import { Card } from '@/components/ui/card'
-import type { TransactionFilters, DatePreset, StatusFilter } from '../types'
+import type { TransactionFilters, DatePreset, StatusFilter, ActivityType } from '../types'
 import { PRESETS } from '@/shared/dates'
 import {
   TransactionDateFilter,
+  TransactionInvestmentFilter,
   TransactionStatusFilter,
   FilterPill,
 } from './filters'
@@ -28,16 +29,13 @@ interface TransactionFilterPanelProps {
   filters: TransactionFilters
   datePreset: DatePreset
   statusFilter: StatusFilter
-  activeFilterCount: number
-  hasActiveFilters: boolean
   pendingCount?: number
-  onFilterChange: <K extends keyof TransactionFilters>(key: K, value: TransactionFilters[K]) => void
-  onFiltersChange: (updates: Partial<TransactionFilters>) => void
   onDatePresetChange: (preset: DatePreset) => void
   onCustomDateChange: (startDate: string, endDate: string) => void
   onStatusFilterChange: (status: StatusFilter) => void
-  onClearFilter: (key: keyof TransactionFilters) => void
-  onClearAllFilters: () => void
+  onIncludeInvestmentActivityChange: (val: boolean) => void
+  onActivityTypesChange: (types: ActivityType[]) => void
+  onClearAll?: () => void
   disabled?: boolean
 }
 
@@ -45,33 +43,37 @@ interface TransactionFilterPanelProps {
 interface FilterPillsSectionProps {
   dateDisplayValue: string | null
   statusDisplayValue: string | null
+  investmentDisplayValue: string | null
+  activityTypesDisplayValue: string | null
   onDatePresetChange: (preset: DatePreset) => void
   onStatusFilterChange: (status: StatusFilter) => void
+  onIncludeInvestmentActivityChange: (val: boolean) => void
+  onActivityTypesChange: (types: ActivityType[]) => void
 }
 
 // Extracted module-level component for filter pills
 function FilterPillsSection({
   dateDisplayValue,
   statusDisplayValue,
+  investmentDisplayValue,
+  activityTypesDisplayValue,
   onDatePresetChange,
   onStatusFilterChange,
+  onIncludeInvestmentActivityChange,
+  onActivityTypesChange,
 }: FilterPillsSectionProps) {
+  const pills: Array<{ show: string | null, label: string, value: string | null, onRemove: () => void }> = [
+    { show: dateDisplayValue, label: 'Date', value: dateDisplayValue, onRemove: () => onDatePresetChange('all') },
+    { show: statusDisplayValue, label: 'Status', value: statusDisplayValue, onRemove: () => onStatusFilterChange('all') },
+    { show: investmentDisplayValue, label: 'Investments', value: investmentDisplayValue, onRemove: () => onIncludeInvestmentActivityChange(true) },
+    { show: activityTypesDisplayValue, label: 'Activity', value: activityTypesDisplayValue, onRemove: () => onActivityTypesChange([]) },
+  ]
+
   return (
     <div className="flex flex-wrap gap-2">
-      {dateDisplayValue && (
-        <FilterPill
-          label="Date"
-          value={dateDisplayValue}
-          onRemove={() => onDatePresetChange('all')}
-        />
-      )}
-      {statusDisplayValue && (
-        <FilterPill
-          label="Status"
-          value={statusDisplayValue}
-          onRemove={() => onStatusFilterChange('all')}
-        />
-      )}
+      {pills.filter(({ show }) => show).map(({ label, value, onRemove }) => (
+        <FilterPill key={label} label={label} value={value!} onRemove={onRemove} />
+      ))}
     </div>
   )
 }
@@ -99,37 +101,74 @@ export function TransactionFilterPanel({
   onDatePresetChange,
   onCustomDateChange,
   onStatusFilterChange,
+  onIncludeInvestmentActivityChange,
+  onActivityTypesChange,
+  onClearAll,
   disabled,
 }: TransactionFilterPanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   const isMobile = useIsMobile()
 
-  // Get display values for filter pills
-  const getDateDisplayValue = () => {
-    if (datePreset === 'all') return null
-    if (datePreset === 'custom' && filters.start_date && filters.end_date) {
-      return `${filters.start_date} - ${filters.end_date}`
+  const includeInvestmentActivity = filters.include_investment_activity ?? true
+  const activityTypes = (filters.activity_types ?? []) as ActivityType[]
+
+  // Consolidated clear all handler — use atomic onClearAll (single setSearchParams) when
+  // provided to avoid the multi-call race where the last setSearchParams overwrites earlier
+  // ones if they all read from the same original URL state.
+  const handleClearAllFilters = () => {
+    if (onClearAll) {
+      onClearAll()
+      return
     }
-    const match = PRESETS.find((p) => p.value === datePreset)
-    return match?.label ?? datePreset
+    onDatePresetChange('all')
+    onStatusFilterChange('all')
+    onIncludeInvestmentActivityChange(true)
+    onActivityTypesChange([])
   }
 
-  const getStatusDisplayValue = () => {
-    if (statusFilter === 'all') return null
-    return statusFilter === 'posted' ? 'Posted' : 'Pending'
-  }
+  const filterPillsProps = useMemo<FilterPillsSectionProps>(() => {
+    const types = (filters.activity_types ?? []) as ActivityType[]
 
-  // Prepare filter pills props
-  const filterPillsProps: FilterPillsSectionProps = {
-    dateDisplayValue: getDateDisplayValue(),
-    statusDisplayValue: getStatusDisplayValue(),
-    onDatePresetChange,
-    onStatusFilterChange,
-  }
+    const getDateDisplayValue = (): string | null => {
+      if (datePreset === 'all') return null
+      if (datePreset === 'custom' && filters.start_date && filters.end_date) {
+        return `${filters.start_date} - ${filters.end_date}`
+      }
+      const match = PRESETS.find((p) => p.value === datePreset)
+      return match?.label ?? datePreset
+    }
 
-  // Calculate active count for date/status only
-  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0)
+    const getStatusDisplayValue = (): string | null => {
+      if (statusFilter === 'all') return null
+      return statusFilter === 'posted' ? 'Posted' : 'Pending'
+    }
+
+    const getInvestmentDisplayValue = (): string | null => {
+      if (includeInvestmentActivity) return null
+      return 'Hidden'
+    }
+
+    const getActivityTypesDisplayValue = (): string | null => {
+      if (!types.length) return null
+      return types.length === 1 ? types[0] : `${types.length} types`
+    }
+
+    return {
+      dateDisplayValue: getDateDisplayValue(),
+      statusDisplayValue: getStatusDisplayValue(),
+      investmentDisplayValue: getInvestmentDisplayValue(),
+      activityTypesDisplayValue: getActivityTypesDisplayValue(),
+      onDatePresetChange,
+      onStatusFilterChange,
+      onIncludeInvestmentActivityChange,
+      onActivityTypesChange,
+    }
+  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange])
+
+  // Calculate active count for date/status/investment filters
+  const investmentActiveCount = (!includeInvestmentActivity ? 1 : 0) + (activityTypes.length > 0 ? 1 : 0)
+  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount
   const hasDateStatusFilters = dateStatusActiveCount > 0
 
   // Mobile: Bottom sheet
@@ -145,7 +184,7 @@ export function TransactionFilterPanel({
             >
               <div className="flex items-center gap-2">
                 <FunnelIcon className="w-5 h-5 text-muted-foreground" />
-                <span className="font-medium text-foreground">Date & Status</span>
+                <span className="font-medium text-foreground">Filters</span>
                 {dateStatusActiveCount > 0 && (
                   <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded-full">
                     {dateStatusActiveCount}
@@ -158,7 +197,7 @@ export function TransactionFilterPanel({
 
           <SheetContent side="bottom" className="max-h-[85vh] overflow-auto">
             <SheetHeader>
-              <SheetTitle>Date & Status Filters</SheetTitle>
+              <SheetTitle>Filters</SheetTitle>
             </SheetHeader>
 
             <div className="py-4 overflow-auto">
@@ -178,6 +217,13 @@ export function TransactionFilterPanel({
                   pendingCount={pendingCount}
                   disabled={disabled}
                 />
+                <TransactionInvestmentFilter
+                  includeInvestmentActivity={includeInvestmentActivity}
+                  activityTypes={activityTypes}
+                  onIncludeChange={onIncludeInvestmentActivityChange}
+                  onActivityTypesChange={onActivityTypesChange}
+                  disabled={disabled}
+                />
               </div>
             </div>
 
@@ -185,10 +231,7 @@ export function TransactionFilterPanel({
               {hasDateStatusFilters && (
                 <button
                   type="button"
-                  onClick={() => {
-                    onDatePresetChange('all')
-                    onStatusFilterChange('all')
-                  }}
+                  onClick={handleClearAllFilters}
                   className="flex-1 px-4 py-2 text-sm text-muted-foreground border border-input rounded-lg hover:bg-accent transition-colors"
                 >
                   Clear All
@@ -226,7 +269,7 @@ export function TransactionFilterPanel({
       >
         <div className="flex items-center gap-2">
           <FunnelIcon className="w-5 h-5 text-muted-foreground" />
-          <span className="font-medium text-foreground">Date & Status</span>
+          <span className="font-medium text-foreground">Filters</span>
           {dateStatusActiveCount > 0 && (
             <span className="inline-flex items-center justify-center px-2 py-0.5 text-xs font-medium bg-info/10 text-info rounded-full">
               {dateStatusActiveCount}
@@ -244,10 +287,7 @@ export function TransactionFilterPanel({
           <FilterPillsSection {...filterPillsProps} />
           <button
             type="button"
-            onClick={() => {
-              onDatePresetChange('all')
-              onStatusFilterChange('all')
-            }}
+            onClick={handleClearAllFilters}
             className="text-xs text-muted-foreground hover:text-foreground underline"
           >
             Clear all
@@ -276,6 +316,15 @@ export function TransactionFilterPanel({
               pendingCount={pendingCount}
               disabled={disabled}
             />
+
+            {/* Investment Activity Filter */}
+            <TransactionInvestmentFilter
+              includeInvestmentActivity={includeInvestmentActivity}
+              activityTypes={activityTypes}
+              onIncludeChange={onIncludeInvestmentActivityChange}
+              onActivityTypesChange={onActivityTypesChange}
+              disabled={disabled}
+            />
           </div>
 
           {/* Clear all button */}
@@ -283,10 +332,7 @@ export function TransactionFilterPanel({
             <div className="mt-4 pt-4 border-t border-border/50 flex justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  onDatePresetChange('all')
-                  onStatusFilterChange('all')
-                }}
+                onClick={handleClearAllFilters}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
               >
                 <XMarkIcon className="w-4 h-4" />

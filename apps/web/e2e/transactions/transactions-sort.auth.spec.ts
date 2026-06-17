@@ -148,7 +148,9 @@ test.describe('Transaction Sort', () => {
       }
     })
 
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included,
+    // so non-date sort only flows to the API when the investment toggle is off.
+    await page.goto('/transactions?include_investment_activity=false')
     await acceptCookieConsent(page)
 
     const table = page.getByRole('table')
@@ -175,7 +177,8 @@ test.describe('Transaction Sort', () => {
 
   test('cross-page invariant — page 2 loads with cursor preserving sort params', async ({ page }) => {
     await setupTransactionsMock(page)
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included.
+    await page.goto('/transactions?include_investment_activity=false')
     await acceptCookieConsent(page)
 
     await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
@@ -205,8 +208,10 @@ test.describe('Transaction Sort', () => {
     await Promise.all([scrollAction, page2ReqPromise])
     await page.waitForTimeout(500)
 
-    // All 60 fixture transactions loaded — count in page header confirms both pages merged
-    await expect(page.getByText(/60 transactions loaded/i)).toBeVisible({ timeout: 5_000 })
+    // All 60 fixture transactions loaded — count in page header confirms both pages merged.
+    // include_investment_activity=false is an active filter → page shows "Showing N matching
+    // transactions" rather than "N transactions loaded".
+    await expect(page.getByText(/\b60\b.*(transactions loaded|matching transactions)/i)).toBeVisible({ timeout: 5_000 })
   })
 
   test('sorting resets to page 1 — cursor absent after sort change', async ({ page }) => {
@@ -219,7 +224,8 @@ test.describe('Transaction Sort', () => {
       }
     })
 
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included.
+    await page.goto('/transactions?include_investment_activity=false')
     await acceptCookieConsent(page)
     await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })
 
@@ -251,7 +257,8 @@ test.describe('Transaction Sort', () => {
 
   test('third click on a sorted column clears sort and resets to default date:desc', async ({ page }) => {
     await setupTransactionsMock(page)
-    await page.goto('/transactions')
+    // include_investment_activity=false: T3 forces sort_by=date when investments included.
+    await page.goto('/transactions?include_investment_activity=false')
     await acceptCookieConsent(page)
 
     await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 })

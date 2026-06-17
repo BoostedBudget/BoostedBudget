@@ -4,10 +4,10 @@ import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import { formatCurrency } from '@/shared/charts/formatters'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
+import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import {
   TXN_COLUMN_IDS,
   MASKED_COLUMN_IDS,
-  formatTransactionType,
   buildInvestmentVirtualization,
 } from './investmentTransactionsTable.constants'
 
@@ -56,7 +56,7 @@ export function InvestmentTransactionsTable({
       id: 'type',
       header: 'Type',
       key: 'type',
-      render: (r) => formatTransactionType(r.type),
+      render: (r) => <ActivityTypeChip activityType={r.type} />,
     },
     {
       id: 'security',

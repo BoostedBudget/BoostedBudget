@@ -3,7 +3,9 @@ import { Edit, Tag, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
-import type { Transaction } from '../types'
+import type { Transaction, FeedRow } from '../types'
+import { isInvestmentRow } from '../types'
+import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
@@ -12,12 +14,14 @@ import { HierarchicalCategoryTreeSelect } from '@/shared/components/Hierarchical
 import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
 import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
+import { formatDate } from '@/shared/transactions/dates'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
 import type { FilterOption, RangeValue } from '@/shared/components/ColumnFilterDropdown'
 
 const TRANSACTION_COLUMN_IDS = ['date', 'merchant', 'account', 'category', 'sub_category', 'amount'] as const
+const ACTION_BUTTON_CLASS = 'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4'
 
 export type TransactionSortColumn = 'date' | 'merchant' | 'amount' | 'category'
 export type SortDirection = 'asc' | 'desc'
@@ -31,11 +35,11 @@ export const TRANSACTION_SORTABLE_COLUMNS = new Set([
 ] as const)
 
 export interface TransactionTableProps {
-  transactions: Transaction[]
+  transactions: FeedRow[]
   accountsMap: Record<string, Account>
   onEdit?: (transaction: Transaction) => void
   onCategorize?: (transaction: Transaction) => void
-  onRowClick?: (transaction: Transaction) => void
+  onRowClick?: (row: FeedRow) => void
   loading?: boolean
   sort?: SortState
   onSortChange?: (sort: SortState) => void
@@ -61,21 +65,6 @@ export interface TransactionTableProps {
   hasMore?: boolean
   /** Infinite scroll: whether a fetch is in progress */
   isFetchingMore?: boolean
-}
-
-function formatDate(dateStr: string | null | undefined): string {
-  if (!dateStr || typeof dateStr !== 'string') return 'Invalid Date'
-  const datePortion = dateStr.split('T')[0]
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) return 'Invalid Date'
-  const [year, month, day] = datePortion.split('-').map(Number)
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return 'Invalid Date'
-  const transactionDate = new Date(year, month - 1, day)
-  if (isNaN(transactionDate.getTime())) return 'Invalid Date'
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(transactionDate)
 }
 
 export function TransactionTable({
@@ -132,7 +121,7 @@ export function TransactionTable({
     [filters.account, filters.amount, filters.sub_category, onAccountFilterChange, onAmountRangeChange, onDetailedsChange]
   )
 
-  const columns: ColumnDef<Transaction>[] = [
+  const columns: ColumnDef<FeedRow>[] = [
     {
       id: 'date',
       header: 'Date',
@@ -156,22 +145,31 @@ export function TransactionTable({
       reorderable: true,
       defaultSize: 240,
       minSize: 160,
-      render: (row) => (
-        <div>
-          <div className="font-medium text-foreground">
-            {row.merchant_name || row.name}
-          </div>
-          {row.tags && row.tags.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {row.tags.map((tag) => (
-                <Badge key={`${row.id}-${tag}`} variant="info" size="sm">
-                  {tag}
-                </Badge>
-              ))}
+      render: (row) => {
+        if (isInvestmentRow(row)) {
+          return (
+            <div className="font-medium text-foreground">
+              {row.ticker_symbol ?? '—'} · {row.security_name ?? '—'}
             </div>
-          )}
-        </div>
-      ),
+          )
+        }
+        return (
+          <div>
+            <div className="font-medium text-foreground">
+              {row.merchant_name || row.name}
+            </div>
+            {row.tags && row.tags.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {row.tags.map((tag) => (
+                  <Badge key={`${row.id}-${tag}`} variant="info" size="sm">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      },
     },
     {
       id: 'account',
@@ -215,7 +213,11 @@ export function TransactionTable({
       minSize: 120,
       maxSize: 280,
       render: (row) => {
-        const eff = getEffectiveCategory(row)
+        if (isInvestmentRow(row)) {
+          return <ActivityTypeChip activityType={row.activity_type} />
+        }
+        const txn = row as unknown as Transaction
+        const eff = getEffectiveCategory(txn)
         const categoryLabel = getEffectiveCategoryLabel(eff)
         // For a custom category, show its icon + color (Issue #1203) when we can
         // resolve it from the loaded custom categories; otherwise fall back to the
@@ -276,7 +278,8 @@ export function TransactionTable({
       minSize: 100,
       maxSize: 260,
       render: (row) => {
-        const detailed = getEffectiveDetailedCategory(row)
+        const txn = row as unknown as Transaction
+        const detailed = getEffectiveDetailedCategory(txn)
         if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>
         const label = getDetailedLabel(detailed) ?? detailed
         return <span className="text-sm text-muted-foreground">{label}</span>
@@ -297,34 +300,39 @@ export function TransactionTable({
       defaultSize: 140,
       minSize: 110,
       maxSize: 200,
-      render: (row) => (
-        <div className="flex flex-col items-end gap-1">
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              isOutflow(row.amount)
-                ? 'transaction-table__amount--debit text-destructive'
-                : row.amount < 0
-                  ? 'transaction-table__amount--credit text-success'
-                  : 'text-foreground'
-            )}
-          >
-            {formatTransactionAmount(row.amount).text}
-          </span>
-          {row.pending && (
-            <Badge variant="warning" size="sm">
-              <Clock className="h-2.5 w-2.5" aria-hidden="true" />
-              Pending
-            </Badge>
-          )}
-        </div>
-      ),
+      render: (row) => {
+        const isInvestment = isInvestmentRow(row)
+        return (
+          <div className="flex flex-col items-end gap-1">
+            <span
+              className={cn(
+                'font-semibold tabular-nums',
+                isOutflow(row.amount)
+                  ? 'transaction-table__amount--debit text-destructive'
+                  : row.amount < 0
+                    ? 'transaction-table__amount--credit text-success'
+                    : 'text-foreground'
+              )}
+            >
+              {formatTransactionAmount(row.amount).text}
+            </span>
+            {isInvestment ? (
+              <Badge variant="info" size="sm">Investment</Badge>
+            ) : row.pending ? (
+              <Badge variant="warning" size="sm">
+                <Clock className="h-2.5 w-2.5" aria-hidden="true" />
+                Pending
+              </Badge>
+            ) : null}
+          </div>
+        )
+      },
       filter: onAmountRangeChange ? { type: 'range', unit: 'currency' } : undefined,
     },
   ]
 
   return (
-    <DataTable<Transaction>
+    <DataTable<FeedRow>
       data={transactions}
       columns={columns}
       rowKey={(row) => row.id}
@@ -370,38 +378,41 @@ export function TransactionTable({
       }
       rowActions={
         hasActions
-          ? (row) => (
-              <div className="flex items-center justify-end gap-2">
-                {onEdit && (
-                  <ReadOnlyGuard message="Resubscribe to edit transactions">
-                    <button
-                      type="button"
-                      onClick={() => onEdit(row)}
-                      disabled={loading}
-                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                      aria-label="Edit transaction"
-                      title="Edit transaction"
-                    >
-                      <Edit aria-hidden="true" />
-                    </button>
-                  </ReadOnlyGuard>
-                )}
-                {onCategorize && (
-                  <ReadOnlyGuard message="Resubscribe to categorize transactions">
-                    <button
-                      type="button"
-                      onClick={() => onCategorize(row)}
-                      disabled={loading}
-                      className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4"
-                      aria-label="Categorize transaction"
-                      title="Categorize transaction"
-                    >
-                      <Tag aria-hidden="true" />
-                    </button>
-                  </ReadOnlyGuard>
-                )}
-              </div>
-            )
+          ? (row) => {
+              if (isInvestmentRow(row)) return null
+              return (
+                <div className="flex items-center justify-end gap-2">
+                  {onEdit && (
+                    <ReadOnlyGuard message="Resubscribe to edit transactions">
+                      <button
+                        type="button"
+                        onClick={() => onEdit(row as unknown as Transaction)}
+                        disabled={loading}
+                        className={ACTION_BUTTON_CLASS}
+                        aria-label="Edit transaction"
+                        title="Edit transaction"
+                      >
+                        <Edit aria-hidden="true" />
+                      </button>
+                    </ReadOnlyGuard>
+                  )}
+                  {onCategorize && (
+                    <ReadOnlyGuard message="Resubscribe to categorize transactions">
+                      <button
+                        type="button"
+                        onClick={() => onCategorize(row as unknown as Transaction)}
+                        disabled={loading}
+                        className={ACTION_BUTTON_CLASS}
+                        aria-label="Categorize transaction"
+                        title="Categorize transaction"
+                      >
+                        <Tag aria-hidden="true" />
+                      </button>
+                    </ReadOnlyGuard>
+                  )}
+                </div>
+              )
+            }
           : undefined
       }
     />

@@ -27,7 +27,8 @@ import { ReviewFilterPresets } from './components/ReviewFilterPresets'
 import { ReviewBulkActionBar } from './components/ReviewBulkActionBar'
 import { TriageDetailView } from './components/TriageDetailView'
 import type { ReviewPreset } from './components/ReviewFilterPresets'
-import type { TransactionFilters, Transaction } from '../types'
+import type { TransactionFilters, Transaction, FeedRow } from '../types'
+import { isInvestmentRow } from '../types'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -69,7 +70,11 @@ export function ReviewInboxPage() {
       limit: INBOX_PAGE_LIMIT,
     })
   // Cast API transactions to local Transaction type (compatible shape, narrower string literals)
-  const transactions = apiTransactions as unknown as Transaction[]
+  // Investment rows are read-only and never have review state — exclude them from the inbox.
+  const castedTransactions = apiTransactions as unknown as Transaction[]
+  const transactions = castedTransactions.filter(
+    (t) => !isInvestmentRow(t as unknown as FeedRow)
+  )
 
   // ── All caught up (computed early — used in analytics effect below) ────────
   const allCaughtUp = !isLoading && !isError && transactions.length === 0 && activePreset === 'unreviewed'
