@@ -41,17 +41,11 @@ const defaultProps = {
   filters: defaultFilters,
   datePreset: 'all' as const,
   statusFilter: 'all' as const,
-  activeFilterCount: 0,
-  hasActiveFilters: false,
-  onFilterChange: () => {},
-  onFiltersChange: () => {},
   onDatePresetChange: () => {},
   onCustomDateChange: () => {},
   onStatusFilterChange: () => {},
   onIncludeInvestmentActivityChange: () => {},
   onActivityTypesChange: () => {},
-  onClearFilter: () => {},
-  onClearAllFilters: () => {},
 }
 
 function setViewportWidth(width: number) {
