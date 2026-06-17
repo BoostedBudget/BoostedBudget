@@ -357,3 +357,186 @@ func TestValidWidgetTypes(t *testing.T) {
 		}
 	}
 }
+
+// Issue #1297: Investment widget types
+
+func TestInvestmentWidgetTypes_Present(t *testing.T) {
+	allTypes := AllWidgetTypes()
+	validTypes := ValidWidgetTypes()
+
+	investmentTypes := []WidgetType{
+		WidgetTypePortfolioSummary,
+		WidgetTypePortfolioHoldings,
+		WidgetTypeAssetAllocation,
+	}
+
+	for _, wt := range investmentTypes {
+		t.Run(string(wt), func(t *testing.T) {
+			// Must be in ValidWidgetTypes
+			if !validTypes[wt] {
+				t.Errorf("ValidWidgetTypes() missing investment type: %v", wt)
+			}
+
+			// Must be in AllWidgetTypes with investments category
+			var found *WidgetTypeInfo
+			for i := range allTypes {
+				if allTypes[i].Type == wt {
+					found = &allTypes[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Errorf("AllWidgetTypes() missing investment type: %v", wt)
+				return
+			}
+			if found.Category != WidgetCategoryInvestments {
+				t.Errorf("AllWidgetTypes() type %v category = %v, want %v", wt, found.Category, WidgetCategoryInvestments)
+			}
+		})
+	}
+}
+
+func TestInvestmentWidgetTypes_Sizes(t *testing.T) {
+	tests := []struct {
+		wt        WidgetType
+		defaultW  int
+		defaultH  int
+		minW      int
+		minH      int
+	}{
+		{WidgetTypePortfolioSummary, 6, 3, 4, 2},
+		{WidgetTypePortfolioHoldings, 6, 4, 4, 3},
+		{WidgetTypeAssetAllocation, 4, 4, 3, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.wt), func(t *testing.T) {
+			info := GetWidgetTypeInfo(tt.wt)
+			if info == nil {
+				t.Fatalf("GetWidgetTypeInfo(%v) returned nil", tt.wt)
+			}
+			if info.DefaultWidth != tt.defaultW {
+				t.Errorf("DefaultWidth = %v, want %v", info.DefaultWidth, tt.defaultW)
+			}
+			if info.DefaultHeight != tt.defaultH {
+				t.Errorf("DefaultHeight = %v, want %v", info.DefaultHeight, tt.defaultH)
+			}
+			if info.MinWidth != tt.minW {
+				t.Errorf("MinWidth = %v, want %v", info.MinWidth, tt.minW)
+			}
+			if info.MinHeight != tt.minH {
+				t.Errorf("MinHeight = %v, want %v", info.MinHeight, tt.minH)
+			}
+		})
+	}
+}
+
+func TestInvestmentWidgetTypes_ValidInLayout(t *testing.T) {
+	// New types must pass WidgetConfig.Validate() so layout save doesn't reject them
+	widgets := []WidgetConfig{
+		{ID: "portfolio-summary-1", Type: WidgetTypePortfolioSummary, X: 0, Y: 0, W: 6, H: 3},
+		{ID: "portfolio-holdings-1", Type: WidgetTypePortfolioHoldings, X: 6, Y: 0, W: 6, H: 4},
+		{ID: "asset-allocation-1", Type: WidgetTypeAssetAllocation, X: 0, Y: 4, W: 4, H: 4},
+	}
+	for _, w := range widgets {
+		if err := w.Validate(); err != nil {
+			t.Errorf("WidgetConfig{Type: %v}.Validate() = %v, want nil", w.Type, err)
+		}
+	}
+}
+
+// Issue #1297: WidgetConfig.Settings — opaque JSONB blob, must round-trip through Get/SetLayout
+
+func TestWidgetConfig_Settings_RoundTrip(t *testing.T) {
+	settings := map[string]any{
+		"topN":   float64(10), // JSON numbers unmarshal as float64
+		"sortBy": "value",
+	}
+	layout := &DashboardLayout{
+		Widgets: []WidgetConfig{
+			{
+				ID:       "portfolio-holdings-1",
+				Type:     WidgetTypePortfolioHoldings,
+				X:        0,
+				Y:        0,
+				W:        6,
+				H:        4,
+				Settings: settings,
+			},
+		},
+		Version: 4,
+	}
+
+	prefs := &DashboardPreferences{UserID: "user-1"}
+	if err := prefs.SetLayout(layout); err != nil {
+		t.Fatalf("SetLayout() error = %v", err)
+	}
+
+	got, err := prefs.GetLayout()
+	if err != nil {
+		t.Fatalf("GetLayout() error = %v", err)
+	}
+	if len(got.Widgets) != 1 {
+		t.Fatalf("GetLayout() widgets count = %v, want 1", len(got.Widgets))
+	}
+
+	gotSettings := got.Widgets[0].Settings
+	if gotSettings == nil {
+		t.Fatal("GetLayout() widget Settings is nil after round-trip")
+	}
+	if gotSettings["topN"] != float64(10) {
+		t.Errorf("settings topN = %v, want 10", gotSettings["topN"])
+	}
+	if gotSettings["sortBy"] != "value" {
+		t.Errorf("settings sortBy = %v, want value", gotSettings["sortBy"])
+	}
+}
+
+func TestWidgetConfig_Settings_NilPreserved(t *testing.T) {
+	// A widget with no settings must round-trip with nil Settings (back-compat for old rows)
+	layout := &DashboardLayout{
+		Widgets: []WidgetConfig{
+			{ID: "balance-overview-1", Type: WidgetTypeBalanceOverview, X: 0, Y: 0, W: 4, H: 2},
+		},
+		Version: 4,
+	}
+	prefs := &DashboardPreferences{UserID: "user-1"}
+	if err := prefs.SetLayout(layout); err != nil {
+		t.Fatalf("SetLayout() error = %v", err)
+	}
+	got, err := prefs.GetLayout()
+	if err != nil {
+		t.Fatalf("GetLayout() error = %v", err)
+	}
+	if got.Widgets[0].Settings != nil {
+		t.Errorf("expected nil Settings for widget with no settings, got %v", got.Widgets[0].Settings)
+	}
+}
+
+func TestWidgetConfig_Settings_ScalarAndArrayDoNotPanic(t *testing.T) {
+	// Old or malformed rows might have non-object settings; Validate must not panic.
+	// We test this by unmarshalling raw JSON directly (simulating a DB read).
+	rawLayouts := []string{
+		// null settings
+		`{"widgets":[{"i":"w1","type":"balance-overview","x":0,"y":0,"w":4,"h":2,"settings":null}],"version":4}`,
+		// scalar settings (string) — not valid but must not panic
+		`{"widgets":[{"i":"w1","type":"balance-overview","x":0,"y":0,"w":4,"h":2,"settings":"bad"}],"version":4}`,
+		// array settings — not valid but must not panic
+		`{"widgets":[{"i":"w1","type":"balance-overview","x":0,"y":0,"w":4,"h":2,"settings":[1,2,3]}],"version":4}`,
+		// missing settings field entirely
+		`{"widgets":[{"i":"w1","type":"balance-overview","x":0,"y":0,"w":4,"h":2}],"version":4}`,
+	}
+
+	for _, raw := range rawLayouts {
+		prefs := &DashboardPreferences{
+			UserID: "user-1",
+			Layout: []byte(raw),
+		}
+		// Must not panic; error is acceptable for malformed inputs
+		got, _ := prefs.GetLayout()
+		if got != nil {
+			// If parsing succeeded, Validate should not panic
+			_ = got.Validate()
+		}
+	}
+}

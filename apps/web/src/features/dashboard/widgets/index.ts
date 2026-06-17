@@ -9,6 +9,10 @@ export { CashFlowChartWidget } from './CashFlowChartWidget';
 export { AccountCardsWidget } from './AccountCardsWidget';
 export { NetWorthWidget } from './NetWorthWidget';
 export { SavingsImpactWidget } from './SavingsImpactWidget';
+// Issue #1297: Investment widgets
+export { PortfolioSummaryWidget } from './PortfolioSummaryWidget';
+export { PortfolioHoldingsWidget } from './PortfolioHoldingsWidget';
+export { AssetAllocationWidget } from './AssetAllocationWidget';
 
 // Export registry functions
 export {
