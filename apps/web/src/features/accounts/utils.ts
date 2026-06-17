@@ -91,6 +91,7 @@ export function formatAccountBalance(
 ): string {
   if (amount === undefined || amount === null) return options.empty
 
+  // Fall back to USD when currencyCode is absent (account not yet currency-resolved).
   const currency = currencyCode ?? 'USD'
 
   try {
@@ -101,6 +102,8 @@ export function formatAccountBalance(
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(absAmount)
+    // Use Math.abs + manual '-' prefix to match the AccountTable formatting convention;
+    // output is identical for en-US (Intl.NumberFormat with Math.abs vs. negative input).
     return amount < 0 ? `-${formatted}` : formatted
   } catch {
     // Fallback if currency code is invalid
