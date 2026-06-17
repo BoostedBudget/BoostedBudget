@@ -108,6 +108,7 @@ import {
   mockUseExchangePublicToken,
   mockExchangePublicTokenMutateAsync,
 } from '@/test/mocks/plaid-api'
+import { mockNavigate } from '@/test/mocks/react-router'
 
 // ============================================================================
 // Test helper
@@ -149,6 +150,7 @@ const mockUser = {
 describe('AccountsPage', () => {
   beforeEach(() => {
     // Clear all mock call history
+    mockNavigate.mockClear()
     mockUseGetAccounts.mockClear()
     mockUseDeleteAccount.mockClear()
     mockUseGetUserProfile.mockClear()
@@ -397,23 +399,7 @@ describe('AccountsPage', () => {
     })
 
     it('passes onRowClick to AccountTable and navigates to /accounts/:id on row click', () => {
-      // Render with a router that captures navigation
-      const { unmount } = render(
-        <QueryClientProvider
-          client={
-            new QueryClient({
-              defaultOptions: {
-                queries: { retry: false, gcTime: 0 },
-                mutations: { retry: false },
-              },
-            })
-          }
-        >
-          <MemoryRouter initialEntries={['/accounts']}>
-            <AccountsPage />
-          </MemoryRouter>
-        </QueryClientProvider>
-      )
+      renderAccountsPage()
 
       // Switch to table view to render AccountTable
       const tableToggle = screen.getByTitle('Table view')
@@ -423,11 +409,7 @@ describe('AccountsPage', () => {
       const row = screen.getByTestId('table-row')
       fireEvent.click(row)
 
-      // The component should attempt navigate('/accounts/acc-1') — no error thrown
-      // We verify by checking the row still exists (navigation in MemoryRouter doesn't unmount)
-      expect(row).toBeInTheDocument()
-
-      unmount()
+      expect(mockNavigate).toHaveBeenCalledWith('/accounts/acc-1')
     })
   })
 })
