@@ -12,6 +12,12 @@ export type TransactionSource = 'plaid' | 'manual' | 'teller' | 'finicity' | 'yo
 export type ActivityType = 'buy' | 'sell' | 'dividend' | 'reinvest' | 'fee' | 'cash' | 'other'
 
 /**
+ * Feed row source discriminator — identifies the row kind in the unified activity feed.
+ * Distinct from TransactionSource (provider-level) which identifies the data provider.
+ */
+export type FeedRowSource = 'banking' | 'investment'
+
+/**
  * Category source identifier
  * Indicates where the category came from
  */
