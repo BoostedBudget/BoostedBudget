@@ -1560,10 +1560,10 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	// Re-query — orphan must NOT be returned (user_account_id is NULL, no chain)
 	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
 	require.NoError(t, err, "re-query after orphan insert must not error")
-	// Filter to count only the banking rows that have a chain (user_account_id set)
-	// On current code both rows may be returned (JOIN includes accountA if still active),
-	// but after the fix only the chained row survives.
-	// RED assertion: after fix, exactly 1 row (the chained one).
+	// Filter to count only the chained banking row.
+	// On current code both rows are dropped (inner JOIN excludes replaced accountA),
+	// so chainedCount will be 0 — the key RED failure for this sub-case.
+	// After the fix, exactly 1 row (the chained one) must appear.
 	chainedCount := 0
 	for _, item := range items2 {
 		if item.ID == bankTxnID.String() {
