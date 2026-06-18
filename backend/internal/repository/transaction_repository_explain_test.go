@@ -55,6 +55,37 @@ func runExplain(ctx context.Context, t *testing.T, db *pgxpool.Pool, sql string,
 	return strings.Join(lines, "\n")
 }
 
+// TestChainExistsIndex_EXPLAIN verifies that the correlated chain-expansion EXISTS
+// subquery uses idx_accounts_user_account_status (migration 000033) rather than a Seq Scan.
+func TestChainExistsIndex_EXPLAIN(t *testing.T) {
+	db := connectTestDB(t)
+	ctx := context.Background()
+
+	// Disable seq scan so the planner is forced to prefer an index if one
+	// is applicable. A missing or mis-named index produces a Seq Scan here.
+	_, err := db.Exec(ctx, "SET enable_seqscan = OFF")
+	require.NoError(t, err)
+	defer db.Exec(ctx, "SET enable_seqscan = ON") //nolint:errcheck
+
+	// The chain subquery as it appears in GetByUserIDKeysetUnified (both branches).
+	// Issues #1109 / #1304: this runs per candidate row to find an active sibling
+	// sharing the same user_account_id.
+	chainSQL := `SELECT 1 FROM accounts chain_a
+WHERE chain_a.user_account_id = $1
+  AND chain_a.status = 'active'`
+
+	plan := runExplain(ctx, t, db, chainSQL, "00000000-0000-0000-0000-000000000000")
+
+	assert.True(t,
+		strings.Contains(plan, "Index Scan") || strings.Contains(plan, "Bitmap Index Scan"),
+		"Expected an index scan for the chain EXISTS subquery; got Seq Scan.\n"+
+			"Likely cause: idx_accounts_user_account_status is missing or not matching.\n"+
+			"Plan:\n%s", plan,
+	)
+	assert.Contains(t, plan, "idx_accounts_user_account_status",
+		"Plan must reference idx_accounts_user_account_status (migration 000033).\nPlan:\n%s", plan)
+}
+
 // TestTransactionKeyset_EXPLAIN verifies each of the 4 keyset indexes is used
 // by the corresponding ORDER BY expression when enable_seqscan is off.
 func TestTransactionKeyset_EXPLAIN(t *testing.T) {
