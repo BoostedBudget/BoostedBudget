@@ -9,7 +9,9 @@ package repository
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/repository/... \
-//	  -run TestInvestment_ -tags integration -v
+//	  -run 'TestInvestment_|TestTransactions_' -tags integration -v
+//
+// Note: banking chain-expansion tests use the TestTransactions_ prefix.
 
 import (
 	"context"
@@ -1526,7 +1528,7 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
 	require.NoError(t, err)
 
-	// Unified feed (banking only — IncludeInvestmentActivity=false) must return the banking row
+	// IncludeInvestmentActivity gating happens in transaction_service, not in SQL.
 	repo := NewTransactionRepository(tx, enc)
 	filters := domain.TransactionFilters{
 		IncludeInvestmentActivity: false,
@@ -1614,4 +1616,84 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 	assert.True(t, nullAcctFound,
 		"banking transaction with account_id=NULL but user_account_id chained to an active account "+
 			"must appear in unified feed (migration 000035 SET NULL path — R11)")
+}
+
+// TestTransactions_UnifiedFeed_NoDuplication_Integration verifies that EXISTS (semi-join)
+// prevents row duplication when multiple active accounts share a user_account_id.
+// A JOIN would produce multiple rows; this test asserts exactly 1 output row.
+func TestTransactions_UnifiedFeed_NoDuplication_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountA, _ := seedInvestmentFixture(ctx, t, tx, "dedup-u4")
+
+	// Stable chain key shared by three accounts.
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-u4')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
+		userAcctID, accountA)
+	require.NoError(t, err)
+
+	// accountB — first active sibling (post-relink).
+	accountB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Active Sibling B U4', 'depository', 'active', $5)
+	`, accountB, linkedItemID, userID, "plaid-b-u4-"+accountB.String(), userAcctID)
+	require.NoError(t, err)
+
+	// accountC — second active sibling; under a JOIN both B and C would each match the
+	// transaction's user_account_id, producing 2 output rows instead of 1.
+	accountC := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Active Sibling C U4', 'depository', 'active', $5)
+	`, accountC, linkedItemID, userID, "plaid-c-u4-"+accountC.String(), userAcctID)
+	require.NoError(t, err)
+
+	// Mark accountA replaced (the original account bearing the transaction).
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
+	require.NoError(t, err)
+
+	// Insert a single banking transaction on the replaced accountA.
+	bankTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, user_account_id,
+			 source, external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, $5,
+			 'plaid', $6, $7,
+			 99.00, '2024-06-01', 'Dedup Guard U4', false, now(), now())
+	`, bankTxnID, userID, accountA, linkedItemID, userAcctID,
+		"dedup-ext-u4-"+bankTxnID.String(), "dedup-blind-u4-"+bankTxnID.String())
+	require.NoError(t, err)
+
+	repo := NewTransactionRepository(tx, enc)
+	filters := domain.TransactionFilters{IncludeInvestmentActivity: false}
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "GetByUserIDKeysetUnified must not error")
+
+	// Count how many times bankTxnID appears. Under a JOIN with 2 active siblings
+	// this would be 2; EXISTS (semi-join) must yield exactly 1.
+	count := 0
+	for _, item := range items {
+		if item.ID == bankTxnID.String() {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count,
+		"banking transaction must appear exactly once even when two active siblings share the "+
+			"same user_account_id (EXISTS semi-join must not fan-out like a JOIN would — Issue #1304)")
 }

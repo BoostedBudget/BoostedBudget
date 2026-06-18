@@ -55,35 +55,52 @@ func runExplain(ctx context.Context, t *testing.T, db *pgxpool.Pool, sql string,
 	return strings.Join(lines, "\n")
 }
 
-// TestChainExistsIndex_EXPLAIN verifies that the correlated chain-expansion EXISTS
-// subquery uses idx_accounts_user_account_status (migration 000033) rather than a Seq Scan.
+// TestChainExistsIndex_EXPLAIN verifies that the chain-expansion EXISTS leg
+// in GetByUserIDKeysetUnified uses a user_account_id index rather than a Seq Scan.
+// Accepts either idx_accounts_user_account_status (composite) or idx_accounts_user_account
+// (single-col) — both are valid and statistics-driven.
+//
+// Like all EXPLAIN tests in this file, it runs against an empty table; the planner
+// still produces a real access-path plan because enable_seqscan=OFF makes seq scans
+// prohibitively expensive. The assertion proves index availability, not row-level behavior.
 func TestChainExistsIndex_EXPLAIN(t *testing.T) {
 	db := connectTestDB(t)
 	ctx := context.Background()
 
-	// Disable seq scan so the planner is forced to prefer an index if one
-	// is applicable. A missing or mis-named index produces a Seq Scan here.
+	// Force index use (disable seq scan); a missing index produces a Seq Scan.
 	_, err := db.Exec(ctx, "SET enable_seqscan = OFF")
 	require.NoError(t, err)
 	defer db.Exec(ctx, "SET enable_seqscan = ON") //nolint:errcheck
 
-	// The chain subquery as it appears in GetByUserIDKeysetUnified (both branches).
-	// Issues #1109 / #1304: this runs per candidate row to find an active sibling
-	// sharing the same user_account_id.
-	chainSQL := `SELECT 1 FROM accounts chain_a
-WHERE chain_a.user_account_id = $1
-  AND chain_a.status = 'active'`
+	// The correlated banking-branch shape from GetByUserIDKeysetUnified.
+	// When account_id is NULL or replaced, the planner must use the user_account_id
+	// index in the chain leg (second EXISTS) rather than a sequential scan.
+	bankingChainSQL := `
+SELECT t.id FROM transactions t
+WHERE t.user_id = $1
+  AND (
+      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active')
+      OR (
+          t.user_account_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM accounts chain_a
+              WHERE chain_a.user_account_id = t.user_account_id
+                AND chain_a.status = 'active'
+          )
+      )
+  )`
 
-	plan := runExplain(ctx, t, db, chainSQL, "00000000-0000-0000-0000-000000000000")
+	plan := runExplain(ctx, t, db, bankingChainSQL, "00000000-0000-0000-0000-000000000000")
 
 	assert.True(t,
 		strings.Contains(plan, "Index Scan") || strings.Contains(plan, "Bitmap Index Scan"),
-		"Expected an index scan for the chain EXISTS subquery; got Seq Scan.\n"+
-			"Likely cause: idx_accounts_user_account_status is missing or not matching.\n"+
-			"Plan:\n%s", plan,
+		"Expected an index scan for the chain EXISTS leg; got Seq Scan (missing or misnamed index).\nPlan:\n%s", plan,
 	)
-	assert.Contains(t, plan, "idx_accounts_user_account_status",
-		"Plan must reference idx_accounts_user_account_status (migration 000033).\nPlan:\n%s", plan)
+	assert.True(t,
+		strings.Contains(plan, "idx_accounts_user_account_status") ||
+			strings.Contains(plan, "idx_accounts_user_account"),
+		"Plan must use a user_account_id index (idx_accounts_user_account_status or idx_accounts_user_account).\nPlan:\n%s", plan,
+	)
 }
 
 // TestTransactionKeyset_EXPLAIN verifies each of the 4 keyset indexes is used
