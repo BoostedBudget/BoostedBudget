@@ -53,22 +53,23 @@ func TestAccountRepository_Create(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
+		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`)).WithArgs(
 		account.ID,
 		account.LinkedItemID,
 		account.UserID,
-		pgxmock.AnyArg(), // plaid_account_id (encrypted by repo)
-		pgxmock.AnyArg(), // plaid_account_id_blind_idx
-		pgxmock.AnyArg(), // name (encrypted by repo)
-		pgxmock.AnyArg(), // official_name (encrypted by repo)
+		account.UserAccountID,             // nil
+		pgxmock.AnyArg(),                  // plaid_account_id (encrypted by repo)
+		pgxmock.AnyArg(),                  // plaid_account_id_blind_idx
+		pgxmock.AnyArg(),                  // name (encrypted by repo)
+		pgxmock.AnyArg(),                  // official_name (encrypted by repo)
 		account.Type,
 		account.Subtype,
-		pgxmock.AnyArg(), // mask (encrypted by repo)
+		pgxmock.AnyArg(),                  // mask (encrypted by repo)
 		account.CurrentBalance,
 		account.AvailableBalance,
 		account.CurrencyCode,
@@ -123,22 +124,23 @@ func TestAccountRepository_CreateBatch(t *testing.T) {
 	for _, acc := range accounts {
 		mock.ExpectExec(regexp.QuoteMeta(`
 			INSERT INTO accounts
-			(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
+			(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 			 type, subtype, mask, current_balance, available_balance, currency_code,
 			 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 			 created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		`)).WithArgs(
 			acc.ID,
 			acc.LinkedItemID,
 			acc.UserID,
-			pgxmock.AnyArg(), // plaid_account_id (encrypted by repo)
-			pgxmock.AnyArg(), // plaid_account_id_blind_idx
-			pgxmock.AnyArg(), // name (encrypted by repo)
-			pgxmock.AnyArg(), // official_name (encrypted by repo)
+			acc.UserAccountID,              // nil
+			pgxmock.AnyArg(),               // plaid_account_id (encrypted by repo)
+			pgxmock.AnyArg(),               // plaid_account_id_blind_idx
+			pgxmock.AnyArg(),               // name (encrypted by repo)
+			pgxmock.AnyArg(),               // official_name (encrypted by repo)
 			acc.Type,
 			acc.Subtype,
-			pgxmock.AnyArg(), // mask (encrypted by repo)
+			pgxmock.AnyArg(),               // mask (encrypted by repo)
 			acc.CurrentBalance,
 			acc.AvailableBalance,
 			acc.CurrencyCode,
@@ -315,15 +317,16 @@ func TestAccountRepository_UniqueConstraint(t *testing.T) {
 	// Need to match the full INSERT query with arguments for pgxmock v4
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
+		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`)).WithArgs(
 		pgxmock.AnyArg(), // id
 		pgxmock.AnyArg(), // linked_item_id
 		pgxmock.AnyArg(), // user_id
+		pgxmock.AnyArg(), // user_account_id
 		pgxmock.AnyArg(), // plaid_account_id
 		pgxmock.AnyArg(), // plaid_account_id_blind_idx
 		pgxmock.AnyArg(), // name
