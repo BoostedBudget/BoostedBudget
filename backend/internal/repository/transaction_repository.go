@@ -2550,7 +2550,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- query is already gated on t.user_id = $1.  Parity with the investment
 		  -- branch is intentional; diverging here would reintroduce asymmetry.
 		  AND (
-		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active')
+		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active') -- NULL account_id always false here; falls through to chain leg below
 		      OR (
 		          t.user_account_id IS NOT NULL
 		          AND EXISTS (
