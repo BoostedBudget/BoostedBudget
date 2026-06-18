@@ -382,22 +382,8 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		); err != nil {
 			return nil, nil, fmt.Errorf("GetByUserIDKeyset scan: %w", err)
 		}
-		// Attach security metadata inline — no sub-query needed
-		if tickerSymbol != nil || securityName != nil {
-			secName := ""
-			if securityName != nil {
-				secName = *securityName
-			}
-			txn.PlaidSecurityID = "" // not needed here
-			_ = tickerSymbol
-			_ = secName
-			// Store on a transient Security for callers that need it
-			if txn.SecurityID != nil {
-				txn.PlaidSecurityID = "" // cleared; caller uses SecurityID
-			}
-		}
-		// Store ticker_symbol and security_name in the transaction name/type for now;
-		// the service layer maps to HoldingView/ActivityItem fields.
+		txn.TickerSymbol = tickerSymbol
+		txn.SecurityName = securityName
 		txns = append(txns, txn)
 	}
 	if rows.Err() != nil {
