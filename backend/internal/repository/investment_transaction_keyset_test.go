@@ -23,6 +23,12 @@ import (
 //	it.created_at,
 //	sec.ticker_symbol, sec.name AS security_name
 func makeInvKeysetRow(userID, accountID string, txnDate time.Time) []interface{} {
+	return makeInvKeysetRowWithSecurity(userID, accountID, txnDate, nil, nil)
+}
+
+// makeInvKeysetRowWithSecurity is like makeInvKeysetRow but allows setting the
+// JOIN-derived ticker_symbol and security_name (nil → NULL from LEFT JOIN).
+func makeInvKeysetRowWithSecurity(userID, accountID string, txnDate time.Time, ticker, securityName *string) []interface{} {
 	secID := uuid.New().String()
 	qty := 5.0
 	price := 200.00
@@ -43,8 +49,8 @@ func makeInvKeysetRow(userID, accountID string, txnDate time.Time) []interface{}
 		(*float64)(nil),     // fees (nullable)
 		txnDate,             // date
 		txnDate,             // created_at
-		(*string)(nil),      // ticker_symbol (nullable, from LEFT JOIN securities)
-		(*string)(nil),      // security_name (nullable, from LEFT JOIN securities)
+		ticker,              // ticker_symbol (nullable, from LEFT JOIN securities)
+		securityName,        // security_name (nullable, from LEFT JOIN securities)
 	}
 }
 
@@ -214,6 +220,69 @@ func TestInvestmentTransactionRepository_GetByUserIDKeyset_NextCursorSet(t *test
 	assert.Equal(t, 1, nextCursor.V)
 	assert.Equal(t, date2, nextCursor.SVT) // cursor is on the last returned row
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestInvestmentTransactionRepository_GetByUserIDKeyset_PopulatesSecurityFields verifies
+// that ticker_symbol and security_name from the LEFT JOIN are threaded onto the returned
+// domain.InvestmentTransaction structs, and remain nil for cash transactions (NULL JOIN).
+func TestInvestmentTransactionRepository_GetByUserIDKeyset_PopulatesSecurityFields(t *testing.T) {
+	t.Run("non-nil ticker and security name propagate to struct", func(t *testing.T) {
+		mock, repo := setupInvTxnMockDB(t)
+		defer mock.Close()
+
+		ctx := context.Background()
+		userID := uuid.New().String()
+		accountID := uuid.New().String()
+		txnDate := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
+		ticker := "AAPL"
+		secName := "Apple Inc."
+
+		rows := pgxmock.NewRows(invKeysetColumns()).
+			AddRow(makeInvKeysetRowWithSecurity(userID, accountID, txnDate, &ticker, &secName)...)
+
+		mock.ExpectQuery(`chain_a\.status = 'active'`).
+			WithArgs(anyArgs(2)...).
+			WillReturnRows(rows)
+
+		txns, _, err := repo.GetByUserIDKeyset(ctx, userID, domain.InvestmentTransactionFilters{}, nil, 10)
+
+		require.NoError(t, err)
+		require.Len(t, txns, 1)
+		require.NotNil(t, txns[0].TickerSymbol, "ticker_symbol from JOIN must be set on struct")
+		assert.Equal(t, "AAPL", *txns[0].TickerSymbol)
+		require.NotNil(t, txns[0].SecurityName, "security_name from JOIN must be set on struct")
+		assert.Equal(t, "Apple Inc.", *txns[0].SecurityName)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// NULL pointer threading: ticker/security_name stay nil when the LEFT JOIN returns NULLs.
+	// Full cash-transaction semantics (security_id=nil → NULL JOIN) are covered in the
+	// integration test, which exercises the real query against Postgres.
+	t.Run("nil ticker and security name from LEFT JOIN remain nil on struct", func(t *testing.T) {
+		mock, repo := setupInvTxnMockDB(t)
+		defer mock.Close()
+
+		ctx := context.Background()
+		userID := uuid.New().String()
+		accountID := uuid.New().String()
+		txnDate := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
+		rows := pgxmock.NewRows(invKeysetColumns()).
+			AddRow(makeInvKeysetRowWithSecurity(userID, accountID, txnDate, nil, nil)...)
+
+		mock.ExpectQuery(`chain_a\.status = 'active'`).
+			WithArgs(anyArgs(2)...).
+			WillReturnRows(rows)
+
+		txns, _, err := repo.GetByUserIDKeyset(ctx, userID, domain.InvestmentTransactionFilters{}, nil, 10)
+
+		require.NoError(t, err)
+		require.Len(t, txns, 1)
+		assert.Nil(t, txns[0].TickerSymbol, "NULL ticker_symbol from LEFT JOIN must remain nil")
+		assert.Nil(t, txns[0].SecurityName, "NULL security_name from LEFT JOIN must remain nil")
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
 }
 
 // Compile-time guard: confirm pgxmock.AnyArg is reachable (import used).
