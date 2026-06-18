@@ -256,6 +256,32 @@ func TestInvestmentHandler_GetInvestmentTransactions_LastPage(t *testing.T) {
 	assert.Nil(t, out.Body.NextCursor)
 }
 
+// TestInvestmentHandler_GetInvestmentTransactions_SurfacesSecurityFields pins issue #1305's
+// acceptance criterion at the endpoint boundary: ticker_symbol/security_name set by the service
+// must appear in the output body (guards against a future DTO mapping that drops them).
+func TestInvestmentHandler_GetInvestmentTransactions_SurfacesSecurityFields(t *testing.T) {
+	ticker, secName := "AAPL", "Apple Inc."
+	txns := []domain.InvestmentTransaction{
+		{ID: "itxn-1", UserID: "user-1", Amount: 100.0, TickerSymbol: &ticker, SecurityName: &secName},
+	}
+	svc := &mockInvestmentService{txns: txns}
+	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
+
+	input := &GetInvestmentTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+	}
+
+	out, err := handler.GetInvestmentTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.Len(t, out.Body.Transactions, 1)
+	require.NotNil(t, out.Body.Transactions[0].TickerSymbol)
+	assert.Equal(t, "AAPL", *out.Body.Transactions[0].TickerSymbol)
+	require.NotNil(t, out.Body.Transactions[0].SecurityName)
+	assert.Equal(t, "Apple Inc.", *out.Body.Transactions[0].SecurityName)
+}
+
 // ── Round-6 R6-3: account_id UUID validation → 400 ───────────────────────────
 
 // TestInvestmentHandler_GetHoldings_InvalidAccountID verifies that a malformed

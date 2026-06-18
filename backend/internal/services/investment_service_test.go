@@ -336,3 +336,40 @@ func TestInvestmentService_ListInvestmentTransactions_LastPage(t *testing.T) {
 	assert.Empty(t, result)
 	assert.Nil(t, encodedCursor, "nil cursor → last page, no next cursor in response")
 }
+
+// TestInvestmentService_ListInvestmentTransactions_ForwardsSecurityFields verifies that
+// TickerSymbol and SecurityName set by the repository are forwarded unchanged by the
+// service (guards against enrichment-stripping in future service changes).
+func TestInvestmentService_ListInvestmentTransactions_ForwardsSecurityFields(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	ctx := context.Background()
+	userID := "user-security"
+
+	filters := domain.InvestmentTransactionFilters{}
+	txns := []domain.InvestmentTransaction{
+		{
+			ID:           "itxn-sec",
+			UserID:       userID,
+			Date:         time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+			Amount:       500.0,
+			TickerSymbol: ptrStr("MSFT"),
+			SecurityName: ptrStr("Microsoft Corporation"),
+		},
+	}
+	invTxnRepo.On("GetByUserIDKeyset", ctx, userID, filters, (*domain.InvestmentTransactionCursor)(nil), 10).
+		Return(txns, (*domain.InvestmentTransactionCursor)(nil), nil)
+
+	result, _, err := svc.ListInvestmentTransactions(ctx, userID, filters, nil, 10)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].TickerSymbol, "service must forward TickerSymbol from repo")
+	assert.Equal(t, "MSFT", *result[0].TickerSymbol)
+	require.NotNil(t, result[0].SecurityName, "service must forward SecurityName from repo")
+	assert.Equal(t, "Microsoft Corporation", *result[0].SecurityName)
+	invTxnRepo.AssertExpectations(t)
+}

@@ -31,6 +31,7 @@ import (
 // seedInvestmentFixture creates a minimal user + linked_item + investment account + security.
 // All rows land in db (typically a pgx.Tx) so they roll back with it.
 // The prefix disambiguates seeds across tests.
+// The security is seeded with ticker_symbol='TSEC' and name='Test Security'.
 // Returns (userID, linkedItemID, accountID, securityID).
 func seedInvestmentFixture(ctx context.Context, t *testing.T, db DB, prefix string) (
 	userID, linkedItemID, accountID, secID uuid.UUID,
@@ -60,7 +61,7 @@ func seedInvestmentFixture(ctx context.Context, t *testing.T, db DB, prefix stri
 	require.NoError(t, err)
 
 	_, err = db.Exec(ctx, `
-		INSERT INTO securities (id, plaid_security_id, name) VALUES ($1, $2, 'Test Security')
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol) VALUES ($1, $2, 'Test Security', 'TSEC')
 	`, secID, prefix+"-sec-"+secID.String())
 	require.NoError(t, err)
 
@@ -101,6 +102,67 @@ func TestInvestment_ActivityTypeFilter_NoAmbiguousColumn_Integration(t *testing.
 	require.NoError(t, err, "GetByUserIDKeyset with activity_types must not error (proves GAP F fix)")
 	require.Len(t, txns, 1, "expected the seeded buy transaction")
 	assert.Equal(t, "buy", txns[0].Type)
+}
+
+// ── #1305: ticker_symbol and security_name must propagate through GetByUserIDKeyset ──
+
+// TestInvestment_GetByUserIDKeyset_PopulatesSecurityFields_Integration proves that
+// ticker_symbol and security_name from the securities JOIN are threaded onto the
+// returned domain.InvestmentTransaction structs, and remain nil for cash transactions.
+// pgxmock cannot catch column/type/NULL errors on the real query — this guards that.
+func TestInvestment_GetByUserIDKeyset_PopulatesSecurityFields_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1305")
+
+	// Seed a security-linked buy transaction.
+	secTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Buy TSEC', 250.00, '2025-01-10')
+	`, secTxnID, userID, accountID, secID, "plaid-1305-sec-"+secTxnID.String())
+	require.NoError(t, err)
+
+	// Seed a cash transaction (no security_id → LEFT JOIN produces NULLs).
+	cashTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, 'cash', 'Cash Distribution', 10.00, '2025-01-09')
+	`, cashTxnID, userID, accountID, "plaid-1305-cash-"+cashTxnID.String())
+	require.NoError(t, err)
+
+	repo := NewInvestmentTransactionRepository(tx)
+	txns, _, err := repo.GetByUserIDKeyset(ctx, userID.String(), domain.InvestmentTransactionFilters{}, nil, 10)
+	require.NoError(t, err)
+	require.Len(t, txns, 2, "expected both seeded transactions")
+
+	// Find each transaction by type.
+	var secTxn, cashTxn *domain.InvestmentTransaction
+	for i := range txns {
+		switch txns[i].Type {
+		case "buy":
+			secTxn = &txns[i]
+		case "cash":
+			cashTxn = &txns[i]
+		}
+	}
+
+	require.NotNil(t, secTxn, "security-linked buy transaction must be returned")
+	require.NotNil(t, secTxn.TickerSymbol, "ticker_symbol must be populated for security-linked txn")
+	assert.Equal(t, "TSEC", *secTxn.TickerSymbol)
+	require.NotNil(t, secTxn.SecurityName, "security_name must be populated for security-linked txn")
+	assert.Equal(t, "Test Security", *secTxn.SecurityName)
+
+	require.NotNil(t, cashTxn, "cash transaction must be returned")
+	assert.Nil(t, cashTxn.TickerSymbol, "NULL ticker_symbol (no security) must remain nil")
+	assert.Nil(t, cashTxn.SecurityName, "NULL security_name (no security) must remain nil")
 }
 
 // ── GAP B: partial-NULL cost_basis must not inflate gain/loss ────────────────
