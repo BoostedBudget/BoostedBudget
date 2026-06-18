@@ -35,5 +35,3 @@ func newTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
 	return enc
 }
 
-// NewTestFieldEncryptor exports newTestFieldEncryptor for package repository_test.
-var NewTestFieldEncryptor = newTestFieldEncryptor
