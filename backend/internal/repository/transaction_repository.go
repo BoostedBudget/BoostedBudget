@@ -2539,8 +2539,27 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::float8,
 			NULL::float8
 		FROM transactions t
-		JOIN accounts a ON a.id = t.account_id AND a.status = 'active'
 		WHERE t.user_id = $1
+		  -- Chain-expansion active-account filter: include pre-relink rows whose
+		  -- account_id is replaced, as long as an active account shares the same
+		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
+		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
+		  -- accounts share a user_account_id (Issue #1304).
+		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
+		  -- transitive via the user_accounts FK (migration 000033), and the outer
+		  -- query is already gated on t.user_id = $1.  Parity with the investment
+		  -- branch is intentional; diverging here would reintroduce asymmetry.
+		  AND (
+		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active') -- NULL account_id always false here; falls through to chain leg below
+		      OR (
+		          t.user_account_id IS NOT NULL
+		          AND EXISTS (
+		              SELECT 1 FROM accounts chain_a
+		              WHERE chain_a.user_account_id = t.user_account_id
+		                AND chain_a.status = 'active'
+		          )
+		      )
+		  )
 		%s%s%s%s%s%s
 
 		UNION ALL
@@ -2587,9 +2606,28 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			it.price,
 			it.fees
 		FROM investment_transactions it
-		JOIN accounts a ON a.id = it.account_id AND a.status = 'active'
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1
+		  -- Chain-expansion active-account filter: include pre-relink rows whose
+		  -- account_id is replaced, as long as an active account shares the same
+		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
+		  -- Using EXISTS subqueries (no JOIN) avoids row duplication when multiple
+		  -- accounts share a user_account_id (Issue #1304).
+		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
+		  -- transitive via the user_accounts FK (migration 000033), and the outer
+		  -- query is already gated on it.user_id = $1.  Parity with the banking
+		  -- branch is intentional; diverging here would reintroduce asymmetry.
+		  AND (
+		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
+		      OR (
+		          it.user_account_id IS NOT NULL
+		          AND EXISTS (
+		              SELECT 1 FROM accounts chain_a
+		              WHERE chain_a.user_account_id = it.user_account_id
+		                AND chain_a.status = 'active'
+		          )
+		      )
+		  )
 		%s%s%s%s%s%s
 
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
