@@ -132,7 +132,9 @@ type InvestmentTransaction struct {
 	AccountID                    string   `json:"account_id" db:"account_id"`
 	UserAccountID                *string  `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference across Plaid re-links (Issue #1109)
 	SecurityID                   *string  `json:"security_id,omitempty" db:"security_id"` // NULL for cash transactions
-	PlaidSecurityID              string   `json:"plaid_security_id,omitempty" db:"-"`     // transient: used during sync
+	PlaidSecurityID              string   `json:"plaid_security_id,omitempty" db:"-"`     // transient: used during sync only
+	TickerSymbol                 *string  `json:"ticker_symbol,omitempty" db:"-"`         // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
+	SecurityName                 *string  `json:"security_name,omitempty" db:"-"`         // from LEFT JOIN securities in GetByUserIDKeyset; nil for cash
 	PlaidInvestmentTransactionID string   `json:"plaid_investment_transaction_id" db:"plaid_investment_transaction_id"`
 	Type                         string   `json:"type" db:"type"` // buy, sell, dividend, cash, fee, transfer, etc.
 	Subtype                      *string  `json:"subtype,omitempty" db:"subtype"`

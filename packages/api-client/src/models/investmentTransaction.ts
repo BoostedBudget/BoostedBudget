@@ -44,7 +44,9 @@ export interface InvestmentTransaction {
   price?: number;
   quantity?: number;
   security_id?: string;
+  security_name?: string;
   subtype?: string;
+  ticker_symbol?: string;
   type: string;
   user_account_id?: string;
   user_id: string;
