@@ -1576,4 +1576,42 @@ func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T
 		assert.NotEqual(t, orphanTxnID.String(), item.ID,
 			"orphan banking transaction (user_account_id=NULL on replaced account) must be excluded")
 	}
+
+	// ── Sub-case R11: NULL account_id + active sibling → INCLUDED ────────────
+	// Migration 000035 (ON DELETE SET NULL) can produce a transactions row where
+	// account_id IS NULL after the referenced account is hard-deleted, while
+	// user_account_id still points at a live chain.  The first EXISTS leg
+	// (EXISTS ... WHERE id = t.account_id AND status='active') evaluates to
+	// UNKNOWN when account_id IS NULL (Postgres three-valued logic: id = NULL →
+	// UNKNOWN, not TRUE), so the row falls through to the chain leg.
+	// This sub-case asserts that fall-through include path is working, so a
+	// future refactor (e.g. = ANY(...) or COALESCE) can't silently break it.
+	nullAcctTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, user_account_id,
+			 source, external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pending, created_at, updated_at)
+		VALUES
+			($1, $2, NULL, $3, $4,
+			 'plaid', $5, $6,
+			 11.00, '2024-05-04', 'Null-Acct Chained U3', false, now(), now())
+	`, nullAcctTxnID, userID, linkedItemID, userAcctID,
+		"ext-"+nullAcctTxnID.String(), "blind-"+nullAcctTxnID.String())
+	require.NoError(t, err)
+
+	// Re-query — null-acct chained row MUST be returned; orphan MUST NOT.
+	items3, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "re-query after null-acct-chained insert must not error")
+	nullAcctFound := false
+	for _, item := range items3 {
+		if item.ID == nullAcctTxnID.String() {
+			nullAcctFound = true
+		}
+		assert.NotEqual(t, orphanTxnID.String(), item.ID,
+			"orphan (NULL user_account_id) must remain excluded after null-acct-chained insert")
+	}
+	assert.True(t, nullAcctFound,
+		"banking transaction with account_id=NULL but user_account_id chained to an active account "+
+			"must appear in unified feed (migration 000035 SET NULL path — R11)")
 }
