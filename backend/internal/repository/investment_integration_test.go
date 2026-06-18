@@ -1314,3 +1314,266 @@ func TestInvestment_UnifiedFeed_SearchMatchesTicker_Integration(t *testing.T) {
 	assert.Equal(t, domain.FeedSourceInvestment, items3[0].Source,
 		"Search=Boosted must match security name and return the investment row")
 }
+
+// ── #1304: chain-expansion for unified feed (RED tests) ───────────────────────
+//
+// The three tests below lock the requirement that GetByUserIDKeysetUnified must
+// return pre-relink rows after an account is marked status='replaced'.  On current
+// code both UNION branches use a hard JOIN on accounts.status='active' which
+// silently drops rows whose account_id points at a replaced account.
+//
+// These tests FAIL on current code (RED) and must PASS after the Task 2 fix.
+
+// TestInvestment_UnifiedFeed_InvestmentSurvivesRelink_Integration proves that an
+// investment transaction inserted on accountA (status='active') is still visible
+// in the unified feed after accountA is replaced by accountB (re-link).
+func TestInvestment_UnifiedFeed_InvestmentSurvivesRelink_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountA, secID := seedInvestmentFixture(ctx, t, tx, "inv-u1")
+
+	// Create a stable user_accounts row (survives re-links)
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-u1')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	// Wire accountA to the stable user_account
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
+		userAcctID, accountA)
+	require.NoError(t, err)
+
+	// Insert an investment transaction on accountA with user_account_id set
+	txnID := uuid.New()
+	userAcctIDStr := userAcctID.String()
+	secIDStr := secID.String()
+	invRepo := NewInvestmentTransactionRepository(tx)
+	inserted, err := invRepo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           txnID.String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountA.String(),
+		UserAccountID:                &userAcctIDStr,
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: "plaid-u1-unified-001",
+		Type:                         "buy",
+		Name:                         "Buy AAPL unified",
+		Amount:                       1200.00,
+		Date:                         mustParseDate("2024-03-01"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted)
+
+	// Create accountB (the post-relink active account) with the same user_account_id
+	accountB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Brokerage U1', 'investment', 'active', $5)
+	`, accountB, linkedItemID, userID, "plaid-relink-u1-"+accountB.String(), userAcctID)
+	require.NoError(t, err)
+
+	// Mark accountA as replaced (simulates Plaid re-link)
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
+	require.NoError(t, err)
+
+	// Unified feed with no account filter — must still return the pre-relink txn
+	repo := NewTransactionRepository(tx, enc)
+	filters := domain.TransactionFilters{
+		IncludeInvestmentActivity: true,
+	}
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "GetByUserIDKeysetUnified must not error")
+	require.Len(t, items, 1,
+		"pre-relink investment transaction must appear in unified feed after re-link (chain-expansion RED)")
+	assert.Equal(t, txnID.String(), items[0].ID,
+		"returned item must be the pre-relink transaction")
+	assert.Equal(t, domain.FeedSourceInvestment, items[0].Source)
+}
+
+// TestInvestment_UnifiedFeed_SurvivesRelink_WithAccountFilter_Integration proves
+// that filtering the unified feed by the NEW (post-relink) accountB still returns
+// the pre-relink investment transaction stored under accountA.
+func TestInvestment_UnifiedFeed_SurvivesRelink_WithAccountFilter_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountA, secID := seedInvestmentFixture(ctx, t, tx, "inv-u2")
+
+	// Stable user_accounts row
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-u2')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
+		userAcctID, accountA)
+	require.NoError(t, err)
+
+	txnID := uuid.New()
+	userAcctIDStr := userAcctID.String()
+	secIDStr := secID.String()
+	invRepo := NewInvestmentTransactionRepository(tx)
+	inserted, err := invRepo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           txnID.String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountA.String(),
+		UserAccountID:                &userAcctIDStr,
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: "plaid-u2-unified-002",
+		Type:                         "buy",
+		Name:                         "Buy VTI unified acct filter",
+		Amount:                       800.00,
+		Date:                         mustParseDate("2024-04-01"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted)
+
+	// Create accountB (post-relink active) with same user_account_id
+	accountB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Brokerage U2', 'investment', 'active', $5)
+	`, accountB, linkedItemID, userID, "plaid-relink-u2-"+accountB.String(), userAcctID)
+	require.NoError(t, err)
+
+	// Mark accountA replaced
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
+	require.NoError(t, err)
+
+	// Filter by accountB — chain-expansion must reach pre-relink txn on accountA
+	accountBStr := accountB.String()
+	filters := domain.TransactionFilters{
+		IncludeInvestmentActivity: true,
+		AccountID:                 &accountBStr,
+	}
+	repo := NewTransactionRepository(tx, enc)
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "GetByUserIDKeysetUnified with AccountID filter must not error")
+	require.Len(t, items, 1,
+		"pre-relink investment txn must be found via accountB filter (chain-expansion RED)")
+	assert.Equal(t, txnID.String(), items[0].ID,
+		"returned item must be the pre-relink transaction")
+	assert.Equal(t, domain.FeedSourceInvestment, items[0].Source)
+}
+
+// TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration proves that a
+// banking transaction (transactions table) on a replaced account is still returned
+// by the unified feed when chain-expansion is applied to the banking branch.
+// Also asserts that orphan rows (account_id=NULL and user_account_id=NULL) are excluded.
+func TestTransactions_UnifiedFeed_BankingSurvivesRelink_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, linkedItemID, accountA, _ := seedInvestmentFixture(ctx, t, tx, "inv-u3")
+
+	// Stable user_accounts row
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-u3')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	_, err = tx.Exec(ctx, `UPDATE accounts SET user_account_id = $1 WHERE id = $2`,
+		userAcctID, accountA)
+	require.NoError(t, err)
+
+	// Insert a banking transaction on accountA with user_account_id set
+	bankTxnID := uuid.New()
+	userAcctIDStr := userAcctID.String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id, user_account_id,
+			 source, external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pfc_primary, pfc_detailed, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4, $5,
+			 'plaid', $6, $7,
+			 42.00, '2024-05-01', 'Coffee Relink U3',
+			 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE_SHOP', false, now(), now())
+	`, bankTxnID, userID, accountA, linkedItemID, userAcctID,
+		"bank-ext-u3-"+bankTxnID.String(), "bank-blind-u3-"+bankTxnID.String())
+	require.NoError(t, err)
+
+	// Create accountB (post-relink) with same user_account_id
+	accountB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status, user_account_id)
+		VALUES ($1, $2, $3, $4, 'Relinked Checking U3', 'depository', 'active', $5)
+	`, accountB, linkedItemID, userID, "plaid-relink-u3-"+accountB.String(), userAcctIDStr)
+	require.NoError(t, err)
+
+	// Mark accountA replaced
+	_, err = tx.Exec(ctx, `UPDATE accounts SET status = 'replaced', replaced_at = now() WHERE id = $1`, accountA)
+	require.NoError(t, err)
+
+	// Unified feed (banking only — IncludeInvestmentActivity=false) must return the banking row
+	repo := NewTransactionRepository(tx, enc)
+	filters := domain.TransactionFilters{
+		IncludeInvestmentActivity: false,
+	}
+	items, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "GetByUserIDKeysetUnified (banking-only) must not error")
+	require.Len(t, items, 1,
+		"pre-relink banking transaction must appear in unified feed after re-link (banking chain-expansion RED)")
+	assert.Equal(t, bankTxnID.String(), items[0].ID,
+		"returned item must be the pre-relink banking transaction")
+	assert.Equal(t, domain.FeedSourceBanking, items[0].Source)
+
+	// ── Sub-case: orphan row (no account_id linkage) must be excluded ─────────
+	// Insert a banking row with account_id pointing to a replaced account and
+	// user_account_id=NULL — this is a true orphan with no chain to follow.
+	// The result count must remain 1.
+	orphanTxnID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions
+			(id, user_id, account_id, linked_item_id,
+			 source, external_transaction_id, external_transaction_id_blind_idx,
+			 amount, date, name, pending, created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4,
+			 'plaid', $5, $6,
+			 7.00, '2024-05-02', 'Orphan Row U3', false, now(), now())
+	`, orphanTxnID, userID, accountA, linkedItemID,
+		"orphan-ext-u3-"+orphanTxnID.String(), "orphan-blind-u3-"+orphanTxnID.String())
+	require.NoError(t, err)
+
+	// Re-query — orphan must NOT be returned (user_account_id is NULL, no chain)
+	items2, _, err := repo.GetByUserIDKeysetUnified(ctx, userID.String(), filters, nil, 10)
+	require.NoError(t, err, "re-query after orphan insert must not error")
+	// Filter to count only the banking rows that have a chain (user_account_id set)
+	// On current code both rows may be returned (JOIN includes accountA if still active),
+	// but after the fix only the chained row survives.
+	// RED assertion: after fix, exactly 1 row (the chained one).
+	chainedCount := 0
+	for _, item := range items2 {
+		if item.ID == bankTxnID.String() {
+			chainedCount++
+		}
+	}
+	assert.Equal(t, 1, chainedCount,
+		"chained banking transaction (user_account_id set) must appear exactly once")
+	for _, item := range items2 {
+		assert.NotEqual(t, orphanTxnID.String(), item.ID,
+			"orphan banking transaction (user_account_id=NULL on replaced account) must be excluded")
+	}
+}
