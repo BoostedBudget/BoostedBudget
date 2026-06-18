@@ -16,6 +16,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -90,9 +91,9 @@ func makeUnifiedFeedRow(userID, accountID string) []interface{} {
 		(*string)(nil), // effective_pfc_primary
 		(*string)(nil), // effective_pfc_detailed
 		(*string)(nil), // effective_category_name
-		(*bool)(nil),   // reviewed
-		(*string)(nil), // reviewed_at
-		(*[]byte)(nil), // tags (jsonb)
+		(*bool)(nil),      // reviewed
+		(*time.Time)(nil), // reviewed_at
+		(*[]byte)(nil),    // tags (jsonb)
 		(*string)(nil), // security_id
 		(*string)(nil), // ticker_symbol
 		(*string)(nil), // security_name
@@ -222,4 +223,76 @@ func TestUnifiedFeed_BankingChainPredicate_SQLShape(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet(),
 		"GetByUserIDKeysetUnified must include 't.user_account_id IS NOT NULL' in the banking branch")
+}
+
+// TestUnifiedFeed_NoActiveJoin_SQLShape asserts that the old inner-JOIN pattern
+// (pre-#1304 fix) is NOT present in the emitted query.
+//
+// Technique: register an ExpectQuery whose regex ONLY matches if the old JOIN
+// string is present.  After the call, assert that ExpectationsWereMet returns
+// an error — meaning the expected (old-JOIN) regex was never satisfied, proving
+// the JOIN was absent.  This is the standard pgxmock idiom for "assert absent."
+func TestUnifiedFeed_NoActiveJoin_SQLShape(t *testing.T) {
+	ctx := context.Background()
+
+	// --- banking branch ---
+	t.Run("banking branch omits old active-account JOIN", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		enc := newTestFieldEncryptor(t)
+		repo := NewTransactionRepository(mock, enc)
+
+		rows := pgxmock.NewRows(unifiedFeedColumns()).
+			AddRow(makeUnifiedFeedRow("user-no-join-1", "acct-no-join-1")...)
+
+		// This regex would only match if the old JOIN-based active-account filter
+		// were present in the banking branch.  It must NOT match post-fix.
+		mock.ExpectQuery(`JOIN accounts a ON a\.id = t\.account_id AND a\.status = .active.`).
+			WithArgs(anyArgs(2)...).
+			WillReturnRows(rows)
+
+		_, _, _ = repo.GetByUserIDKeysetUnified(
+			ctx,
+			"user-no-join-1",
+			domain.TransactionFilters{},
+			nil,
+			10,
+		)
+
+		// ExpectationsWereMet must return an error: the old-JOIN expectation was
+		// never satisfied because the query no longer contains that JOIN.
+		require.Error(t, mock.ExpectationsWereMet(),
+			"old active-account JOIN should be absent from the banking branch (chain-expansion fix #1304)")
+	})
+
+	// --- investment branch ---
+	t.Run("investment branch omits old active-account JOIN", func(t *testing.T) {
+		mock, err := pgxmock.NewPool()
+		require.NoError(t, err)
+		defer mock.Close()
+
+		enc := newTestFieldEncryptor(t)
+		repo := NewTransactionRepository(mock, enc)
+
+		rows := pgxmock.NewRows(unifiedFeedColumns()).
+			AddRow(makeUnifiedFeedRow("user-no-join-2", "acct-no-join-2")...)
+
+		// Would match the old JOIN in the investment branch.  Must not match post-fix.
+		mock.ExpectQuery(`JOIN accounts a ON a\.id = it\.account_id AND a\.status = .active.`).
+			WithArgs(anyArgs(2)...).
+			WillReturnRows(rows)
+
+		_, _, _ = repo.GetByUserIDKeysetUnified(
+			ctx,
+			"user-no-join-2",
+			domain.TransactionFilters{IncludeInvestmentActivity: true},
+			nil,
+			10,
+		)
+
+		require.Error(t, mock.ExpectationsWereMet(),
+			"old active-account JOIN should be absent from the investment branch (chain-expansion fix #1304)")
+	})
 }
