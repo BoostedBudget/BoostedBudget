@@ -319,7 +319,7 @@ func TestTransactionRepository_Integration_InflowSignMagnitude(t *testing.T) {
 	_ = seedIntegrationTransaction(t, pool, userID, accountID, 75.0)               // outflow — excluded
 	_ = inflowTxnID
 
-	repo := repository.NewTransactionRepository(pool)
+	repo := repository.NewTransactionRepository(pool, repository.NewTestFieldEncryptor(t))
 
 	start := time.Now().AddDate(0, -1, 0)
 	end := time.Now().AddDate(0, 1, 0)
