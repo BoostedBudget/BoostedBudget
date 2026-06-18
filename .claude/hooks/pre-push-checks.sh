@@ -4,7 +4,7 @@
 # Exit 0 = allow push | Exit 2 = block push (stderr shown to user)
 #
 # Checks run (fast local-only gates; tests run in CI):
-#   1. Dependency audit:    bun audit --audit-level=high  (HIGH/CRITICAL block)
+#   1. Dependency audit:    bun audit --audit-level=high  (HIGH/CRITICAL block; bun not installed / too old also blocks)
 #   2. Go vuln scan:        govulncheck ./...
 #   3. Bundle size check:   make check-bundle-size  (~25 sec)
 #   4. MCP artifacts:       build:artifacts + check:artifacts-committed
@@ -108,13 +108,14 @@ printf 'Security:\n'
 
 if command -v bun &>/dev/null; then
   # bun audit was added in bun 1.2.15; older versions report "Script not found".
-  # Treat missing-command as a non-blocking warning so the gate works on any bun version.
+  # Both cases are hard failures — an un-auditable dependency tree blocks the push.
   _AUDIT_OUT=$(cd "$PROJECT_ROOT" && bun audit --audit-level=high 2>&1)
   _AUDIT_RC=$?
   if printf '%s' "$_AUDIT_OUT" | grep -qF "Script not found"; then
-    printf '  %-50s⚠️  (bun audit not available in bun %s — upgrade to ≥1.2.15)\n' \
+    printf '  %-50s❌  (bun ≥1.2.15 required — current: %s)\n' \
       "bun audit" "$(bun --version)"
-    WARNINGS="${WARNINGS}\n  • bun audit requires bun ≥1.2.15; current: $(bun --version) — upgrade: https://bun.sh"
+    FAILED=1
+    ERRORS="${ERRORS}\n  • bun audit unavailable: bun $(bun --version) is below 1.2.15\n    Fix: bun upgrade\n"
   elif [ "$_AUDIT_RC" -ne 0 ]; then
     printf '  %-50s❌\n' "bun audit            (HIGH/CRITICAL advisories)"
     FAILED=1
@@ -125,8 +126,9 @@ if command -v bun &>/dev/null; then
   fi
   unset _AUDIT_OUT _AUDIT_RC _snippet
 else
-  printf '  %-50s⚠️  (bun not installed)\n' "bun audit"
-  WARNINGS="${WARNINGS}\n  • bun not installed — install: https://bun.sh"
+  printf '  %-50s❌  (bun not installed)\n' "bun audit"
+  FAILED=1
+  ERRORS="${ERRORS}\n  • bun not installed — install: https://bun.sh\n"
 fi
 
 # Backend Go vulnerability scan (mirrors pre-commit; protects against --no-verify bypass)
