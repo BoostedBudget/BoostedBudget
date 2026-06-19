@@ -221,27 +221,31 @@ type AccountIDEvaluator struct{}
 type AccountTypeEvaluator struct{}
 
 // Evaluate matches a transaction's account against the condition's value list.
-// Issue #1109 chain-awareness: when the transaction carries a UserAccountID (stable
-// reference that survives Plaid re-links), match against that instead of the raw
-// AccountID. This allows rules backfilled by migration 000070 to keep firing after
-// a user re-links their bank. Falls back to AccountID for legacy transactions.
+// Issue #1109 chain-awareness: prefers the stable UserAccountID (survives Plaid re-links)
+// when it is set. Falls back to raw AccountID for legacy transactions AND for rules whose
+// condition value was not backfilled by migration 000070/000072 (accounts that had a NULL
+// user_account_id at migration time were skipped, so their rules still store a raw account_id).
+// Issue #1306 P2: the startup backfill populates UserAccountID on transactions, which would
+// silently break those stale rules if we hard-returned on a non-matching UserAccountID — so
+// we fall through to the AccountID check instead of returning false early.
 func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
 	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
 		return false, nil
 	}
 
-	// Prefer stable UserAccountID when present (post-relink scenario).
+	// Prefer the stable UserAccountID when present (post-relink, #1109).
 	if tx.UserAccountID != nil && *tx.UserAccountID != "" {
 		for _, v := range values {
 			if *tx.UserAccountID == v {
 				return true, nil
 			}
 		}
-		return false, nil
+		// #1306 P2: fall through — the rule may store a raw account_id instead of
+		// user_account_id (migration 000072 skipped accounts NULL at migration time).
 	}
 
-	// Fallback: legacy transactions without UserAccountID use raw AccountID.
+	// Fallback: match the raw AccountID (legacy txns and migration-skipped rules).
 	if tx.AccountID == "" {
 		return false, nil
 	}

@@ -49,8 +49,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) })
 
-	// ── Seed user_account with computed blind indexes ─────────────────────────
-	// The backfill will look this row up by (user_id, institution_id_blind_idx, mask_blind_idx).
+	// ── Seed user_account with blind indexes ──────────────────────────────────
 	uaID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx)
@@ -68,7 +67,6 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// ── Seed account with NULL user_account_id and encrypted mask ─────────────
-	// This simulates an account created during the bug window.
 	accID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, mask)
@@ -84,10 +82,62 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, txID, userID, accID, liID)
 	require.NoError(t, err)
 
-	// ── Precondition: account must have NULL user_account_id before backfill ──
+	// ── Seed security (required by investment tables) ──────────────────────────
+	// securities is not user-scoped (shared reference data), so it needs an explicit
+	// cleanup — the DELETE FROM users cascade won't reach it.
+	secID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name)
+		VALUES ($1, $2, 'Test Security')
+	`, secID, "plaid-sec-p2-"+suffix)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM securities WHERE id = $1", secID) })
+
+	// ── Seed investment_transaction with NULL user_account_id ─────────────────
+	invTxID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO investment_transactions
+		  (id, user_id, account_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, 'buy', 'Test Inv Tx', 100.00, '2024-01-01')
+	`, invTxID, userID, accID, "plaid-inv-p2-"+suffix)
+	require.NoError(t, err)
+
+	// ── Seed holding with NULL user_account_id ────────────────────────────────
+	holdingID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity)
+		VALUES ($1, $2, $3, $4, 10.0)
+	`, holdingID, userID, accID, secID)
+	require.NoError(t, err)
+
+	// ── Seed balance_snapshot with NULL user_account_id ──────────────────────
+	bsID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO balance_snapshots (id, account_id, user_id, snapshot_date, source)
+		VALUES ($1, $2, $3, '2000-01-01', 'migration')
+	`, bsID, accID, userID)
+	require.NoError(t, err)
+
+	// ── Seed savings_goal with NULL user_account_id ───────────────────────────
+	sgID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO savings_goals (id, user_id, account_id, name, target_amount)
+		VALUES ($1, $2, $3, $4, 500.00)
+	`, sgID, userID, accID, "Goal-p2-"+suffix)
+	require.NoError(t, err)
+
+	// ── Seed transfer_suggestion with NULL from/to user_account_ids ───────────
+	tsID := uuid.New().String()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO transfer_suggestions (id, user_id, from_account_id, to_account_id, amount)
+		VALUES ($1, $2, $3, $3, 25.00)
+	`, tsID, userID, accID)
+	require.NoError(t, err)
+
+	// ── Verify account has NULL user_account_id before backfill ────────────────
 	var before *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&before))
-	require.Nil(t, before, "precondition: account must have NULL user_account_id before backfill")
+	require.Nil(t, before, "account must have NULL user_account_id before backfill")
 
 	// ── Run BackfillUserAccountIDs ────────────────────────────────────────────
 	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
@@ -103,6 +153,38 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM transactions WHERE id = $1", txID).Scan(&gotTxUAID))
 	require.NotNil(t, gotTxUAID, "cascade must set transactions.user_account_id")
 	assert.Equal(t, uaID, *gotTxUAID)
+
+	// ── Assert investment_transactions cascade ────────────────────────────────
+	var gotInvTxUAID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM investment_transactions WHERE id = $1", invTxID).Scan(&gotInvTxUAID))
+	require.NotNil(t, gotInvTxUAID, "cascade must set investment_transactions.user_account_id")
+	assert.Equal(t, uaID, *gotInvTxUAID)
+
+	// ── Assert holdings cascade ───────────────────────────────────────────────
+	var gotHoldingUAID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM holdings WHERE id = $1", holdingID).Scan(&gotHoldingUAID))
+	require.NotNil(t, gotHoldingUAID, "cascade must set holdings.user_account_id")
+	assert.Equal(t, uaID, *gotHoldingUAID)
+
+	// ── Assert balance_snapshots cascade ──────────────────────────────────────
+	var gotBsUAID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM balance_snapshots WHERE id = $1", bsID).Scan(&gotBsUAID))
+	require.NotNil(t, gotBsUAID, "cascade must set balance_snapshots.user_account_id")
+	assert.Equal(t, uaID, *gotBsUAID)
+
+	// ── Assert savings_goals cascade ──────────────────────────────────────────
+	var gotSgUAID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM savings_goals WHERE id = $1", sgID).Scan(&gotSgUAID))
+	require.NotNil(t, gotSgUAID, "cascade must set savings_goals.user_account_id")
+	assert.Equal(t, uaID, *gotSgUAID)
+
+	// ── Assert transfer_suggestions cascade (both from and to columns) ─────────
+	var gotFromUAID, gotToUAID *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT from_user_account_id::text, to_user_account_id::text FROM transfer_suggestions WHERE id = $1", tsID).Scan(&gotFromUAID, &gotToUAID))
+	require.NotNil(t, gotFromUAID, "cascade must set transfer_suggestions.from_user_account_id")
+	assert.Equal(t, uaID, *gotFromUAID)
+	require.NotNil(t, gotToUAID, "cascade must set transfer_suggestions.to_user_account_id")
+	assert.Equal(t, uaID, *gotToUAID)
 
 	// ── Idempotency: re-run must be a no-op ───────────────────────────────────
 	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))

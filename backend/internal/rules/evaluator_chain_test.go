@@ -41,31 +41,33 @@ func TestAccountIDEvaluator_ChainAware_PreferUserAccountID(t *testing.T) {
 	}
 }
 
-// TestAccountIDEvaluator_ChainAware_NoMatchWhenUserAccountIDDiffers verifies that
-// when both tx.UserAccountID and rule condition value are set but differ, the
-// evaluator returns false even if tx.AccountID accidentally matches.
-func TestAccountIDEvaluator_ChainAware_NoMatchWhenUserAccountIDDiffers(t *testing.T) {
+// TestAccountIDEvaluator_ChainAware_MatchesViaAccountIDWhenUserAccountIDDiffers verifies
+// that stale rules (storing raw account_id) still match via fallback when tx.UserAccountID
+// is set to a different value (Issue #1306 P2 regression guard). See evaluator.go comment
+// for collision risk analysis.
+func TestAccountIDEvaluator_ChainAware_MatchesViaAccountIDWhenUserAccountIDDiffers(t *testing.T) {
 	evaluator := &AccountIDEvaluator{}
 
 	txUserAccountID := "user-acct-A"
-	ruleValue := "user-acct-B"
+	rawAccountID := "raw-account-uuid-123"
 
 	tx := &domain.Transaction{
-		AccountID:     ruleValue,          // raw ID happens to equal rule value
-		UserAccountID: &txUserAccountID,   // but stable ID differs
+		AccountID:     rawAccountID,      // stale rule stores this raw account_id
+		UserAccountID: &txUserAccountID,  // stable ID set by P2 backfill (different UUID)
 	}
 
+	// Rule stores raw account_id (migration 000072 skipped this account).
 	condition := domain.RuleCondition{
 		Type:  domain.ConditionAccountID,
-		Value: ruleValue,
+		Value: rawAccountID,
 	}
 
 	got, err := evaluator.Evaluate(tx, condition)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got {
-		t.Errorf("expected no match when UserAccountID differs from condition value, got true")
+	if !got {
+		t.Errorf("expected match via AccountID fallback when UserAccountID differs (stale migration-skipped rule), got false")
 	}
 }
 
@@ -92,6 +94,41 @@ func TestAccountIDEvaluator_ChainAware_FallbackToAccountIDWhenNoUserAccountID(t 
 	}
 	if !got {
 		t.Errorf("expected match via AccountID fallback, got false")
+	}
+}
+
+// TestAccountIDEvaluator_ChainAware_KnownLimitation_UUIDCollision documents the
+// theoretical false-positive: if a MIGRATED rule stores account B's user_account_id as
+// its condition value, and a DIFFERENT transaction's raw AccountID happens to equal that
+// same UUID, the OR-logic fallback would match. This is the known trade-off of Issue #1306
+// P2 (see evaluator.go comment). In practice, both accounts.id and user_accounts.id are
+// server-generated v4 UUIDs — collision probability is ~1 in 2^122 per pair and not
+// exploitable. This test documents the current behavior so any future change is visible.
+func TestAccountIDEvaluator_ChainAware_KnownLimitation_UUIDCollision(t *testing.T) {
+	evaluator := &AccountIDEvaluator{}
+
+	txUserAccountID := "user-acct-A"              // tx belongs to account A
+	accountBUserAccountID := "user-acct-B-stable" // account B's stable user_account_id
+
+	tx := &domain.Transaction{
+		AccountID:     accountBUserAccountID, // impossible UUID collision (documented)
+		UserAccountID: &txUserAccountID,
+	}
+
+	// Rule was properly migrated for account B — stores B's user_account_id.
+	condition := domain.RuleCondition{
+		Type:  domain.ConditionAccountID,
+		Value: accountBUserAccountID,
+	}
+
+	got, err := evaluator.Evaluate(tx, condition)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Under the UUID-collision scenario, the OR-logic fallback matches via AccountID.
+	// This is the accepted known limitation; correct behavior requires zero UUID collision.
+	if !got {
+		t.Errorf("known-limitation test changed behavior unexpectedly: expected true (via AccountID fallback), got false")
 	}
 }
 

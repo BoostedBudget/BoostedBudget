@@ -494,6 +494,27 @@ func TestAccountIDEvaluator_Evaluate(t *testing.T) {
 	}
 }
 
+// TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet is the regression guard
+// for Issue #1306 P2: stale rules (created before migration 000072, storing raw account_id)
+// must still match after UserAccountID is backfilled, via the fallback path.
+func TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet(t *testing.T) {
+	e := &AccountIDEvaluator{}
+	uaid := "11111111-1111-1111-1111-111111111111"
+	acctID := "22222222-2222-2222-2222-222222222222"
+	tx := newTestTransaction("M", 1.0, "online", nil)
+	tx.AccountID = acctID
+	tx.UserAccountID = &uaid
+	cond := domain.RuleCondition{Type: domain.ConditionAccountID, Value: acctID}
+
+	matched, err := e.Evaluate(tx, cond)
+	if err != nil {
+		t.Fatalf("Evaluate() returned error: %v", err)
+	}
+	if !matched {
+		t.Error("Evaluate() = false; fallback must match raw account_id when UserAccountID differs")
+	}
+}
+
 // TestExistingCategoryEvaluator_Evaluate was removed — ExistingCategoryEvaluator was replaced
 // by ExistingPFCPrimaryEvaluator and ExistingPFCDetailedEvaluator in the PFCv2 migration.
 // See TestExistingPFCPrimaryEvaluator_* tests below.
