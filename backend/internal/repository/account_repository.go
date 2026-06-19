@@ -241,17 +241,18 @@ func (r *accountRepository) Create(ctx context.Context, account *domain.Account)
 
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
+		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	_, err := r.db.Exec(ctx, query,
 		account.ID,
 		account.LinkedItemID,
 		account.UserID,
+		account.UserAccountID,
 		account.PlaidAccountID,
 		plaidAccountIDBlindIdx,
 		account.Name,
@@ -281,20 +282,19 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		return nil
 	}
 
-	// Start transaction
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) // Rollback if not committed
+	defer tx.Rollback(ctx)
 
 	query := `
 		INSERT INTO accounts
-		(id, linked_item_id, user_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
+		(id, linked_item_id, user_id, user_account_id, plaid_account_id, plaid_account_id_blind_idx, name, official_name,
 		 type, subtype, mask, current_balance, available_balance, currency_code,
 		 persistent_account_id_blind_idx, fallback_fingerprint_blind_idx,
 		 created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	now := time.Now()
@@ -302,16 +302,13 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 	for i := range accounts {
 		account := &accounts[i]
 
-		// Generate UUID if not already set
 		if account.ID == "" {
 			account.ID = uuid.New().String()
 		}
 
-		// Set timestamps
 		account.CreatedAt = now
 		account.UpdatedAt = now
 
-		// Compute blind index from plaintext before encrypting
 		plaidAccountIDBlindIdx := r.enc.BlindIndex(account.PlaidAccountID)
 
 		if err := r.encryptAccountPIIFields(account); err != nil {
@@ -322,6 +319,7 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 			account.ID,
 			account.LinkedItemID,
 			account.UserID,
+			account.UserAccountID,
 			account.PlaidAccountID,
 			plaidAccountIDBlindIdx,
 			account.Name,
@@ -343,7 +341,6 @@ func (r *accountRepository) CreateBatch(ctx context.Context, accounts []domain.A
 		}
 	}
 
-	// Commit transaction
 	return tx.Commit(ctx)
 }
 

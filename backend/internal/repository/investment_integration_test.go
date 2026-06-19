@@ -1759,3 +1759,209 @@ func TestTransactions_UnifiedFeed_NoDuplication_Integration(t *testing.T) {
 		"banking transaction must appear exactly once even when two active siblings share the "+
 			"same user_account_id (EXISTS semi-join must not fan-out like a JOIN would — Issue #1304)")
 }
+
+// ── #1306: UpsertBatch ON CONFLICT DO UPDATE atomicity ───────────────────────
+
+// TestInvestmentTransactionRepository_UpsertBatch_ConflictSemantics_Integration
+// validates what pgxmock unit tests cannot: that the actual PostgreSQL
+// ON CONFLICT DO UPDATE conflict handling correctly:
+//
+//	(a) returns inserted=1 for a fresh row (xmax::text::bigint=0),
+//	(b) backfills user_account_id and returns inserted=0 when the existing row
+//	    has NULL user_account_id and the incoming row has a non-NULL value,
+//	(c) leaves an existing non-NULL user_account_id untouched and returns
+//	    inserted=0 when the DO UPDATE WHERE clause is false.
+//
+// This is the real-Postgres regression test for Issue #1306.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... \
+//	  -run TestInvestmentTransactionRepository_UpsertBatch_ConflictSemantics_Integration \
+//	  -tags integration -v
+func TestInvestmentTransactionRepository_UpsertBatch_ConflictSemantics_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1306")
+
+	// user_accounts row required for user_account_id FK.
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-1306')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	userAcctIDStr := userAcctID.String()
+	secIDStr := secID.String()
+
+	repo := NewInvestmentTransactionRepository(tx)
+
+	// ── (a) Fresh insert → inserted=1, user_account_id stored ─────────────────
+	plaidID1 := "plaid-1306-fresh-" + uuid.New().String()
+	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           uuid.New().String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountID.String(),
+		UserAccountID:                &userAcctIDStr,
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: plaidID1,
+		Type:                         "buy",
+		Name:                         "Fresh insert",
+		Amount:                       100.00,
+		Date:                         mustParseDate("2024-01-01"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inserted, "(a) fresh insert must return inserted=1")
+
+	var storedUAID *string
+	err = tx.QueryRow(ctx,
+		`SELECT user_account_id::text FROM investment_transactions WHERE plaid_investment_transaction_id = $1`,
+		plaidID1).Scan(&storedUAID)
+	require.NoError(t, err)
+	require.NotNil(t, storedUAID, "(a) user_account_id must be stored on fresh insert")
+	assert.Equal(t, userAcctIDStr, *storedUAID)
+
+	// ── (b) Conflict, existing NULL, incoming non-NULL → backfill, inserted=0 ──
+	plaidID2 := "plaid-1306-null-" + uuid.New().String()
+	// Seed row directly with NULL user_account_id (simulates a pre-fix row).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id, type, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'buy', 'Pre-fix NULL row', 200.00, '2024-01-02')
+	`, uuid.New(), userID, accountID, secID, plaidID2)
+	require.NoError(t, err)
+
+	inserted, err = repo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           uuid.New().String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountID.String(),
+		UserAccountID:                &userAcctIDStr, // non-NULL incoming → DO UPDATE fires
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: plaidID2,
+		Type:                         "buy",
+		Name:                         "Pre-fix NULL row",
+		Amount:                       200.00,
+		Date:                         mustParseDate("2024-01-02"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, inserted, "(b) conflict backfill must return inserted=0")
+
+	err = tx.QueryRow(ctx,
+		`SELECT user_account_id::text FROM investment_transactions WHERE plaid_investment_transaction_id = $1`,
+		plaidID2).Scan(&storedUAID)
+	require.NoError(t, err)
+	require.NotNil(t, storedUAID, "(b) user_account_id must be backfilled after DO UPDATE fires")
+	assert.Equal(t, userAcctIDStr, *storedUAID)
+
+	// ── (c) Conflict, existing non-NULL → no-op, inserted=0, data unchanged ────
+	// Re-insert row from (a) which already has user_account_id set; WHERE is false.
+	inserted, err = repo.UpsertBatch(ctx, []domain.InvestmentTransaction{{
+		ID:                           uuid.New().String(),
+		UserID:                       userID.String(),
+		AccountID:                    accountID.String(),
+		UserAccountID:                &userAcctIDStr,
+		SecurityID:                   &secIDStr,
+		PlaidInvestmentTransactionID: plaidID1, // same plaid ID as (a) → conflict, non-NULL → no-op
+		Type:                         "buy",
+		Name:                         "Fresh insert",
+		Amount:                       999.00, // different amount must NOT be stored
+		Date:                         mustParseDate("2024-01-01"),
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, inserted, "(c) no-op conflict must return inserted=0")
+
+	var storedAmount float64
+	err = tx.QueryRow(ctx,
+		`SELECT amount FROM investment_transactions WHERE plaid_investment_transaction_id = $1`,
+		plaidID1).Scan(&storedAmount)
+	require.NoError(t, err)
+	assert.InDelta(t, 100.00, storedAmount, 0.001, "(c) amount must not change on no-op conflict")
+}
+
+// TestInvestmentTransactionRepository_UpsertBatch_DuplicatePlaidIDInBatch_Integration
+// locks the behavior when the SAME plaid_investment_transaction_id appears twice in a
+// single UpsertBatch call. Because UpsertBatch issues one atomic INSERT ... ON CONFLICT
+// DO UPDATE statement per slice element, the second occurrence is processed as a conflict
+// against the row the first occurrence just inserted — so the end state is correct and
+// more atomic than the deleted post-loop bulk UPDATE (Issue #1306, Codex Finding #1).
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... \
+//	  -run TestInvestmentTransactionRepository_UpsertBatch_DuplicatePlaidIDInBatch_Integration \
+//	  -tags integration -v
+func TestInvestmentTransactionRepository_UpsertBatch_DuplicatePlaidIDInBatch_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1306-dup")
+
+	userAcctID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, 'ins-test-1306-dup')
+	`, userAcctID, userID)
+	require.NoError(t, err)
+
+	userAcctIDStr := userAcctID.String()
+	secIDStr := secID.String()
+	repo := NewInvestmentTransactionRepository(tx)
+
+	// helper: build a txn with the given plaid_id and optional user_account_id
+	mk := func(plaidID string, uaid *string) domain.InvestmentTransaction {
+		return domain.InvestmentTransaction{
+			ID:                           uuid.New().String(),
+			UserID:                       userID.String(),
+			AccountID:                    accountID.String(),
+			UserAccountID:                uaid,
+			SecurityID:                   &secIDStr,
+			PlaidInvestmentTransactionID: plaidID,
+			Type:                         "buy",
+			Name:                         "dup-in-batch",
+			Amount:                       100.00,
+			Date:                         mustParseDate("2024-03-01"),
+		}
+	}
+	readUAID := func(plaidID string) *string {
+		var got *string
+		e := tx.QueryRow(ctx,
+			`SELECT user_account_id::text FROM investment_transactions WHERE plaid_investment_transaction_id = $1`,
+			plaidID).Scan(&got)
+		require.NoError(t, e)
+		return got
+	}
+
+	// ── (a) order [nil, then non-NULL]: iter2 DO UPDATE backfills in-batch ─────
+	plaidA := "plaid-1306-dup-a-" + uuid.New().String()
+	insertedA, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{
+		mk(plaidA, nil),
+		mk(plaidA, &userAcctIDStr),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, insertedA, "(a) duplicate plaid_id in one batch counts as exactly one insert")
+	gotA := readUAID(plaidA)
+	require.NotNil(t, gotA, "(a) user_account_id must be backfilled by the in-batch conflict DO UPDATE")
+	assert.Equal(t, userAcctIDStr, *gotA)
+
+	// ── (b) order [non-NULL, then nil]: iter2 WHERE false → preserves value ────
+	plaidB := "plaid-1306-dup-b-" + uuid.New().String()
+	insertedB, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{
+		mk(plaidB, &userAcctIDStr),
+		mk(plaidB, nil),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, insertedB, "(b) duplicate plaid_id in one batch counts as exactly one insert")
+	gotB := readUAID(plaidB)
+	require.NotNil(t, gotB, "(b) incoming NULL must not clobber the non-NULL value set by the first row")
+	assert.Equal(t, userAcctIDStr, *gotB)
+}
