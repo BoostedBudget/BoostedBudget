@@ -228,6 +228,10 @@ type AccountTypeEvaluator struct{}
 // Issue #1306 P2: the startup backfill populates UserAccountID on transactions, which would
 // silently break those stale rules if we hard-returned on a non-matching UserAccountID — so
 // we fall through to the AccountID check instead of returning false early.
+// Known limitation: because accounts.id and user_accounts.id are both server-generated v4 UUIDs,
+// a rule storing account B's user_account_id could theoretically match a transaction whose
+// raw AccountID happens to equal that same UUID. Collision probability is ~1 in 2^122 per pair
+// and is not practically exploitable. Documented in TestAccountIDEvaluator_ChainAware_KnownLimitation_UUIDCollision.
 func (e *AccountIDEvaluator) Evaluate(tx *domain.Transaction, condition domain.RuleCondition) (bool, error) {
 	values := matching.ExtractStringValues(condition.Value)
 	if len(values) == 0 {
