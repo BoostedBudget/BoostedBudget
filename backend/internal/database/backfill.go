@@ -316,6 +316,208 @@ func backfillUserPrefixIndices(ctx context.Context, db *pgxpool.Pool, enc *appcr
 	return resultProcessed, tx.Commit(ctx)
 }
 
+// BackfillUserAccountIDs repairs accounts.user_account_id for rows whose in-memory value
+// was silently dropped by the pre-#1306-P1 CreateBatch INSERT bug. Migration 000037 was a
+// deliberate NO-OP ("no production data yet"), delegating population to the runtime path
+// that the bug then broke. This startup safety-net provides the deferred repair.
+//
+// Strategy: join accounts to their linked_items, decrypt mask + institution_id, compute
+// HMAC blind indexes, look up the matching user_accounts row, then UPDATE. After repairing
+// accounts, cascade to transactions, investment_transactions, and holdings via deterministic
+// account_id-join SQL (no crypto required for the cascade).
+//
+// Idempotent: both the scan (WHERE user_account_id IS NULL) and the per-row UPDATE guard
+// ensure safe re-runs. No-match and decrypt failures are WARN-logged and skipped;
+// they self-heal on the user's next re-link.
+func BackfillUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *appcrypto.FieldEncryptor) error {
+	if db == nil || enc == nil {
+		return nil // encryption not configured (local dev without ENCRYPTION_KEY)
+	}
+
+	if err := backfillAccountsUserAccountIDs(ctx, db, enc); err != nil {
+		return fmt.Errorf("accounts user_account_id backfill: %w", err)
+	}
+	if err := backfillDownstreamUserAccountIDs(ctx, db); err != nil {
+		return fmt.Errorf("downstream user_account_id cascade: %w", err)
+	}
+	return nil
+}
+
+func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *appcrypto.FieldEncryptor) error {
+	rows, err := db.Query(ctx, `
+		SELECT a.id, a.user_id, a.mask, li.institution_id
+		FROM accounts a
+		JOIN linked_items li ON a.linked_item_id = li.id
+		WHERE a.user_account_id IS NULL
+	`)
+	if err != nil {
+		return fmt.Errorf("query accounts with null user_account_id: %w", err)
+	}
+	defer rows.Close()
+
+	type accountRow struct {
+		id     string
+		userID string
+		mask   *string
+		instID *string // nullable on linked_items
+	}
+	var accs []accountRow
+	for rows.Next() {
+		var r accountRow
+		if err := rows.Scan(&r.id, &r.userID, &r.mask, &r.instID); err != nil {
+			return fmt.Errorf("scan account row: %w", err)
+		}
+		accs = append(accs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate account rows: %w", err)
+	}
+	if len(accs) == 0 {
+		return nil // fast path — nothing to repair
+	}
+
+	slog.WarnContext(ctx, "#1306 P2: found accounts with null user_account_id, backfilling at startup",
+		"count", len(accs))
+
+	repaired, skippedNoMatch, skippedDecrypt := 0, 0, 0
+	for _, r := range accs {
+		if r.instID == nil {
+			// linked_item has no institution_id — cannot compute blind index.
+			slog.WarnContext(ctx, "#1306 P2: skipping account — linked_item has no institution_id",
+				"account_id", r.id)
+			skippedNoMatch++
+			continue
+		}
+
+		// Decrypt institution_id; handles both ENC$ ciphertext and legacy plaintext.
+		plainInstID, err := enc.DecryptString(*r.instID)
+		if err != nil {
+			slog.WarnContext(ctx, "#1306 P2: skipping account — cannot decrypt institution_id",
+				"account_id", r.id, "error", err)
+			skippedDecrypt++
+			continue
+		}
+
+		// Decrypt mask (nullable).
+		var plainMask *string
+		if r.mask != nil {
+			m, err := enc.DecryptString(*r.mask)
+			if err != nil {
+				slog.WarnContext(ctx, "#1306 P2: skipping account — cannot decrypt mask",
+					"account_id", r.id, "error", err)
+				skippedDecrypt++
+				continue
+			}
+			plainMask = &m // handles both ENC$ ciphertext and legacy plaintext (handled by DecryptString)
+		}
+
+		// Compute blind indexes and look up the user_account row.
+		instBlind := enc.BlindIndex(plainInstID)
+		maskBlind := enc.BlindIndexNullable(plainMask)
+
+		var uaID string
+		var lookupErr error
+		if maskBlind == nil {
+			lookupErr = db.QueryRow(ctx, `
+				SELECT id FROM user_accounts
+				WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			`, r.userID, instBlind).Scan(&uaID)
+		} else {
+			lookupErr = db.QueryRow(ctx, `
+				SELECT id FROM user_accounts
+				WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			`, r.userID, instBlind, *maskBlind).Scan(&uaID)
+		}
+
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "#1306 P2: no matching user_account — skipping (self-heals on next re-link)",
+				"account_id", r.id)
+			skippedNoMatch++
+			continue
+		}
+		if lookupErr != nil {
+			return fmt.Errorf("lookup user_account for account %s: %w", r.id, lookupErr)
+		}
+
+		if _, err := db.Exec(ctx,
+			"UPDATE accounts SET user_account_id = $1 WHERE id = $2 AND user_account_id IS NULL",
+			uaID, r.id,
+		); err != nil {
+			return fmt.Errorf("update account %s: %w", r.id, err)
+		}
+		repaired++
+	}
+
+	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
+		"repaired", repaired, "skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
+	return nil
+}
+
+// backfillDownstreamUserAccountIDs cascades accounts.user_account_id to all downstream
+// tables that derive it from accounts via account_id. Pure SQL — no crypto needed.
+// Mirrors the one-time backfills in migrations 000071, 000038, 000068, 000069.
+func backfillDownstreamUserAccountIDs(ctx context.Context, db *pgxpool.Pool) error {
+	type cascade struct {
+		query string
+		table string
+	}
+	steps := []cascade{
+		{
+			table: "transactions",
+			query: `UPDATE transactions t SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE t.account_id = a.id AND t.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "investment_transactions",
+			query: `UPDATE investment_transactions it SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE it.account_id = a.id AND it.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "holdings",
+			query: `UPDATE holdings h SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE h.account_id = a.id AND h.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "balance_snapshots",
+			query: `UPDATE balance_snapshots bs SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE bs.account_id = a.id AND bs.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "savings_goals",
+			query: `UPDATE savings_goals sg SET user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE sg.account_id = a.id AND sg.user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "transfer_suggestions (from)",
+			query: `UPDATE transfer_suggestions ts SET from_user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE ts.from_account_id = a.id AND ts.from_user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+		{
+			table: "transfer_suggestions (to)",
+			query: `UPDATE transfer_suggestions ts SET to_user_account_id = a.user_account_id
+				FROM accounts a
+				WHERE ts.to_account_id = a.id AND ts.to_user_account_id IS NULL AND a.user_account_id IS NOT NULL`,
+		},
+	}
+
+	for _, s := range steps {
+		tag, err := db.Exec(ctx, s.query)
+		if err != nil {
+			return fmt.Errorf("repair %s: %w", s.table, err)
+		}
+		if n := tag.RowsAffected(); n > 0 {
+			slog.InfoContext(ctx, "#1306 P2: repaired user_account_id", "table", s.table, "count", n)
+		}
+	}
+	return nil
+}
+
 // insertPrefixIndicesTx is the package-level helper used by the backfill (database package).
 // Profile repository has its own identical private method — same logic, different package scope.
 func insertPrefixIndicesTx(ctx context.Context, tx pgx.Tx, userID string, blindIndices []string) error {
