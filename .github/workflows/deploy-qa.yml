@@ -216,7 +216,7 @@ jobs:
           fi
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           ref: ${{ steps.build-target.outputs.ref }}
@@ -363,7 +363,7 @@ jobs:
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
           ref: ${{ needs.build-images.outputs.ref }}
@@ -495,7 +495,7 @@ jobs:
           sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: ${{ env.UNIQUE_WORKSPACE }}
 
