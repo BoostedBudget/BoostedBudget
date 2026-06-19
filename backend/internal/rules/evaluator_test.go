@@ -450,11 +450,13 @@ func TestConditionRegistry_UnknownType_ReturnsFalse(t *testing.T) {
 func TestAccountIDEvaluator_Evaluate(t *testing.T) {
 	evaluator := &AccountIDEvaluator{}
 
+	uaid := "user-acct-xxx"
 	tests := []struct {
-		name      string
-		accountID string
-		condition domain.RuleCondition
-		want      bool
+		name          string
+		accountID     string
+		userAccountID *string
+		condition     domain.RuleCondition
+		want          bool
 	}{
 		{
 			name:      "matches single account ID",
@@ -480,17 +482,49 @@ func TestAccountIDEvaluator_Evaluate(t *testing.T) {
 			condition: domain.RuleCondition{Type: domain.ConditionAccountID, Value: "acc-123"},
 			want:      false,
 		},
+		{
+			// Issue #1306 P2: when UserAccountID is set but neither it nor AccountID is in
+			// the condition values, the evaluator must return false (OR-logic does not widen to match
+			// unrelated accounts — it only falls back within the same condition's value set).
+			name:          "no match when user_account_id set but neither matches",
+			accountID:     "acc-999",
+			userAccountID: &uaid,
+			condition:     domain.RuleCondition{Type: domain.ConditionAccountID, Value: "acc-123"},
+			want:          false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tx := newTestTransaction("MERCHANT", 10.0, "in store", nil)
 			tx.AccountID = tt.accountID
+			tx.UserAccountID = tt.userAccountID
 			got, _ := evaluator.Evaluate(tx, tt.condition)
 			if got != tt.want {
 				t.Errorf("Evaluate() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet is the regression guard
+// for Issue #1306 P2: stale rules (created before migration 000072, storing raw account_id)
+// must still match after UserAccountID is backfilled, via the fallback path.
+func TestAccountIDEvaluator_FallsBackToAccountID_WhenUserAccountIDSet(t *testing.T) {
+	e := &AccountIDEvaluator{}
+	uaid := "11111111-1111-1111-1111-111111111111"
+	acctID := "22222222-2222-2222-2222-222222222222"
+	tx := newTestTransaction("M", 1.0, "online", nil)
+	tx.AccountID = acctID
+	tx.UserAccountID = &uaid
+	cond := domain.RuleCondition{Type: domain.ConditionAccountID, Value: acctID}
+
+	matched, err := e.Evaluate(tx, cond)
+	if err != nil {
+		t.Fatalf("Evaluate() returned error: %v", err)
+	}
+	if !matched {
+		t.Error("Evaluate() = false; fallback must match raw account_id when UserAccountID differs")
 	}
 }
 

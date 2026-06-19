@@ -53,19 +53,23 @@ func NewInvestmentTransactionRepository(db DB) InvestmentTransactionRepository {
 	return &investmentTransactionRepository{db: db}
 }
 
-// UpsertBatch inserts investment transactions using ON CONFLICT DO NOTHING for idempotency.
-// Returns the count of actually-inserted rows (duplicates are skipped and not counted).
+// UpsertBatch inserts investment transactions atomically per row using ON CONFLICT DO UPDATE.
+// For each row:
+//   - New row: inserted with user_account_id from the caller (xmax::text::bigint=0 → counted).
+//   - Conflict, existing user_account_id IS NULL, incoming non-NULL: user_account_id backfilled
+//     in the same statement (xmax!=0 → not counted as inserted).
+//   - Conflict, existing user_account_id already set, or incoming is NULL: no-op (WHERE false,
+//     row not returned → not counted).
+//
+// Returns the count of genuinely new rows only. Backfill updates are not counted.
+// Issue #1306: eliminates the non-transactional two-step that could leave NULL
+// user_account_id rows between a crash and the next sync cycle.
 func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, transactions []domain.InvestmentTransaction) (int, error) {
 	if len(transactions) == 0 {
 		return 0, nil
 	}
 
 	totalInserted := 0
-
-	// Collect (plaid_id, user_account_id) pairs for the post-loop bulk backfill.
-	// This avoids N round-trips (one per row) for the pre-fix NULL repair path.
-	// Only non-nil UserAccountIDs are collected; these will batch-repair pre-fix rows.
-	var backfillPIDs, backfillUAIDs []string
 
 	for i := range transactions {
 		txn := &transactions[i]
@@ -74,9 +78,16 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 		}
 		txn.CreatedAt = time.Now()
 
-		// COUNT(*) FILTER trick: returns 1 if inserted, 0 if skipped (ON CONFLICT DO NOTHING)
-		// user_account_id is the stable chain-expansion key set at insert time so that
-		// pre-relink rows remain visible after a Plaid re-link (Issue #1109).
+		// ON CONFLICT DO UPDATE atomically backfills user_account_id for pre-fix NULL rows
+		// in the same statement as the INSERT, eliminating the non-transactional two-step.
+		// user_account_id is the stable chain-expansion key (Issue #1109).
+		//
+		// (xmax::text::bigint = 0) distinguishes fresh inserts (xmax=0) from DO UPDATE
+		// conflict-updates (xmax!=0), matching the convention in transaction_repository.go
+		// (Issue #1213). COUNT FILTER counts only fresh inserts.
+		//
+		// AND EXCLUDED.user_account_id IS NOT NULL guards against a NULL→NULL update when
+		// the caller has no user_account_id to offer, avoiding a needless row lock.
 		query := `
 			WITH ins AS (
 				INSERT INTO investment_transactions (
@@ -86,10 +97,13 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 					quantity, amount, price, fees, date,
 					created_at
 				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-				ON CONFLICT (plaid_investment_transaction_id) DO NOTHING
-				RETURNING id
+				ON CONFLICT (plaid_investment_transaction_id) DO UPDATE
+					SET user_account_id = EXCLUDED.user_account_id
+					WHERE investment_transactions.user_account_id IS NULL
+					  AND EXCLUDED.user_account_id IS NOT NULL
+				RETURNING id, (xmax::text::bigint = 0) AS is_new_insert
 			)
-			SELECT COUNT(*) AS inserted FROM ins
+			SELECT COUNT(*) FILTER (WHERE is_new_insert) AS inserted FROM ins
 		`
 
 		var inserted int
@@ -114,26 +128,6 @@ func (r *investmentTransactionRepository) UpsertBatch(ctx context.Context, trans
 			return totalInserted, err
 		}
 		totalInserted += inserted
-
-		if txn.UserAccountID != nil {
-			backfillPIDs = append(backfillPIDs, txn.PlaidInvestmentTransactionID)
-			backfillUAIDs = append(backfillUAIDs, *txn.UserAccountID)
-		}
-	}
-
-	// Bulk backfill: repair pre-fix rows (user_account_id IS NULL) in one round-trip.
-	// No-op when all rows were inserted fresh (their user_account_id is already set above).
-	if len(backfillPIDs) > 0 {
-		backfillQuery := `
-			UPDATE investment_transactions t
-			SET user_account_id = data.uaid::uuid
-			FROM unnest($1::text[], $2::text[]) AS data(pid, uaid)
-			WHERE t.plaid_investment_transaction_id = data.pid
-			  AND t.user_account_id IS NULL
-		`
-		if _, err := r.db.Exec(ctx, backfillQuery, backfillPIDs, backfillUAIDs); err != nil {
-			return totalInserted, err
-		}
 	}
 
 	return totalInserted, nil

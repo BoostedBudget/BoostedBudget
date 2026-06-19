@@ -329,6 +329,13 @@ func main() {
 			os.Exit(1)
 		}
 
+		// #1306 P2: Repair accounts.user_account_id (silently dropped by CreateBatch INSERT bug).
+		// Cascades to transactions, investment_transactions, and holdings. Idempotent backfill.
+		if err := database.BackfillUserAccountIDs(context.Background(), db, fieldEncryptor); err != nil {
+			appLogger.Error("BackfillUserAccountIDs failed — exiting to prevent orphaned records", "error", err)
+			os.Exit(1)
+		}
+
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
 		privacyRepo := repository.NewPrivacyRepository(db)
