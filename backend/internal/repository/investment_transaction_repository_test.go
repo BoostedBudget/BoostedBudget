@@ -55,7 +55,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_InsertNew(t *testing.T) {
 
 	// CTE returns 1 row inserted
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
 		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
@@ -80,7 +80,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_SkipDuplicates(t *testing.T
 
 	// ON CONFLICT DO NOTHING — 0 rows inserted (already exists)
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
 		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
@@ -111,14 +111,43 @@ func TestInvestmentTransactionRepository_UpsertBatch_MixedNewAndDuplicate(t *tes
 	r0 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
 	r1 := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
 	r2 := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r0)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).WithArgs(anyArgs(15)...).WillReturnRows(r2)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r0)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r1)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).WithArgs(anyArgs(15)...).WillReturnRows(r2)
 
 	inserted, err := repo.UpsertBatch(ctx, txns)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, inserted) // 2 new, 1 duplicate skipped
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestInvestmentTransactionRepository_UpsertBatch_BackfillsNullUserAccountID verifies
+// that when a conflicting row has user_account_id IS NULL and the incoming row has a
+// non-nil UserAccountID, the DO UPDATE branch fires (backfill) and the call succeeds
+// without counting the row as a new insert. The inserted count must be 0, not 1.
+func TestInvestmentTransactionRepository_UpsertBatch_BackfillsNullUserAccountID(t *testing.T) {
+	mock, repo := setupInvTxnMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	accountID := uuid.New().String()
+	uaid := uuid.New().String()
+	txn := makeTestInvTxn(userID, accountID)
+	txn.UserAccountID = &uaid
+
+	// Conflict row with user_account_id IS NULL: DO UPDATE fires.
+	// xmax::text::bigint != 0 (update path) → is_new_insert = false → COUNT returns 0.
+	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(0)
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
+		WithArgs(anyArgs(15)...).
+		WillReturnRows(rows)
+
+	inserted, err := repo.UpsertBatch(ctx, []domain.InvestmentTransaction{txn})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, inserted)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -239,7 +268,7 @@ func TestInvestmentTransactionRepository_UpsertBatch_NullSecurityID(t *testing.T
 	}
 
 	rows := pgxmock.NewRows([]string{"inserted"}).AddRow(1)
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO investment_transactions`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT (plaid_investment_transaction_id) DO UPDATE`)).
 		WithArgs(anyArgs(15)...).
 		WillReturnRows(rows)
 
