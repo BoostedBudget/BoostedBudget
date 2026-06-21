@@ -34,12 +34,12 @@
     "@cloudflare/vitest-pool-workers": "^0.16.13",
     "@cloudflare/workers-types": "^4.20260604.1",
     "@eslint/js": "^9.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.60.1",
-    "@typescript-eslint/parser": "^8.60.1",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "eslint": "^9.0.0",
     "globals": "^17.6.0",
     "typescript": "^5.8.3",
-    "vitest": "^4.1.8",
+    "vitest": "^4.1.9",
     "wrangler": "^4.20.0",
     "yaml": "^2.8.3"
   }
