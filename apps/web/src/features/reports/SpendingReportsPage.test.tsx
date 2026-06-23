@@ -13,24 +13,7 @@ import '@/test/mocks/shared-charts'
 import '@/test/mocks/react-router'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Mock toggle-group for DateRangePicker.
-// Uses event-delegation so onValueChange fires when a ToggleGroupItem is clicked —
-// this makes the mock functional (not a hollow stub) so tests in other files that rely
-// on ToggleGroup value-change behavior (e.g. PortfolioPage.test.tsx) are not broken
-// when this mock is the last registered in the shared bun worker process.
-mock.module('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children, onValueChange }: { children: React.ReactNode; onValueChange?: (v: string) => void }) =>
-    React.createElement('div', {
-      role: 'group',
-      'data-testid': 'toggle-group',
-      onClick: (e: React.MouseEvent<HTMLDivElement>) => {
-        const btn = (e.target as HTMLElement).closest('[data-value]') as HTMLElement | null
-        if (btn?.dataset.value) onValueChange?.(btn.dataset.value)
-      },
-    }, children),
-  ToggleGroupItem: ({ children, value }: { children: React.ReactNode; value: string }) =>
-    React.createElement('button', { 'data-value': value }, children),
-}))
+// Issue #1323: toggle-group is centrally mocked via bunfig.toml preload (toggle-group.tsx)
 
 import { SpendingReportsPage } from './SpendingReportsPage'
 
