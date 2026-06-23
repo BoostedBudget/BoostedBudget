@@ -49,9 +49,6 @@ EXCLUDE_PATTERNS=(
     # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh; centralized mock
     # now in bunfig.toml preload so individual test files no longer need inline mocks.
     "src/components/ui/toggle-group.test.tsx"
-    # Issue #1323: confirmation-dialog.test.tsx moved to test-conflict-files.sh; AccountsPage.test.tsx
-    # registers a stub for @/components/ui/confirmation-dialog that pollutes this test.
-    "src/components/ui/confirmation-dialog.test.tsx"
     # setSystemTime pollution: date mocks from other test files leak into these, causing
     # date mismatch failures in the full suite (#952)
     "src/features/dashboard/components/TimeframeSelector.test.tsx"

@@ -1,9 +1,9 @@
-// Issue #1323: Centralized ConfirmationDialog mock to prevent mock.module() pollution.
-// This file is preloaded via bunfig.toml before all tests.
+// Issue #1323: Centralized ConfirmationDialog stub to prevent inline mock.module() duplication.
+// NOT preloaded via bunfig.toml — confirmation-dialog.test.tsx runs in the main batch
+// and needs the real implementation. Each consuming test file must call mock.module() manually.
 //
 // The stub renders just enough for component tests (open/close, title, description,
-// confirm/cancel buttons). ConfirmationDialog.test.tsx tests the REAL implementation
-// and must run separately via test-conflict-files.sh.
+// confirm/cancel buttons).
 
 import React from 'react'
 import { mock } from 'bun:test'

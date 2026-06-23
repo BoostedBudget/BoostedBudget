@@ -1,14 +1,9 @@
 // Issue #1300: InsightsPage sub-tabs + URL state tests
 // API hooks are mocked via bunfig.toml preloads (analytics-api.ts, net-worth-hooks.ts,
 // track-event.ts, investments-api.ts).
-// IMPORTANT: Do NOT add ad-hoc mock.module() calls here for hooks other than useTrackEvent
-// — they leak globally across test files in bun:test. The track-event re-registration
-// below is intentional: it pins useTrackEvent to the canonical mockTrackEvent reference
-// so analytics assertions work regardless of file execution order (pattern from
-// PortfolioPage.test.tsx / BudgetDetailPage.analytics.test.tsx).
 // QueryClientProvider is required because PortfolioPage uses useInfiniteInvestmentTransactions
 // (real useInfiniteQuery under the mocked getInvestmentTransactions fetcher).
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
