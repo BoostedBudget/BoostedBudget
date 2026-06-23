@@ -34,7 +34,7 @@ mkdir -p coverage
 
 # Find all lcov files
 LCOV_FILES=""
-for dir in coverage coverage-real coverage-isolated; do
+for dir in coverage coverage-real coverage-conflict coverage-isolated; do
     if [ -f "$dir/lcov.info" ]; then
         LCOV_FILES="$LCOV_FILES $dir/lcov.info"
         echo "Found: $dir/lcov.info"

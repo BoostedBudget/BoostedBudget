@@ -51,8 +51,11 @@ PRELOAD_FILES=(
     "$FRONTEND_DIR/src/test/mocks/investments-api.ts"
 )
 
-# Build preload arguments
-PRELOAD_ARGS=$(printf -- '--preload %s ' "${PRELOAD_FILES[@]}")
+# Build preload arguments (array-based to handle paths with spaces)
+PRELOAD_ARGS=()
+for f in "${PRELOAD_FILES[@]}"; do
+    PRELOAD_ARGS+=(--preload "$f")
+done
 
 # CRITICAL: Run from /tmp to avoid loading bunfig.toml from frontend CWD.
 # Bun's --config flag is ADDITIVE, not a replacement. Running from /tmp
@@ -61,13 +64,13 @@ cd /tmp
 
 if [ "$COVERAGE" = true ]; then
     echo "Coverage enabled - generating to coverage-conflict/"
-    bun test $PRELOAD_ARGS \
+    bun test "${PRELOAD_ARGS[@]}" \
         --timeout 30000 \
         --coverage --coverage-reporter=lcov \
         --coverage-dir="$FRONTEND_DIR/coverage-conflict" \
         "${TEST_FILES[@]}"
 else
-    bun test $PRELOAD_ARGS --timeout 30000 "${TEST_FILES[@]}"
+    bun test "${PRELOAD_ARGS[@]}" --timeout 30000 "${TEST_FILES[@]}"
 fi
 
 echo ""
