@@ -45,8 +45,8 @@ func TestTransactionRepository_BulkUpdateCategory_Integration(t *testing.T) {
 		{otherUserID, "test|" + otherUserID, "integration-1210-bulk-other-" + otherUserID + "@example.com"},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, row.id, row.authID, row.email)
 		require.NoError(t, err, "seed user %s", row.id)
 	}
@@ -85,17 +85,17 @@ func TestTransactionRepository_BulkUpdateCategory_Integration(t *testing.T) {
 				id, user_id, account_id, linked_item_id, source,
 				external_transaction_id, amount, date, name,
 				pfc_primary, pfc_detailed, category_source,
-				effective_pfc_primary, effective_pfc_detailed, effective_category_name,
+				effective_category_name,
 				reviewed, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, 'plaid',
-				$5, -10.00, $6, 'Bulk Cat Test',
+				$5, -10.00, $7, 'Bulk Cat Test',
 				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'plaid',
-				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'Coffee',
+				'Coffee',
 				false, $6, $6
 			)
 		`, row.id, row.userID, accountID, linkedItemID,
-			"ext-bulk-"+row.id, now)
+			"ext-bulk-"+row.id, now, now.Format("2006-01-02"))
 		require.NoError(t, err, "seed transaction %d", i)
 	}
 

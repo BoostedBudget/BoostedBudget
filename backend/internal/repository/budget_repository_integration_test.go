@@ -41,8 +41,8 @@ func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 		{otherID},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, u.id, "test|"+u.id.String(), "int-cat-owner-"+u.id.String()+"@example.com")
 		require.NoError(t, err, "seed user %s", u.id)
 	}
@@ -50,32 +50,32 @@ func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 	// ── seed: budget owned by ownerID ────────────────────────────────────────────
 	ownerBudgetID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active)
-		VALUES ($1, $2, 'Owner Budget', 'monthly', NOW()::date, 1000.00, true)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
+		VALUES ($1, $2, 'Owner Budget', 'monthly', NOW()::date, 1000.00, true, $1)
 	`, ownerBudgetID, ownerID)
 	require.NoError(t, err, "seed owner budget")
 
 	// ── seed: category within ownerID's budget ───────────────────────────────────
 	ownedCatID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, category_kind, allocated_amount, spent_amount)
-		VALUES ($1, $2, 'pfc', 200.00, 0.00)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 200.00, 0.00)
 	`, ownedCatID, ownerBudgetID)
 	require.NoError(t, err, "seed owned category")
 
 	// ── seed: budget owned by otherID ────────────────────────────────────────────
 	otherBudgetID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active)
-		VALUES ($1, $2, 'Other Budget', 'monthly', NOW()::date, 500.00, true)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
+		VALUES ($1, $2, 'Other Budget', 'monthly', NOW()::date, 500.00, true, $1)
 	`, otherBudgetID, otherID)
 	require.NoError(t, err, "seed other budget")
 
 	// ── seed: category within otherID's budget ───────────────────────────────────
 	foreignCatID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, category_kind, allocated_amount, spent_amount)
-		VALUES ($1, $2, 'pfc', 100.00, 0.00)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 100.00, 0.00)
 	`, foreignCatID, otherBudgetID)
 	require.NoError(t, err, "seed foreign category")
 
@@ -94,14 +94,14 @@ func TestGetCategoryByIDAndUser_Integration(t *testing.T) {
 		cat, err := txRepo.GetCategoryByIDAndUser(ctx, foreignCatID.String(), ownerID.String())
 		require.Error(t, err, "should reject a category owned by a different user")
 		assert.Nil(t, cat)
-		assert.Contains(t, err.Error(), "category not found or not owned by user")
+		assert.Contains(t, err.Error(), "budget category not found")
 	})
 
 	t.Run("non-existent category ID returns error", func(t *testing.T) {
 		cat, err := txRepo.GetCategoryByIDAndUser(ctx, uuid.New().String(), ownerID.String())
 		require.Error(t, err, "should reject a non-existent category")
 		assert.Nil(t, cat)
-		assert.Contains(t, err.Error(), "category not found or not owned by user")
+		assert.Contains(t, err.Error(), "budget category not found")
 	})
 }
 
@@ -117,8 +117,8 @@ func TestBudgetRepository_CreateWithCategories_RollsBackOnCategoryFailure(t *tes
 	// ── seed: one user ────────────────────────────────────────────────────────
 	userID := uuid.New()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO users (id, clerk_id, email, created_at, updated_at)
-		VALUES ($1, $2, $3, now(), now())
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "cwc-rollback-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 	t.Cleanup(func() {

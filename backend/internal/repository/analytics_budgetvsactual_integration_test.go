@@ -32,8 +32,8 @@ func TestGetBudgetVsActual_Integration(t *testing.T) {
 	userID := uuid.New()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-bva-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -42,39 +42,39 @@ func TestGetBudgetVsActual_Integration(t *testing.T) {
 	// Seed 1 active monthly budget with 2 categories: one over budget, one under.
 	monthlyBudgetID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active)
-		VALUES ($1, $2, 'Monthly Budget', 'monthly', $3, 1000.00, true)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
+		VALUES ($1, $2, 'Monthly Budget', 'monthly', $3, 1000.00, true, $1)
 	`, monthlyBudgetID, userID, now.Format("2006-01-02"))
 	require.NoError(t, err, "seed monthly budget")
 
 	// Category 1: Groceries — over budget (spent 300 > allocated 200)
 	cat1ID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, category, allocated_amount, spent_amount)
-		VALUES ($1, $2, '["FOOD_AND_DRINK"]', 200.00, 300.00)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 200.00, 300.00)
 	`, cat1ID, monthlyBudgetID)
 	require.NoError(t, err, "seed budget category 1")
 
 	// Category 2: Transport — under budget (spent 50 < allocated 150)
 	cat2ID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, category, allocated_amount, spent_amount)
-		VALUES ($1, $2, '["TRANSPORTATION"]', 150.00, 50.00)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'TRANSPORTATION', 150.00, 50.00)
 	`, cat2ID, monthlyBudgetID)
 	require.NoError(t, err, "seed budget category 2")
 
 	// Seed 1 active yearly budget — should NOT be returned when querying monthly.
 	yearlyBudgetID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active)
-		VALUES ($1, $2, 'Yearly Budget', 'yearly', $3, 5000.00, true)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
+		VALUES ($1, $2, 'Yearly Budget', 'yearly', $3, 5000.00, true, $1)
 	`, yearlyBudgetID, userID, now.Format("2006-01-02"))
 	require.NoError(t, err, "seed yearly budget")
 
 	cat3ID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, category, allocated_amount, spent_amount)
-		VALUES ($1, $2, '["SHOPPING"]', 500.00, 250.00)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'GENERAL_MERCHANDISE', 500.00, 250.00)
 	`, cat3ID, yearlyBudgetID)
 	require.NoError(t, err, "seed yearly budget category")
 

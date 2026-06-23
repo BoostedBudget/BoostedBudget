@@ -109,10 +109,14 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 	db := connectTestDB(t)
 	ctx := context.Background()
 
-	// Disable seq scan so the planner is forced to prefer an index if one applies.
+	// Disable seq scan and explicit sort so the planner must use an index that provides
+	// the required ORDER BY directly (i.e. the keyset composite index).
 	_, err := db.Exec(ctx, "SET enable_seqscan = OFF")
 	require.NoError(t, err)
 	defer db.Exec(ctx, "SET enable_seqscan = ON") //nolint:errcheck
+	_, err = db.Exec(ctx, "SET enable_sort = OFF")
+	require.NoError(t, err)
+	defer db.Exec(ctx, "SET enable_sort = ON") //nolint:errcheck
 
 	type tc struct {
 		sortExpr    string // must match sortColumnMap exactly
@@ -172,10 +176,12 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 				`SELECT id FROM transactions WHERE user_id = $1 ORDER BY %s %s, id ASC LIMIT 51`,
 				tc.sortExpr, tc.orderDir,
 			)
-			plan := runExplain(ctx, t, db, firstPageSQL, "smoke-test-user")
+			plan := runExplain(ctx, t, db, firstPageSQL, "00000000-0000-0000-0000-000000000000")
 			expectedIdx := "idx_tx_keyset_" + tc.indexSuffix
 			assert.True(t,
-				strings.Contains(plan, "Index Scan") || strings.Contains(plan, "Bitmap Index Scan"),
+				strings.Contains(plan, "Index Scan") ||
+					strings.Contains(plan, "Bitmap Index Scan") ||
+					strings.Contains(plan, "Index Only Scan"),
 				"Expected index scan for sort=%s dir=%s; plan:\n%s",
 				tc.indexSuffix, tc.orderDir, plan,
 			)
