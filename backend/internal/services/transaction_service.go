@@ -36,7 +36,7 @@ const (
 type TransactionService interface {
 	// ListTransactions retrieves transactions for a user with optional filters and pagination
 	// Returns paginated results with metadata (total_count, has_more)
-	// Validates input parameters and sanitizes search queries
+	// Validates input parameters
 	ListTransactions(
 		ctx context.Context,
 		userID string,
@@ -341,7 +341,6 @@ func encodeNextCursor(cursor *domain.TransactionCursor) (*string, error) {
 	}
 	return &encoded, nil
 }
-
 
 // GetTransactionByID retrieves a transaction by its ID
 func (s *transactionService) GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error) {
