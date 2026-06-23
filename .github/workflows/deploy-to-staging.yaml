@@ -55,7 +55,7 @@ jobs:
       mcp_prior_sha:        ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: staging
           fetch-depth: 0
@@ -257,7 +257,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout staging branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -435,7 +435,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -541,7 +541,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout staging branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -608,7 +608,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout deploy SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -695,7 +695,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -749,7 +749,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           fetch-depth: 0
