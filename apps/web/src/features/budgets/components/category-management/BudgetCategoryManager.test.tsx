@@ -9,10 +9,6 @@ import type { CustomCategory } from '@boostedbudget/api-client/models/customCate
 // in beforeEach using the exported mock functions from the preload.
 import {
   mockUseGetUserCategories,
-  mockUseCreateCategory,
-  mockUseUpdateCategory,
-  mockUseDeleteCategory,
-  mockUseGetCategoryUsage,
 } from '@/test/mocks/categories-api'
 
 mock.module('./AllocationBreakdown', () => ({
