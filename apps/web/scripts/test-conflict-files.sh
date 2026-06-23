@@ -15,8 +15,6 @@
 # - registry.test.ts           (needs real widget registry; registry.ts preload conflicts)
 # - useInfiniteInvestmentTransactions.test.tsx (needs real hook; investments-hooks.ts preload conflicts)
 # - toggle-group.test.tsx      (needs real ToggleGroup; toggle-group.tsx preload conflicts — Issue #1323)
-# - confirmation-dialog.test.tsx (needs real ConfirmationDialog; AccountsPage.test.tsx registers a stub
-#                                 via mock.module() before confirmation-dialog.test.tsx runs — Issue #1323)
 #
 # Group B (WITH registry/dashboard-context preloads, NO dashboard-grid/widget-catalog):
 # - DashboardGrid.test.tsx     (needs real DashboardGrid; dashboard-grid.tsx preload conflicts — Issue #1323)
@@ -49,7 +47,6 @@ GROUP_A_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/widgets/registry.test.ts"
     "$FRONTEND_DIR/src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
     "$FRONTEND_DIR/src/components/ui/toggle-group.test.tsx"
-    "$FRONTEND_DIR/src/components/ui/confirmation-dialog.test.tsx"
 )
 
 GROUP_A_PRELOADS=(
