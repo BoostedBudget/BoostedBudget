@@ -44,8 +44,8 @@ func TestCompletePartialUniqueMatchedTxn_Integration(t *testing.T) {
 	// users → linked_items → accounts → transactions.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-sugg-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -147,8 +147,8 @@ func TestReserveMatchedTransaction_CrossSyncDoubleCountGuard_Integration(t *test
 	// Seed user, linked_item, account, and an inflow transaction T.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "gapah-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -274,8 +274,8 @@ func TestClearStaleReservations_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "stale-res-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -399,8 +399,8 @@ func TestUpdateStatusAndComplete_StatusGuards_Integration(t *testing.T) {
 	// Seed a user and linked item (required by FK constraints on transfer_suggestions).
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "status-guard-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -528,8 +528,8 @@ func TestCompleteRetainingReservation_TOCTOUGuard_Integration(t *testing.T) {
 	// Seed user, linked_item, account, and two inflow transactions T1 and T2.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "gapar-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -570,6 +570,7 @@ func TestCompleteRetainingReservation_TOCTOUGuard_Integration(t *testing.T) {
 	repo := NewTransferSuggestionRepository(tx)
 	now := time.Now()
 	t1Str := t1ID.String()
+	t2Str := t2ID.String()
 
 	// Case 1: confirm with correct observed reservation succeeds.
 	s1 := insertSugg()
@@ -589,16 +590,17 @@ func TestCompleteRetainingReservation_TOCTOUGuard_Integration(t *testing.T) {
 	assert.Equal(t, domain.SuggestionStatusCompleted, sugg.Status, "case 2: suggestion must be completed")
 
 	// Case 3: stale observed reservation — DB was cleared between read and write.
-	// The service reads T1 as the reservation, then ClearMatchedTransactionID runs
-	// (stale-clear path), then the confirm arrives with the stale T1 value.
-	// IS NOT DISTINCT FROM predicate: DB has NULL, expected is &T1 → no match → AlreadyActioned.
+	// Use T2 (T1 is locked by completed s1). The service reads T2 as the reservation,
+	// then ClearMatchedTransactionID runs (stale-clear path), then the confirm arrives
+	// with the stale T2 value.
+	// IS NOT DISTINCT FROM predicate: DB has NULL, expected is &T2 → no match → AlreadyActioned.
 	s3 := insertSugg()
-	require.NoError(t, repo.ReserveMatchedTransaction(ctx, s3, t1Str), "case 3: initial reserve")
+	require.NoError(t, repo.ReserveMatchedTransaction(ctx, s3, t2Str), "case 3: initial reserve")
 	// Simulate stale-clear (reservation released, e.g. ClearStaleReservations ran).
 	_, err = tx.Exec(ctx, `UPDATE transfer_suggestions SET matched_transaction_id = NULL WHERE id = $1`, s3)
 	require.NoError(t, err, "case 3: simulate stale-clear")
 	// Now confirm arrives with the stale (now-gone) reservation.
-	err = repo.CompleteRetainingReservation(ctx, s3, 100.00, "user_confirmed", now, &t1Str)
+	err = repo.CompleteRetainingReservation(ctx, s3, 100.00, "user_confirmed", now, &t2Str)
 	require.ErrorIs(t, err, domain.ErrTransferSuggestionAlreadyActioned,
 		"case 3: stale reservation mismatch must return AlreadyActioned (IS NOT DISTINCT FROM guard)")
 
@@ -623,8 +625,8 @@ func TestClearMatchedTransactionID_ZeroRowAlreadyActioned_Integration(t *testing
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "gapaq-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -691,8 +693,8 @@ func TestClearMatchedTransactionID_WrongExpected_DoesNotRelease(t *testing.T) {
 	// Seed user and linked_item/account/transactions.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "gapav-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -781,8 +783,8 @@ func TestDeclineReleasesReservationForReClaim_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "decline-ai-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -872,8 +874,8 @@ func TestClearStaleReservations_ClosesMatchNotifications_Integration(t *testing.
 	// Seed user + account hierarchy (needed for FK constraints).
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|ba-"+userID.String(), "notif-close-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -980,8 +982,8 @@ func TestGetByUserIDStatuses_ReturnsFilteredByStatus_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|filter-"+userID.String(), "status-filter-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -1049,8 +1051,8 @@ func TestGetByUserIDStatuses_EmptySlice_ReturnsPendingOnly_Integration(t *testin
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|empty-"+userID.String(), "empty-slice-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -1088,8 +1090,8 @@ func TestGetByUserIDStatuses_LimitOffset_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|page-"+userID.String(), "page-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -1151,8 +1153,8 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|enr-"+userID.String(), "enr-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -1174,7 +1176,7 @@ func TestGetByUserIDStatuses_Enrichment_Integration(t *testing.T) {
 	toAccID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, nickname, type)
-		VALUES ($1, $2, $3, 'plaid-to-savings', 'Savings', 'Emergency Fund', 'savings')
+		VALUES ($1, $2, $3, 'plaid-to-savings', 'Savings', 'Emergency Fund', 'depository')
 	`, toAccID, linkedItemID, userID)
 	require.NoError(t, err, "seed to-account with nickname")
 
@@ -1252,8 +1254,8 @@ func TestGetByUserIDStatuses_EventTimeOrdering_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|ord-"+userID.String(), "ord-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -1311,8 +1313,8 @@ func TestCancelAcceptedSuggestion_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "cancel-accepted-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -1333,6 +1335,28 @@ func TestCancelAcceptedSuggestion_Integration(t *testing.T) {
 		return id
 	}
 
+	// Seed linked_item → account → transaction so matched_transaction_id FK reference is valid.
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-cancel-token')
+	`, linkedItemID, userID, "item-cancel-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, $4, 'Cancel Test Account', 'depository')
+	`, accountID, linkedItemID, userID, "plaid-cancel-"+accountID.String())
+	require.NoError(t, err)
+
+	txnUUID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
+		VALUES ($1, $2, $3, $4, 'plaid', -100.00, '2024-01-01', 'Cancel Test Txn')
+	`, txnUUID, userID, accountID, linkedItemID)
+	require.NoError(t, err)
+
 	repo := NewTransferSuggestionRepository(tx)
 
 	// pending → rejected.
@@ -1344,7 +1368,7 @@ func TestCancelAcceptedSuggestion_Integration(t *testing.T) {
 	assert.Equal(t, domain.SuggestionStatusRejected, s.Status)
 
 	// accepted → rejected (this is the bug fix — UpdateStatus would silently no-op here).
-	txnID := "txn-reserved-" + uuid.New().String()
+	txnID := txnUUID.String()
 	acceptedID := insert("accepted", &txnID)
 	err = repo.CancelAcceptedSuggestion(ctx, acceptedID, nil)
 	require.NoError(t, err, "CancelAcceptedSuggestion on accepted must succeed")

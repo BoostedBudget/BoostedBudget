@@ -34,8 +34,8 @@ func TestGetByIDForUser_OwnerCanFetchOwnGoal(t *testing.T) {
 	// Seed a user and the required account (savings_goals.account_id NOT NULL).
 	ownerID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, ownerID, "test|"+ownerID.String(), "int-sgowner-"+ownerID.String()+"@example.com")
 	require.NoError(t, err, "seed owner user")
 
@@ -55,8 +55,8 @@ func TestGetByIDForUser_OwnerCanFetchOwnGoal(t *testing.T) {
 
 	goalID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO savings_goals (id, user_id, name, target_amount, account_id)
-		VALUES ($1, $2, 'Emergency Fund', 5000.00, $3)
+		INSERT INTO savings_goals (id, user_id, name, target_amount, account_id, progress_basis)
+		VALUES ($1, $2, 'Emergency Fund', 5000.00, $3, 'manual')
 	`, goalID, ownerID, accountID)
 	require.NoError(t, err, "seed savings_goal")
 
@@ -92,8 +92,8 @@ func TestGetByIDForUser_NonOwnerCannotFetchGoal(t *testing.T) {
 		{attackerID, "attacker"},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, u.id, "test|"+u.id.String(), "int-sg"+u.label+"-"+u.id.String()+"@example.com")
 		require.NoError(t, err, "seed "+u.label+" user")
 	}
@@ -114,8 +114,8 @@ func TestGetByIDForUser_NonOwnerCannotFetchGoal(t *testing.T) {
 
 	goalID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO savings_goals (id, user_id, name, target_amount, account_id)
-		VALUES ($1, $2, 'Owner Secret Goal', 10000.00, $3)
+		INSERT INTO savings_goals (id, user_id, name, target_amount, account_id, progress_basis)
+		VALUES ($1, $2, 'Owner Secret Goal', 10000.00, $3, 'manual')
 	`, goalID, ownerID, accountID)
 	require.NoError(t, err, "seed savings_goal owned by owner")
 
@@ -140,8 +140,8 @@ func TestGetByIDForUser_NonexistentGoalReturnsNotFound(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-sgnoexist-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 

@@ -38,8 +38,8 @@ func TestGetByUserIDFiltered_Integration(t *testing.T) {
 	// Seed a user.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-filter-rule-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 

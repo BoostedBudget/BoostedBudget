@@ -45,8 +45,8 @@ func TestTransactionRepository_CreateBatch_ConflictPreservesUserFields_Integrati
 	accountID := uuid.New().String()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID, "integration-1213-"+userID+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -98,9 +98,6 @@ func TestTransactionRepository_CreateBatch_ConflictPreservesUserFields_Integrati
 	// Simulates a re-sync of the same Plaid transaction. The incoming payload
 	// has a different amount (legitimate Plaid update) and different rule-applied
 	// category (should be ignored because ON CONFLICT DO UPDATE preserves them).
-	externalIDCopy := externalID // same ExternalTransactionID → conflict fires
-	differentKind := "custom"
-	differentPrimary := "TRANSPORTATION"
 	differentNotes := "DIFFERENT NOTES — should NOT appear in DB"
 
 	txn2 := domain.Transaction{
@@ -109,15 +106,14 @@ func TestTransactionRepository_CreateBatch_ConflictPreservesUserFields_Integrati
 		AccountID:             accountID,
 		LinkedItemID:          linkedItemID,
 		Source:                domain.SourcePlaid,
-		ExternalTransactionID: &externalIDCopy,
-		Amount:                -6.00, // amount is in the SET clause → updated (expected)
+		ExternalTransactionID: &externalID, // same ExternalTransactionID → conflict fires
+		Amount:                -6.00,        // amount is in the SET clause → updated (expected)
 		Date:                  time.Now().UTC().Truncate(24 * time.Hour),
 		Name:                  "Starbucks",
-		// Incoming category/notes that must NOT overwrite the existing row's enrichment:
-		CategoryOverrideKind: &differentKind,
-		PFCPrimaryOverride:   &differentPrimary,
-		CategorySourceField:  domain.CategorySourceRule,
-		UserNotes:            &differentNotes,
+		// No CategoryOverrideKind / PFCPrimaryOverride: incoming re-sync has nil overrides.
+		// The ON CONFLICT DO UPDATE must preserve txn1's "pfc" kind and "FOOD_AND_DRINK" override.
+		CategorySourceField: domain.CategorySourceRule,
+		UserNotes:           &differentNotes,
 	}
 
 	insertedIDs2, err := repo.CreateBatch(ctx, []domain.Transaction{txn2})

@@ -46,8 +46,8 @@ func TestGetRecentInflowsByUserID_FiltersPostedInflowsSinceCutoff_Integration(t 
 
 	for _, uid := range []string{userID, otherUserID} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, uid, "test|"+uid, "inflow-inttest-"+uid+"@example.com")
 		require.NoError(t, err)
 	}
