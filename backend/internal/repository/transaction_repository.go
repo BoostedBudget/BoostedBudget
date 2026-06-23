@@ -2099,6 +2099,15 @@ func effDateStr(tx domain.Transaction) string {
 	return tx.Date.Format(time.DateOnly)
 }
 
+// nilOrEmpty returns s if non-nil, else empty string.
+// Used for optional string pointers in scanning operations.
+func nilOrEmpty(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
 // GetInflowTransactionsForAccount returns posted inflow transactions (amount < 0 under
 // PFCv2) for a specific account within [start, end].  Chain-aware via user_account_id
 // (Issue #1109). Returns lightweight projections; Magnitude = ABS(amount) (always
@@ -2647,7 +2656,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	var items []*domain.ActivityItem
 	for rows.Next() {
 		var (
-			id, userIDCol, accountID, sourceDisc, name string
+			id, userIDCol, sourceDisc, name string
+			accountID                        *string
 			sortDate, date                             time.Time
 			amount                                     float64
 			userAccountID, linkedItemID                *string
@@ -2697,7 +2707,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			SortDate:              sortDate,
 			ID:                    id,
 			UserID:                userIDCol,
-			AccountID:             accountID,
+			AccountID:             nilOrEmpty(accountID),
 			Date:                  date,
 			Amount:                amount,
 			Name:                  name,

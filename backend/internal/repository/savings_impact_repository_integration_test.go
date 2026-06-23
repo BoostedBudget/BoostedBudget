@@ -119,8 +119,8 @@ func TestGetAggregateSavingsStats_Integration(t *testing.T) {
 		{userNoConsentID, false},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, row.id, "test|"+row.id.String(), "int-agg-"+row.id.String()+"@example.com")
 		require.NoError(t, err, "seed user")
 
@@ -188,8 +188,8 @@ func TestGetUserImpact_Integration(t *testing.T) {
 	// Seed a user. No privacy_settings needed — GetUserImpact doesn't filter by consent.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "user-impact-"+userID.String()+"@example.com")
 	require.NoError(t, err)
 
@@ -292,8 +292,8 @@ func TestGetUserImpact_DestinationAccountName_Integration(t *testing.T) {
 	// Seed a user.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-ca-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -431,8 +431,8 @@ func TestGetUserImpact_CrossUserAccountName_Integration(t *testing.T) {
 		{otherUserID, "cf-other"},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, row.id, "test|"+row.id.String(), row.label+"-"+row.id.String()+"@example.com")
 		require.NoError(t, err, "seed user "+row.label)
 	}

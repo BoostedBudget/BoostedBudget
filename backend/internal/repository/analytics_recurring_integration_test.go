@@ -31,8 +31,8 @@ func TestGetRecurringSubscriptions_Integration(t *testing.T) {
 	userID := uuid.New()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-recur-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -68,7 +68,7 @@ func TestGetRecurringSubscriptions_Integration(t *testing.T) {
 	oneOffID := uuid.New()
 	_, err = tx.Exec(ctx, `
 		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, name, merchant_name, amount, date, pending, pfc_primary)
-		VALUES ($1, $2, $3, $4, 'plaid', 'Amazon', 'Amazon', 99.00, $5, false, 'SHOPPING')
+		VALUES ($1, $2, $3, $4, 'plaid', 'Amazon', 'Amazon', 99.00, $5, false, 'GENERAL_MERCHANDISE')
 	`, oneOffID, userID, accountID, linkedItemID, now.AddDate(0, -1, 0).Format("2006-01-02"))
 	require.NoError(t, err, "seed one-off Amazon transaction")
 
