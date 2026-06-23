@@ -10,11 +10,15 @@
 # bunfig.toml from CWD; --config is ADDITIVE, not a replacement).
 # Pass only the minimal preloads each file actually needs.
 #
-# Test files included:
+# Group A (no registry/dashboard-context preloads):
 # - DashboardContext.test.tsx  (needs real useDashboardContext; dashboard-context.ts preload conflicts)
 # - registry.test.ts           (needs real widget registry; registry.ts preload conflicts)
 # - useInfiniteInvestmentTransactions.test.tsx (needs real hook; investments-hooks.ts preload conflicts)
 # - toggle-group.test.tsx      (needs real ToggleGroup; toggle-group.tsx preload conflicts — Issue #1323)
+#
+# Group B (WITH registry/dashboard-context preloads, NO dashboard-grid/widget-catalog):
+# - DashboardGrid.test.tsx     (needs real DashboardGrid; dashboard-grid.tsx preload conflicts — Issue #1323)
+# - WidgetCatalog.test.tsx     (needs real WidgetCatalog; widget-catalog.tsx preload conflicts — Issue #1323)
 
 set -e
 
@@ -34,45 +38,68 @@ done
 
 echo "Running preload-conflict tests (real implementations)..."
 
-# The preload-conflict test files (absolute paths)
-TEST_FILES=(
+# CRITICAL: Run from /tmp to avoid loading bunfig.toml from frontend CWD.
+cd /tmp
+
+# === Group A: Minimal preloads (no registry/dashboard-context mocks) ===
+GROUP_A_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/context/DashboardContext.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/widgets/registry.test.ts"
     "$FRONTEND_DIR/src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
     "$FRONTEND_DIR/src/components/ui/toggle-group.test.tsx"
 )
 
-# Minimal preloads: DOM, testing-library, and only what these files need
-# - clerk.tsx: DashboardContext -> useActiveAccounts -> useUser() needs a provider stub
-# - investments-api.ts: useInfiniteInvestmentTransactions mocks the raw fetcher (not the wrapper hook)
-# Deliberately NO wrapper-level mocks (dashboard-context.ts, registry.ts, investments-hooks.ts)
-PRELOAD_FILES=(
+GROUP_A_PRELOADS=(
     "$FRONTEND_DIR/src/test/happydom.ts"
     "$FRONTEND_DIR/src/test/testing-library.ts"
     "$FRONTEND_DIR/src/test/mocks/clerk.tsx"
     "$FRONTEND_DIR/src/test/mocks/investments-api.ts"
 )
 
-# Build preload arguments (array-based to handle paths with spaces)
-PRELOAD_ARGS=()
-for f in "${PRELOAD_FILES[@]}"; do
-    PRELOAD_ARGS+=(--preload "$f")
+GROUP_A_PRELOAD_ARGS=()
+for f in "${GROUP_A_PRELOADS[@]}"; do
+    GROUP_A_PRELOAD_ARGS+=(--preload "$f")
 done
 
-# CRITICAL: Run from /tmp to avoid loading bunfig.toml from frontend CWD.
-# Bun's --config flag is ADDITIVE, not a replacement. Running from /tmp
-# ensures no bunfig.toml is found, so only our explicit preloads apply.
-cd /tmp
+# === Group B: With registry/dashboard-context but WITHOUT dashboard-grid/widget-catalog ===
+GROUP_B_FILES=(
+    "$FRONTEND_DIR/src/features/dashboard/widgets/DashboardGrid.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/widgets/WidgetCatalog.test.tsx"
+)
+
+GROUP_B_PRELOADS=(
+    "$FRONTEND_DIR/src/test/happydom.ts"
+    "$FRONTEND_DIR/src/test/testing-library.ts"
+    "$FRONTEND_DIR/src/test/mocks/clerk.tsx"
+    "$FRONTEND_DIR/src/test/mocks/registry.ts"
+    "$FRONTEND_DIR/src/test/mocks/dashboard-context.ts"
+    "$FRONTEND_DIR/src/test/mocks/dashboard-wrapper-hooks.ts"
+)
+
+GROUP_B_PRELOAD_ARGS=()
+for f in "${GROUP_B_PRELOADS[@]}"; do
+    GROUP_B_PRELOAD_ARGS+=(--preload "$f")
+done
 
 if [ "$COVERAGE" = true ]; then
     echo "Coverage enabled - generating to coverage-conflict/"
-    bun test "${PRELOAD_ARGS[@]}" \
+    echo "Running Group A (DashboardContext, registry, useInfiniteInvestmentTransactions, toggle-group)..."
+    bun test "${GROUP_A_PRELOAD_ARGS[@]}" \
         --timeout 30000 \
         --coverage --coverage-reporter=lcov \
         --coverage-dir="$FRONTEND_DIR/coverage-conflict" \
-        "${TEST_FILES[@]}"
+        "${GROUP_A_FILES[@]}"
+    echo "Running Group B (DashboardGrid, WidgetCatalog)..."
+    bun test "${GROUP_B_PRELOAD_ARGS[@]}" \
+        --timeout 30000 \
+        --coverage --coverage-reporter=lcov \
+        --coverage-dir="$FRONTEND_DIR/coverage-conflict" \
+        "${GROUP_B_FILES[@]}"
 else
-    bun test "${PRELOAD_ARGS[@]}" --timeout 30000 "${TEST_FILES[@]}"
+    echo "Running Group A (DashboardContext, registry, useInfiniteInvestmentTransactions, toggle-group)..."
+    bun test "${GROUP_A_PRELOAD_ARGS[@]}" --timeout 30000 "${GROUP_A_FILES[@]}"
+    echo "Running Group B (DashboardGrid, WidgetCatalog)..."
+    bun test "${GROUP_B_PRELOAD_ARGS[@]}" --timeout 30000 "${GROUP_B_FILES[@]}"
 fi
 
 echo ""

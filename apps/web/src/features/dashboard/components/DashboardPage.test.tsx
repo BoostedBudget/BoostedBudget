@@ -60,7 +60,9 @@ mock.module('../hooks/useGettingStarted', () => ({
   useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
 }))
 
-// Mock child components (these are isolated mocks specific to this test)
+// Mock child components to isolate DashboardPage tests from gridstack/widget internals.
+// DashboardGrid.test.tsx and WidgetCatalog.test.tsx run via test-conflict-files.sh
+// (from /tmp without bunfig.toml preloads) where they get the REAL implementations.
 mock.module('../widgets/DashboardGrid', () => ({
   DashboardGrid: () => <div data-testid="dashboard-grid">Dashboard Grid</div>,
 }))

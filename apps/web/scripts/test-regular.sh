@@ -39,9 +39,10 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/useAvailableCategories.test.tsx"
     # Hook implementation tests (need API-level mocks, not wrapper mocks)
     "src/features/dashboard/hooks/useGettingStarted.test.ts"
-    # Isolated tests polluted by other tests (run via test-isolated.sh)
+    # Issue #1323: DashboardGrid and WidgetCatalog moved to test-conflict-files.sh
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
+    # Isolated tests polluted by other tests (run via test-isolated.sh)
     "src/features/boosts/components/BoostsManagePage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
@@ -56,20 +57,16 @@ EXCLUDE_PATTERNS=(
     "src/features/pricing/hooks/usePricingContext.test.tsx"
     # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
     "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
-    # CustomCategoryManager: relies on the shared useGetUserCategories mock state, which
-    # other test files clobber via global mock.module() in the full suite (#1203)
-    "src/features/categories/components/CustomCategoryManager.test.tsx"
-    # These depend on the centralized categories/transactions API mocks, which the budgets
-    # tests clobber via inline global mock.module() in the full suite (#1203)
-    "src/features/categories/hooks/useCustomCategories.test.tsx"
-    "src/features/categories/hooks/useCategoryMutations.test.tsx"
-    "src/features/transactions/hooks/useReviewMutations.test.tsx"
+    # Issue #1323: CustomCategoryManager, useCustomCategories, useCategoryMutations,
+    # useReviewMutations, and CustomCategoryFilter pollution FIXED — these tests now
+    # run in the main batch. The pollution sources (BudgetCategoryManager,
+    # BudgetCategoryForm, AutoCategorizationPageWrapper) were fixed to use the
+    # centralized categories-api mock instead of overriding with inline mock.module().
     "src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
     # Hangs in full suite (real React Query against mocked fetcher; same pattern as
     # useInfiniteTransactions — runs via test-real-implementations.sh instead)
     "src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
     "src/features/budgets/hooks/usePreviewCategories.test.tsx"
-    "src/features/reports/components/CustomCategoryFilter.test.tsx"
 )
 
 echo "Running regular tests (excluding real-implementation tests)..."
