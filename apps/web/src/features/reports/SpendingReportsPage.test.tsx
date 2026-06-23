@@ -32,16 +32,6 @@ mock.module('@/components/ui/toggle-group', () => ({
     React.createElement('button', { 'data-value': value }, children),
 }))
 
-// Re-register useTrackEvent with the preloaded mockTrackEvent reference so that
-// analytics assertions in other test files work regardless of file execution order.
-// (Previous pattern used mock(() => mock(() => {})) which is a spy-wrapped factory
-// that bun cannot properly replace when other files call mock.module to restore the
-// preloaded reference — see issue #1296 Round-4 gap fix.)
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-
 import { SpendingReportsPage } from './SpendingReportsPage'
 
 const renderPage = () =>

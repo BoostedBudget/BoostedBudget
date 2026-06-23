@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import * as RealAnalyticsEvents from '@/shared/analytics/events'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import type { ReactNode } from 'react'
@@ -29,22 +28,6 @@ const REVIEW_ANALYTICS_EVENTS = {
   REVIEW_BULK_RECATEGORIZED: 'review_bulk_recategorized',
 } as const
 
-mock.module('@/shared/analytics/events', () => ({
-  ...RealAnalyticsEvents,
-  ANALYTICS_EVENTS: {
-    ...RealAnalyticsEvents.ANALYTICS_EVENTS,
-    ...REVIEW_ANALYTICS_EVENTS,
-  },
-}))
-
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-mock.module('sonner', () => ({
-  toast: mockToast,
-  Toaster: () => null,
-}))
 
 import { ReviewInboxPage } from './ReviewInboxPage'
 

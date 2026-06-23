@@ -14,11 +14,6 @@ import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-// Imports must come AFTER mock.module() calls in bun:test
 import { TransactionsPage } from './TransactionsPage'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import {

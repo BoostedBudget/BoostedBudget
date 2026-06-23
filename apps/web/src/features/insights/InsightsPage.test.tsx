@@ -18,10 +18,6 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { InsightsPage } from './InsightsPage'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 function renderInsightsPage(search = '') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(

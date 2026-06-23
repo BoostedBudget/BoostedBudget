@@ -30,15 +30,7 @@ import {
   mockDismissGettingStarted,
 } from '@/test/mocks/dashboard-wrapper-hooks'
 
-// Local mock for useTrackEvent — avoids posthog module resolution ordering issues in full suite
-const mockTrackEvent = mock(() => {})
-
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-mock.module('../../../shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
   useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
