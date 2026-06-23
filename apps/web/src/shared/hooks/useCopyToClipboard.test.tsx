@@ -1,16 +1,9 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
 import { useCopyToClipboard } from './useCopyToClipboard'
-
-const mockToastSuccess = mock(() => {})
-const mockToastError = mock(() => {})
-
-mock.module('sonner', () => ({
-  toast: {
-    success: mockToastSuccess,
-    error: mockToastError,
-  },
-}))
+// Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
+// Inline mock.module('sonner') would clobber the global mock and pollute other tests.
+import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
 
 describe('useCopyToClipboard', () => {
   const originalClipboard = navigator.clipboard

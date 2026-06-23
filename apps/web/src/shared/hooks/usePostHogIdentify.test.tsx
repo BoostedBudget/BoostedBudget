@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { ANALYTICS_EVENTS } from '../analytics'
+// Issue #1323: Use centralized Clerk mock (preloaded via bunfig.toml).
+// Inline mock.module('@clerk/react-router') with only {useUser} clobbers the full
+// mock and pollutes tests that depend on other Clerk exports (e.g. useActiveAccounts).
+import { mockUseUser } from '@/test/mocks/clerk'
 
 const mockIdentify = mock(() => {})
 const mockCapture = mock(() => {})
@@ -26,18 +30,12 @@ function makeUser(overrides?: Partial<{ createdAt: Date; id: string }>) {
   }
 }
 
-let mockUser: ReturnType<typeof makeUser> | null = null
-
-mock.module('@clerk/react-router', () => ({
-  useUser: () => ({ user: mockUser }),
-}))
-
 // Import after mocks are set up
 const { usePostHogIdentify } = await import('./usePostHogIdentify')
 
 describe('usePostHogIdentify', () => {
   beforeEach(() => {
-    mockUser = null
+    mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
     mockIdentify.mockClear()
     mockCapture.mockClear()
     mockReset.mockClear()
@@ -45,7 +43,7 @@ describe('usePostHogIdentify', () => {
 
   describe('Initial render with no user', () => {
     it('should not call identify, capture, or reset when user is null on mount', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       renderHook(() => usePostHogIdentify())
 
       expect(mockIdentify).not.toHaveBeenCalled()
@@ -56,10 +54,10 @@ describe('usePostHogIdentify', () => {
 
   describe('Sign-in transition (null → user)', () => {
     it('should call identify and fire sign_in_completed when user appears', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = makeUser()
+      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
       rerender()
 
       expect(mockIdentify).toHaveBeenCalledWith('user_123', {
@@ -70,10 +68,10 @@ describe('usePostHogIdentify', () => {
     })
 
     it('should NOT fire sign_up_completed for an existing user (createdAt > 60s ago)', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = makeUser({ createdAt: new Date(Date.now() - 120_000) })
+      mockUseUser.mockReturnValue({ user: makeUser({ createdAt: new Date(Date.now() - 120_000) }), isLoaded: true, isSignedIn: true })
       rerender()
 
       const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
@@ -81,10 +79,10 @@ describe('usePostHogIdentify', () => {
     })
 
     it('should fire sign_up_completed when createdAt is within last 60 seconds', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = makeUser({ createdAt: new Date(Date.now() - 5_000) })
+      mockUseUser.mockReturnValue({ user: makeUser({ createdAt: new Date(Date.now() - 5_000) }), isLoaded: true, isSignedIn: true })
       rerender()
 
       const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
@@ -93,10 +91,10 @@ describe('usePostHogIdentify', () => {
     })
 
     it('should not fire sign_out_completed on sign-in', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = makeUser()
+      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
       rerender()
 
       const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])
@@ -107,14 +105,14 @@ describe('usePostHogIdentify', () => {
 
   describe('Sign-out transition (user → null)', () => {
     it('should fire sign_out_completed and call reset when user becomes null', () => {
-      mockUser = makeUser()
+      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
       // Clear calls from initial mount (no transition from null, so nothing should fire)
       mockCapture.mockClear()
       mockReset.mockClear()
 
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       rerender()
 
       expect(mockCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.SIGN_OUT_COMPLETED)
@@ -122,11 +120,11 @@ describe('usePostHogIdentify', () => {
     })
 
     it('should not call identify on sign-out', () => {
-      mockUser = makeUser()
+      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
       mockIdentify.mockClear()
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       rerender()
 
       expect(mockIdentify).not.toHaveBeenCalled()
@@ -136,7 +134,7 @@ describe('usePostHogIdentify', () => {
   describe('Stable user (no transition)', () => {
     it('should not fire any events when the same user object is re-rendered', () => {
       const user = makeUser()
-      mockUser = user
+      mockUseUser.mockReturnValue({ user, isLoaded: true, isSignedIn: true })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
       // Same user reference re-render (no state change)
@@ -155,16 +153,20 @@ describe('usePostHogIdentify', () => {
 
   describe('User with missing optional fields', () => {
     it('should omit email when primaryEmailAddress is null', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = {
-        id: 'user_456',
-        primaryEmailAddress: null,
-        fullName: null,
-        publicMetadata: {},
-        createdAt: new Date(Date.now() - 120_000),
-      } as unknown as ReturnType<typeof makeUser>
+      mockUseUser.mockReturnValue({
+        user: {
+          id: 'user_456',
+          primaryEmailAddress: null,
+          fullName: null,
+          publicMetadata: {},
+          createdAt: new Date(Date.now() - 120_000),
+        } as unknown as ReturnType<typeof makeUser>,
+        isLoaded: true,
+        isSignedIn: true,
+      })
       rerender()
 
       expect(mockIdentify).toHaveBeenCalledWith('user_456', {
@@ -178,13 +180,14 @@ describe('usePostHogIdentify', () => {
     })
 
     it('should handle user with null createdAt (no sign_up_completed)', () => {
-      mockUser = null
+      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
       const { rerender } = renderHook(() => usePostHogIdentify())
 
-      mockUser = {
-        ...makeUser(),
-        createdAt: null,
-      } as unknown as ReturnType<typeof makeUser>
+      mockUseUser.mockReturnValue({
+        user: { ...makeUser(), createdAt: null } as unknown as ReturnType<typeof makeUser>,
+        isLoaded: true,
+        isSignedIn: true,
+      })
       rerender()
 
       const capturedEvents = mockCapture.mock.calls.map((c: unknown[]) => c[0])

@@ -10,22 +10,17 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactNode } from 'react'
-import { toast } from 'sonner'
+// Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
+// Inline mock.module('sonner') would clobber the global mock and pollute other tests.
+import { mockToastSuccess } from '@/test/mocks/sonner'
 
-// Mock the hook module directly
+// Mock the hook module directly (local admin hook, no centralized preload)
 mock.module('../hooks/useAdminSubscription', () => ({
     useAdminSubscriptionDetail: mock(() => ({})),
     useUpdateUserTier: mock(() => ({})),
 }))
 
 import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
-
-mock.module('sonner', () => ({
-    toast: {
-        success: mock(() => ({})),
-        error: mock(() => ({})),
-    },
-}))
 
 function wrapper({ children }: { children: ReactNode }) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -57,7 +52,7 @@ describe('SubscriptionOverrideModal', () => {
         // @ts-expect-error mock method added by bun:test mock.module
         useUpdateUserTier.mockClear()
         // @ts-expect-error mock method added by bun:test mock.module
-        toast.success.mockClear()
+        mockToastSuccess.mockClear()
     })
 
     it('renders date picker for expires at field', () => {
@@ -122,7 +117,7 @@ describe('SubscriptionOverrideModal', () => {
         await waitFor(() => {
             expect(mockMutate).toHaveBeenCalled()
             // @ts-expect-error mock method added by bun:test mock.module
-            expect(toast.success).toHaveBeenCalled()
+            expect(mockToastSuccess).toHaveBeenCalled()
             expect(onClose).toHaveBeenCalled()
         })
     })
