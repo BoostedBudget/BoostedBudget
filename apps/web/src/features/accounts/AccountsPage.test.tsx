@@ -24,22 +24,10 @@ mock.module('./components/AccountCustomizationModal', () => ({
   AccountCustomizationModal: () => null,
 }))
 
-mock.module('@/components/ui/confirmation-dialog', () => ({
-  ConfirmationDialog: ({
-    open, title, confirmText, confirmButtonText, variant, description, onConfirm,
-  }: {
-    open: boolean; title: string; confirmText?: string; confirmButtonText?: string;
-    variant?: string; description: unknown; onConfirm?: () => void
-  }) =>
-    open ? (
-      <div role="alertdialog" data-testid="confirm-delete-dialog" data-title={title} data-confirm-text={confirmText}>
-        <div data-testid="dialog-description">{description}</div>
-        <button onClick={onConfirm}>
-          {confirmButtonText ?? (variant === 'destructive' ? 'Delete' : 'Confirm')}
-        </button>
-      </div>
-    ) : null,
-}))
+// Issue #1323: Use centralized ConfirmationDialog stub to avoid clobbering
+// @/components/ui/confirmation-dialog with an ad-hoc inline stub.
+import { STUB_CONFIRMATION_DIALOG } from '@/test/mocks/confirmation-dialog'
+mock.module('@/components/ui/confirmation-dialog', () => STUB_CONFIRMATION_DIALOG)
 
 // Simplify AccountCard — exposes a Delete button that calls onDelete with the full account object
 mock.module('./AccountCard', () => ({
