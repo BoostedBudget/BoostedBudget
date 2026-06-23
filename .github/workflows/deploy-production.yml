@@ -74,7 +74,7 @@ jobs:
           echo "::error::Production deploy must be dispatched from 'main'. In the 'Run workflow' dialog, set 'Use workflow from' → 'Branch: main'. Got '${REF_NAME}'."
           exit 1
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -281,7 +281,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout main branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -495,7 +495,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -602,7 +602,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout main branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -675,7 +675,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout deploy SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -762,7 +762,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           path: ${{ env.UNIQUE_WORKSPACE }}
@@ -817,7 +817,7 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.detect-changes.outputs.deploy_sha }}
           fetch-depth: 0

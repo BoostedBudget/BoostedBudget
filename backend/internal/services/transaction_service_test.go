@@ -267,35 +267,84 @@ func TestTransactionService_ListTransactions_ValidatesDateRange(t *testing.T) {
 	assert.Equal(t, ErrInvalidDateRange, err)
 }
 
-// TestTransactionService_ListTransactions_SanitizesSearchInput tests SQL injection prevention
-func TestTransactionService_ListTransactions_SanitizesSearchInput(t *testing.T) {
-	mockRepo := new(MockTransactionRepository)
-	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
-	ctx := context.Background()
+// searchPassthroughCases are the test cases shared by both SearchPassesThrough tests below.
+// The sanitizer matched "UNION " (with trailing space), so these cases cover the literal
+// corruption scenarios from #1307 plus an injection string that demonstrates the value
+// is harmless once bound as an ILIKE parameter.
+var searchPassthroughCases = []struct {
+	name   string
+	search string
+}{
+	{"payee with UNION and trailing context", "Western Union Bank"},
+	{"payee with UNION and trailing space", "Western Union "},
+	{"literal SQL injection string", "'; DROP TABLE transactions; --"},
+}
 
-	userID := "user-123"
-	maliciousSearch := "'; DROP TABLE transactions; --"
-	filters := domain.TransactionFilters{
-		Search: &maliciousSearch,
+// TestTransactionService_ListTransactions_SearchPassesThrough verifies that search values —
+// including payee names that contain SQL keywords and literal injection strings — reach the
+// repository verbatim. The parameterised ILIKE query is the actual injection barrier; value
+// mutation is unnecessary and corrupts legitimate searches like "Western Union" (#1307).
+func TestTransactionService_ListTransactions_SearchPassesThrough(t *testing.T) {
+	for _, tc := range searchPassthroughCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockRepo := new(MockTransactionRepository)
+			service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+			ctx := context.Background()
+
+			userID := "user-123"
+			search := tc.search
+			filters := domain.TransactionFilters{Search: &search}
+
+			var gotSearch string
+			mockRepo.On("GetByUserIDWithFilters", ctx, userID, mock.Anything, 50, 0).
+				Run(func(args mock.Arguments) {
+					f := args.Get(2).(domain.TransactionFilters)
+					if f.Search != nil {
+						gotSearch = *f.Search
+					}
+				}).
+				Return([]domain.Transaction{}, nil)
+			mockRepo.On("CountByUserID", ctx, userID, mock.Anything).Return(0, nil)
+
+			_, err := service.ListTransactions(ctx, userID, filters, 50, 0)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.search, gotSearch, "search value must reach the repository unchanged")
+			mockRepo.AssertExpectations(t)
+		})
 	}
+}
 
-	// Mock repository should receive sanitized search string
-	mockRepo.On("GetByUserIDWithFilters", ctx, userID, mock.MatchedBy(func(f domain.TransactionFilters) bool {
-		// Check that search input was sanitized (should not contain SQL injection patterns)
-		if f.Search == nil {
-			return false
-		}
-		// Should have dangerous characters removed or escaped
-		return !containsSQLInjection(*f.Search)
-	}), 50, 0).Return([]domain.Transaction{}, nil)
+// TestTransactionService_ListTransactionsByCursor_SearchPassesThrough verifies that the
+// cursor path — the path used by the live endpoint — also forwards the search value unchanged.
+func TestTransactionService_ListTransactionsByCursor_SearchPassesThrough(t *testing.T) {
+	for _, tc := range searchPassthroughCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockRepo := new(MockTransactionRepository)
+			service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+			ctx := context.Background()
 
-	mockRepo.On("CountByUserID", ctx, userID, mock.Anything).Return(0, nil)
+			userID := "user-123"
+			search := tc.search
+			filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc", Search: &search}
 
-	result, err := service.ListTransactions(ctx, userID, filters, 50, 0)
+			var gotSearch string
+			mockRepo.On("GetByUserIDKeyset", ctx, userID, mock.Anything, (*domain.TransactionCursor)(nil), 50).
+				Run(func(args mock.Arguments) {
+					f := args.Get(2).(domain.TransactionFilters)
+					if f.Search != nil {
+						gotSearch = *f.Search
+					}
+				}).
+				Return([]domain.Transaction{}, (*domain.TransactionCursor)(nil), nil)
 
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-	mockRepo.AssertExpectations(t)
+			_, err := service.ListTransactionsByCursor(ctx, userID, filters, nil, 50)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.search, gotSearch, "search value must reach the repository unchanged")
+			mockRepo.AssertExpectations(t)
+		})
+	}
 }
 
 // TestTransactionService_ListTransactions_ReturnsTransactionsArray tests successful transaction retrieval
@@ -467,48 +516,6 @@ func TestTransactionService_ListTransactions_DefaultsLimit(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// Helper function to detect SQL injection patterns
-func containsSQLInjection(s string) bool {
-	dangerousPatterns := []string{
-		"DROP TABLE",
-		"DELETE FROM",
-		"INSERT INTO",
-		"UPDATE ",
-		"';",
-		"--",
-		"/*",
-		"*/",
-		"UNION SELECT",
-		"OR 1=1",
-	}
-
-	for _, pattern := range dangerousPatterns {
-		if len(s) >= len(pattern) {
-			for i := 0; i <= len(s)-len(pattern); i++ {
-				// Case-insensitive comparison
-				match := true
-				for j := 0; j < len(pattern); j++ {
-					c1 := s[i+j]
-					c2 := pattern[j]
-					if c1 >= 'a' && c1 <= 'z' {
-						c1 = c1 - 32 // Convert to uppercase
-					}
-					if c2 >= 'a' && c2 <= 'z' {
-						c2 = c2 - 32
-					}
-					if c1 != c2 {
-						match = false
-						break
-					}
-				}
-				if match {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
 
 // TestTransactionService_GetDistinctPlaidCategories_Success tests successful retrieval of Plaid categories
 func TestTransactionService_GetDistinctPlaidCategories_Success(t *testing.T) {
