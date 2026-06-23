@@ -40,8 +40,8 @@ func TestTransactionRepository_CategorySourceFilter_Integration(t *testing.T) {
 	accountID := uuid.New().String()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID, "integration-1210-cs-"+userID+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -77,17 +77,17 @@ func TestTransactionRepository_CategorySourceFilter_Integration(t *testing.T) {
 				id, user_id, account_id, linked_item_id, source,
 				external_transaction_id, amount, date, name,
 				pfc_primary, pfc_detailed, category_source,
-				effective_pfc_primary, effective_pfc_detailed, effective_category_name,
+				effective_category_name,
 				reviewed, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, 'plaid',
 				$5, -10.00, $6, 'Test tx '||$7,
 				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', $7,
-				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'Coffee',
-				false, $6, $6
+				'Coffee',
+				false, $8, $8
 			)
 		`, row.id, userID, accountID, linkedItemID,
-			"ext-"+row.id, now, row.source)
+			"ext-"+row.id, now.Format("2006-01-02"), row.source, now)
 		require.NoError(t, err, "seed transaction source=%s", row.source)
 	}
 

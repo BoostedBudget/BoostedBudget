@@ -71,7 +71,7 @@ func TestTransactionService_SearchPassthrough_Integration(t *testing.T) {
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "int-search|"+userID, "int-search-"+userID+"@example.com")
 	require.NoError(t, err, "seed user")
 

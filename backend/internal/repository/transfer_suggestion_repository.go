@@ -251,15 +251,27 @@ func (r *transferSuggestionRepository) GetPendingByUserID(ctx context.Context, u
 func (r *transferSuggestionRepository) UpdateStatus(ctx context.Context, id string, status domain.SuggestionStatus, userNotes *string) error {
 	now := time.Now()
 
-	query := `
-		UPDATE transfer_suggestions
-		SET status = $1,
-		    user_action_at = $2,
-		    user_notes = $3,
-		    updated_at = $4,
-		    matched_transaction_id = CASE WHEN $1::text = 'rejected' THEN NULL ELSE matched_transaction_id END
-		WHERE id = $5 AND status = 'pending'
-	`
+	var query string
+	if status == domain.SuggestionStatusRejected {
+		query = `
+			UPDATE transfer_suggestions
+			SET status = $1,
+			    user_action_at = $2,
+			    user_notes = $3,
+			    updated_at = $4,
+			    matched_transaction_id = NULL
+			WHERE id = $5 AND status = 'pending'
+		`
+	} else {
+		query = `
+			UPDATE transfer_suggestions
+			SET status = $1,
+			    user_action_at = $2,
+			    user_notes = $3,
+			    updated_at = $4
+			WHERE id = $5 AND status = 'pending'
+		`
+	}
 
 	ct, err := r.db.Exec(ctx, query, status, now, userNotes, now, id)
 	if err != nil {

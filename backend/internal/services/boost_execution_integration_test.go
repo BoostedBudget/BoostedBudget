@@ -44,11 +44,13 @@ func connectIntegrationDB(t *testing.T) *pgxpool.Pool {
 
 // categoryFixture holds the seeded IDs for a single sub-test fixture.
 type categoryFixture struct {
-	userID    string
-	budgetXID string
-	budgetYID string
-	catCID    string // category in Budget X
-	catDID    string // category in Budget Y
+	userID        string
+	budgetXID     string
+	budgetYID     string
+	catCID        string // category in Budget X
+	catDID        string // category in Budget Y
+	fromAccountID string // source account for transfer suggestions
+	toAccountID   string // destination account for transfer suggestions
 }
 
 // seedFixtureInTx seeds the standard fixture inside a pgx transaction and returns the IDs.
@@ -58,58 +60,82 @@ func seedFixtureInTx(ctx context.Context, t *testing.T, db repository.DB) catego
 
 	userID := uuid.New().String()
 	_, err := db.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "int-cat|"+userID, "int-cat-"+userID+"@example.com")
 	require.NoError(t, err, "seed user")
 
+	// Seed linked_item + two accounts required by transfer_suggestions FK.
+	linkedItemID := uuid.New().String()
+	_, err = db.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-boost-test-token')
+	`, linkedItemID, userID, "boost-item-"+linkedItemID)
+	require.NoError(t, err, "seed linked_item")
+
+	fromAccountID := uuid.New().String()
+	_, err = db.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, $4, 'Checking From', 'depository')
+	`, fromAccountID, linkedItemID, userID, "plaid-from-"+fromAccountID)
+	require.NoError(t, err, "seed from account")
+
+	toAccountID := uuid.New().String()
+	_, err = db.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+		VALUES ($1, $2, $3, $4, 'Savings To', 'depository')
+	`, toAccountID, linkedItemID, userID, "plaid-to-"+toAccountID)
+	require.NoError(t, err, "seed to account")
+
 	budgetXID := uuid.New().String()
 	_, err = db.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount)
-		VALUES ($1, $2, 'Budget X', 'monthly', '2024-01-01', 1000.00)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, $2, 'Budget X', 'monthly', '2024-01-01', 1000.00, $1)
 	`, budgetXID, userID)
 	require.NoError(t, err, "seed Budget X")
 
 	budgetYID := uuid.New().String()
 	_, err = db.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount)
-		VALUES ($1, $2, 'Budget Y', 'monthly', '2024-01-01', 800.00)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, $2, 'Budget Y', 'monthly', '2024-01-01', 800.00, $1)
 	`, budgetYID, userID)
 	require.NoError(t, err, "seed Budget Y")
 
 	// Category C: in Budget X, PercentUsed = 200/500 * 100 = 40 %
 	catCID := uuid.New().String()
 	_, err = db.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, user_id, name, allocated_amount, spent_amount)
-		VALUES ($1, $2, $3, 'Category C', 500.00, 200.00)
-	`, catCID, budgetXID, userID)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 500.00, 200.00)
+	`, catCID, budgetXID)
 	require.NoError(t, err, "seed Category C")
 
 	// Category D: in Budget Y, PercentUsed = 150/300 * 100 = 50 %
 	catDID := uuid.New().String()
 	_, err = db.Exec(ctx, `
-		INSERT INTO budget_categories (id, budget_id, user_id, name, allocated_amount, spent_amount)
-		VALUES ($1, $2, $3, 'Category D', 300.00, 150.00)
-	`, catDID, budgetYID, userID)
+		INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+		VALUES ($1, $2, 'pfc', 'TRANSPORTATION', 300.00, 150.00)
+	`, catDID, budgetYID)
 	require.NoError(t, err, "seed Category D")
 
 	return categoryFixture{
-		userID:    userID,
-		budgetXID: budgetXID,
-		budgetYID: budgetYID,
-		catCID:    catCID,
-		catDID:    catDID,
+		userID:        userID,
+		budgetXID:     budgetXID,
+		budgetYID:     budgetYID,
+		catCID:        catCID,
+		catDID:        catDID,
+		fromAccountID: fromAccountID,
+		toAccountID:   toAccountID,
 	}
 }
 
 // buildTransferActionsJSON marshals a minimal TransferAction to JSON.
-// FromAccountID/ToAccountID are fake UUIDs because the suggestion repo does NOT
-// enforce FKs on those columns for rule-created suggestions.
-func buildTransferActionsJSON(t *testing.T) json.RawMessage {
+// fromAccountID and toAccountID must be valid rows in the accounts table;
+// transfer_suggestions.from_account_id/to_account_id carry FK constraints.
+func buildTransferActionsJSON(t *testing.T, fromAccountID, toAccountID string) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(domain.TransferAction{
-		FromAccountID: uuid.New().String(),
-		ToAccountID:   uuid.New().String(),
+		FromAccountID: fromAccountID,
+		ToAccountID:   toAccountID,
 		AmountType:    "fixed",
 		Amount:        100.00,
 	})
@@ -119,7 +145,7 @@ func buildTransferActionsJSON(t *testing.T) json.RawMessage {
 
 // buildCategoryScopedBoostReq returns a CreateBoostRequest for a budget_category.percent_used > threshold
 // boost scoped to the given budgetID + categoryID with a transfer_suggestion action.
-func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID string, threshold float64) *domain.CreateBoostRequest {
+func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID, fromAccountID, toAccountID string, threshold float64) *domain.CreateBoostRequest {
 	t.Helper()
 	return &domain.CreateBoostRequest{
 		Name:           "test-cat-rule-" + uuid.New().String()[:8],
@@ -139,7 +165,7 @@ func buildCategoryScopedBoostReq(t *testing.T, budgetID, categoryID string, thre
 				BudgetID:   budgetID,
 			},
 		},
-		Actions: buildTransferActionsJSON(t),
+		Actions: buildTransferActionsJSON(t, fromAccountID, toAccountID),
 	}
 }
 
@@ -176,7 +202,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		boostSvc, execSvc := buildServices(tx)
 
 		// Create a rule scoped to Budget X / Category C with threshold 30 % → fires at 40 %.
-		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, 30.0)
+		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
@@ -214,7 +240,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		boostSvc, execSvc := buildServices(tx)
 
 		// Rule scoped to Budget X / Category C.
-		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, 30.0)
+		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
@@ -252,23 +278,23 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		// Seed a second user and a category that belongs to them.
 		user2ID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, user2ID, "int-u2|"+user2ID, "int-u2-"+user2ID+"@example.com")
 		require.NoError(t, err, "seed user2")
 
 		budget2ID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO budgets (id, user_id, name, period, start_date, amount)
-			VALUES ($1, $2, 'User2 Budget', 'monthly', '2024-01-01', 500.00)
+			INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
+			VALUES ($1, $2, 'User2 Budget', 'monthly', '2024-01-01', 500.00, $1)
 		`, budget2ID, user2ID)
 		require.NoError(t, err, "seed user2 budget")
 
 		cat2ID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO budget_categories (id, budget_id, user_id, name, allocated_amount, spent_amount)
-			VALUES ($1, $2, $3, 'User2 Cat', 200.00, 50.00)
-		`, cat2ID, budget2ID, user2ID)
+			INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+			VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 200.00, 50.00)
+		`, cat2ID, budget2ID)
 		require.NoError(t, err, "seed user2 category")
 
 		boostSvc, _ := buildServices(tx)
@@ -276,7 +302,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		// user1 tries to create a rule scoped to user2's category → must be rejected.
 		// We use budget2ID as BudgetID so the budget+category binding is consistent for
 		// ValidateForPersistence; the ownership check fires in validateBoostReferenceOwnership.
-		req := buildCategoryScopedBoostReq(t, budget2ID, cat2ID, 30.0)
+		req := buildCategoryScopedBoostReq(t, budget2ID, cat2ID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.Error(t, err, "CreateBoost with another user's category must fail")
 		assert.True(t, errors.Is(err, domain.ErrBoostConditionForbidden),
@@ -295,7 +321,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		boostSvc, _ := buildServices(tx)
 
 		// Category C is in Budget X but we claim it belongs to Budget Y → must fail.
-		req := buildCategoryScopedBoostReq(t, fix.budgetYID, fix.catCID, 30.0)
+		req := buildCategoryScopedBoostReq(t, fix.budgetYID, fix.catCID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.Error(t, err, "category C is not in Budget Y — must be rejected")
 		assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
@@ -339,7 +365,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 					BudgetID:   fix.budgetYID,
 				},
 			},
-			Actions: buildTransferActionsJSON(t),
+			Actions: buildTransferActionsJSON(t, fix.fromAccountID, fix.toAccountID),
 		}
 
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
@@ -359,7 +385,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		fix := seedFixtureInTx(ctx, t, tx)
 		boostSvc, execSvc := buildServices(tx)
 
-		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, 30.0)
+		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
@@ -402,7 +428,7 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		fix := seedFixtureInTx(ctx, t, tx)
 		boostSvc, execSvc := buildServices(tx)
 
-		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, 30.0)
+		req := buildCategoryScopedBoostReq(t, fix.budgetXID, fix.catCID, fix.fromAccountID, fix.toAccountID, 30.0)
 		_, err = boostSvc.CreateBoost(ctx, fix.userID, req)
 		require.NoError(t, err)
 
@@ -433,30 +459,52 @@ func TestBoostExecution_CategoryScoped_Integration(t *testing.T) {
 		// Seed a user, budget, and a category with AllocatedAmount=0, SpentAmount=50.
 		userID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-			VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+			INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+			VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 		`, userID, "int-zero|"+userID, "int-zero-"+userID+"@example.com")
 		require.NoError(t, err)
 
 		budgetID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO budgets (id, user_id, name, period, start_date, amount)
-			VALUES ($1, $2, 'Zero Alloc Budget', 'monthly', '2024-01-01', 500.00)
+			INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
+			VALUES ($1, $2, 'Zero Alloc Budget', 'monthly', '2024-01-01', 500.00, $1)
 		`, budgetID, userID)
 		require.NoError(t, err)
 
 		// AllocatedAmount=0, SpentAmount=50 → PercentUsed() = 100 (over budget with no allocation).
 		catID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
-			INSERT INTO budget_categories (id, budget_id, user_id, name, allocated_amount, spent_amount)
-			VALUES ($1, $2, $3, 'Zero Cat', 0.00, 50.00)
-		`, catID, budgetID, userID)
+			INSERT INTO budget_categories (id, budget_id, category_kind, pfc_primary, allocated_amount, spent_amount)
+			VALUES ($1, $2, 'pfc', 'FOOD_AND_DRINK', 0.00, 50.00)
+		`, catID, budgetID)
 		require.NoError(t, err)
+
+		// Seed linked_item + two accounts required by transfer_suggestions FK.
+		zeroLinkedItemID := uuid.New().String()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+			VALUES ($1, $2, $3, 'enc-zero-test-token')
+		`, zeroLinkedItemID, userID, "zero-item-"+zeroLinkedItemID)
+		require.NoError(t, err, "seed zero-test linked_item")
+
+		zeroFromAccID := uuid.New().String()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+			VALUES ($1, $2, $3, $4, 'Zero From', 'depository')
+		`, zeroFromAccID, zeroLinkedItemID, userID, "plaid-zero-from-"+zeroFromAccID)
+		require.NoError(t, err, "seed zero-test from account")
+
+		zeroToAccID := uuid.New().String()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type)
+			VALUES ($1, $2, $3, $4, 'Zero To', 'depository')
+		`, zeroToAccID, zeroLinkedItemID, userID, "plaid-zero-to-"+zeroToAccID)
+		require.NoError(t, err, "seed zero-test to account")
 
 		boostSvc, execSvc := buildServices(tx)
 
 		// Rule: percent_used > 50 — should fire because PercentUsed() = 100.
-		req := buildCategoryScopedBoostReq(t, budgetID, catID, 50.0)
+		req := buildCategoryScopedBoostReq(t, budgetID, catID, zeroFromAccID, zeroToAccID, 50.0)
 		_, err = boostSvc.CreateBoost(ctx, userID, req)
 		require.NoError(t, err)
 

@@ -36,8 +36,8 @@ func TestTransferSuggestionMatchNotificationType_Integration(t *testing.T) {
 	// Seed the user required by the notifications user_id FK.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-notif-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -101,8 +101,8 @@ func TestGetOpenByTransferSuggestionID_TypeScoping_Integration(t *testing.T) {
 	// Seed user and transfer_suggestion.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-typescope-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -191,8 +191,8 @@ func TestMigration000094Down_DeletesMatchRowsAndRestoresConstraint_Integration(t
 	// Seed a user and a transfer_suggestion needed by FK constraints.
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-down-mig-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
