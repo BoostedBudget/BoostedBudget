@@ -30,8 +30,9 @@ echo "Running isolated tests (polluted by DashboardPage.test.tsx in full suite).
 # Test files that are polluted in the full suite
 # These need centralized mocks but run separately due to mock pollution
 TEST_FILES=(
-    "src/features/dashboard/widgets/DashboardGrid.test.tsx"
-    "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
+    # Issue #1323: DashboardGrid.test.tsx and WidgetCatalog.test.tsx moved to test-conflict-files.sh
+    # (centralized dashboard-grid.tsx / widget-catalog.tsx preloads in bunfig.toml now provide
+    # the stub implementations; the real component tests run from /tmp without those preloads)
     # BoostsManagePage polluted by BoostBuilder (sets empty boosts array)
     "src/features/boosts/components/BoostsManagePage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
@@ -49,14 +50,11 @@ TEST_FILES=(
     "src/features/pricing/hooks/usePricingContext.test.tsx"
     # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
     "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
-    # CustomCategoryManager: shared useGetUserCategories mock clobbered in full suite (#1203)
-    "src/features/categories/components/CustomCategoryManager.test.tsx"
-    # These need the centralized categories/transactions API mocks but the budgets tests
-    # clobber them via inline global mock.module() in the full suite (#1203)
-    "src/features/categories/hooks/useCustomCategories.test.tsx"
-    "src/features/categories/hooks/useCategoryMutations.test.tsx"
-    "src/features/transactions/hooks/useReviewMutations.test.tsx"
-    "src/features/reports/components/CustomCategoryFilter.test.tsx"
+    # Issue #1323: CustomCategoryManager, useCustomCategories, useCategoryMutations,
+    # useReviewMutations, and CustomCategoryFilter FIXED — pollution sources
+    # (BudgetCategoryManager, BudgetCategoryForm, AutoCategorizationPageWrapper) now
+    # use centralized categories-api mock. These tests moved to main batch (bun test src/).
+    # Keeping this comment for audit trail — see commit history for details.
 )
 
 # Build test command
