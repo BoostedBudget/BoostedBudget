@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -135,7 +134,6 @@ func NewTransactionService(repo repository.TransactionRepository, customCategory
 // - Enforces max limit of 100 transactions per request
 // - Enforces non-negative offset
 // - Validates date range (start before or equal to end)
-// - Sanitizes search input to prevent SQL injection
 //
 // Pagination:
 // - Default limit: 50
@@ -173,12 +171,6 @@ func (s *transactionService) ListTransactions(
 		if *filters.MinAmount > *filters.MaxAmount {
 			return nil, ErrInvalidAmountRange
 		}
-	}
-
-	// Sanitize search input to prevent SQL injection
-	if filters.Search != nil {
-		sanitized := sanitizeSearchInput(*filters.Search)
-		filters.Search = &sanitized
 	}
 
 	// Get transactions from repository
@@ -258,11 +250,6 @@ func (s *transactionService) ListTransactionsByCursor(
 	}
 	if cursor != nil && (cursor.K != sortBy || cursor.D != sortDir) {
 		return nil, ErrCursorSortMismatch
-	}
-
-	if filters.Search != nil {
-		sanitized := sanitizeSearchInput(*filters.Search)
-		filters.Search = &sanitized
 	}
 
 	// Unified investment feed path: merge banking + investment_transactions via UNION ALL.
@@ -355,54 +342,6 @@ func encodeNextCursor(cursor *domain.TransactionCursor) (*string, error) {
 	return &encoded, nil
 }
 
-// sanitizeSearchInput removes or escapes potentially dangerous characters from search input
-// This prevents SQL injection and other malicious input
-//
-// Strategy:
-//   - Remove SQL comment markers (-- and /* */)
-//   - Remove semicolons (statement terminators)
-//   - Remove dangerous SQL keywords (DROP, DELETE, INSERT, UPDATE, UNION, etc.)
-//   - Trim whitespace
-//   - PostgreSQL parameterized queries already handle single quotes safely,
-//     but we still sanitize for defense in depth
-func sanitizeSearchInput(input string) string {
-	// Remove SQL comment markers
-	sanitized := strings.ReplaceAll(input, "--", "")
-	sanitized = strings.ReplaceAll(sanitized, "/*", "")
-	sanitized = strings.ReplaceAll(sanitized, "*/", "")
-
-	// Remove semicolons (SQL statement terminators)
-	sanitized = strings.ReplaceAll(sanitized, ";", "")
-
-	// Remove dangerous SQL keywords (case-insensitive)
-	dangerousKeywords := []string{
-		"DROP TABLE", "DROP ", "DELETE FROM", "DELETE ",
-		"INSERT INTO", "INSERT ", "UPDATE ", "UNION SELECT",
-		"UNION ", "OR 1=1", "OR 1 =", "AND 1=1",
-	}
-
-	upper := strings.ToUpper(sanitized)
-	for _, keyword := range dangerousKeywords {
-		if strings.Contains(upper, keyword) {
-			// Remove the keyword (case-insensitive)
-			upperKeyword := strings.ToUpper(keyword)
-			for {
-				idx := strings.Index(upper, upperKeyword)
-				if idx == -1 {
-					break
-				}
-				// Remove the keyword from both strings
-				sanitized = sanitized[:idx] + sanitized[idx+len(keyword):]
-				upper = upper[:idx] + upper[idx+len(keyword):]
-			}
-		}
-	}
-
-	// Trim whitespace
-	sanitized = strings.TrimSpace(sanitized)
-
-	return sanitized
-}
 
 // GetTransactionByID retrieves a transaction by its ID
 func (s *transactionService) GetTransactionByID(ctx context.Context, userID, transactionID string) (*domain.Transaction, error) {
