@@ -37,26 +37,24 @@ EXCLUDE_PATTERNS=(
     "src/features/budgets/hooks/useSavingsGoals.test.tsx"
     "src/features/budgets/hooks/useBudgetDetail.test.tsx"
     "src/features/budgets/hooks/useAvailableCategories.test.tsx"
-    # Hook implementation tests (need API-level mocks, not wrapper mocks)
+    # Issue #1323 Task 4: useGettingStarted.test.ts moved to test-real-implementations.sh.
+    # useGettingStarted is now preload-mocked so the test needs real implementation via /tmp.
     "src/features/dashboard/hooks/useGettingStarted.test.ts"
     # Issue #1323: DashboardGrid and WidgetCatalog moved to test-conflict-files.sh
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
-    # Isolated tests polluted by other tests (run via test-isolated.sh)
-    "src/features/boosts/components/BoostsManagePage.test.tsx"
+    # Issue #1323 Task 4: BoostsManagePage FIXED — confirmed passes in full suite.
+    # Moved to main batch; entry removed from EXCLUDE_PATTERNS.
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
     # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh; centralized mock
     # now in bunfig.toml preload so individual test files no longer need inline mocks.
     "src/components/ui/toggle-group.test.tsx"
-    # setSystemTime pollution: date mocks from other test files leak into these, causing
-    # date mismatch failures in the full suite (#952)
-    "src/features/dashboard/components/TimeframeSelector.test.tsx"
-    "src/features/transactions/components/TransactionCard.test.tsx"
-    # usePricingContext: mock state pollution from full suite causes tiers to appear loading (#1038)
-    "src/features/pricing/hooks/usePricingContext.test.tsx"
-    # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
-    "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # Issue #1323 Task 4: TimeframeSelector and TransactionCard FIXED — both already had
+    # afterEach(() => setSystemTime()) cleanup. Confirmed to pass in full suite (#952).
+    # These tests moved to main batch; entries removed from EXCLUDE_PATTERNS.
+    # Issue #1323 Task 4: usePricingContext and usePostSignInCheckoutIntent FIXED —
+    # confirmed pass in full suite. Moved to main batch (#1038).
     # Issue #1323: CustomCategoryManager, useCustomCategories, useCategoryMutations,
     # useReviewMutations, and CustomCategoryFilter pollution FIXED — these tests now
     # run in the main batch. The pollution sources (BudgetCategoryManager,

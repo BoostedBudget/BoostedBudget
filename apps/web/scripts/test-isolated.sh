@@ -1,12 +1,17 @@
 #!/bin/bash
 # Run isolated tests that need centralized mocks but are polluted in full suite
-# Issue #575: These tests pass individually but fail when run after DashboardPage.test.tsx
+# Issue #575 / #1323
 #
-# Pollution cause: DashboardPage.test.tsx mocks DashboardGrid and WidgetCatalog components,
-# which persists globally due to Bun's mock.module() behavior.
+# Remaining isolated tests (after Task 4 fixes):
+# - AccountsPage: uses local component mocks that can pollute AccountTable etc. (#839)
 #
-# These tests need centralized mocks (registry, dashboard-context, etc.) so they
-# can't use bunfig.real.toml. They run with the normal bunfig.toml but separately.
+# Fixed and moved in Task 4:
+# - BoostsManagePage → main batch (pollution source already resolved)
+# - usePricingContext, usePostSignInCheckoutIntent → main batch (#1038)
+# - TimeframeSelector, TransactionCard → main batch (afterEach cleanup was sufficient)
+# - useGettingStarted → test-real-implementations.sh (now preload-mocked)
+# - DashboardGrid, WidgetCatalog, toggle-group, DashboardContext, registry →
+#   test-conflict-files.sh (need real implementations without preload mocks)
 
 set -e
 
@@ -30,26 +35,22 @@ echo "Running isolated tests (polluted by DashboardPage.test.tsx in full suite).
 # Test files that are polluted in the full suite
 # These need centralized mocks but run separately due to mock pollution
 TEST_FILES=(
-    # Issue #1323: DashboardGrid.test.tsx and WidgetCatalog.test.tsx moved to test-conflict-files.sh
-    # (centralized dashboard-grid.tsx / widget-catalog.tsx preloads in bunfig.toml now provide
-    # the stub implementations; the real component tests run from /tmp without those preloads)
-    # BoostsManagePage polluted by BoostBuilder (sets empty boosts array)
-    "src/features/boosts/components/BoostsManagePage.test.tsx"
-    # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
+    # Issue #1323: DashboardGrid.test.tsx and WidgetCatalog.test.tsx → test-conflict-files.sh
+    # Issue #1323 Task 4: BoostsManagePage FIXED — confirmed passes in full suite; moved to
+    # main batch (bun test src/). Pollution source was already fixed.
+    # AccountsPage uses inline mock.module('./AccountCard') and mock.module('./components/AccountTable')
+    # which pollute AccountCard.test.tsx and AccountTable.test.tsx (confirmed: 34 failures in
+    # AccountTable.test.tsx when run after AccountsPage.test.tsx in the same process).
+    # Cannot centralize without creating new preload files AND moving AccountCard/AccountTable tests
+    # to test-conflict-files.sh — out of scope for Task 4. Tracked in #839.
     "src/features/accounts/AccountsPage.test.tsx"
-    # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)
-    # but can't run in regular suite: DashboardPage.test.tsx mocks useGettingStarted globally (#848)
-    "src/features/dashboard/hooks/useGettingStarted.test.ts"
-    # setSystemTime pollution: Bun's setSystemTime leaks across test files in the full suite.
-    # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh (centralized toggle-group
-    # mock now in bunfig.toml preload; toggle-group.test.tsx needs real implementation).
-    # These tests pass individually but fail when other date-mocking tests run first (#952)
-    "src/features/dashboard/components/TimeframeSelector.test.tsx"
-    "src/features/transactions/components/TransactionCard.test.tsx"
-    # usePricingContext: mock state pollution from full suite causes tiers to appear loading (#1038)
-    "src/features/pricing/hooks/usePricingContext.test.tsx"
-    # usePostSignInCheckoutIntent: mockUseCreatePaddleCheckout state leaks from prior tests (#1038)
-    "src/features/pricing/hooks/usePostSignInCheckoutIntent.test.tsx"
+    # Issue #1323 Task 4: useGettingStarted.test.ts moved to test-real-implementations.sh.
+    # Issue #1323 Task 4: TimeframeSelector.test.tsx and TransactionCard.test.tsx FIXED
+    # (both already had afterEach setSystemTime() cleanup, confirmed pass in full suite).
+    # These were moved to the main batch (test-regular.sh). Entries removed from here.
+    # toggle-group.test.tsx moved to test-conflict-files.sh (Issue #1323 prior tasks).
+    # Issue #1323 Task 4: usePricingContext and usePostSignInCheckoutIntent FIXED —
+    # confirmed pass in full suite. Moved to main batch; entries removed from here (#1038).
     # Issue #1323: CustomCategoryManager, useCustomCategories, useCategoryMutations,
     # useReviewMutations, and CustomCategoryFilter FIXED — pollution sources
     # (BudgetCategoryManager, BudgetCategoryForm, AutoCategorizationPageWrapper) now
