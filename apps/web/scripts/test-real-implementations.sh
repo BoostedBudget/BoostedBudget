@@ -16,6 +16,7 @@
 # - useDashboardData.test.tsx - Dashboard data hook
 # - useDashboardLayout.test.tsx - Dashboard layout hook
 # - useDashboardOnboarding.test.ts - Dashboard onboarding hook
+# - useGettingStarted.test.ts - Dashboard onboarding checklist hook
 # - useBudgetFilters.test.ts - Budget filters hook
 # - useBudgets.test.tsx - Budgets hook
 # - useSavingsGoals.test.tsx - Savings goals hook (features/savings/hooks/)
@@ -23,6 +24,9 @@
 # - useAvailableCategories.test.tsx - Available categories hook
 # - useInfiniteTransactions.test.tsx - Hangs in full suite (lingering QueryClient spy)
 # - usePreviewCategories.test.tsx - Hangs in full suite (unmounted React root update)
+#
+# Note: registry.test.ts and DashboardContext.test.tsx were moved to
+# scripts/test-conflict-files.sh (Issue #1323) — removed from this list in Task 4.
 
 set -e
 
@@ -44,11 +48,12 @@ echo "Running real-implementation tests..."
 
 # Test files that need real implementations (absolute paths)
 TEST_FILES=(
-    "$FRONTEND_DIR/src/features/dashboard/widgets/registry.test.ts"
-    "$FRONTEND_DIR/src/features/dashboard/context/DashboardContext.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardData.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardLayout.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
+    # Issue #1323 Task 4: moved from test-isolated.sh; useGettingStarted now preload-mocked
+    # so this test must run from /tmp to get the real hook implementation
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useGettingStarted.test.ts"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetFilters.test.ts"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgets.test.tsx"
     "$FRONTEND_DIR/src/features/savings/hooks/useSavingsGoals.test.tsx"
@@ -69,9 +74,15 @@ PRELOAD_FILES=(
     "$FRONTEND_DIR/src/test/testing-library.ts"
     # Clerk mock: DashboardContext → useActiveAccounts → useUser() (Issue #1109 W4-D)
     "$FRONTEND_DIR/src/test/mocks/clerk.tsx"
-    "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
     # API-level mocks for useInfiniteInvestmentTransactions (mocks fetcher, not wrapper hook)
     "$FRONTEND_DIR/src/test/mocks/investments-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/savings-goals-api.ts"
+    # Issue #1323 Task 4: additional mocks for useGettingStarted.test.ts
+    # (moved from test-isolated.sh; needs API-level mocks but not wrapper-level mocks)
+    "$FRONTEND_DIR/src/test/mocks/budgets-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/boosts-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/auto-categorization-api.ts"
+    "$FRONTEND_DIR/src/test/mocks/dashboard-context.ts"
 )
 
 # Build preload arguments
