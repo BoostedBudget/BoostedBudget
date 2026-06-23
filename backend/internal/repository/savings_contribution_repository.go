@@ -643,7 +643,9 @@ func (r *savingsContributionRepository) RejectContribution(ctx context.Context, 
 		  AND c.savings_goal_id = g.id
 		  AND g.user_id = $2
 		  AND c.status = 'proposed'
-		RETURNING ` + contributionSelectCols
+		RETURNING c.id, c.savings_goal_id, c.transaction_id, c.amount, c.source, c.status,
+			c.managed_by_reconciliation, c.confirmed_by_user,
+			to_char(c.occurred_on, 'YYYY-MM-DD'), c.created_at, c.updated_at`
 	contrib := &domain.SavingsGoalContribution{}
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&contrib.ID, &contrib.SavingsGoalID, &contrib.TransactionID,

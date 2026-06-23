@@ -53,8 +53,8 @@ func seedIntegrationUser(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	userID := uuid.New().String()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO users (id, clerk_id, email, created_at, updated_at)
-		VALUES ($1, $2, $3, now(), now())
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "clerk_"+userID, "test_"+userID+"@example.com")
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -66,14 +66,24 @@ func seedIntegrationUser(t *testing.T, pool *pgxpool.Pool) string {
 // seedIntegrationAccount inserts a minimal account row owned by userID.
 func seedIntegrationAccount(t *testing.T, pool *pgxpool.Pool, userID string) string {
 	t.Helper()
-	accountID := uuid.New().String()
+	linkedItemID := uuid.New().String()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO accounts (id, user_id, plaid_account_id, name, type, subtype, current_balance, created_at, updated_at)
-		VALUES ($1, $2, $3, 'Test Account', 'depository', 'savings', 1000.0, now(), now())
-	`, accountID, userID, "plaid_"+accountID)
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, linkedItemID, userID, "item_"+linkedItemID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, accountID)
+		pool.Exec(context.Background(), `DELETE FROM linked_items WHERE id = $1`, linkedItemID) //nolint:errcheck
+	})
+
+	accountID := uuid.New().String()
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, subtype, current_balance, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'Test Account', 'depository', 'savings', 1000.0, now(), now())
+	`, accountID, linkedItemID, userID, "plaid_"+accountID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM accounts WHERE id = $1`, accountID) //nolint:errcheck
 	})
 	return accountID
 }
@@ -84,8 +94,8 @@ func seedIntegrationGoal(t *testing.T, pool *pgxpool.Pool, userID, accountID str
 	goalID := uuid.New().String()
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO savings_goals (id, user_id, account_id, name, target_amount, current_amount, progress_basis, created_at, updated_at)
-		VALUES ($1, $2, $3, 'Integration Test Goal', 1000.0, 0.0, 'contributions', now(), now())
-	`, goalID, userID, accountID)
+		VALUES ($1, $2, $3, $4, 1000.0, 0.0, 'contributions', now(), now())
+	`, goalID, userID, accountID, "Goal "+goalID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		pool.Exec(context.Background(), `DELETE FROM savings_goals WHERE id = $1`, goalID)
@@ -97,14 +107,20 @@ func seedIntegrationGoal(t *testing.T, pool *pgxpool.Pool, userID, accountID str
 // Positive amount = outflow (Plaid convention), negative = inflow.
 func seedIntegrationTransaction(t *testing.T, pool *pgxpool.Pool, userID, accountID string, amount float64) string {
 	t.Helper()
+	var linkedItemID string
+	err := pool.QueryRow(context.Background(),
+		`SELECT linked_item_id FROM accounts WHERE id = $1`, accountID,
+	).Scan(&linkedItemID)
+	require.NoError(t, err, "look up linked_item_id for account")
+
 	txnID := uuid.New().String()
-	_, err := pool.Exec(context.Background(), `
-		INSERT INTO transactions (id, user_id, account_id, amount, name, date, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'Test Transfer', now()::date, now(), now())
-	`, txnID, userID, accountID, amount)
+	_, err = pool.Exec(context.Background(), `
+		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, name, date, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'plaid', $5, 'Test Transfer', now()::date, now(), now())
+	`, txnID, userID, accountID, linkedItemID, amount)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM transactions WHERE id = $1`, txnID)
+		pool.Exec(context.Background(), `DELETE FROM transactions WHERE id = $1`, txnID) //nolint:errcheck
 	})
 	return txnID
 }

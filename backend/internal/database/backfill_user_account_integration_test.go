@@ -27,8 +27,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	enc := newBackfillTestEnc(t)
 	ctx := context.Background()
 
-	// ── Seed encrypted field values and blind indexes ─────────────────────────
-	// Use the same encryptor as BackfillUserAccountIDs so decrypt→BlindIndex matches.
+	// Seed encrypted field values and blind indexes using same encryptor as BackfillUserAccountIDs
 	suffix := uuid.New().String()[:8]
 	plainInstID := "ins-p2-" + suffix
 	plainMask := "5678"
@@ -40,25 +39,25 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	instBlind := enc.BlindIndex(plainInstID)
 	maskBlind := enc.BlindIndex(plainMask)
 
-	// ── Seed user ─────────────────────────────────────────────────────────────
+	// Seed user
 	userID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
 		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|p2-"+userID, "p2-"+userID+"@example.com")
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) })
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) }) //nolint:errcheck
 
-	// ── Seed user_account with blind indexes ──────────────────────────────────
+	// Seed user_account with blind indexes
 	uaID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`, uaID, userID, encInstID, encMask, instBlind, maskBlind)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM user_accounts WHERE id = $1", uaID) })
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM user_accounts WHERE id = $1", uaID) }) //nolint:errcheck
 
-	// ── Seed linked_item with encrypted institution_id ────────────────────────
+	// Seed linked_item with encrypted institution_id
 	liID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, institution_id)
@@ -66,7 +65,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, liID, userID, "item-p2-"+liID, encInstID)
 	require.NoError(t, err)
 
-	// ── Seed account with NULL user_account_id and encrypted mask ─────────────
+	// Seed account with NULL user_account_id and encrypted mask
 	accID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, mask)
@@ -74,7 +73,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, accID, liID, userID, "plaid-p2-"+suffix, encMask)
 	require.NoError(t, err)
 
-	// ── Seed transaction with NULL user_account_id ────────────────────────────
+	// Seed transaction with NULL user_account_id
 	txID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO transactions (id, user_id, account_id, linked_item_id, source, amount, date, name)
@@ -82,18 +81,16 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, txID, userID, accID, liID)
 	require.NoError(t, err)
 
-	// ── Seed security (required by investment tables) ──────────────────────────
-	// securities is not user-scoped (shared reference data), so it needs an explicit
-	// cleanup — the DELETE FROM users cascade won't reach it.
+	// Seed security (required by investment tables; not user-scoped, needs explicit cleanup)
 	secID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO securities (id, plaid_security_id, name)
 		VALUES ($1, $2, 'Test Security')
 	`, secID, "plaid-sec-p2-"+suffix)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM securities WHERE id = $1", secID) })
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM securities WHERE id = $1", secID) }) //nolint:errcheck
 
-	// ── Seed investment_transaction with NULL user_account_id ─────────────────
+	// Seed investment_transaction with NULL user_account_id
 	invTxID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO investment_transactions
@@ -102,7 +99,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, invTxID, userID, accID, "plaid-inv-p2-"+suffix)
 	require.NoError(t, err)
 
-	// ── Seed holding with NULL user_account_id ────────────────────────────────
+	// Seed holding with NULL user_account_id
 	holdingID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
 		INSERT INTO holdings (id, user_id, account_id, security_id, quantity)
@@ -110,75 +107,75 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	`, holdingID, userID, accID, secID)
 	require.NoError(t, err)
 
-	// ── Seed balance_snapshot with NULL user_account_id ──────────────────────
+	// Seed balance_snapshot with NULL user_account_id
 	bsID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
-		INSERT INTO balance_snapshots (id, account_id, user_id, snapshot_date, source)
+		INSERT INTO balance_snapshots (id, account_id, user_id, snapshot_at, source)
 		VALUES ($1, $2, $3, '2000-01-01', 'migration')
 	`, bsID, accID, userID)
 	require.NoError(t, err)
 
-	// ── Seed savings_goal with NULL user_account_id ───────────────────────────
+	// Seed savings_goal with NULL user_account_id
 	sgID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
-		INSERT INTO savings_goals (id, user_id, account_id, name, target_amount)
-		VALUES ($1, $2, $3, $4, 500.00)
+		INSERT INTO savings_goals (id, user_id, account_id, name, target_amount, progress_basis)
+		VALUES ($1, $2, $3, $4, 500.00, 'manual')
 	`, sgID, userID, accID, "Goal-p2-"+suffix)
 	require.NoError(t, err)
 
-	// ── Seed transfer_suggestion with NULL from/to user_account_ids ───────────
+	// Seed transfer_suggestion with NULL from/to user_account_ids
 	tsID := uuid.New().String()
 	_, err = pool.Exec(ctx, `
-		INSERT INTO transfer_suggestions (id, user_id, from_account_id, to_account_id, amount)
-		VALUES ($1, $2, $3, $3, 25.00)
+		INSERT INTO transfer_suggestions (id, user_id, from_account_id, to_account_id, amount, source)
+		VALUES ($1, $2, $3, $3, 25.00, 'boost')
 	`, tsID, userID, accID)
 	require.NoError(t, err)
 
-	// ── Verify account has NULL user_account_id before backfill ────────────────
+	// Verify account has NULL user_account_id before backfill
 	var before *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&before))
 	require.Nil(t, before, "account must have NULL user_account_id before backfill")
 
-	// ── Run BackfillUserAccountIDs ────────────────────────────────────────────
+	// Run BackfillUserAccountIDs
 	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
 
-	// ── Assert account repaired ───────────────────────────────────────────────
+	// Assert account repaired
 	var gotUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&gotUAID))
 	require.NotNil(t, gotUAID, "BackfillUserAccountIDs must set accounts.user_account_id")
 	assert.Equal(t, uaID, *gotUAID)
 
-	// ── Assert transaction cascade ────────────────────────────────────────────
+	// Assert transaction cascade
 	var gotTxUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM transactions WHERE id = $1", txID).Scan(&gotTxUAID))
 	require.NotNil(t, gotTxUAID, "cascade must set transactions.user_account_id")
 	assert.Equal(t, uaID, *gotTxUAID)
 
-	// ── Assert investment_transactions cascade ────────────────────────────────
+	// Assert investment_transactions cascade
 	var gotInvTxUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM investment_transactions WHERE id = $1", invTxID).Scan(&gotInvTxUAID))
 	require.NotNil(t, gotInvTxUAID, "cascade must set investment_transactions.user_account_id")
 	assert.Equal(t, uaID, *gotInvTxUAID)
 
-	// ── Assert holdings cascade ───────────────────────────────────────────────
+	// Assert holdings cascade
 	var gotHoldingUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM holdings WHERE id = $1", holdingID).Scan(&gotHoldingUAID))
 	require.NotNil(t, gotHoldingUAID, "cascade must set holdings.user_account_id")
 	assert.Equal(t, uaID, *gotHoldingUAID)
 
-	// ── Assert balance_snapshots cascade ──────────────────────────────────────
+	// Assert balance_snapshots cascade
 	var gotBsUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM balance_snapshots WHERE id = $1", bsID).Scan(&gotBsUAID))
 	require.NotNil(t, gotBsUAID, "cascade must set balance_snapshots.user_account_id")
 	assert.Equal(t, uaID, *gotBsUAID)
 
-	// ── Assert savings_goals cascade ──────────────────────────────────────────
+	// Assert savings_goals cascade
 	var gotSgUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM savings_goals WHERE id = $1", sgID).Scan(&gotSgUAID))
 	require.NotNil(t, gotSgUAID, "cascade must set savings_goals.user_account_id")
 	assert.Equal(t, uaID, *gotSgUAID)
 
-	// ── Assert transfer_suggestions cascade (both from and to columns) ─────────
+	// Assert transfer_suggestions cascade (both from and to columns)
 	var gotFromUAID, gotToUAID *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT from_user_account_id::text, to_user_account_id::text FROM transfer_suggestions WHERE id = $1", tsID).Scan(&gotFromUAID, &gotToUAID))
 	require.NotNil(t, gotFromUAID, "cascade must set transfer_suggestions.from_user_account_id")
@@ -186,7 +183,7 @@ func TestBackfillUserAccountIDs_Integration(t *testing.T) {
 	require.NotNil(t, gotToUAID, "cascade must set transfer_suggestions.to_user_account_id")
 	assert.Equal(t, uaID, *gotToUAID)
 
-	// ── Idempotency: re-run must be a no-op ───────────────────────────────────
+	// Idempotency: re-run must be a no-op
 	require.NoError(t, BackfillUserAccountIDs(ctx, pool, enc))
 	var afterRerun *string
 	require.NoError(t, pool.QueryRow(ctx, "SELECT user_account_id::text FROM accounts WHERE id = $1", accID).Scan(&afterRerun))
@@ -214,7 +211,7 @@ func TestBackfillUserAccountIDs_NoMatch_Integration(t *testing.T) {
 		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|p2-nm-"+userID, "p2-nm-"+userID+"@example.com")
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) })
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) }) //nolint:errcheck
 
 	liID := uuid.New().String()
 	_, err = pool.Exec(ctx, `

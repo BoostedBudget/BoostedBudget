@@ -40,15 +40,15 @@ func TestInsertMarker_UniqueExactlyOnce_Integration(t *testing.T) {
 	// Seed user and budget — budget_id has a FK constraint to budgets(id).
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-marker-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
 	budgetID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO budgets (id, user_id, name, period, start_date, amount)
-		VALUES ($1, $2, 'Integration Test Budget', 'monthly', '2024-01-01', 1000.00)
+		INSERT INTO budgets (id, user_id, name, period, start_date, amount, series_id)
+		VALUES ($1, $2, 'Integration Test Budget', 'monthly', '2024-01-01', 1000.00, $1)
 	`, budgetID, userID)
 	require.NoError(t, err, "seed budget")
 

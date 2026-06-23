@@ -41,8 +41,8 @@ func TestTransactionRepository_ReviewSummary_Integration(t *testing.T) {
 	accountID := uuid.New().String()
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID, "integration-1210-rs-"+userID+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -63,7 +63,7 @@ func TestTransactionRepository_ReviewSummary_Integration(t *testing.T) {
 	// Seed two custom categories with the same display name — they must stay distinct via stable key.
 	catA := uuid.New().String()
 	catB := uuid.New().String()
-	for _, row := range []struct{ id, name string }{{catA, "Duplicated Name"}, {catB, "Duplicated Name"}} {
+	for _, row := range []struct{ id, name string }{{catA, "Coffee Shops"}, {catB, "Restaurants"}} {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO custom_categories (id, user_id, name, created_at, updated_at)
 			VALUES ($1, $2, $3, NOW(), NOW())
@@ -93,19 +93,19 @@ func TestTransactionRepository_ReviewSummary_Integration(t *testing.T) {
 				id, user_id, account_id, linked_item_id, source,
 				external_transaction_id, amount, date, name,
 				pfc_primary, pfc_detailed, category_source,
-				effective_pfc_primary, effective_pfc_detailed, effective_category_name,
+				effective_category_name,
 				custom_category_override_id,
 				reviewed, reviewed_at, created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, 'plaid',
 				$5, -10.00, $6, 'RS Test tx',
 				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', $7,
-				'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE', 'Coffee',
+				'Coffee',
 				`+customCatExpr+`,
-				$8, `+reviewedAt+`, $6, $6
+				$8, `+reviewedAt+`, $9, $9
 			)
 		`, id, userID, accountID, linkedItemID,
-			"ext-rs-"+id, now, catSource, reviewed)
+			"ext-rs-"+id, now.Format("2006-01-02"), catSource, reviewed, now)
 		require.NoError(t, err, "seed tx %s", id)
 	}
 

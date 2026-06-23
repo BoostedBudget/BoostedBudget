@@ -40,8 +40,8 @@ func TestBoostType_SavingsGoalAccepted_Integration(t *testing.T) {
 	// Seed a user (FK: boosts.user_id → users.id).
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-boost-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
@@ -80,8 +80,8 @@ func TestBoostType_AllValidTypesAccepted_Integration(t *testing.T) {
 
 			userID := uuid.New()
 			_, err = tx.Exec(ctx, `
-				INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-				VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+				INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+				VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 			`, userID, "test|"+userID.String(), "int-boost-type-"+boostType+"-"+userID.String()+"@example.com")
 			require.NoError(t, err, "seed user")
 
@@ -109,8 +109,8 @@ func TestBoostType_InvalidTypeRejected_Integration(t *testing.T) {
 
 	userID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO users (id, auth0_user_id, email, subscription_tier, subscription_status, primary_region)
-		VALUES ($1, $2, $3, 'premium', 'active', 'us-east-1')
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
 	`, userID, "test|"+userID.String(), "int-boost-bogus-"+userID.String()+"@example.com")
 	require.NoError(t, err, "seed user")
 
