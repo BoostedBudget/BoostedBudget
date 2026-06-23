@@ -45,8 +45,8 @@ EXCLUDE_PATTERNS=(
     "src/features/boosts/components/BoostsManagePage.test.tsx"
     # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
     "src/features/accounts/AccountsPage.test.tsx"
-    # ToggleGroup component test needs real implementation but TimeframeSelector/DateRangePicker
-    # tests mock @/components/ui/toggle-group globally, polluting it in the full suite (#953)
+    # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh; centralized mock
+    # now in bunfig.toml preload so individual test files no longer need inline mocks.
     "src/components/ui/toggle-group.test.tsx"
     # setSystemTime pollution: date mocks from other test files leak into these, causing
     # date mismatch failures in the full suite (#952)

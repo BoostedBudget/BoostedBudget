@@ -44,6 +44,7 @@ preload = [
   "./src/test/mocks/shared-charts.ts",
   "./src/test/mocks/net-worth-hooks.ts",
   "./src/test/mocks/react-colorful.tsx",
+  "./src/test/mocks/toggle-group.tsx",
   "./src/test/mocks/savings-goals-api.ts",
   "./src/test/mocks/admin-api.ts",
   "./src/test/mocks/admin-subscriptions-api.ts",
@@ -60,9 +61,11 @@ preload = [
 # (useCashFlowData.test.tsx) need real hooks with API-level mocks.
 # Component tests that need wrapper mocks should import cash-flow-hooks.ts directly.
 
-# NOTE: DashboardContext.test.tsx and registry.test.ts need real implementations.
-# They must be run separately with: bun test --config bunfig.real.toml <file>
+# NOTE: DashboardContext.test.tsx, registry.test.ts, and toggle-group.test.tsx need
+# real implementations. They must be run separately with:
+#   bun test --config bunfig.real.toml <file>
 # Bun doesn't support exclude patterns for test files (feature request #21395)
+# toggle-group.tsx mock above provides a jsdom-compatible stub for all other tests.
 
 # Generous timeout for CI stability (Issues #180, #219, #422)
 timeout = 30000

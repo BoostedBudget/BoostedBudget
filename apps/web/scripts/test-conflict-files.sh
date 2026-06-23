@@ -2,7 +2,7 @@
 # Run tests that conflict with preloaded mocks in bunfig.toml
 # Issue #1323: Migrate to single bun test src/ command
 #
-# These 3 test files test the REAL implementation of modules that are
+# These test files test the REAL implementation of modules that are
 # preloaded as mocks in bunfig.toml. They cannot run in the main batch
 # because the preload has already replaced the real module with a mock.
 #
@@ -14,6 +14,7 @@
 # - DashboardContext.test.tsx  (needs real useDashboardContext; dashboard-context.ts preload conflicts)
 # - registry.test.ts           (needs real widget registry; registry.ts preload conflicts)
 # - useInfiniteInvestmentTransactions.test.tsx (needs real hook; investments-hooks.ts preload conflicts)
+# - toggle-group.test.tsx      (needs real ToggleGroup; toggle-group.tsx preload conflicts — Issue #1323)
 
 set -e
 
@@ -33,11 +34,12 @@ done
 
 echo "Running preload-conflict tests (real implementations)..."
 
-# The 3 preload-conflict test files (absolute paths)
+# The preload-conflict test files (absolute paths)
 TEST_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/context/DashboardContext.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/widgets/registry.test.ts"
     "$FRONTEND_DIR/src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
+    "$FRONTEND_DIR/src/components/ui/toggle-group.test.tsx"
 )
 
 # Minimal preloads: DOM, testing-library, and only what these files need

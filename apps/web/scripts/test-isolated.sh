@@ -39,10 +39,9 @@ TEST_FILES=(
     # useGettingStarted needs centralized mocks (dashboard-context, budgets-api, etc.)
     # but can't run in regular suite: DashboardPage.test.tsx mocks useGettingStarted globally (#848)
     "src/features/dashboard/hooks/useGettingStarted.test.ts"
-    # ToggleGroup component test needs real module, but TimeframeSelector/DateRangePicker
-    # tests mock @/components/ui/toggle-group globally in the regular suite (#953)
-    "src/components/ui/toggle-group.test.tsx"
     # setSystemTime pollution: Bun's setSystemTime leaks across test files in the full suite.
+    # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh (centralized toggle-group
+    # mock now in bunfig.toml preload; toggle-group.test.tsx needs real implementation).
     # These tests pass individually but fail when other date-mocking tests run first (#952)
     "src/features/dashboard/components/TimeframeSelector.test.tsx"
     "src/features/transactions/components/TransactionCard.test.tsx"
