@@ -14,10 +14,6 @@ import {
 
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 const baseSummary: NetWorthSummary = {
   as_of_date: '2024-03-31',
   net_worth: 10000,

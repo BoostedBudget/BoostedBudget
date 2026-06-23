@@ -3,10 +3,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { ColumnVisibilityMenu } from './ColumnVisibilityMenu'
 import type { ColumnDef } from './types'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mock(() => {}),
-}))
-
 type Row = { id: string; name: string }
 
 const hideableColumns: ColumnDef<Row>[] = [

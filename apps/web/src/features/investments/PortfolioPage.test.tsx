@@ -22,12 +22,6 @@ import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
 import type { GetPortfolioHistoryOutputBody } from '@boostedbudget/api-client/models/getPortfolioHistoryOutputBody'
 
-// Re-register useTrackEvent with the preloaded mockTrackEvent reference so analytics
-// assertions work regardless of file execution order (other files may override this mock).
-// Pattern from BoostsPage.test.tsx / BudgetDetailPage.analytics.test.tsx.
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
 
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })

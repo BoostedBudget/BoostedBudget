@@ -30,11 +30,6 @@ import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Re-register to ensure mock is current for this test file's execution order
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 const mockBoost: Boost = {
   id: 'boost-1',
   user_id: 'user-1',

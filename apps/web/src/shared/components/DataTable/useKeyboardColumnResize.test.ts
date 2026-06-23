@@ -1,15 +1,8 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { renderHook, act } from '@testing-library/react'
-import { mock } from 'bun:test'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import { useKeyboardColumnResize } from './useKeyboardColumnResize'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
-
-// Mock useTrackEvent (avoids posthog module-resolution ordering issues with process-global mock.module calls)
-const mockTrackEvent = mock(() => {})
-
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
 
 const TABLE_ID = 'test-table'
 

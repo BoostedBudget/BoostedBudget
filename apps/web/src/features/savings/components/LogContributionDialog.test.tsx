@@ -8,19 +8,7 @@ import {
   mockLogSavingsGoalContributionMutateAsync,
 } from '@/test/mocks/savings-goals-api'
 
-const mockTrackEvent = mock(() => {})
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-import * as RealAnalyticsEvents from '@/shared/analytics/events'
-mock.module('@/shared/analytics/events', () => ({
-  ...RealAnalyticsEvents,
-  ANALYTICS_EVENTS: {
-    ...RealAnalyticsEvents.ANALYTICS_EVENTS,
-    SAVINGS_CONTRIBUTION_LOGGED: 'savings_contribution_logged',
-  },
-}))
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
