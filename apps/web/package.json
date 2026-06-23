@@ -16,7 +16,7 @@
     "test:coverage:combine": "bash scripts/combine-coverage.sh",
     "test:coverage:combine:check": "bash scripts/combine-coverage.sh --check-threshold",
     "test:watch": "bun test --watch src/",
-    "test:ci": "tsc --noEmit && bash scripts/test-regular.sh --coverage && bun run test:real:coverage && bun run test:isolated:coverage && bun run test:coverage:combine",
+    "test:ci": "tsc --noEmit && bash scripts/test-regular.sh --coverage && bun run test:real:coverage && bash scripts/test-conflict-files.sh --coverage && bun run test:isolated:coverage && bun run test:coverage:combine",
     "test:integration": "bun test scripts/integration/",
     "test:e2e": "bash scripts/run-e2e-with-ports.sh",
     "test:e2e:ci": "bash scripts/run-e2e-with-ports.sh",

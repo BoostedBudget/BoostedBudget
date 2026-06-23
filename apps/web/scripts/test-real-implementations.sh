@@ -13,8 +13,6 @@
 # are resolved from CWD.
 #
 # Test files included:
-# - registry.test.ts - Widget registry real implementation
-# - DashboardContext.test.tsx - Dashboard context real implementation
 # - useDashboardData.test.tsx - Dashboard data hook
 # - useDashboardLayout.test.tsx - Dashboard layout hook
 # - useDashboardOnboarding.test.ts - Dashboard onboarding hook
@@ -59,9 +57,8 @@ TEST_FILES=(
     # Hangs in the full parallel suite; --timeout kills the lingering event loop
     "$FRONTEND_DIR/src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
     "$FRONTEND_DIR/src/features/budgets/hooks/usePreviewCategories.test.tsx"
-    # Hangs in the full parallel suite (real React Query against mocked fetcher;
-    # same pattern as useInfiniteTransactions)
-    "$FRONTEND_DIR/src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
+    # registry.test.ts, DashboardContext.test.tsx, useInfiniteInvestmentTransactions.test.tsx
+    # were moved to scripts/test-conflict-files.sh (Issue #1323)
 )
 
 # Preload files for real implementation tests (absolute paths)
