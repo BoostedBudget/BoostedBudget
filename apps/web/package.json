@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "bash scripts/test-regular.sh",
+    "test": "bash scripts/test-regular.sh && bash scripts/test-conflict-files.sh",
     "test:all-files": "bun test src/",
     "test:real": "bash scripts/test-real-implementations.sh",
     "test:isolated": "bash scripts/test-isolated.sh",
