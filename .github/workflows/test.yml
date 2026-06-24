@@ -629,7 +629,8 @@ jobs:
         run: |
           if ! command -v lcov >/dev/null 2>&1; then
             brew install lcov
-            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+            BREW_PREFIX=$(brew --prefix)
+            echo "$BREW_PREFIX/bin" >> "$GITHUB_PATH"
           fi
           lcov --version
 
@@ -666,9 +667,9 @@ jobs:
             SUMMARY=$(lcov --summary coverage/combined.lcov 2>&1)
             echo "$SUMMARY" | grep -E "(lines|functions|branches)"
 
-            LINES=$(echo "$SUMMARY" | grep "lines" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
-            FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
-            BRANCHES=$(echo "$SUMMARY" | grep "branches" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
+            LINES=$(echo "$SUMMARY"     | grep "lines"     | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+            FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+            BRANCHES=$(echo "$SUMMARY"  | grep "branches"  | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
 
             FAILED=false
             check_threshold() {
@@ -681,8 +682,11 @@ jobs:
                 echo "::notice::$metric coverage not available from Bun LCOV — not gated"
                 return 0
               fi
-              local int_value
-              int_value=$(echo "$value" | cut -d. -f1)
+              if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "::error::$metric coverage value '${value}' is not numeric — gate cannot run"
+                return 1
+              fi
+              local int_value=${value%%.*}
               if [ "$int_value" -lt "$threshold" ]; then
                 echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
                 return 1
