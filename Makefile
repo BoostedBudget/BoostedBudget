@@ -73,6 +73,7 @@ test-ci:
 	./scripts/check-coverage.sh backend/coverage.out 60
 	cd apps/web && bun run test:ci
 	@echo "All CI tests passed!"
+	@echo "Note: combine + threshold enforcement is handled in CI workflow (lcov inline)"
 
 # Fast Tests (No E2E) - For rapid iteration during development
 # Use this in pre-push hook for fast feedback (1-2 minutes, ~700MB)
@@ -113,7 +114,7 @@ test-fast:
 	@echo ""
 	@echo "3️⃣  Frontend Tests (bun:test — fast, no coverage)..."
 	@cd apps/web && bun run test
-	@echo "✅ Frontend tests passed (run 'make test-all' for vitest coverage)"
+	@echo "✅ Frontend tests passed (run 'make test-all' for coverage)"
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
 	@cd apps/mcp-server && bun run test
@@ -170,9 +171,20 @@ test-all:
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
 	@echo "✅ Backend coverage: backend/coverage.html"
 	@echo ""
-	@echo "3️⃣  Frontend Tests (bun:test + vitest combined coverage)..."
+	@echo "3️⃣  Frontend Tests (bun:test + combined coverage)..."
 	@cd apps/web && bun run test:ci
-	@echo "✅ Frontend coverage: apps/web/coverage/combined.lcov"
+	@echo "Combining frontend coverage (coverage/ + coverage-conflict/)..."
+	@if command -v lcov &> /dev/null; then \
+		lcov_files=""; \
+		[ -f apps/web/coverage/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage/lcov.info"; \
+		[ -f apps/web/coverage-conflict/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage-conflict/lcov.info"; \
+		if [ -n "$$lcov_files" ]; then \
+			lcov $$lcov_files -o apps/web/coverage/combined.lcov; \
+			echo "✅ Frontend combined coverage: apps/web/coverage/combined.lcov"; \
+		fi; \
+	else \
+		echo "⚠️  lcov not installed — skipping coverage combine (install: brew install lcov)"; \
+	fi
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."
 	@cd apps/mcp-server && bun run test
