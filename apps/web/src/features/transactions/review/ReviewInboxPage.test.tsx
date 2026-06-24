@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
@@ -15,7 +15,7 @@ import {
   mockUseBulkUpdateTransactionCategory,
 } from '@/test/mocks/transactions-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
-import { mockToast, mockToastSuccess } from '@/test/mocks/sonner'
+import { mockToastSuccess } from '@/test/mocks/sonner'
 
 const REVIEW_ANALYTICS_EVENTS = {
   REVIEW_INBOX_VIEWED: 'review_inbox_viewed',

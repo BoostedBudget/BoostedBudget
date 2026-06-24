@@ -5,7 +5,7 @@
  * Issue #1184: Coming Soon state when login is disabled
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { mockUseClerk, createMockClerk } from '@/test/mocks/clerk'

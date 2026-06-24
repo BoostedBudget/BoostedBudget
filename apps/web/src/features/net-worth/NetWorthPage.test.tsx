@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import '@/test/mocks/shared-charts'
@@ -11,7 +11,6 @@ import {
 import {
   mockUseGetAccounts,
 } from '@/test/mocks/accounts-api'
-
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
 const baseSummary: NetWorthSummary = {

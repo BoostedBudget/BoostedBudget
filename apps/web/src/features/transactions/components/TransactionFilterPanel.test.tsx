@@ -4,7 +4,7 @@
  * Issue #1193: Bug fix — Date Range + Status filters overlap at narrow viewports
  */
 
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionFilterPanel } from './TransactionFilterPanel'
 import type { TransactionFilters } from '../types'
