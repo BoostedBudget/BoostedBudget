@@ -2,8 +2,8 @@
 # Run isolated tests that need centralized mocks but are polluted in full suite
 # Issue #575 / #1323
 #
-# Remaining isolated tests (after Task 4 fixes):
-# - AccountsPage: uses local component mocks that can pollute AccountTable etc. (#839)
+# Issue #1323 (final task): ALL isolated tests have been fixed. This script is now
+# empty and exists only for backward compatibility (CI/Makefile references).
 #
 # Fixed and moved in Task 4:
 # - BoostsManagePage → main batch (pollution source already resolved)
@@ -12,6 +12,11 @@
 # - useGettingStarted → test-real-implementations.sh (now preload-mocked)
 # - DashboardGrid, WidgetCatalog, toggle-group, DashboardContext, registry →
 #   test-conflict-files.sh (need real implementations without preload mocks)
+#
+# Fixed and moved in final task (#1323):
+# - AccountsPage → test-conflict-files.sh Group C (inline mock.module() calls for
+#   AccountCard, AccountTable, AccountCustomizationModal, ConfirmationDialog,
+#   useAccountFilters, and useAccountCustomization are process-isolated from /tmp)
 
 set -e
 
@@ -30,33 +35,19 @@ for arg in "$@"; do
     esac
 done
 
-echo "Running isolated tests (polluted by DashboardPage.test.tsx in full suite)..."
+echo "Running isolated tests..."
 
-# Test files that are polluted in the full suite
-# These need centralized mocks but run separately due to mock pollution
-TEST_FILES=(
-    # Issue #1323: DashboardGrid.test.tsx and WidgetCatalog.test.tsx → test-conflict-files.sh
-    # Issue #1323 Task 4: BoostsManagePage FIXED — confirmed passes in full suite; moved to
-    # main batch (bun test src/). Pollution source was already fixed.
-    # AccountsPage uses inline mock.module('./AccountCard') and mock.module('./components/AccountTable')
-    # which pollute AccountCard.test.tsx and AccountTable.test.tsx (confirmed: 34 failures in
-    # AccountTable.test.tsx when run after AccountsPage.test.tsx in the same process).
-    # Cannot centralize without creating new preload files AND moving AccountCard/AccountTable tests
-    # to test-conflict-files.sh — out of scope for Task 4. Tracked in #839.
-    "src/features/accounts/AccountsPage.test.tsx"
-    # Issue #1323 Task 4: useGettingStarted.test.ts moved to test-real-implementations.sh.
-    # Issue #1323 Task 4: TimeframeSelector.test.tsx and TransactionCard.test.tsx FIXED
-    # (both already had afterEach setSystemTime() cleanup, confirmed pass in full suite).
-    # These were moved to the main batch (test-regular.sh). Entries removed from here.
-    # toggle-group.test.tsx moved to test-conflict-files.sh (Issue #1323 prior tasks).
-    # Issue #1323 Task 4: usePricingContext and usePostSignInCheckoutIntent FIXED —
-    # confirmed pass in full suite. Moved to main batch; entries removed from here (#1038).
-    # Issue #1323: CustomCategoryManager, useCustomCategories, useCategoryMutations,
-    # useReviewMutations, and CustomCategoryFilter FIXED — pollution sources
-    # (BudgetCategoryManager, BudgetCategoryForm, AutoCategorizationPageWrapper) now
-    # use centralized categories-api mock. These tests moved to main batch (bun test src/).
-    # Keeping this comment for audit trail — see commit history for details.
-)
+# All previously isolated tests have been fixed and migrated:
+# - AccountsPage → test-conflict-files.sh Group C (process-isolated from /tmp)
+# See scripts/test-conflict-files.sh for the current configuration.
+TEST_FILES=()
+
+if [ ${#TEST_FILES[@]} -eq 0 ]; then
+    echo "No isolated tests remaining — all tests have been migrated."
+    echo "  - AccountsPage.test.tsx → test-conflict-files.sh Group C (inline mock isolation)"
+    echo "test-isolated.sh is now empty. Issue #1323 complete."
+    exit 0
+fi
 
 # Build test command
 if [ "$COVERAGE" = true ]; then
