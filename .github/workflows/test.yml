@@ -626,7 +626,12 @@ jobs:
           echo "::endgroup::"
 
       - name: Ensure lcov is installed
-        run: command -v lcov >/dev/null 2>&1 || brew install lcov
+        run: |
+          if ! command -v lcov >/dev/null 2>&1; then
+            brew install lcov
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          fi
+          lcov --version
 
       - name: Combine coverage reports and enforce thresholds
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
@@ -634,7 +639,7 @@ jobs:
           echo "::group::Combining coverage reports and checking thresholds"
           # Merge lcov from test-regular.sh (coverage/) and test-conflict-files.sh (coverage-conflict/)
           # Coverage thresholds — FLOOR pattern, not ratchet (#1169).
-          # Thresholds: LINES>=63, FUNCTIONS>=67, BRANCHES>=68
+          # LINES>=63 enforced; FUNCTIONS/BRANCHES informational (Bun LCOV emits no per-fn/branch data)
           LCOV_FILES=""
           PLAIN_FILES=""
           if [ -f coverage/lcov.info ]; then
@@ -667,21 +672,26 @@ jobs:
 
             FAILED=false
             check_threshold() {
-              local metric=$1 value=$2 threshold=$3
-              if [ -n "$value" ]; then
-                local int_value=$(echo "$value" | cut -d. -f1)
-                if [ "$int_value" -lt "$threshold" ]; then
-                  echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
+              local metric=$1 value=$2 threshold=$3 required=${4:-false}
+              if [ -z "$value" ]; then
+                if [ "$required" = true ]; then
+                  echo "::error::$metric coverage could not be parsed from lcov summary — gate cannot run"
                   return 1
-                else
-                  echo "::notice::$metric coverage ${value}% meets threshold ${threshold}%"
                 fi
+                echo "::notice::$metric coverage not available from Bun LCOV — not gated"
+                return 0
               fi
-              return 0
+              local int_value
+              int_value=$(echo "$value" | cut -d. -f1)
+              if [ "$int_value" -lt "$threshold" ]; then
+                echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
+                return 1
+              fi
+              echo "::notice::$metric coverage ${value}% meets threshold ${threshold}%"
             }
-            check_threshold "Lines" "$LINES" 63 || FAILED=true
-            check_threshold "Functions" "$FUNCTIONS" 67 || FAILED=true
-            check_threshold "Branches" "$BRANCHES" 68 || FAILED=true
+            check_threshold "Lines"     "$LINES"     63 true  || FAILED=true
+            check_threshold "Functions" "$FUNCTIONS" 67 false || FAILED=true
+            check_threshold "Branches"  "$BRANCHES"  68 false || FAILED=true
             [ "$FAILED" = true ] && exit 1
           else
             echo "::error::lcov is required for coverage threshold enforcement but is not installed. Install with: brew install lcov"
