@@ -4,8 +4,8 @@
  * Issue #1200: Multi-Level Category Hierarchy
  *
  * Dedicated test file for budget category CRUD analytics events.
- * Uses mock.module for useTrackEvent only (safe here — this is a focused,
- * single-purpose file, not a broad component test file per CLAUDE.md guidance).
+ * All hooks mocked via bunfig.toml preloads (budgets-api.ts, budget-detail-hooks.ts,
+ * track-event.ts, tags-hooks.ts).
  *
  * UI interactions:
  * - Add: Click "Add Category" → PFC tree picker → select primary → fill amount → submit
@@ -13,17 +13,9 @@
  * - Delete: Click "Delete category" → confirm alertdialog
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Mock useTrackEvent before any component imports so the spy is installed
-// process-globally for this file. Acceptable: this is a focused analytics test
-// file, not a broad component test file.
-const mockTrackEvent = mock(() => {})
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-// Imports must come AFTER mock.module() calls in bun:test
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'

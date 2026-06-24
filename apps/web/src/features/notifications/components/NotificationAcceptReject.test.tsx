@@ -18,10 +18,6 @@ import { mockToastSuccess } from '@/test/mocks/sonner'
 import { renderWithQuery } from '@/test/utils/queryTestUtils'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 describe('NotificationAcceptReject', () => {
   beforeEach(() => {
     mockUseAcceptTransferSuggestion.mockClear()

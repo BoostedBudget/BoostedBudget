@@ -9,20 +9,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TransactionDateFilter } from './TransactionDateFilter'
 
-// Mock ToggleGroup so tests don't depend on Radix internals
-mock.module('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (v: string) => void }) => (
-    <div data-testid="toggle-group" onClick={(e) => {
-      const btn = (e.target as HTMLElement).closest('[data-value]')
-      if (btn) onValueChange(btn.getAttribute('data-value') ?? '')
-    }}>
-      {children}
-    </div>
-  ),
-  ToggleGroupItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
-    <button data-value={value} type="button">{children}</button>
-  ),
-}))
+// Issue #1323: toggle-group is centrally mocked via bunfig.toml preload (toggle-group.tsx)
 
 describe('TransactionDateFilter', () => {
   const mockOnPresetChange = mock(() => {})

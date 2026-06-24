@@ -1,19 +1,13 @@
-// Issue #575: Dashboard wrapper hook mock exports
-// These are EXPORTS ONLY - NOT globally registered via mock.module()
+// Issue #575 / #1323: Dashboard wrapper hook mock exports AND module registrations
 //
-// The hook implementation tests (useDashboardData.test.tsx, useDashboardLayout.test.tsx,
-// useDashboardOnboarding.test.tsx) need to test the REAL hook implementations with
-// API-level mocks from dashboard-api.ts.
+// This file is preloaded via bunfig.toml. It:
+// 1. Creates named mock function exports (used in beforeEach/mockReturnValue chains)
+// 2. Registers mock.module() for each wrapper hook so component tests don't need
+//    inline mock.module() calls (which are process-global and pollute subsequent tests)
 //
-// Component tests that need wrapper-level mocks should import these exports and
-// apply mock.module() inline BEFORE importing the component.
-//
-// Example usage in component tests:
-//   import { mockUseDashboardLayout, ... } from '@/test/mocks/dashboard-wrapper-hooks'
-//   mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
-//     useDashboardLayout: () => mockUseDashboardLayout(),
-//   }))
-//   // NOW import the component
+// Hook implementation tests (useDashboardData.test.tsx, useDashboardLayout.test.tsx,
+// useDashboardOnboarding.test.ts, useGettingStarted.test.ts) need REAL implementations
+// and run via test-real-implementations.sh (from /tmp, bypassing bunfig.toml preloads).
 
 import { mock } from 'bun:test'
 import type { WidgetType } from '@/features/dashboard/types'
@@ -105,4 +99,27 @@ export const mockUseGettingStarted = mock(() => ({
   isLoading: false,
   isCelebrating: false,
   dismiss: mockDismissGettingStarted,
+}))
+
+// === Centralized mock.module() registrations (Issue #1323) ===
+// Registered here at preload time so component tests don't need inline mock.module()
+// calls. Inline mock.module() is process-global and pollutes subsequent test files.
+//
+// Hook implementation tests that need real implementations run via
+// test-real-implementations.sh (from /tmp, bypassing bunfig.toml preloads).
+
+mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
+  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
+}))
+
+mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
+  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
+}))
+
+mock.module('@/features/dashboard/hooks/useDashboardOnboarding', () => ({
+  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
+}))
+
+mock.module('@/features/dashboard/hooks/useGettingStarted', () => ({
+  useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
 }))

@@ -4,36 +4,12 @@
  * Issue #1193: Bug fix — Date Range + Status filters overlap at narrow viewports
  */
 
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TransactionFilterPanel } from './TransactionFilterPanel'
 import type { TransactionFilters } from '../types'
 
-// Mock ToggleGroup so tests don't depend on Radix internals
-mock.module('@/components/ui/toggle-group', () => ({
-  ToggleGroup: ({
-    children,
-    onValueChange,
-  }: {
-    children: React.ReactNode
-    onValueChange: (v: string) => void
-  }) => (
-    <div
-      data-testid="toggle-group"
-      onClick={(e) => {
-        const btn = (e.target as HTMLElement).closest('[data-value]')
-        if (btn) onValueChange(btn.getAttribute('data-value') ?? '')
-      }}
-    >
-      {children}
-    </div>
-  ),
-  ToggleGroupItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
-    <button data-value={value} type="button">
-      {children}
-    </button>
-  ),
-}))
+// Issue #1323: toggle-group is centrally mocked via bunfig.toml preload (toggle-group.tsx)
 
 const defaultFilters: TransactionFilters = {}
 

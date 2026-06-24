@@ -3,24 +3,13 @@ import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models/customCategory'
 
-// Mock useGetUserCategories so BudgetCategoryManager can resolve custom category names.
-// Also stub the category mutation/usage hooks so the embedded CustomCategoryManager
-// (opened via the "Manage categories" launcher, #1203) can mount.
-const mockUseGetUserCategories = mock(() => ({
-  data: [] as CustomCategory[],
-  isLoading: false,
-  error: null,
-  refetch: mock(() => Promise.resolve()),
-}))
-const mockMutation = () => ({ mutateAsync: mock(() => Promise.resolve()), isPending: false })
-mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
-  useGetUserCategories: mockUseGetUserCategories,
-  useCreateCategory: mock(mockMutation),
-  useUpdateCategory: mock(mockMutation),
-  useDeleteCategory: mock(mockMutation),
-  useGetCategoryUsage: mock(() => ({ data: undefined, isLoading: false, error: null })),
-  getGetUserCategoriesQueryKey: mock(() => ['user-categories']),
-}))
+// Issue #1323: Use centralized categories-api mock (preloaded via bunfig.toml).
+// Calling mock.module() here would clobber the global mock and pollute other tests
+// (CustomCategoryManager, useCustomCategories, etc.). Instead, override return values
+// in beforeEach using the exported mock functions from the preload.
+import {
+  mockUseGetUserCategories,
+} from '@/test/mocks/categories-api'
 
 mock.module('./AllocationBreakdown', () => ({
   AllocationBreakdown: ({
@@ -128,6 +117,13 @@ describe('BudgetCategoryManager', () => {
     mockOnAddCategory = mock(() => Promise.resolve({} as BudgetCategory))
     mockOnUpdateCategory = mock(() => Promise.resolve({} as BudgetCategory))
     mockOnDeleteCategory = mock(() => Promise.resolve(undefined))
+    // Reset useGetUserCategories to empty (non-loading) state for this describe block
+    mockUseGetUserCategories.mockReturnValue({
+      data: [] as CustomCategory[],
+      isLoading: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    })
   })
 
   it('should render empty state when no categories', () => {
