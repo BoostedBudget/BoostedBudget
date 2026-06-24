@@ -116,6 +116,10 @@ func (m *mockTransactionService) SetAnalytics(_ phclient.Analytics) {
 	// no-op in tests
 }
 
+func (m *mockTransactionService) SetAccountRepository(_ repository.AccountRepository) {
+	// no-op in tests
+}
+
 func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
 	m.capturedFilters = filters
 	m.capturedCursor = cursor
@@ -173,6 +177,47 @@ func TestGetTransactions_Success(t *testing.T) {
 	assert.Len(t, output.Body.Transactions, 1)
 	assert.Equal(t, 50, output.Body.Limit)
 	assert.Nil(t, output.Body.NextCursor)
+}
+
+// TestGetTransactions_EmbeddedAccountInResponse verifies that an investment ActivityItem
+// with a populated Account field is serialized correctly through the handler.
+// This is a regression guard: a serialization change that drops the account field
+// would not be caught by unit tests alone.
+func TestGetTransactions_EmbeddedAccountInResponse(t *testing.T) {
+	userID := "user-123"
+	nickname := "My Brokerage"
+	acct := &domain.Account{ID: "acc-invest-1", Nickname: &nickname}
+	item := &domain.ActivityItem{
+		Source:    domain.FeedSourceInvestment,
+		ID:        "inv-tx-1",
+		UserID:    userID,
+		AccountID: "acc-invest-1",
+		Name:      "Dividend",
+		Account:   acct,
+	}
+
+	mockService := &mockTransactionService{
+		listResponse: &services.TransactionListResponse{
+			Transactions: []*domain.ActivityItem{item},
+			Limit:        50,
+		},
+	}
+
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	require.NoError(t, err)
+	require.Len(t, output.Body.Transactions, 1)
+	require.NotNil(t, output.Body.Transactions[0].Account, "embedded account must not be nil for investment rows")
+	assert.Equal(t, "acc-invest-1", output.Body.Transactions[0].Account.ID)
+	require.NotNil(t, output.Body.Transactions[0].Account.Nickname)
+	assert.Equal(t, nickname, *output.Body.Transactions[0].Account.Nickname)
 }
 
 // TestGetTransactions_WithFilters tests transaction listing with filters.

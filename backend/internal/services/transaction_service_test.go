@@ -1062,3 +1062,217 @@ func TestTransactionService_SetReviewed_EmptyIDs(t *testing.T) {
 	assert.Equal(t, int64(0), n)
 	mockRepo.AssertNotCalled(t, "SetReviewed", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
+
+// ── #1329: enrichAccountForInvestmentItems ────────────────────────────────────
+// MockAccountRepository is already defined in account_service_test.go (same package).
+// strPtr is also defined there; both are reused here.
+
+// helper: builds a minimal unified-feed filters struct with IncludeInvestmentActivity=true.
+func investFilters() domain.TransactionFilters {
+	return domain.TransactionFilters{IncludeInvestmentActivity: true}
+}
+
+// TestEnrichAccount_HappyPath verifies that an investment ActivityItem receives the
+// embedded Account (id/name/nickname/mask) when its account_id is found in active accounts.
+func TestEnrichAccount_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	acctID := uuid.New().String()
+	userID := "user-enrich-1"
+	mask := "4321"
+	nick := "My Brokerage"
+
+	mockTxRepo := new(MockTransactionRepository)
+	item := &domain.ActivityItem{
+		Source:    domain.FeedSourceInvestment,
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		AccountID: acctID,
+		Name:      "Buy AAPL",
+		Amount:    100.0,
+	}
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+
+	mockAcctRepo := new(MockAccountRepository)
+	mockAcctRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{}).Return([]domain.Account{
+		{
+			ID:       acctID,
+			Name:     "Brokerage Account",
+			Nickname: &nick,
+			Mask:     &mask,
+			Status:   domain.AccountStatusActive,
+		},
+	}, nil)
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+	svc.SetAccountRepository(mockAcctRepo)
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+
+	got := resp.Transactions[0]
+	require.NotNil(t, got.Account, "Account must be populated for investment row on happy path")
+	assert.Equal(t, acctID, got.Account.ID)
+	assert.Equal(t, "Brokerage Account", got.Account.Name)
+	require.NotNil(t, got.Account.Nickname)
+	assert.Equal(t, "My Brokerage", *got.Account.Nickname)
+	require.NotNil(t, got.Account.Mask)
+	assert.Equal(t, "4321", *got.Account.Mask)
+
+	mockTxRepo.AssertExpectations(t)
+	mockAcctRepo.AssertExpectations(t)
+}
+
+// TestEnrichAccount_ActiveChainRelink verifies that when an investment row's account_id
+// points to a REPLACED account (absent from the active set), but its user_account_id
+// matches an active account, the embedded Account resolves to the active chain account.
+func TestEnrichAccount_ActiveChainRelink(t *testing.T) {
+	ctx := context.Background()
+	replacedAcctID := uuid.New().String()
+	activeAcctID := uuid.New().String()
+	userAccountID := uuid.New().String()
+	userID := "user-enrich-2"
+	nick := "Fidelity Brokerage"
+
+	mockTxRepo := new(MockTransactionRepository)
+	item := &domain.ActivityItem{
+		Source:        domain.FeedSourceInvestment,
+		ID:            uuid.New().String(),
+		UserID:        userID,
+		AccountID:     replacedAcctID,
+		UserAccountID: strPtr(userAccountID),
+		Name:          "Sell TSLA",
+		Amount:        500.0,
+	}
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+
+	// Active account references the same user_account_id; replaced account is absent.
+	mockAcctRepo := new(MockAccountRepository)
+	mockAcctRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{}).Return([]domain.Account{
+		{
+			ID:            activeAcctID,
+			Name:          "Fidelity Account",
+			Nickname:      &nick,
+			UserAccountID: strPtr(userAccountID),
+			Status:        domain.AccountStatusActive,
+		},
+	}, nil)
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+	svc.SetAccountRepository(mockAcctRepo)
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+
+	got := resp.Transactions[0]
+	require.NotNil(t, got.Account, "Account must resolve to active chain account after relink")
+	assert.Equal(t, activeAcctID, got.Account.ID, "must resolve to active account, not replaced")
+	require.NotNil(t, got.Account.Nickname)
+	assert.Equal(t, "Fidelity Brokerage", *got.Account.Nickname)
+
+	mockTxRepo.AssertExpectations(t)
+	mockAcctRepo.AssertExpectations(t)
+}
+
+// TestEnrichAccount_MissingAccount verifies that when neither account_id nor user_account_id
+// resolves to an active account, item.Account stays nil (drawer falls back to "Unknown account").
+func TestEnrichAccount_MissingAccount(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-enrich-3"
+
+	mockTxRepo := new(MockTransactionRepository)
+	item := &domain.ActivityItem{
+		Source:    domain.FeedSourceInvestment,
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		AccountID: uuid.New().String(), // not in active set
+		Name:      "Dividend",
+		Amount:    10.0,
+	}
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+
+	mockAcctRepo := new(MockAccountRepository)
+	mockAcctRepo.On("GetAccountsWithInstitutionFiltered", ctx, userID, repository.AccountFilterOptions{}).Return([]domain.Account{}, nil) // empty active set
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+	svc.SetAccountRepository(mockAcctRepo)
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+
+	assert.Nil(t, resp.Transactions[0].Account, "Account must remain nil when no active account found")
+
+	mockTxRepo.AssertExpectations(t)
+	mockAcctRepo.AssertExpectations(t)
+}
+
+// TestEnrichAccount_NilSafe verifies that when SetAccountRepository is NOT called the
+// service silently skips enrichment and does not panic (all existing tests are unaffected).
+func TestEnrichAccount_NilSafe(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-enrich-4"
+
+	mockTxRepo := new(MockTransactionRepository)
+	item := &domain.ActivityItem{
+		Source:    domain.FeedSourceInvestment,
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		AccountID: uuid.New().String(),
+		Name:      "Buy MSFT",
+		Amount:    200.0,
+	}
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{item}, (*domain.TransactionCursor)(nil), nil)
+
+	// No SetAccountRepository call — accountRepo is nil.
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err, "must not panic or error when accountRepo is nil")
+	require.Len(t, resp.Transactions, 1)
+	assert.Nil(t, resp.Transactions[0].Account, "Account stays nil when accountRepo not wired")
+
+	mockTxRepo.AssertExpectations(t)
+}
+
+// TestEnrichAccount_BankingScopeGuard verifies that banking rows in the same unified feed
+// are NOT given an embedded Account (out-of-scope for #1329).
+func TestEnrichAccount_BankingScopeGuard(t *testing.T) {
+	ctx := context.Background()
+	acctID := uuid.New().String()
+	userID := "user-enrich-5"
+
+	mockTxRepo := new(MockTransactionRepository)
+	bankingItem := &domain.ActivityItem{
+		Source:    domain.FeedSourceBanking,
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		AccountID: acctID,
+		Name:      "Coffee Shop",
+		Amount:    4.5,
+	}
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+
+	// No accounts expectation — the enrichment early-exits when there are no
+	// investment rows, so GetAccountsWithInstitutionFiltered must NOT be called.
+	mockAcctRepo := new(MockAccountRepository)
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+	svc.SetAccountRepository(mockAcctRepo)
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+
+	assert.Nil(t, resp.Transactions[0].Account, "banking rows must NOT receive embedded Account (#1329 scope)")
+
+	mockTxRepo.AssertExpectations(t)
+	// Verify the accounts repo was never queried — banking-only feeds must not pay the extra round-trip.
+	mockAcctRepo.AssertNotCalled(t, "GetAccountsWithInstitutionFiltered", mock.Anything, mock.Anything, mock.Anything)
+}
