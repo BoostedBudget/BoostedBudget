@@ -448,6 +448,33 @@ describe('useInfiniteTransactions', () => {
         expect(invAsInv.investment_price).toBe(150.0)
       })
     })
+
+    it('preserves embedded account field through ActivityItem→FeedRow cast (#1329)', async () => {
+      // Regression guard: toFeedRow uses `as unknown as FeedRow`; any destructuring
+      // change that drops extra fields would silently remove the account from the drawer.
+      const embeddedAccount = { id: 'acc-inv-1', nickname: 'My Brokerage' }
+      const itemWithAccount = {
+        ...makeInvestmentActivityFixture('inv-embedded'),
+        account: embeddedAccount,
+      } as unknown as ActivityItem
+
+      mockGetTransactions.mockResolvedValue({
+        transactions: [itemWithAccount],
+        limit: 50,
+        next_cursor: undefined,
+      })
+
+      const { result } = renderHook(() => useInfiniteTransactions(defaultOpts), {
+        wrapper: createWrapper(),
+      })
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+      const row = result.current.transactions.find((t) => t.id === 'inv-embedded') as InvestmentActivity
+      expect(row?.account).toBeDefined()
+      expect(row?.account?.id).toBe('acc-inv-1')
+      expect(row?.account?.nickname).toBe('My Brokerage')
+    })
   })
 
   describe('updateTransaction cache surgery', () => {
