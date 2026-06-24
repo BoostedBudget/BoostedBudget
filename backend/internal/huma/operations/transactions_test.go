@@ -116,6 +116,10 @@ func (m *mockTransactionService) SetAnalytics(_ phclient.Analytics) {
 	// no-op in tests
 }
 
+func (m *mockTransactionService) SetAccountRepository(_ repository.AccountRepository) {
+	// no-op in tests
+}
+
 func (m *mockTransactionService) ListTransactionsByCursor(ctx context.Context, userID string, filters domain.TransactionFilters, cursor *domain.TransactionCursor, limit int) (*services.TransactionListResponse, error) {
 	m.capturedFilters = filters
 	m.capturedCursor = cursor

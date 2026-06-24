@@ -395,6 +395,7 @@ func main() {
 		privacyService := services.NewPrivacyService(privacyRepo)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		transactionService.SetAnalytics(phClient)
+		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
