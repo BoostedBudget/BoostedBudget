@@ -627,10 +627,17 @@ jobs:
 
       - name: Ensure lcov is installed
         run: |
+          # Self-hosted macOS runners may not have Homebrew in PATH at step launch.
+          # Probe standard locations and prepend before any command-v check.
+          for BREW_DIR in /opt/homebrew/bin /usr/local/bin; do
+            if [ -x "$BREW_DIR/brew" ]; then
+              export PATH="$BREW_DIR:$PATH"
+              echo "$BREW_DIR" >> "$GITHUB_PATH"
+              break
+            fi
+          done
           if ! command -v lcov >/dev/null 2>&1; then
             brew install lcov
-            BREW_PREFIX=$(brew --prefix)
-            echo "$BREW_PREFIX/bin" >> "$GITHUB_PATH"
           fi
           lcov --version
 
