@@ -633,9 +633,16 @@ jobs:
           # Coverage thresholds — FLOOR pattern, not ratchet (#1169).
           # Thresholds: LINES>=63, FUNCTIONS>=67, BRANCHES>=68
           LCOV_FILES=""
-          [ -f coverage/lcov.info ] && LCOV_FILES="$LCOV_FILES -a coverage/lcov.info"
+          PLAIN_FILES=""
+          if [ -f coverage/lcov.info ]; then
+            LCOV_FILES="$LCOV_FILES -a coverage/lcov.info"
+            PLAIN_FILES="$PLAIN_FILES coverage/lcov.info"
+          fi
           for group in a b c d; do
-            [ -f "coverage-conflict/group-$group/lcov.info" ] && LCOV_FILES="$LCOV_FILES -a coverage-conflict/group-$group/lcov.info"
+            if [ -f "coverage-conflict/group-$group/lcov.info" ]; then
+              LCOV_FILES="$LCOV_FILES -a coverage-conflict/group-$group/lcov.info"
+              PLAIN_FILES="$PLAIN_FILES coverage-conflict/group-$group/lcov.info"
+            fi
           done
 
           if [ -z "$LCOV_FILES" ]; then
@@ -644,34 +651,39 @@ jobs:
           fi
 
           mkdir -p coverage
-          lcov $LCOV_FILES -o coverage/combined.lcov
-          echo "::notice::Combined coverage written to coverage/combined.lcov"
+          if command -v lcov &>/dev/null; then
+            lcov $LCOV_FILES -o coverage/combined.lcov
+            echo "::notice::Combined coverage written to coverage/combined.lcov"
 
-          SUMMARY=$(lcov --summary coverage/combined.lcov 2>&1)
-          echo "$SUMMARY" | grep -E "(lines|functions|branches)"
+            SUMMARY=$(lcov --summary coverage/combined.lcov 2>&1)
+            echo "$SUMMARY" | grep -E "(lines|functions|branches)"
 
-          LINES=$(echo "$SUMMARY" | grep "lines" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
-          FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
-          BRANCHES=$(echo "$SUMMARY" | grep "branches" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
+            LINES=$(echo "$SUMMARY" | grep "lines" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
+            FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
+            BRANCHES=$(echo "$SUMMARY" | grep "branches" | grep -oE '[0-9]+\.[0-9]+%' | head -1 | sed 's/%//')
 
-          FAILED=false
-          check_threshold() {
-            local metric=$1 value=$2 threshold=$3
-            if [ -n "$value" ]; then
-              local int_value=$(echo "$value" | cut -d. -f1)
-              if [ "$int_value" -lt "$threshold" ]; then
-                echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
-                return 1
-              else
-                echo "::notice::$metric coverage ${value}% meets threshold ${threshold}%"
+            FAILED=false
+            check_threshold() {
+              local metric=$1 value=$2 threshold=$3
+              if [ -n "$value" ]; then
+                local int_value=$(echo "$value" | cut -d. -f1)
+                if [ "$int_value" -lt "$threshold" ]; then
+                  echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
+                  return 1
+                else
+                  echo "::notice::$metric coverage ${value}% meets threshold ${threshold}%"
+                fi
               fi
-            fi
-            return 0
-          }
-          check_threshold "Lines" "$LINES" 63 || FAILED=true
-          check_threshold "Functions" "$FUNCTIONS" 67 || FAILED=true
-          check_threshold "Branches" "$BRANCHES" 68 || FAILED=true
-          [ "$FAILED" = true ] && exit 1
+              return 0
+            }
+            check_threshold "Lines" "$LINES" 63 || FAILED=true
+            check_threshold "Functions" "$FUNCTIONS" 67 || FAILED=true
+            check_threshold "Branches" "$BRANCHES" 68 || FAILED=true
+            [ "$FAILED" = true ] && exit 1
+          else
+            echo "::warning::lcov not installed — concatenating coverage files without merging (install: brew install lcov)"
+            cat $PLAIN_FILES > coverage/combined.lcov
+          fi
           echo "::endgroup::"
 
       - name: Upload combined coverage report
