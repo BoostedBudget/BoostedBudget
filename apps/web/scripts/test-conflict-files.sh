@@ -25,9 +25,11 @@ run_group() {
     shift 2
     echo "Running Group $name: $label..."
     if [ "$COVERAGE" = true ]; then
+        local group_name
+        group_name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
         bun test --timeout 30000 \
             --coverage --coverage-reporter=lcov \
-            --coverage-dir="$FRONTEND_DIR/coverage-conflict" \
+            --coverage-dir="$FRONTEND_DIR/coverage-conflict/group-$group_name" \
             "$@"
     else
         bun test --timeout 30000 "$@"

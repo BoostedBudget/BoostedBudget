@@ -614,6 +614,10 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
 
+      - name: Typecheck frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run typecheck
+
       - name: Run frontend tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
@@ -630,7 +634,9 @@ jobs:
           # Thresholds: LINES>=63, FUNCTIONS>=67, BRANCHES>=68
           LCOV_FILES=""
           [ -f coverage/lcov.info ] && LCOV_FILES="$LCOV_FILES -a coverage/lcov.info"
-          [ -f coverage-conflict/lcov.info ] && LCOV_FILES="$LCOV_FILES -a coverage-conflict/lcov.info"
+          for group in a b c d; do
+            [ -f "coverage-conflict/group-$group/lcov.info" ] && LCOV_FILES="$LCOV_FILES -a coverage-conflict/group-$group/lcov.info"
+          done
 
           if [ -z "$LCOV_FILES" ]; then
             echo "::error::No coverage files found! Run tests with --coverage first."
