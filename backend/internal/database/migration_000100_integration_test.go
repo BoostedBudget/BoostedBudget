@@ -441,16 +441,31 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		// Insert linked_item for the accounts FK required by transfers
 		liID := seedMigTestLinkedItem(t, tx, userID, suffix)
 
-		// Placeholder account for accounts FK (required by boosts user_id FK check in some DBs)
-		// Actually boosts just needs user_id FK, not accounts. Let's insert directly.
-
-		// Insert boost with transfer suggestion referencing U2.from_user_account_id
-		boostID := uuid.New().String()
-		boostActions := fmt.Sprintf(`{"transfer": {"from_user_account_id": "%s", "to_user_account_id": "other-id"}}`, u2ID)
+		// Boost B1: transfer_suggestion with from_user_account_id = loser U2, to_user_account_id = unrelated "other-id"
+		boostID1 := uuid.New().String()
+		boostActions1 := fmt.Sprintf(`{"transfer": {"from_user_account_id": "%s", "to_user_account_id": "other-id"}}`, u2ID)
 		_, err = tx.Exec(ctx, `
 			INSERT INTO boosts (id, user_id, name, boost_type, actions, trigger_config)
 			VALUES ($1, $2, $3, 'transfer_suggestion', $4::jsonb, '{}'::jsonb)
-		`, boostID, userID, "boost-B-"+suffix, boostActions)
+		`, boostID1, userID, "boost-B1-"+suffix, boostActions1)
+		require.NoError(t, err)
+
+		// Boost B2: transfer_suggestion with to_user_account_id = loser U2, from_user_account_id = unrelated "other-id"
+		boostID2 := uuid.New().String()
+		boostActions2 := fmt.Sprintf(`{"transfer": {"from_user_account_id": "other-id", "to_user_account_id": "%s"}}`, u2ID)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO boosts (id, user_id, name, boost_type, actions, trigger_config)
+			VALUES ($1, $2, $3, 'transfer_suggestion', $4::jsonb, '{}'::jsonb)
+		`, boostID2, userID, "boost-B2-"+suffix, boostActions2)
+		require.NoError(t, err)
+
+		// Boost B3: event-type trigger with trigger_config.filters.user_account_id = loser U2
+		boostID3 := uuid.New().String()
+		boostTrigger3 := fmt.Sprintf(`{"type": "event", "filters": {"user_account_id": "%s"}}`, u2ID)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO boosts (id, user_id, name, boost_type, actions, trigger_config)
+			VALUES ($1, $2, $3, 'transfer_suggestion', '{}'::jsonb, $4::jsonb)
+		`, boostID3, userID, "boost-B3-"+suffix, boostTrigger3)
 		require.NoError(t, err)
 
 		// Insert categorization_rule with account_id condition referencing U2
@@ -466,11 +481,25 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 
 		applyMigration000100(t, tx)
 
-		// Assert boosts JSONB rewritten: from_user_account_id → U1
-		var gotActions string
-		require.NoError(t, tx.QueryRow(ctx, "SELECT actions::text FROM boosts WHERE id = $1", boostID).Scan(&gotActions))
-		assert.Contains(t, gotActions, u1ID, "boosts.actions must reference survivor U1")
-		assert.NotContains(t, gotActions, u2ID, "boosts.actions must not reference loser U2")
+		// Assert boost B1: from_user_account_id rewritten to U1, to_user_account_id ("other-id") preserved
+		var gotActions1 string
+		require.NoError(t, tx.QueryRow(ctx, "SELECT actions::text FROM boosts WHERE id = $1", boostID1).Scan(&gotActions1))
+		assert.Contains(t, gotActions1, u1ID, "boost B1 actions must reference survivor U1 in from_user_account_id")
+		assert.NotContains(t, gotActions1, u2ID, "boost B1 actions must not reference loser U2")
+		assert.Contains(t, gotActions1, "other-id", "boost B1 actions must preserve unrelated to_user_account_id 'other-id'")
+
+		// Assert boost B2: to_user_account_id rewritten to U1, from_user_account_id ("other-id") preserved
+		var gotActions2 string
+		require.NoError(t, tx.QueryRow(ctx, "SELECT actions::text FROM boosts WHERE id = $1", boostID2).Scan(&gotActions2))
+		assert.Contains(t, gotActions2, u1ID, "boost B2 actions must reference survivor U1 in to_user_account_id")
+		assert.NotContains(t, gotActions2, u2ID, "boost B2 actions must not reference loser U2")
+		assert.Contains(t, gotActions2, "other-id", "boost B2 actions must preserve unrelated from_user_account_id 'other-id'")
+
+		// Assert boost B3: trigger_config.filters.user_account_id rewritten to U1
+		var gotTrigger3 string
+		require.NoError(t, tx.QueryRow(ctx, "SELECT trigger_config::text FROM boosts WHERE id = $1", boostID3).Scan(&gotTrigger3))
+		assert.Contains(t, gotTrigger3, u1ID, "boost B3 trigger_config must reference survivor U1 in filters.user_account_id")
+		assert.NotContains(t, gotTrigger3, u2ID, "boost B3 trigger_config must not reference loser U2")
 
 		// Assert categorization_rules conditions rewritten
 		var gotConditions string
@@ -615,6 +644,71 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 			)
 		`).Scan(&nonUniqueExists))
 		assert.False(t, nonUniqueExists, "non-unique index must not exist after up migration")
+	})
+
+	// ─── Scenario H: NULL-mask duplicate collapse ─────────────────────────────
+	t.Run("ScenarioH_NullMaskDuplicateCollapse", func(t *testing.T) {
+		ctx := context.Background()
+		suffix := fmt.Sprintf("H-%d", time.Now().UnixNano())
+
+		userID := seedMigTestUser(t, pool, suffix)
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		rollbackMigration000100(t, tx)
+
+		instBlind := "blind-inst-H-" + suffix
+
+		// U_H1: survivor (earliest created_at), mask = NULL, mask_blind_idx = NULL
+		tH1 := time.Now().Add(-2 * time.Hour)
+		uH1ID := seedUserAccount(t, tx, userID, instBlind, "", "", tH1)
+
+		// U_H2: loser (later created_at), mask = NULL, mask_blind_idx = NULL
+		tH2 := time.Now().Add(-1 * time.Hour)
+		uH2ID := seedUserAccount(t, tx, userID, instBlind, "", "", tH2)
+
+		applyMigration000100(t, tx)
+
+		// U_H2 must be deleted (NULL mask_blind_idx is treated as equal by NULLS NOT DISTINCT)
+		var uH2Count int
+		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id = $1", uH2ID).Scan(&uH2Count))
+		assert.Equal(t, 0, uH2Count, "loser U_H2 (NULL mask) must be deleted after migration")
+
+		// U_H1 must survive
+		var uH1Count int
+		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id = $1", uH1ID).Scan(&uH1Count))
+		assert.Equal(t, 1, uH1Count, "survivor U_H1 (NULL mask) must still exist after migration")
+	})
+
+	// ─── Scenario I: NULL institution_id_blind_idx rows untouched ────────────
+	t.Run("ScenarioI_NullBlindIdxUntouched", func(t *testing.T) {
+		ctx := context.Background()
+		suffix := fmt.Sprintf("I-%d", time.Now().UnixNano())
+
+		userID := seedMigTestUser(t, pool, suffix)
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		rollbackMigration000100(t, tx)
+
+		// Both rows have institution_id_blind_idx = NULL; the dedup CTE's
+		// WHERE institution_id_blind_idx IS NOT NULL predicate excludes them.
+		tI1 := time.Now().Add(-2 * time.Hour)
+		uI1ID := seedUserAccount(t, tx, userID, "", "", "", tI1)
+
+		tI2 := time.Now().Add(-1 * time.Hour)
+		uI2ID := seedUserAccount(t, tx, userID, "", "", "", tI2)
+
+		applyMigration000100(t, tx)
+
+		// Both rows must still exist — dedup does not touch NULL-blind-idx rows
+		var count int
+		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id IN ($1, $2)", uI1ID, uI2ID).Scan(&count))
+		assert.Equal(t, 2, count, "rows with NULL institution_id_blind_idx must not be touched by dedup migration")
 	})
 
 	// ─── Scenario G: Customization merge ─────────────────────────────────────
