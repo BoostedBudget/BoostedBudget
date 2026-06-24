@@ -7,36 +7,36 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
-import '@/test/mocks/registry'
+// Issue #1323: Use centralized registry mock (preloaded via bunfig.toml).
+// Inline mock.module('./registry') would clobber the global mock and pollute
+// Widget Registry tests that run in the same batch.
+import { mockGetWidget } from '@/test/mocks/registry'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 
-// Mock the registry to return controlled widget definitions
-const mockGetWidget = mock((type: string) => {
-  if (type === 'balance-history') {
-    return {
-      type: 'balance-history',
-      emptyState: {
-        icon: <svg data-testid="widget-icon" />,
-        title: 'No balance history yet',
-        noAccountsDescription: 'Connect a bank account to track your balances over time',
-        noDataDescription: 'No balance data for this time period',
-      },
-    }
-  }
-  if (type === 'no-empty-state-widget') {
-    return { type: 'no-empty-state-widget' }
-  }
-  return undefined
-})
+// Widget definitions used by this test file
+const balanceHistoryWidget = {
+  type: 'balance-history',
+  emptyState: {
+    icon: <svg data-testid="widget-icon" />,
+    title: 'No balance history yet',
+    noAccountsDescription: 'Connect a bank account to track your balances over time',
+    noDataDescription: 'No balance data for this time period',
+  },
+}
 
-mock.module('./registry', () => ({
-  getWidget: mockGetWidget,
-  registerWidget: mock(() => {}),
-}))
-mock.module('@/features/dashboard/widgets/registry', () => ({
-  getWidget: mockGetWidget,
-  registerWidget: mock(() => {}),
-}))
+const noEmptyStateWidget = { type: 'no-empty-state-widget' }
+
+// Default mock context used across all describes
+const defaultDashboardContext = {
+  filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
+  setFilters: mock(() => {}),
+  timeframe: 'this_month' as const,
+  setTimeframe: mock(() => {}),
+  isEditing: false,
+  setIsEditing: mock(() => {}),
+  hasAccounts: false,
+  accountsLoading: false,
+}
 
 import { WidgetEmptyState } from './WidgetEmptyState'
 
@@ -46,15 +46,14 @@ const renderWithRouter = (ui: React.ReactNode) =>
 describe('WidgetEmptyState', () => {
   describe('when no accounts connected (hasAccounts: false)', () => {
     beforeEach(() => {
+      mockGetWidget.mockImplementation((type: string) => {
+        if (type === 'balance-history') return balanceHistoryWidget as never
+        if (type === 'no-empty-state-widget') return noEmptyStateWidget as never
+        return undefined
+      })
       mockUseDashboardContext.mockReturnValue({
-        filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
-        setFilters: mock(() => {}),
-        timeframe: 'this_month' as const,
-        setTimeframe: mock(() => {}),
-        isEditing: false,
-        setIsEditing: mock(() => {}),
+        ...defaultDashboardContext,
         hasAccounts: false,
-        accountsLoading: false,
       })
     })
 
@@ -78,15 +77,13 @@ describe('WidgetEmptyState', () => {
 
   describe('when accounts exist (hasAccounts: true)', () => {
     beforeEach(() => {
+      mockGetWidget.mockImplementation((type: string) => {
+        if (type === 'balance-history') return balanceHistoryWidget as never
+        return undefined
+      })
       mockUseDashboardContext.mockReturnValue({
-        filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
-        setFilters: mock(() => {}),
-        timeframe: 'this_month' as const,
-        setTimeframe: mock(() => {}),
-        isEditing: false,
-        setIsEditing: mock(() => {}),
+        ...defaultDashboardContext,
         hasAccounts: true,
-        accountsLoading: false,
       })
     })
 
@@ -103,15 +100,13 @@ describe('WidgetEmptyState', () => {
 
   describe('accessibility', () => {
     beforeEach(() => {
+      mockGetWidget.mockImplementation((type: string) => {
+        if (type === 'balance-history') return balanceHistoryWidget as never
+        return undefined
+      })
       mockUseDashboardContext.mockReturnValue({
-        filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
-        setFilters: mock(() => {}),
-        timeframe: 'this_month' as const,
-        setTimeframe: mock(() => {}),
-        isEditing: false,
-        setIsEditing: mock(() => {}),
+        ...defaultDashboardContext,
         hasAccounts: false,
-        accountsLoading: false,
       })
     })
 
@@ -123,15 +118,13 @@ describe('WidgetEmptyState', () => {
 
   describe('fallback when no emptyState config', () => {
     beforeEach(() => {
+      mockGetWidget.mockImplementation((type: string) => {
+        if (type === 'no-empty-state-widget') return noEmptyStateWidget as never
+        return undefined
+      })
       mockUseDashboardContext.mockReturnValue({
-        filters: { startDate: '2024-01-01', endDate: '2024-01-31' },
-        setFilters: mock(() => {}),
-        timeframe: 'this_month' as const,
-        setTimeframe: mock(() => {}),
-        isEditing: false,
-        setIsEditing: mock(() => {}),
+        ...defaultDashboardContext,
         hasAccounts: false,
-        accountsLoading: false,
       })
     })
 

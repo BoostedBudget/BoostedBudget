@@ -30,45 +30,19 @@ import {
   mockDismissGettingStarted,
 } from '@/test/mocks/dashboard-wrapper-hooks'
 
-// Local mock for useTrackEvent — avoids posthog module resolution ordering issues in full suite
-const mockTrackEvent = mock(() => {})
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-mock.module('../../../shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-mock.module('@/features/dashboard/hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-mock.module('../hooks/useDashboardData', () => ({
-  useDashboardData: (...args: unknown[]) => mockUseDashboardData(...args),
-}))
-
-mock.module('@/features/dashboard/hooks/useDashboardLayout', () => ({
-  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
-}))
-mock.module('../hooks/useDashboardLayout', () => ({
-  useDashboardLayout: (...args: unknown[]) => mockUseDashboardLayout(...args),
-}))
-
-mock.module('@/features/dashboard/hooks/useDashboardOnboarding', () => ({
-  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
-}))
-mock.module('../hooks/useDashboardOnboarding', () => ({
-  useDashboardOnboarding: (...args: unknown[]) => mockUseDashboardOnboarding(...args),
-}))
-
-mock.module('@/features/dashboard/hooks/useGettingStarted', () => ({
-  useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
-}))
-mock.module('../hooks/useGettingStarted', () => ({
-  useGettingStarted: (...args: unknown[]) => mockUseGettingStarted(...args),
-}))
-
-// Mock child components (these are isolated mocks specific to this test)
+// Issue #1323: hook mocks (useDashboardData, useDashboardLayout, useDashboardOnboarding,
+// useGettingStarted) are now registered via the dashboard-wrapper-hooks.ts preload
+// (loaded via bunfig.toml). The preload's mock.module() calls prevent process-global
+// pollution of subsequent test files.
+//
+// DashboardGrid and WidgetCatalog component stubs are kept as inline mock.module()
+// calls here because DashboardPage imports them via the '../widgets' barrel file, and
+// Bun does not normalize barrel-re-exported module IDs to the same cache key as the
+// @/ alias registered by the preload. DashboardGrid.test.tsx and WidgetCatalog.test.tsx
+// run via test-conflict-files.sh (from /tmp without bunfig.toml preloads) so they are
+// NOT affected by these inline mocks.
 mock.module('../widgets/DashboardGrid', () => ({
   DashboardGrid: () => <div data-testid="dashboard-grid">Dashboard Grid</div>,
 }))
@@ -78,6 +52,8 @@ mock.module('../widgets/WidgetCatalog', () => ({
     isOpen ? <div data-testid="widget-catalog">Widget Catalog</div> : null,
 }))
 
+// GettingStartedChecklist is mocked locally since it has no preload and the test needs a
+// controllable stub with dismiss/step callbacks.
 mock.module('./GettingStartedChecklist', () => ({
   GettingStartedChecklist: ({ onDismiss, onStepClick }: { onDismiss: () => void; onStepClick?: (stepId: string) => void }) => (
     <div data-testid="getting-started-checklist">

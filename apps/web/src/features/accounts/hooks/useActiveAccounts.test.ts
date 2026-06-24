@@ -16,14 +16,13 @@ import {
   mockRefetchAccounts,
 } from '@/test/mocks/accounts-api'
 import { mockPosthogCapture } from '@/test/mocks/posthog'
-import { mockUseUser } from '@/test/mocks/clerk'
+import { mockUseUser, defaultClerkMock } from '@/test/mocks/clerk'
 
-// Re-assert the Clerk mock using the preloaded mockUseUser so that any inline
-// mock.module('@clerk/react-router', ...) call in another test file (e.g.
-// usePostHogIdentify.test.tsx) does not shadow mockUseUser here.
-mock.module('@clerk/react-router', () => ({
-  useUser: mockUseUser,
-}))
+// Issue #1323: Re-assert the FULL Clerk mock so that any inline mock.module()
+// in a prior test file (e.g. usePostHogIdentify.test.tsx) does not shadow the
+// full defaultClerkMock. Using defaultClerkMock restores all exports (useAuth,
+// useUser, ClerkProvider, etc.) instead of just useUser — preventing pollution.
+mock.module('@clerk/react-router', () => defaultClerkMock)
 
 // ---------------------------------------------------------------------------
 // Test fixtures

@@ -1,19 +1,13 @@
 # Bun configuration for BoostedBudget frontend
-# Issue #575: Bun-native test configuration
+# Issue #1323: Centralized test preloads (mocks loaded for all tests)
 
 [install]
-# Don't freeze lockfile during development
 frozen = false
 
 [test]
-# Preload files for bun test (order matters!)
-# 1. happydom.ts - Register DOM globals first
-# 2. testing-library.ts - Setup testing library matchers
-# 3+. Centralized mocks (Issue #575) - prevent mock.module() pollution
-#
-# NOTE: dashboard-hooks.ts mocks WRAPPER hooks (useDashboardData, useCashFlowSummary, etc.)
-# dashboard-api.ts and analytics-api.ts mock API hooks (useGetDashboardPreferences, etc.)
-# These don't conflict because they mock different modules at different layers.
+# Order: DOM → Testing Library → Centralized Mocks (Issue #575)
+# Note: wrapper-level mocks (dashboard-hooks, dashboard-api) don't conflict
+#       because they mock different modules at different abstraction layers.
 preload = [
   "./src/test/happydom.ts",
   "./src/test/testing-library.ts",
@@ -44,6 +38,7 @@ preload = [
   "./src/test/mocks/shared-charts.ts",
   "./src/test/mocks/net-worth-hooks.ts",
   "./src/test/mocks/react-colorful.tsx",
+  "./src/test/mocks/toggle-group.tsx",
   "./src/test/mocks/savings-goals-api.ts",
   "./src/test/mocks/admin-api.ts",
   "./src/test/mocks/admin-subscriptions-api.ts",
@@ -56,16 +51,8 @@ preload = [
   "./src/test/mocks/investments-api.ts",
   "./src/test/mocks/investments-hooks.ts"
 ]
-# NOTE: cash-flow-hooks.ts is NOT preloaded because hook implementation tests
-# (useCashFlowData.test.tsx) need real hooks with API-level mocks.
-# Component tests that need wrapper mocks should import cash-flow-hooks.ts directly.
+# NOTE: cash-flow-hooks.ts excluded — real hook implementation tests need API-level mocks only.
+# NOTE: Tests requiring real implementations run via test-conflict-files.sh from /tmp.
+#       This avoids loading these preloads (toggle-group.tsx, registry.ts, etc.).
 
-# NOTE: DashboardContext.test.tsx and registry.test.ts need real implementations.
-# They must be run separately with: bun test --config bunfig.real.toml <file>
-# Bun doesn't support exclude patterns for test files (feature request #21395)
-
-# Generous timeout for CI stability (Issues #180, #219, #422)
 timeout = 30000
-
-# Note: Coverage thresholds will be enforced in CI scripts
-# Bun's built-in coverage is used via --coverage flag

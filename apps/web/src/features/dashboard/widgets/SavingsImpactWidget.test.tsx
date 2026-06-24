@@ -19,13 +19,8 @@ import {
 import {
   mockUseSavingsImpactData,
 } from '@/test/mocks/savings-impact-hooks'
-import { mock } from 'bun:test'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { mockPosthogCapture } from '@/test/mocks/posthog'
-
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
 
 const { SavingsImpactWidget } = await import('./SavingsImpactWidget')
 

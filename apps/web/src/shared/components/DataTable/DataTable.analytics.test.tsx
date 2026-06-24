@@ -1,15 +1,9 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, fireEvent, act } from '@testing-library/react'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import { DataTable } from './DataTable'
 import type { ColumnDef, SortState } from './types'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
-
-// Narrow, focused file — mock.module is process-global but safe here since
-// this file tests only analytics behavior and runs in its own Bun process.
-const mockTrackEvent = mock(() => {})
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
 
 type Row = { id: string; name: string; amount: number }
 

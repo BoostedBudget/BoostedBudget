@@ -10,24 +10,12 @@ import { mockUseGetUserTags } from '@/test/mocks/tags-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseGetUserProfile, mockRefetchUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers, mockRefetchSubscriptionTiers } from '@/test/mocks/subscription-api'
-
-// Categories API mock (no centralized mock yet)
-const mockUseGetUserCategories = mock(() => ({
-  data: [],
-  isLoading: false,
-  error: null,
-}))
-
-const mockUseGetPlaidCategories = mock(() => ({
-  data: [],
-  isLoading: false,
-  error: null,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
-  useGetUserCategories: mockUseGetUserCategories,
-  useGetPlaidCategories: mockUseGetPlaidCategories,
-}))
+// Issue #1323: Use centralized categories-api mock (preloaded via bunfig.toml).
+// Inline mock.module() would clobber the global mock and pollute downstream tests.
+import {
+  mockUseGetUserCategories,
+  mockUseGetPlaidCategories,
+} from '@/test/mocks/categories-api'
 
 mock.module('./AutoCategorizationPage', () => ({
   AutoCategorizationPage: ({ categories, accounts, tags, maxRules, currentTier }: { categories: string[][], accounts?: Account[], tags?: UserTag[], maxRules?: number, currentTier?: string }) => (

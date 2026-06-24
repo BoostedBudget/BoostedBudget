@@ -16,10 +16,6 @@ import { mockToastError } from '@/test/mocks/sonner'
 import { renderWithQuery } from '@/test/utils/queryTestUtils'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 const { NotificationConfirmMatch } = await import('./NotificationConfirmMatch')
 
 describe('NotificationConfirmMatch', () => {

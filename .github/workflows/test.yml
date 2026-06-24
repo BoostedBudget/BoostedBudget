@@ -604,7 +604,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.3.14"
 
       - name: Install workspace dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
@@ -614,32 +614,93 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: bun run lint
 
-      - name: Run bun:test tests with coverage
+      - name: Typecheck frontend
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: bun run typecheck
+
+      - name: Run frontend tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
-          echo "::group::Running bun:test tests with coverage"
-          bun run test:coverage
+          echo "::group::Running frontend tests with coverage"
+          bun run test:ci
           echo "::endgroup::"
 
-      - name: Run real implementation tests with coverage
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+      - name: Ensure lcov is installed
         run: |
-          echo "::group::Running real-implementation tests with coverage"
-          bun run test:real:coverage
-          echo "::endgroup::"
-
-      - name: Run isolated tests with coverage
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
-        run: |
-          echo "::group::Running isolated tests with coverage"
-          bun run test:isolated:coverage
-          echo "::endgroup::"
+          if ! command -v lcov >/dev/null 2>&1; then
+            brew install lcov
+            BREW_PREFIX=$(brew --prefix)
+            echo "$BREW_PREFIX/bin" >> "$GITHUB_PATH"
+          fi
+          lcov --version
 
       - name: Combine coverage reports and enforce thresholds
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
           echo "::group::Combining coverage reports and checking thresholds"
-          bun run test:coverage:combine:check
+          # Merge lcov from test-regular.sh (coverage/) and test-conflict-files.sh (coverage-conflict/)
+          # Coverage thresholds — FLOOR pattern, not ratchet (#1169).
+          # LINES>=63 enforced; FUNCTIONS/BRANCHES informational (Bun LCOV emits no per-fn/branch data)
+          LCOV_FILES=""
+          PLAIN_FILES=""
+          if [ -f coverage/lcov.info ]; then
+            LCOV_FILES="$LCOV_FILES -a coverage/lcov.info"
+            PLAIN_FILES="$PLAIN_FILES coverage/lcov.info"
+          fi
+          for group in a b c d; do
+            if [ -f "coverage-conflict/group-$group/lcov.info" ]; then
+              LCOV_FILES="$LCOV_FILES -a coverage-conflict/group-$group/lcov.info"
+              PLAIN_FILES="$PLAIN_FILES coverage-conflict/group-$group/lcov.info"
+            fi
+          done
+
+          if [ -z "$LCOV_FILES" ]; then
+            echo "::error::No coverage files found! Run tests with --coverage first."
+            exit 1
+          fi
+
+          mkdir -p coverage
+          if command -v lcov &>/dev/null; then
+            lcov $LCOV_FILES -o coverage/combined.lcov
+            echo "::notice::Combined coverage written to coverage/combined.lcov"
+
+            SUMMARY=$(lcov --summary coverage/combined.lcov 2>&1)
+            echo "$SUMMARY" | grep -E "(lines|functions|branches)"
+
+            LINES=$(echo "$SUMMARY"     | grep "lines"     | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+            FUNCTIONS=$(echo "$SUMMARY" | grep "functions" | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+            BRANCHES=$(echo "$SUMMARY"  | grep "branches"  | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+
+            FAILED=false
+            check_threshold() {
+              local metric=$1 value=$2 threshold=$3 required=${4:-false}
+              if [ -z "$value" ]; then
+                if [ "$required" = true ]; then
+                  echo "::error::$metric coverage could not be parsed from lcov summary — gate cannot run"
+                  return 1
+                fi
+                echo "::notice::$metric coverage not available from Bun LCOV — not gated"
+                return 0
+              fi
+              if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+                echo "::error::$metric coverage value '${value}' is not numeric — gate cannot run"
+                return 1
+              fi
+              local int_value=${value%%.*}
+              if [ "$int_value" -lt "$threshold" ]; then
+                echo "::error::$metric coverage ${value}% is below threshold ${threshold}%"
+                return 1
+              fi
+              echo "::notice::$metric coverage ${value}% meets threshold ${threshold}%"
+            }
+            check_threshold "Lines"     "$LINES"     63 true  || FAILED=true
+            check_threshold "Functions" "$FUNCTIONS" 67 false || FAILED=true
+            check_threshold "Branches"  "$BRANCHES"  68 false || FAILED=true
+            [ "$FAILED" = true ] && exit 1
+          else
+            echo "::error::lcov is required for coverage threshold enforcement but is not installed. Install with: brew install lcov"
+            exit 1
+          fi
           echo "::endgroup::"
 
       - name: Upload combined coverage report
@@ -650,7 +711,6 @@ jobs:
           name: frontend-coverage-${{ github.run_id }}
           path: |
             ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/combined.lcov
-            ${{ env.UNIQUE_WORKSPACE }}/apps/web/coverage/html/
           retention-days: 1
           if-no-files-found: warn
 

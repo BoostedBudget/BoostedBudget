@@ -19,11 +19,7 @@ mock.module('../goalTemplates', () => ({
   },
 }))
 
-// Analytics mocks (must be before component import)
-const mockTrackEvent = mock(() => {})
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'

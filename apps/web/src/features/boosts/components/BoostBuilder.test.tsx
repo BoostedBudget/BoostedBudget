@@ -6,7 +6,7 @@
  * Tests for the main rule builder form.
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -29,11 +29,6 @@ import { mockNavigate } from '@/test/mocks/react-router'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 import { mockTrackEvent } from '@/test/mocks/track-event'
-
-// Re-register to ensure mock is current for this test file's execution order
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
 
 const mockBoost: Boost = {
   id: 'boost-1',
