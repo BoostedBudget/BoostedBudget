@@ -5,21 +5,13 @@
  * Issue #1184: Coming Soon state when login is disabled
  */
 
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { mockUseClerk, createMockClerk } from '@/test/mocks/clerk'
 import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
-// Mock useTrackEvent before FinalCTA is imported so the component always picks
-// up our spy regardless of module-mock ordering from other test files.
-const mockTrackEvent = mock(() => {})
-mock.module('../../../shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
-// Import after mock.module so the component's static dependency on useTrackEvent
-// resolves to the mock above.
 import { FinalCTA } from './FinalCTA'
 
 function renderFinalCTA() {

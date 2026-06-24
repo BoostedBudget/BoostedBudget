@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
 import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
-import * as ReactRouterDom from 'react-router-dom'
 import { MemoryRouter } from 'react-router-dom'
 import { TierActionButton } from './TierActionButton'
 import type { PricingState } from '../hooks/usePricingContext'
@@ -12,12 +11,10 @@ import {
   mockCreatePaddleCheckoutMutateAsync,
 } from '@/test/mocks/subscription-api'
 import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
-
-const mockNavigate = mock(() => {})
-mock.module('react-router-dom', () => ({
-  ...ReactRouterDom,
-  useNavigate: () => mockNavigate,
-}))
+// Issue #1323: Use centralized react-router-dom mock (preloaded via bunfig.toml).
+// Inline mock.module('react-router-dom') re-asserts the module globally and pollutes
+// other tests. The centralized mock already stubs useNavigate with mockNavigate.
+import { mockNavigate } from '@/test/mocks/react-router'
 
 function makeTier(priceMonthly: number): SubscriptionTier {
   return {

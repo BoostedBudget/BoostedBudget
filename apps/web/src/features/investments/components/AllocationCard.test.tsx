@@ -13,10 +13,6 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { AllocationCard } from './AllocationCard'
 import type { AllocationConfig } from '../hooks/usePortfolioAllocationConfig'
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 const DEFAULT_CONFIG: AllocationConfig = {
   include: [],
   group_by: 'security_type',

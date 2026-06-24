@@ -25,12 +25,6 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { createQueryWrapper } from '@/test/utils/queryTestUtils'
 import { useBoostSuggestionActions } from './useBoostSuggestionActions'
 
-// Mirror NotificationAcceptReject.test.tsx: declare mock.module in the test file too
-// to ensure it applies before the hook module is resolved in this file's scope.
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 describe('useBoostSuggestionActions', () => {
   beforeEach(() => {
     mockUseAcceptTransferSuggestion.mockClear()
