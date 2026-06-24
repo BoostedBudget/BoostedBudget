@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
@@ -11,7 +11,6 @@ import type { CustomCategory } from '@boostedbudget/api-client/models'
 
 import '@/test/mocks/shared-charts'
 import '@/test/mocks/react-router'
-import { mockTrackEvent } from '@/test/mocks/track-event'
 
 // Issue #1323: toggle-group is centrally mocked via bunfig.toml preload (toggle-group.tsx)
 

@@ -4,7 +4,7 @@
  * Tests: loading, error, empty-state (PlaidLinkButton), and data states.
  */
 
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import userEvent from '@testing-library/user-event'
