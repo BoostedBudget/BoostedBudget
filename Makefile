@@ -177,7 +177,9 @@ test-all:
 	@if command -v lcov &> /dev/null; then \
 		lcov_files=""; \
 		[ -f apps/web/coverage/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage/lcov.info"; \
-		[ -f apps/web/coverage-conflict/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage-conflict/lcov.info"; \
+		for group in a b c d; do \
+			[ -f "apps/web/coverage-conflict/group-$$group/lcov.info" ] && lcov_files="$$lcov_files -a apps/web/coverage-conflict/group-$$group/lcov.info"; \
+		done; \
 		if [ -n "$$lcov_files" ]; then \
 			lcov $$lcov_files -o apps/web/coverage/combined.lcov; \
 			echo "✅ Frontend combined coverage: apps/web/coverage/combined.lcov"; \
