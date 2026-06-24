@@ -5,9 +5,11 @@
  * Tests the improved empty state (direct CTA button, benefit-focused copy)
  * and verifies the Monthly Sync Limits card is fully removed.
  *
- * NOTE: This file uses local component stubs that could pollute AccountTable
- * and AccountCard tests if run in the same process. It is intentionally
- * isolated via scripts/test-isolated.sh (#839).
+ * Issue #1323: This test runs via test-conflict-files.sh (from /tmp) where the
+ * inline mock.module() calls below are process-isolated and cannot pollute other
+ * test files. AccountCard.test.tsx, AccountTable.test.tsx, useAccountFilters.test.ts,
+ * useAccountCustomization.test.tsx, AccountCustomizationModal.test.tsx, and
+ * confirmation-dialog.test.tsx run in separate groups within test-conflict-files.sh.
  */
 
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
@@ -16,7 +18,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ============================================================================
-// Local component stubs — only affect modules within this feature folder
+// Local component stubs — safe because this file runs from /tmp (no bunfig.toml)
 // ============================================================================
 
 // Simplify AccountCustomizationModal to avoid complex dependencies

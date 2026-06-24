@@ -45,7 +45,10 @@ EXCLUDE_PATTERNS=(
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     # Issue #1323 Task 4: BoostsManagePage FIXED — confirmed passes in full suite.
     # Moved to main batch; entry removed from EXCLUDE_PATTERNS.
-    # AccountsPage uses local component mocks that can pollute AccountTable etc. (#839)
+    # Issue #1323 (final task): AccountsPage moved to test-conflict-files.sh Group C.
+    # Its inline mock.module() calls (AccountCard, AccountTable, AccountCustomizationModal,
+    # ConfirmationDialog, useAccountFilters, useAccountCustomization) pollute sibling tests
+    # when run in the same process. Running from /tmp ensures process isolation.
     "src/features/accounts/AccountsPage.test.tsx"
     # Issue #1323: toggle-group.test.tsx moved to test-conflict-files.sh; centralized mock
     # now in bunfig.toml preload so individual test files no longer need inline mocks.
