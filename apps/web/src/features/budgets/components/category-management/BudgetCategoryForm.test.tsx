@@ -1,10 +1,12 @@
 // API hooks are mocked via bunfig.toml preloads (categories-api.ts, savings-goals-api.ts).
 // Do NOT add mock.module() for those here — it leaks across test files in bun:test.
+// Issue #1323: Use centralized mockUseGetUserCategories from categories-api preload.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import type { BudgetCategory } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models'
 import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
+import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 
 const mockUsePreviewCategories = mock(() => ({
   preview: null,
@@ -12,18 +14,9 @@ const mockUsePreviewCategories = mock(() => ({
   error: null,
 }))
 
+// usePreviewCategories is a local hook not preloaded — inline mock is safe (not polluting)
 mock.module('../../hooks/usePreviewCategories', () => ({
   usePreviewCategories: mockUsePreviewCategories,
-}))
-
-const mockUseGetUserCategories = mock(() => ({
-  data: [] as CustomCategory[],
-  isLoading: false,
-  error: null,
-}))
-
-mock.module('@boostedbudget/api-client/endpoints/categories/categories', () => ({
-  useGetUserCategories: mockUseGetUserCategories,
 }))
 
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
@@ -124,7 +117,8 @@ describe('BudgetCategoryForm', () => {
       loading: false,
       error: null,
     })
-    mockUseGetUserCategories.mockClear()
+    // Issue #1323: mockUseGetUserCategories is the centralized mock from categories-api.ts preload.
+    // Set a per-test default so tests see a non-loading list of categories.
     mockUseGetUserCategories.mockReturnValue({
       data: defaultUserCategories,
       isLoading: false,

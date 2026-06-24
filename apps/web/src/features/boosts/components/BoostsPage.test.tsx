@@ -28,10 +28,6 @@ mock.module('./BoostsTab', () => ({
   BoostsTab: () => <div data-testid="boosts-page-mock">Boosts Page</div>,
 }))
 
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockTrackEvent,
-}))
-
 import { renderWithQueryAndWrapper } from '@/test/utils/queryTestUtils'
 import { BoostsPage } from './BoostsPage'
 

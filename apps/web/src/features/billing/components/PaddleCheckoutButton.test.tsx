@@ -8,15 +8,9 @@ import {
   mockCreatePaddleCheckoutMutateAsync,
 } from '@/test/mocks/subscription-api'
 import { mockPaddleCheckoutResponse } from '@/test/fixtures/paddleFixtures'
-import { toast } from 'sonner'
-
-// Mock toast
-mock.module('sonner', () => ({
-  toast: {
-    error: mock(() => {}),
-    success: mock(() => {}),
-  },
-}))
+// Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
+// Inline mock.module('sonner') would clobber the global mock and pollute other tests.
+import { mockToastError } from '@/test/mocks/sonner'
 
 const createTestQueryClient = () =>
   new QueryClient({
@@ -230,7 +224,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Please sign in to subscribe')
+        expect(mockToastError).toHaveBeenCalledWith('Please sign in to subscribe')
       })
     })
 
@@ -244,7 +238,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Invalid subscription tier selected')
+        expect(mockToastError).toHaveBeenCalledWith('Invalid subscription tier selected')
       })
     })
 
@@ -258,7 +252,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Payment system error. Please try again later.')
+        expect(mockToastError).toHaveBeenCalledWith('Payment system error. Please try again later.')
       })
     })
 
@@ -272,7 +266,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Failed to start checkout. Please try again.')
+        expect(mockToastError).toHaveBeenCalledWith('Failed to start checkout. Please try again.')
       })
     })
   })
@@ -289,7 +283,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Payment system not loaded. Please refresh the page.')
+        expect(mockToastError).toHaveBeenCalledWith('Payment system not loaded. Please refresh the page.')
       })
 
       expect(mockCreatePaddleCheckoutMutateAsync).not.toHaveBeenCalled()
@@ -354,7 +348,7 @@ describe('PaddleCheckoutButton', () => {
       await userEvent.click(button)
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalled()
+        expect(mockToastError).toHaveBeenCalled()
       })
 
       // Button should be re-enabled after error

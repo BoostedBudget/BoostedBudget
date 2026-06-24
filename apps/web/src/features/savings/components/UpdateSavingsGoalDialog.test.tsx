@@ -5,23 +5,7 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import React from 'react'
 import { mockUseUpdateSavingsGoal, mockUpdateSavingsGoalMutateAsync } from '@/test/mocks/savings-goals-api'
 
-const mockTrackEvent = mock(() => {})
-const mockUseTrackEvent = mock(() => mockTrackEvent)
-
-mock.module('@/shared/hooks/useTrackEvent', () => ({
-  useTrackEvent: () => mockUseTrackEvent(),
-}))
-
-import * as RealAnalyticsEvents from '@/shared/analytics/events'
-
-mock.module('@/shared/analytics/events', () => ({
-  ...RealAnalyticsEvents,
-  ANALYTICS_EVENTS: {
-    ...RealAnalyticsEvents.ANALYTICS_EVENTS,
-    SAVINGS_GOAL_EDITED: 'savings_goal_edited',
-    SAVINGS_GOAL_PROGRESS_BASIS_CHANGED: 'savings_goal_progress_basis_changed',
-  },
-}))
+import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -64,7 +48,6 @@ describe('UpdateSavingsGoalDialog', () => {
     mockUpdateSavingsGoalMutateAsync.mockClear()
     mockUseUpdateSavingsGoal.mockClear()
     mockTrackEvent.mockClear()
-    mockUseTrackEvent.mockClear()
     mockOnCancel.mockClear()
     mockOnGoalUpdated.mockClear()
     mockUseUpdateSavingsGoal.mockReturnValue({
