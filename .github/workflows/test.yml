@@ -625,6 +625,9 @@ jobs:
           bun run test:ci
           echo "::endgroup::"
 
+      - name: Ensure lcov is installed
+        run: command -v lcov >/dev/null 2>&1 || brew install lcov
+
       - name: Combine coverage reports and enforce thresholds
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
         run: |
@@ -681,8 +684,8 @@ jobs:
             check_threshold "Branches" "$BRANCHES" 68 || FAILED=true
             [ "$FAILED" = true ] && exit 1
           else
-            echo "::warning::lcov not installed — concatenating coverage files without merging (install: brew install lcov)"
-            cat $PLAIN_FILES > coverage/combined.lcov
+            echo "::error::lcov is required for coverage threshold enforcement but is not installed. Install with: brew install lcov"
+            exit 1
           fi
           echo "::endgroup::"
 
