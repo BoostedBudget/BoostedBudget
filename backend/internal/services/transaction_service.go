@@ -93,6 +93,11 @@ type TransactionService interface {
 	// SetAnalytics sets the PostHog analytics client for event capture (Issue #1210).
 	// Nil-safe: calling Capture on nil analytics is a no-op.
 	SetAnalytics(analytics phclient.Analytics)
+
+	// SetAccountRepository wires in the account repository so the service can populate
+	// ActivityItem.Account for investment rows in the unified feed (#1329).
+	// Nil-safe: if not called, enrichment is silently skipped.
+	SetAccountRepository(accountRepo repository.AccountRepository)
 }
 
 // TransactionListResponse contains paginated transaction results with metadata.
@@ -118,6 +123,7 @@ type transactionService struct {
 	repo               repository.TransactionRepository
 	customCategoryRepo repository.CustomCategoryRepository
 	analytics          phclient.Analytics
+	accountRepo        repository.AccountRepository // optional; wired via SetAccountRepository (#1329)
 }
 
 // NewTransactionService creates a new TransactionService instance
@@ -281,6 +287,12 @@ func (s *transactionService) ListTransactionsByCursor(
 			}
 		}
 		if err := s.enrichCustomCategoryDisplayForItems(ctx, userID, items); err != nil {
+			return nil, err
+		}
+
+		// Populate ActivityItem.Account for investment rows so the drawer can resolve
+		// the account nickname immediately on cold load, before accountsMap resolves (#1329).
+		if err := s.enrichAccountForInvestmentItems(ctx, userID, items); err != nil {
 			return nil, err
 		}
 
@@ -576,6 +588,84 @@ func (s *transactionService) GetDistinctPlaidCategories(ctx context.Context, use
 // Nil-safe: if analytics is nil, all Capture calls are skipped.
 func (s *transactionService) SetAnalytics(analytics phclient.Analytics) {
 	s.analytics = analytics
+}
+
+// SetAccountRepository wires in the account repository used to populate
+// ActivityItem.Account for investment rows in the unified feed (#1329).
+// Nil-safe: if not called, enrichment is silently skipped.
+func (s *transactionService) SetAccountRepository(accountRepo repository.AccountRepository) {
+	s.accountRepo = accountRepo
+}
+
+// enrichAccountForInvestmentItems populates ActivityItem.Account for every investment
+// row whose account resolves to an active account.
+//
+// Resolution order (mirrors the frontend's accountsMap → embedded account priority):
+//  1. Direct match: byID[item.AccountID] — the common case.
+//  2. Chain match:  byUserAccountID[*item.UserAccountID] — for rows whose account_id
+//     points to a replaced account after a Plaid re-link; the active chain account
+//     shares the same user_account_id.
+//
+// Accounts are fetched via GetAccountsWithInstitution which returns active, fully-
+// decrypted accounts — no inline crypto needed here (#1329, Codex finding #1).
+// Banking rows are intentionally left untouched (out of scope).
+func (s *transactionService) enrichAccountForInvestmentItems(ctx context.Context, userID string, items []*domain.ActivityItem) error {
+	if s.accountRepo == nil {
+		return nil
+	}
+
+	// Early exit: skip the DB fetch when there are no investment rows.
+	hasInvestment := false
+	for _, item := range items {
+		if item.Source == domain.FeedSourceInvestment {
+			hasInvestment = true
+			break
+		}
+	}
+	if !hasInvestment {
+		return nil
+	}
+
+	// Use the filtered variant so nickname and customization fields are included.
+	// Default opts: active-only, hidden excluded — matches what the frontend accountsMap shows.
+	accts, err := s.accountRepo.GetAccountsWithInstitutionFiltered(ctx, userID, repository.AccountFilterOptions{})
+	if err != nil {
+		return fmt.Errorf("enrichAccountForInvestmentItems: %w", err)
+	}
+
+	// Build lookup maps: by direct account ID and by stable user_account_id.
+	byID := make(map[string]*domain.Account, len(accts))
+	byUserAccountID := make(map[string]*domain.Account)
+	for i := range accts {
+		a := &accts[i]
+		byID[a.ID] = a
+		if a.UserAccountID != nil {
+			byUserAccountID[*a.UserAccountID] = a
+		}
+	}
+
+	for _, item := range items {
+		if item.Source != domain.FeedSourceInvestment {
+			continue
+		}
+
+		var resolved *domain.Account
+		if a, ok := byID[item.AccountID]; ok {
+			resolved = a
+		} else if item.UserAccountID != nil {
+			if a, ok := byUserAccountID[*item.UserAccountID]; ok {
+				resolved = a
+			}
+		}
+
+		if resolved != nil {
+			// Copy to avoid aliasing — all items must point to independent Account values.
+			copy := *resolved
+			item.Account = &copy
+		}
+	}
+
+	return nil
 }
 
 // GetReviewSummary returns pre-computed review-state counts and top unreviewed categories (Issue #1210).
