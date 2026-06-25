@@ -2675,12 +2675,12 @@ func TestLinkAccounts_DisconnectedRelink_DetectsDisconnectedItem(t *testing.T) {
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
 		Return(disconnectedItem, nil)
 
-	// Execute: Simulate Step 7 (active check)
+	// Execute: Simulate Step 4 (active check)
 	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
 	require.NoError(t, err)
 	assert.Nil(t, activeItem, "No active item should be found")
 
-	// Execute: Simulate Step 7b (disconnected fallback)
+	// Execute: Simulate Step 4b (disconnected fallback)
 	var existingLinkedItem *domain.LinkedItem
 	if activeItem == nil {
 		existingLinkedItem, err = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
@@ -2850,7 +2850,7 @@ func TestLinkAccounts_ActiveTakesPrecedence_OverDisconnected(t *testing.T) {
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(activeItem, nil)
 
-	// Execute: Step 7 active check
+	// Execute: Step 4 active check
 	found, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
 	require.NoError(t, err)
 
@@ -2893,11 +2893,11 @@ func TestLinkAccounts_NoActiveNoDisconnected_FreshLink(t *testing.T) {
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
 		Return(nil, nil)
 
-	// Execute: Step 7 - active check
+	// Execute: Step 4 - active check
 	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
 	require.NoError(t, err)
 
-	// Execute: Step 7b - disconnected fallback (since active is nil)
+	// Execute: Step 4b - disconnected fallback (since active is nil)
 	var existingLinkedItem *domain.LinkedItem
 	if activeItem == nil {
 		existingLinkedItem, err = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
@@ -2969,12 +2969,12 @@ func TestLinkAccounts_DisconnectedRelink_ErrorCheckingDisconnected_Fails(t *test
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected)).
 		Return(nil, unexpectedErr)
 
-	// Execute: Step 7 - active check
+	// Execute: Step 4 - active check
 	activeItem, err := mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusActive))
 	require.NoError(t, err)
 	assert.Nil(t, activeItem)
 
-	// Execute: Step 7b - disconnected fallback (since active is nil)
+	// Execute: Step 4b - disconnected fallback (since active is nil)
 	var disconnectedErr error
 	if activeItem == nil {
 		_, disconnectedErr = mockLinkedItemRepo.GetByUserAndInstitution(ctx, userID, institutionID, string(domain.LinkedItemStatusDisconnected))
@@ -3099,11 +3099,11 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
-	// Step 7: no active item
+	// Step 4: no active item
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
 
-	// Step 7b: disconnected item exists (re-subscription scenario)
+	// Step 4b: disconnected item exists (re-subscription scenario)
 	disconnectedItem := &domain.LinkedItem{
 		ID:            oldItemID,
 		UserID:        userID,
