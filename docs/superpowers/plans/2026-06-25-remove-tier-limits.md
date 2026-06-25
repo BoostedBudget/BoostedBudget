@@ -30,6 +30,7 @@
 | **Delete** | `apps/web/src/features/subscription/hooks/useTierLimits.ts` |
 | **Delete** | `apps/web/src/features/subscription/hooks/useTierLimits.test.ts` |
 | **Delete** | `apps/web/src/features/accounts/UpgradeBanner.tsx` |
+| **Modify** | `apps/web/src/features/accounts/PlaidLinkButton.tsx` |
 | **Modify** | `apps/web/src/features/auto-categorization/components/AutoCategorizationPage.tsx` |
 | **Modify** | `apps/web/src/features/auto-categorization/components/AutoCategorizationPage.test.tsx` |
 | **Modify** | `apps/web/src/features/auto-categorization/components/AutoCategorizationPageWrapper.tsx` |
@@ -231,9 +232,20 @@ mock.module('./AutoCategorizationPage', () => ({
 }))
 ```
 
-- [ ] **Step 2: Remove the three obsolete tests**
+- [ ] **Step 2: Remove the four obsolete tests**
 
-Delete the following three tests in their entirety:
+Delete the following four tests in their entirety (three named, plus one Codex-flagged fourth):
+
+```ts
+  it('should handle undefined tiers gracefully', async () => {
+    configureHooks({ tiers: null })
+    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
+  })
+```
 
 ```ts
   it('should pass maxRules as undefined (unlimited rules for all tiers)', async () => {
@@ -317,9 +329,16 @@ import { mockUseGetSubscriptionTiers, mockRefetchSubscriptionTiers } from '@/tes
 
 Also remove the `mockUser` constant definition (the object assigned around line 88–101).
 
-- [ ] **Step 5: Update the production wrapper — remove `useProfile`, `userTier`, and tier props**
+- [ ] **Step 5: Update the production wrapper — remove `useProfile`, `userTier`, tier props, and stale JSDoc**
 
-In `AutoCategorizationPageWrapper.tsx`, remove the `useProfile` import:
+In `AutoCategorizationPageWrapper.tsx`, find the JSDoc block at the top of the file and remove these two stale bullet lines:
+
+```
+ * - User subscription tier for rule limits
+ * - Subscription tiers config for max rules limit
+```
+
+Then remove the `useProfile` import:
 
 ```ts
 import { useProfile } from '../../profile/hooks/useProfile'
@@ -583,6 +602,53 @@ EOF
 
 ---
 
+### Task 5.5: Fix Stale Tier-Limit Copy in PlaidLinkButton
+
+**Files:**
+- Modify: `apps/web/src/features/accounts/PlaidLinkButton.tsx`
+
+**Context:** `mapErrorToMessage` at line 43 returns "Account limit reached for your subscription tier. Please upgrade to add more accounts." when the backend returns 403. All tiers are unlimited so this path is never triggered, but the message is still stale tier-specific copy. Replace with a generic message so it remains safe for any future 403 scenario.
+
+- [ ] **Step 1: Update the 403 error message**
+
+In `PlaidLinkButton.tsx`, find (around line 42):
+
+```ts
+    if (error.response.status === 403) {
+      return 'Account limit reached for your subscription tier. Please upgrade to add more accounts.'
+    }
+```
+
+Replace with:
+
+```ts
+    if (error.response.status === 403) {
+      return 'Unable to link this account. Please contact support.'
+    }
+```
+
+- [ ] **Step 2: Run tests**
+
+```bash
+cd apps/web && bun run typecheck
+```
+
+Expected: No TypeScript errors. (PlaidLinkButton has no unit test for this error message path — no test update needed.)
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/web/src/features/accounts/PlaidLinkButton.tsx
+git commit -m "$(cat <<'EOF'
+#1294: Remove tier-specific language from PlaidLinkButton 403 error message
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
 ### Task 6: Delete Orphaned Files
 
 **Files:**
@@ -632,17 +698,17 @@ EOF
 
 ### Task 7: Final Verification and PR
 
-- [ ] **Step 1: Run the full test suite one final time**
+- [ ] **Step 1: Run code-simplifier agent**
+
+Dispatch the `code-simplifier` subagent (haiku) against all modified files to catch any remaining redundancy or style issues. Fix any issues it surfaces before running the full suite.
+
+- [ ] **Step 2: Run the full test suite**
 
 ```bash
 cd apps/web && bun run test && bun run typecheck && bun run lint
 ```
 
 Expected: All pass.
-
-- [ ] **Step 2: Run code-simplifier agent**
-
-Dispatch the `code-simplifier` subagent (haiku) against all modified files to catch any remaining redundancy or style issues.
 
 - [ ] **Step 3: Run Codex adversarial review**
 
