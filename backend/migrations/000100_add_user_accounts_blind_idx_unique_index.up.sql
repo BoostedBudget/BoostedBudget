@@ -273,7 +273,7 @@ WHERE jsonb_typeof(cr.conditions) = 'array'
 -- Step 5: Re-point 8 child FK columns — loser → survivor
 -- =============================================================================
 
--- 5.1 accounts.user_account_id (ON DELETE RESTRICT — must re-point before deleting losers)
+-- 5.1 accounts.user_account_id (ON DELETE NO ACTION — must re-point before deleting losers)
 WITH dupes AS (
     SELECT id,
            first_value(id) OVER (
@@ -292,7 +292,7 @@ SET user_account_id = l.survivor_id
 FROM losers l
 WHERE a.user_account_id = l.loser_id;
 
--- 5.2 transactions.user_account_id (ON DELETE RESTRICT — must re-point before deleting losers)
+-- 5.2 transactions.user_account_id (ON DELETE NO ACTION — must re-point before deleting losers)
 WITH dupes AS (
     SELECT id,
            first_value(id) OVER (

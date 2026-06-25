@@ -121,27 +121,37 @@ func seedMigTestLinkedItem(t *testing.T, tx pgx.Tx, userID, suffix string) strin
 // seedUserAccount inserts a user_accounts row and returns its UUID string.
 // Pass empty strings for instBlindIdx / mask / maskBlindIdx to get SQL NULL.
 // When maskBlindIdx is empty the row is treated as no-mask (mask stored as NULL).
+//
+// institution_id is set to the row's UUID to simulate unique AES-GCM ciphertexts
+// (in production, AES-GCM with random nonces produces a unique ciphertext per row even
+// for the same plaintext, so the old unique_user_account_identity constraint on the
+// plaintext columns never fires on logical duplicates). Using the UUID keeps that
+// invariant in tests without requiring the encryption layer.
 func seedUserAccount(t *testing.T, tx pgx.Tx, userID, instBlindIdx, mask, maskBlindIdx string, createdAt time.Time) string {
 	t.Helper()
 	uaID := uuid.New().String()
 	var err error
+	// encInst simulates a unique AES-GCM ciphertext: in production each row has a different
+	// ciphertext for the same plaintext institution_id, so unique_user_account_identity never
+	// fires on logical duplicates. In tests we pass the row UUID as the institution_id value.
+	encInst := uaID
 	if instBlindIdx == "" {
 		// No institution blind index → fully un-backfilled row (all blind cols NULL)
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO user_accounts (id, user_id, institution_id, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', $3, $3)
-		`, uaID, userID, createdAt)
+			VALUES ($1, $2, $3, $4, $4)
+		`, uaID, userID, encInst, createdAt)
 	} else if maskBlindIdx == "" {
 		// No mask blind index → no-mask row (mask IS NULL, mask_blind_idx IS NULL)
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO user_accounts (id, user_id, institution_id, institution_id_blind_idx, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', $3, $4, $4)
-		`, uaID, userID, instBlindIdx, createdAt)
+			VALUES ($1, $2, $3, $4, $5, $5)
+		`, uaID, userID, encInst, instBlindIdx, createdAt)
 	} else {
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', $3, $4, $5, $6, $6)
-		`, uaID, userID, mask, instBlindIdx, maskBlindIdx, createdAt)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+		`, uaID, userID, encInst, mask, instBlindIdx, maskBlindIdx, createdAt)
 	}
 	require.NoError(t, err)
 	return uaID
@@ -256,9 +266,6 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 
 		t2 := time.Now().Add(-1 * time.Hour)
 		u2ID := seedUserAccount(t, tx, userID, instBlind, "5678", maskBlind, t2)
-
-		// Insert linked_item for the accounts FK required by transfers
-		liID := seedMigTestLinkedItem(t, tx, userID, suffix)
 
 		// Boost B1: transfer_suggestion with from_user_account_id = loser U2, to_user_account_id = unrelated "other-id"
 		boostID1 := uuid.New().String()
@@ -654,12 +661,13 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		maskBlind := "blind-mask-G-" + suffix
 
 		// U1: survivor (oldest), nickname=NULL, custom_color=NULL
+		// institution_id is the row UUID — simulates a unique AES-GCM ciphertext per row.
 		t1 := time.Now().Add(-3 * time.Hour)
 		u1ID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
 			INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx, nickname, custom_color, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', '0000', $3, $4, NULL, NULL, $5, $5)
-		`, u1ID, userID, instBlind, maskBlind, t1)
+			VALUES ($1, $2, $3, '0000', $4, $5, NULL, NULL, $6, $6)
+		`, u1ID, userID, u1ID, instBlind, maskBlind, t1)
 		require.NoError(t, err)
 
 		// U2: loser (newer), nickname='My Checking', custom_color='#FF0000'
@@ -667,8 +675,8 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		u2ID := uuid.New().String()
 		_, err = tx.Exec(ctx, `
 			INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx, nickname, custom_color, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', '0000', $3, $4, 'My Checking', '#FF0000', $5, $5)
-		`, u2ID, userID, instBlind, maskBlind, t2)
+			VALUES ($1, $2, $3, '0000', $4, $5, 'My Checking', '#FF0000', $6, $6)
+		`, u2ID, userID, u2ID, instBlind, maskBlind, t2)
 		require.NoError(t, err)
 
 		applyMigration000100(t, tx)
