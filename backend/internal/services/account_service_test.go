@@ -564,7 +564,6 @@ func (m *MockUserRepository) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, u
 func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// Given: All dependencies mocked with successful responses
 	mockPlaid := new(MockPlaidService)
-	mockSubscription := &SubscriptionService{} // Will need actual implementation
 	mockLinkedItemRepo := new(MockLinkedItemRepository)
 	mockAccountRepo := new(MockAccountRepository)
 	mockUserRepo := new(MockUserRepository)
@@ -602,7 +601,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// TODO: Create service in GREEN phase when implementing actual Plaid integration
 	_ = NewAccountService(
 		mockPlaid,
-		mockSubscription,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -742,7 +740,6 @@ func TestAccountService_GetAccounts(t *testing.T) {
 	// Create service
 	service := NewAccountService(
 		mockPlaidService,
-		nil, // SubscriptionService not needed for GetAccounts
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -808,7 +805,6 @@ func TestAccountService_GetAccounts_Empty(t *testing.T) {
 	// Create service
 	service := NewAccountService(
 		mockPlaidService,
-		nil,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -854,7 +850,6 @@ func TestAccountService_GetAccounts_WithInternalUUID(t *testing.T) {
 	// Create service
 	service := NewAccountService(
 		mockPlaidService,
-		nil,
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -1250,7 +1245,6 @@ func TestDeleteAccount_HidesUserAccountWhenLastAccount(t *testing.T) {
 
 	svc := NewAccountService(
 		nil, // plaid not needed
-		nil, // subscription not needed
 		nil, // linkedItemRepo not needed
 		mockAccountRepo,
 		nil, // userRepo not needed
@@ -1300,7 +1294,6 @@ func TestDeleteAccount_DoesNotHideWhenOtherAccountsRemain(t *testing.T) {
 	userAccountID := uuid.New().String()
 
 	svc := NewAccountService(
-		nil,
 		nil,
 		nil,
 		mockAccountRepo,
@@ -1358,7 +1351,6 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountSvcNil(t *testing.T) {
 	svc := NewAccountService(
 		nil,
 		nil,
-		nil,
 		mockAccountRepo,
 		nil,
 		nil,
@@ -1402,7 +1394,6 @@ func TestDeleteAccount_SkipsHidingWhenUserAccountIDNil(t *testing.T) {
 	mockUserAccountSvc := &MockUserAccountService{}
 
 	svc := NewAccountService(
-		nil,
 		nil,
 		nil,
 		mockAccountRepo,
@@ -3118,9 +3109,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
-	// Step 2: account count
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
-
 	// Step 7: no active item
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3181,7 +3169,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_FullFlow(t *testing.T) {
 	// Build service
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3251,7 +3238,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	// Step 7: active item found — Step 7b should NOT be triggered
 	activeItem := &domain.LinkedItem{
@@ -3289,7 +3275,6 @@ func TestLinkAccounts_Integration_ActiveTakesPrecedence(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3349,7 +3334,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	// Step 7: no active item
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
@@ -3375,7 +3359,6 @@ func TestLinkAccounts_Integration_FreshLink_NoExistingItem(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3436,7 +3419,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	// Step 7: no active item
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
@@ -3449,7 +3431,6 @@ func TestLinkAccounts_Integration_DisconnectedRelink_ErrorPropagates(t *testing.
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3546,7 +3527,6 @@ func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T)
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3564,7 +3544,6 @@ func TestLinkAccounts_FingerprintCheck_BlocksAnotherUserActiveItem(t *testing.T)
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3627,7 +3606,6 @@ func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3647,7 +3625,6 @@ func TestLinkAccounts_FingerprintCheck_BlocksTTLNotExpired(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3710,7 +3687,6 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3748,7 +3724,6 @@ func TestLinkAccounts_FingerprintCheck_AllowsAfterTTLExpiry(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3809,7 +3784,6 @@ func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3833,7 +3807,6 @@ func TestLinkAccounts_FingerprintCheck_AllowsSameUser(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3892,7 +3865,6 @@ func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3915,7 +3887,6 @@ func TestLinkAccounts_FingerprintCheck_RaceConditionHandled(t *testing.T) {
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -3976,7 +3947,6 @@ func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.
 
 	user := &domain.User{ID: userID, SubscriptionTier: "premium"}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(0, nil)
 
 	mockLinkedItemRepo.On("GetByUserAndInstitution", ctx, userID, institutionID, string(domain.LinkedItemStatusActive)).
 		Return(nil, nil)
@@ -3999,7 +3969,6 @@ func TestLinkAccounts_FingerprintCheck_NilMaskAndSubtypeUseSentinels(t *testing.
 
 	svc := NewAccountService(
 		mockPlaidSvc,
-		newTestSubscriptionService(t),
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
@@ -4044,7 +4013,6 @@ func TestAccountService_ListActiveByUser_ExcludesReplaced(t *testing.T) {
 
 	svc := NewAccountService(
 		nil, // plaid not needed
-		nil, // subscription not needed
 		mockLinkedItemRepo,
 		mockAccountRepo,
 		mockUserRepo,
