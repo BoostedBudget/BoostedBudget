@@ -196,16 +196,21 @@ SET conditions = (
             ELSE cond
         END
     ), '[]'::jsonb)
-    FROM jsonb_array_elements(cr.conditions) AS cond
+    FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(cr.conditions) = 'array' THEN cr.conditions ELSE '[]'::jsonb END
+    ) AS cond
 )
-WHERE EXISTS (
+WHERE jsonb_typeof(cr.conditions) = 'array'
+  AND EXISTS (
     SELECT 1
-    FROM jsonb_array_elements(cr.conditions) AS c,
+    FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(cr.conditions) = 'array' THEN cr.conditions ELSE '[]'::jsonb END
+    ) AS c,
          losers l3
     WHERE c->>'type' = 'account_id'
       AND jsonb_typeof(c->'value') = 'string'
       AND l3.loser_id::text = c->>'value'
-);
+  );
 
 -- 4b. Array-valued account_id conditions: {"type": "account_id", "value": ["uuid1", ...]}
 WITH dupes AS (
@@ -245,11 +250,16 @@ SET conditions = (
             ELSE cond
         END
     ), '[]'::jsonb)
-    FROM jsonb_array_elements(cr.conditions) AS cond
+    FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(cr.conditions) = 'array' THEN cr.conditions ELSE '[]'::jsonb END
+    ) AS cond
 )
-WHERE EXISTS (
+WHERE jsonb_typeof(cr.conditions) = 'array'
+  AND EXISTS (
     SELECT 1
-    FROM jsonb_array_elements(cr.conditions) AS c
+    FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(cr.conditions) = 'array' THEN cr.conditions ELSE '[]'::jsonb END
+    ) AS c
     WHERE c->>'type' = 'account_id'
       AND jsonb_typeof(c->'value') = 'array'
       AND EXISTS (
@@ -257,7 +267,7 @@ WHERE EXISTS (
           FROM jsonb_array_elements_text(c->'value') AS v_text, losers l3
           WHERE l3.loser_id::text = v_text
       )
-);
+  );
 
 -- =============================================================================
 -- Step 5: Re-point 8 child FK columns — loser → survivor
