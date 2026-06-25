@@ -530,17 +530,19 @@ func TestUserAccountService_MatchOrCreate_RepoError_FindByInstitutionAndMask(t *
 	mockRepo.AssertExpectations(t)
 }
 
-// TestUserAccountService_MatchOrCreate_RepoError_Create tests error handling when Create fails.
+// TestUserAccountService_MatchOrCreate_RepoError_Create tests error handling when Create fails
+// with a non-duplicate error (e.g. network failure, constraint violation).
 func TestUserAccountService_MatchOrCreate_RepoError_Create(t *testing.T) {
 	mockRepo := new(MockUserAccountRepository)
 	service := NewUserAccountService(mockRepo)
 
 	ctx := context.Background()
 	mask := "1234"
+	genericErr := errors.New("database connection error")
 
 	mockRepo.On("FindByInstitutionAndMask", ctx, "user-123", "ins_bofa", &mask).Return(nil, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
-		Return(repository.ErrDuplicateUserAccount)
+		Return(genericErr)
 
 	// Execute
 	result, err := service.MatchOrCreate(ctx, "user-123", "ins_bofa", &mask, "Account", "depository", "checking")
@@ -548,8 +550,100 @@ func TestUserAccountService_MatchOrCreate_RepoError_Create(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.ErrorIs(t, err, repository.ErrDuplicateUserAccount)
+	assert.ErrorIs(t, err, genericErr)
 	mockRepo.AssertExpectations(t)
+}
+
+// TestMatchOrCreate_DuplicateError_ReturnsExistingRow tests the concurrent race recovery path:
+// when Create returns ErrDuplicateUserAccount (lost a race), MatchOrCreate should re-find
+// the winning row and return it instead of propagating the error.
+func TestMatchOrCreate_DuplicateError_ReturnsExistingRow(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	institutionID := "ins_bofa"
+	mask := "1234"
+	accountType := "depository"
+	accountSubtype := "checking"
+
+	existingUA := &domain.UserAccount{
+		ID:             "ua-winner",
+		UserID:         userID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"),
+		PrimarySubtype: userAccountStrPtr("checking"),
+		IsHidden:       false,
+	}
+
+	// First call: no existing row (both goroutines see nil simultaneously)
+	// Second call: re-find after duplicate error returns the winner's row
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+		Return(nil, nil).Once()
+	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
+		Return(repository.ErrDuplicateUserAccount)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+		Return(existingUA, nil).Once()
+
+	// Execute
+	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA Checking", accountType, accountSubtype)
+
+	// Assert: no error, winner's row returned
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "ua-winner", result.ID)
+
+	// FindByInstitutionAndMask must have been called exactly twice
+	mockRepo.AssertNumberOfCalls(t, "FindByInstitutionAndMask", 2)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestMatchOrCreate_DuplicateError_RunsNormalization tests that the re-found row after a
+// concurrent race is run through the same normalization as the initial-find path:
+// type/subtype update and un-hide are both applied.
+func TestMatchOrCreate_DuplicateError_RunsNormalization(t *testing.T) {
+	mockRepo := new(MockUserAccountRepository)
+	service := NewUserAccountService(mockRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	institutionID := "ins_bofa"
+	mask := "1234"
+	newType := "credit"
+	newSubtype := "credit card"
+
+	// Re-found row has stale type AND is hidden — both normalizations should fire
+	existingUA := &domain.UserAccount{
+		ID:             "ua-winner",
+		UserID:         userID,
+		InstitutionID:  institutionID,
+		Mask:           &mask,
+		PrimaryType:    userAccountStrPtr("depository"), // differs from newType
+		PrimarySubtype: userAccountStrPtr("checking"),   // differs from newSubtype
+		IsHidden:       true,                            // hidden — should be un-hidden
+	}
+
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+		Return(nil, nil).Once()
+	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.UserAccount")).
+		Return(repository.ErrDuplicateUserAccount)
+	mockRepo.On("FindByInstitutionAndMask", ctx, userID, institutionID, &mask).
+		Return(existingUA, nil).Once()
+	mockRepo.On("UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype).Return(nil)
+	mockRepo.On("UpdateHidden", ctx, existingUA.ID, false).Return(nil)
+
+	// Execute
+	result, err := service.MatchOrCreate(ctx, userID, institutionID, &mask, "BoA", newType, newSubtype)
+
+	// Assert: normalization was applied
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.False(t, result.IsHidden, "re-found row should be un-hidden")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertCalled(t, "UpdatePrimaryTypeAndSubtype", ctx, existingUA.ID, newType, newSubtype)
+	mockRepo.AssertCalled(t, "UpdateHidden", ctx, existingUA.ID, false)
 }
 
 // =============================================================================

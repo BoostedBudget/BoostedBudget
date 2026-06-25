@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -66,32 +67,7 @@ func (s *userAccountService) MatchOrCreate(
 
 	if existing != nil {
 		// Found existing - this is a re-link scenario
-		// Check if type/subtype needs updating
-		existingType := derefPtr(existing.PrimaryType)
-		existingSubtype := derefPtr(existing.PrimarySubtype)
-
-		if existingType != accountType || existingSubtype != accountSubtype {
-			// Update type/subtype from new Plaid data
-			err = s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, accountType, accountSubtype)
-			if err != nil {
-				// Non-fatal: log and continue (customizations preserved)
-				// In production, would log warning here
-			}
-		}
-
-		// Un-hide if previously hidden (re-link after account deletion).
-		// Only update in-memory state on success to keep DB and caller in sync.
-		if existing.IsHidden {
-			if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
-				// Non-fatal: log and continue (TODO: add logger to userAccountService)
-				_ = err
-			} else {
-				existing.IsHidden = false
-			}
-		}
-
-		// Return existing account (customizations preserved)
-		return existing, nil
+		return s.normalizeExistingUserAccount(ctx, existing, accountType, accountSubtype)
 	}
 
 	// Step 2: No match found - create new UserAccount
@@ -107,10 +83,55 @@ func (s *userAccountService) MatchOrCreate(
 
 	err = s.repo.Create(ctx, newUA)
 	if err != nil {
+		if errors.Is(err, repository.ErrDuplicateUserAccount) {
+			// Lost a concurrent create race — re-find the winner's row and normalize it.
+			winner, findErr := s.repo.FindByInstitutionAndMask(ctx, userID, institutionID, mask)
+			if findErr != nil {
+				return nil, fmt.Errorf("failed to re-find user account after duplicate: %w", findErr)
+			}
+			if winner == nil {
+				// Should not happen: Create said duplicate exists but FindBy found nothing
+				return nil, fmt.Errorf("user account not found after duplicate create error")
+			}
+			return s.normalizeExistingUserAccount(ctx, winner, accountType, accountSubtype)
+		}
 		return nil, err
 	}
 
 	return newUA, nil
+}
+
+// normalizeExistingUserAccount applies post-find updates to an existing UserAccount:
+// updates type/subtype if they differ from the provided values, and un-hides the account
+// if it was previously hidden (e.g. after a re-link). Both updates are non-fatal.
+func (s *userAccountService) normalizeExistingUserAccount(
+	ctx context.Context,
+	existing *domain.UserAccount,
+	accountType, accountSubtype string,
+) (*domain.UserAccount, error) {
+	// Update type/subtype if changed (new Plaid data takes precedence).
+	existingType := derefPtr(existing.PrimaryType)
+	existingSubtype := derefPtr(existing.PrimarySubtype)
+	if existingType != accountType || existingSubtype != accountSubtype {
+		err := s.repo.UpdatePrimaryTypeAndSubtype(ctx, existing.ID, accountType, accountSubtype)
+		if err != nil {
+			// Non-fatal: log and continue (customizations preserved)
+			// In production, would log warning here
+		}
+	}
+
+	// Un-hide if previously hidden (re-link after account deletion).
+	// Only update in-memory state on success to keep DB and caller in sync.
+	if existing.IsHidden {
+		if err := s.repo.UpdateHidden(ctx, existing.ID, false); err != nil {
+			// Non-fatal: log and continue (TODO: add logger to userAccountService)
+			_ = err
+		} else {
+			existing.IsHidden = false
+		}
+	}
+
+	return existing, nil
 }
 
 // GetByUserID retrieves all user accounts for a user.
