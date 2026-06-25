@@ -76,6 +76,7 @@ func TestCheckLimit_FiniteOverLimit(t *testing.T) {
 	assert.False(t, result.Allowed, "Should not allow usage over the finite limit")
 	assert.False(t, result.IsUnlimited, "transaction_history_days is not unlimited")
 	assert.Equal(t, 730, result.Limit, "Limit should be 730 for premium tier")
+	assert.Equal(t, 800, result.CurrentUsage, "CurrentUsage should echo the usage passed in")
 }
 
 // TestGetEffectiveSubscription_NoOverrides tests getting effective subscription without overrides
