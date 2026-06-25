@@ -171,7 +171,8 @@ func (r *userAccountRepository) Create(ctx context.Context, userAccount *domain.
 		// Check for unique constraint violation on (user_id, institution_id, mask)
 		if strings.Contains(err.Error(), "duplicate key") ||
 			strings.Contains(err.Error(), "unique constraint") ||
-			strings.Contains(err.Error(), "unique_user_account_identity") {
+			strings.Contains(err.Error(), "unique_user_account_identity") ||
+			strings.Contains(err.Error(), "unique_user_accounts_inst_mask_blind") {
 			return ErrDuplicateUserAccount
 		}
 		return err
@@ -342,6 +343,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
 		`
 		args = []interface{}{userID, institutionIDBlindIdx}
 	} else {
@@ -353,6 +356,8 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 			       created_at, updated_at
 			FROM user_accounts
 			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
 		`
 		args = []interface{}{userID, institutionIDBlindIdx, *maskBlindIdx}
 	}
