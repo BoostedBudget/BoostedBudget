@@ -19,9 +19,17 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 )
+
+// backfillQuerier is the minimal DB interface needed by backfillAccountsUserAccountIDsWithDB.
+// Both *pgxpool.Pool and pgxmock.PgxPoolIface satisfy it.
+type backfillQuerier interface {
+	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+}
 
 // BackfillEncryption checks for unmigrated plaintext rows and encrypts them at startup.
 // It runs synchronously before the server begins accepting requests. If encryption fails
@@ -344,6 +352,13 @@ func BackfillUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *appcrypt
 }
 
 func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *appcrypto.FieldEncryptor) error {
+	return backfillAccountsUserAccountIDsWithDB(ctx, db, enc)
+}
+
+// backfillAccountsUserAccountIDsWithDB is the testable implementation of
+// backfillAccountsUserAccountIDs. It accepts a backfillQuerier so that unit
+// tests can inject a pgxmock without needing a live database.
+func backfillAccountsUserAccountIDsWithDB(ctx context.Context, db backfillQuerier, enc *appcrypto.FieldEncryptor) error {
 	rows, err := db.Query(ctx, `
 		SELECT a.id, a.user_id, a.mask, li.institution_id
 		FROM accounts a
@@ -412,31 +427,20 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 		}
 
 		// Compute blind indexes and look up the user_account row.
+		// #1334: Use Query + LIMIT 2 (instead of QueryRow) so we can detect and WARN
+		// when multiple user_accounts rows share the same blind-index triple (possible
+		// before migration 000100 enforces uniqueness). ORDER BY created_at ASC, id ASC
+		// picks the deterministic earliest-created survivor.
 		instBlind := enc.BlindIndex(plainInstID)
 		maskBlind := enc.BlindIndexNullable(plainMask)
 
-		var uaID string
-		var lookupErr error
-		if maskBlind == nil {
-			lookupErr = db.QueryRow(ctx, `
-				SELECT id FROM user_accounts
-				WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
-			`, r.userID, instBlind).Scan(&uaID)
-		} else {
-			lookupErr = db.QueryRow(ctx, `
-				SELECT id FROM user_accounts
-				WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
-			`, r.userID, instBlind, *maskBlind).Scan(&uaID)
+		uaID, found, err := lookupUserAccountID(ctx, db, r.id, r.userID, instBlind, maskBlind)
+		if err != nil {
+			return err
 		}
-
-		if errors.Is(lookupErr, pgx.ErrNoRows) {
-			slog.WarnContext(ctx, "#1306 P2: no matching user_account — skipping (self-heals on next re-link)",
-				"account_id", r.id)
+		if !found {
 			skippedNoMatch++
 			continue
-		}
-		if lookupErr != nil {
-			return fmt.Errorf("lookup user_account for account %s: %w", r.id, lookupErr)
 		}
 
 		if _, err := db.Exec(ctx,
@@ -451,6 +455,76 @@ func backfillAccountsUserAccountIDs(ctx context.Context, db *pgxpool.Pool, enc *
 	slog.InfoContext(ctx, "#1306 P2: accounts backfill complete",
 		"repaired", repaired, "skipped_no_match", skippedNoMatch, "skipped_decrypt", skippedDecrypt)
 	return nil
+}
+
+// lookupUserAccountID fetches up to 2 user_accounts rows matching the given blind-index triple,
+// ordered deterministically (created_at ASC, id ASC). Returns the first row's ID when found.
+// When >1 row matches, emits a slog WARN (possible pre-migration duplicate) but continues
+// with the deterministic survivor — never returns an error in the multi-match case.
+func lookupUserAccountID(
+	ctx context.Context,
+	db backfillQuerier,
+	accountID, userID string,
+	instBlind string,
+	maskBlind *string,
+) (uaID string, found bool, err error) {
+	var (
+		query string
+		args  []any
+	)
+	if maskBlind == nil {
+		query = `
+			SELECT id FROM user_accounts
+			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			ORDER BY created_at ASC, id ASC
+			LIMIT 2`
+		args = []any{userID, instBlind}
+	} else {
+		query = `
+			SELECT id FROM user_accounts
+			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			ORDER BY created_at ASC, id ASC
+			LIMIT 2`
+		args = []any{userID, instBlind, *maskBlind}
+	}
+
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return "", false, fmt.Errorf("error looking up user_account for account %s: %w", accountID, err)
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		count++
+		if count == 1 {
+			if err := rows.Scan(&uaID); err != nil {
+				return "", false, fmt.Errorf("error scanning user_account_id for account %s: %w", accountID, err)
+			}
+		} else {
+			// Discard subsequent rows — we already have the deterministic first.
+			var discarded string
+			_ = rows.Scan(&discarded)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, fmt.Errorf("error iterating user_accounts for account %s: %w", accountID, err)
+	}
+
+	if count == 0 {
+		slog.WarnContext(ctx, "#1306 P2: no matching user_account — skipping (self-heals on next re-link)",
+			"account_id", accountID)
+		return "", false, nil
+	}
+	if count > 1 {
+		// #1334: multiple rows match the blind-index triple — possible pre-migration state.
+		// Pick the deterministic first (ORDER BY created_at ASC, id ASC) and warn.
+		slog.WarnContext(ctx, "#1334: multiple user_accounts match account; picking deterministic survivor",
+			"account_id", accountID,
+			"user_account_id", uaID)
+	}
+
+	return uaID, true, nil
 }
 
 // backfillDownstreamUserAccountIDs cascades accounts.user_account_id to all downstream

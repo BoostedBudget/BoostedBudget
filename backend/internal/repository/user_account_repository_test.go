@@ -543,6 +543,134 @@ func TestUserAccountRepository_FindByInstitutionAndMask_NullMask_Match(t *testin
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMask verifies
+// that the non-null mask branch uses ORDER BY created_at ASC, id ASC LIMIT 1 so that
+// duplicate rows are resolved deterministically rather than arbitrarily.
+func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NonNullMask(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_chase"
+	mask := "1234"
+	now := time.Now()
+	order := 1
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "institution_id", "mask", "account_name_hint",
+		"nickname", "custom_color", "custom_icon", "custom_emoji",
+		"display_order", "is_hidden", "primary_type", "primary_subtype",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, institutionID, strPtr(mask), strPtr("Chase Checking"),
+		strPtr("My Checking"), nil, nil, nil,
+		&order, false, strPtr("depository"), strPtr("checking"),
+		now, now,
+	)
+
+	// The query MUST include ORDER BY created_at ASC, id ASC LIMIT 1 for determinism.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+			SELECT id, user_id, institution_id, mask, account_name_hint,
+			       nickname, custom_color, custom_icon, custom_emoji,
+			       display_order, is_hidden, primary_type, primary_subtype,
+			       created_at, updated_at
+			FROM user_accounts
+			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx = $3
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		`)).WithArgs(userID, pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, &mask)
+
+	require.NoError(t, err)
+	assert.NotNil(t, ua)
+	assert.Equal(t, institutionID, ua.InstitutionID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask verifies
+// that the null mask branch also uses ORDER BY created_at ASC, id ASC LIMIT 1.
+func TestUserAccountRepository_FindByInstitutionAndMask_Deterministic_NullMask(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	institutionID := "ins_manual"
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "institution_id", "mask", "account_name_hint",
+		"nickname", "custom_color", "custom_icon", "custom_emoji",
+		"display_order", "is_hidden", "primary_type", "primary_subtype",
+		"created_at", "updated_at",
+	}).AddRow(
+		uuid.New().String(), userID, institutionID, nil, strPtr("Manual Account"),
+		strPtr("My Manual"), nil, nil, nil,
+		nil, false, nil, nil,
+		now, now,
+	)
+
+	// The null-mask branch MUST also include ORDER BY created_at ASC, id ASC LIMIT 1.
+	mock.ExpectQuery(regexp.QuoteMeta(`
+			SELECT id, user_id, institution_id, mask, account_name_hint,
+			       nickname, custom_color, custom_icon, custom_emoji,
+			       display_order, is_hidden, primary_type, primary_subtype,
+			       created_at, updated_at
+			FROM user_accounts
+			WHERE user_id = $1 AND institution_id_blind_idx = $2 AND mask_blind_idx IS NULL
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		`)).WithArgs(userID, pgxmock.AnyArg()).WillReturnRows(rows)
+
+	ua, err := repo.FindByInstitutionAndMask(ctx, userID, institutionID, nil)
+
+	require.NoError(t, err)
+	assert.NotNil(t, ua)
+	assert.Equal(t, institutionID, ua.InstitutionID)
+	assert.Nil(t, ua.Mask)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserAccountRepository_Create_DuplicateConstraint_NewIndex tests that the new
+// unique index name "unique_user_accounts_inst_mask_blind" is recognized as a duplicate error.
+func TestUserAccountRepository_Create_DuplicateConstraint_NewIndex(t *testing.T) {
+	mock, repo := setupUserAccountMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	userAccount := &domain.UserAccount{
+		ID:            uuid.New().String(),
+		UserID:        uuid.New().String(),
+		InstitutionID: "ins_chase",
+		Mask:          strPtr("1234"),
+	}
+
+	// Simulate unique constraint violation on the new blind index.
+	mock.ExpectExec(regexp.QuoteMeta(`
+		INSERT INTO user_accounts
+		(id, user_id, institution_id, institution_id_blind_idx, mask, mask_blind_idx, account_name_hint,
+		 nickname, custom_color, custom_icon, custom_emoji,
+		 display_order, is_hidden, primary_type, primary_subtype,
+		 created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`)).WithArgs(
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+		pgxmock.AnyArg(),
+	).WillReturnError(errors.New("duplicate key value violates unique constraint \"unique_user_accounts_inst_mask_blind\""))
+
+	err := repo.Create(ctx, userAccount)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrDuplicateUserAccount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // =============================================================================
 // Database Error Tests
 // =============================================================================
