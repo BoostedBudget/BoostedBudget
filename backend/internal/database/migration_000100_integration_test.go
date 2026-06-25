@@ -579,6 +579,64 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		assert.Contains(t, gotConditions, "unrelated-id", "unrelated array element must be preserved")
 	})
 
+	// ─── Scenario K: Non-array categorization_rules.conditions is skipped ───────
+	// Regression guard for G7.
+	// Seeds a categorization_rules row whose conditions field is a non-array JSONB
+	// value (object `{}`). Without the column-type guard, jsonb_array_elements() in
+	// Steps 4a/4b would abort the migration with "cannot extract elements from a
+	// non-array". With the guard, the malformed row is silently skipped and dedup
+	// still completes normally.
+	t.Run("ScenarioK_NonArrayConditionsSkipped", func(t *testing.T) {
+		ctx := context.Background()
+		suffix := fmt.Sprintf("K-%d", time.Now().UnixNano())
+
+		userID := seedMigTestUser(t, pool, suffix)
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		rollbackMigration000100(t, tx)
+
+		instBlind := "blind-inst-K-" + suffix
+		maskBlind := "blind-mask-K-" + suffix
+
+		// U1: survivor (earliest created_at)
+		t1 := time.Now().Add(-2 * time.Hour)
+		u1ID := seedUserAccount(t, tx, userID, instBlind, "7777", maskBlind, t1)
+
+		// U2: loser (later created_at)
+		t2 := time.Now().Add(-1 * time.Hour)
+		u2ID := seedUserAccount(t, tx, userID, instBlind, "7777", maskBlind, t2)
+
+		// Categorization rule with non-array conditions (object) — malformed/legacy.
+		// This is the row that would abort the migration without the G7 column-type guard.
+		ruleID := uuid.New().String()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO categorization_rules (id, user_id, name, conditions)
+			VALUES ($1, $2, $3, '{}'::jsonb)
+		`, ruleID, userID, "rule-K-malformed-"+suffix)
+		require.NoError(t, err)
+
+		// Migration must succeed despite the malformed conditions row.
+		applyMigration000100(t, tx)
+
+		// U2 must be deleted (dedup still ran correctly).
+		var u2Count int
+		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id = $1", u2ID).Scan(&u2Count))
+		assert.Equal(t, 0, u2Count, "loser U2 must be deleted even when a malformed conditions row exists")
+
+		// U1 must survive.
+		var u1Count int
+		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id = $1", u1ID).Scan(&u1Count))
+		assert.Equal(t, 1, u1Count, "survivor U1 must still exist")
+
+		// The malformed rule's conditions must be untouched (still `{}`).
+		var gotConditions string
+		require.NoError(t, tx.QueryRow(ctx, "SELECT conditions::text FROM categorization_rules WHERE id = $1", ruleID).Scan(&gotConditions))
+		assert.Equal(t, "{}", gotConditions, "malformed conditions must be left untouched by the migration")
+	})
+
 	// ─── Scenario G: Customization merge ─────────────────────────────────────
 	t.Run("ScenarioG_CustomizationMerge", func(t *testing.T) {
 		ctx := context.Background()
