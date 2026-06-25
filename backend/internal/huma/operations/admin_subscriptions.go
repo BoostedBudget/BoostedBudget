@@ -145,7 +145,7 @@ type AdminCreateOverrideInput struct {
 	inputs.AdminAuthenticatedInput
 	UserID string `path:"user_id" doc:"ID of the user to override"`
 	Body   struct {
-		ResourceType string `json:"resource_type" enum:"accounts,transaction_history_days,executions_per_day" doc:"The resource type to override"`
+		ResourceType string `json:"resource_type" enum:"transaction_history_days,executions_per_day" doc:"The resource type to override"`
 		LimitValue   int    `json:"limit_value" doc:"The new limit value (-1 for unlimited)"`
 		Reason       string `json:"reason" required:"true" doc:"Reason for the override"`
 	}

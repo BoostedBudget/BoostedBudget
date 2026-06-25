@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
-	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -3039,15 +3038,6 @@ func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts 
 	client := plaid.NewAPIClient(cfg)
 
 	return server, client
-}
-
-// newTestSubscriptionService creates a real SubscriptionService using the project's
-// tier config YAML.
-func newTestSubscriptionService(t *testing.T) *SubscriptionService {
-	t.Helper()
-	tierConfig, err := config.LoadTierConfig()
-	require.NoError(t, err, "failed to load tier config for integration test")
-	return NewSubscriptionService(tierConfig, nil)
 }
 
 // TestLinkAccounts_Integration_DisconnectedRelink_FullFlow verifies that when:
