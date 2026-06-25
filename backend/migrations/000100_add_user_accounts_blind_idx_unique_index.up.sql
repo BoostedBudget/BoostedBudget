@@ -20,10 +20,21 @@
 -- mapping is done via inlined CTEs repeated verbatim in each statement.
 
 -- =============================================================================
--- Step 1: Preflight — abort if any backfilled row has mask but NULL mask_blind_idx
+-- Step 1: Preflight — abort on any un-backfilled or inconsistent blind-index state
+--
+-- Guard 1: Abort if ANY row has NULL institution_id_blind_idx (un-backfilled).
+--          Such rows are invisible to FindByInstitutionAndMask and excluded from
+--          both dedup and the unique index — run cmd/encrypt-migrate first.
+-- Guard 2: Abort if any indexed row has mask but NULL mask_blind_idx (inconsistent
+--          partial backfill — would cause wrong NULL-mask merge).
+-- Guard 3: Abort if any row has mask=NULL but mask_blind_idx IS NOT NULL (inverse
+--          inconsistency — data integrity anomaly).
 -- =============================================================================
 
 DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM user_accounts WHERE institution_id_blind_idx IS NULL) THEN
+    RAISE EXCEPTION '#1334: un-backfilled user_accounts (NULL institution_id_blind_idx); run cmd/encrypt-migrate --table user_accounts first';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM user_accounts
     WHERE institution_id_blind_idx IS NOT NULL
@@ -31,6 +42,9 @@ DO $$ BEGIN
       AND mask_blind_idx IS NULL
   ) THEN
     RAISE EXCEPTION '#1334: user_accounts rows have mask but NULL mask_blind_idx; run cmd/encrypt-migrate --table user_accounts first';
+  END IF;
+  IF EXISTS (SELECT 1 FROM user_accounts WHERE mask IS NULL AND mask_blind_idx IS NOT NULL) THEN
+    RAISE EXCEPTION '#1334: user_accounts rows have NULL mask but non-NULL mask_blind_idx; data inconsistency — fix before migrating';
   END IF;
 END $$;
 
@@ -54,13 +68,13 @@ WITH dupes AS (
 agg AS (
     SELECT
         d.survivor_id,
-        (array_remove(array_agg(ua.nickname          ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS nickname,
-        (array_remove(array_agg(ua.custom_color      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_color,
-        (array_remove(array_agg(ua.custom_icon       ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_icon,
-        (array_remove(array_agg(ua.custom_emoji      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_emoji,
-        (array_remove(array_agg(ua.account_name_hint ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS account_name_hint,
-        (array_remove(array_agg(ua.primary_type      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS primary_type,
-        (array_remove(array_agg(ua.primary_subtype   ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS primary_subtype,
+        (array_remove(array_agg(ua.nickname          ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS nickname,
+        (array_remove(array_agg(ua.custom_color      ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS custom_color,
+        (array_remove(array_agg(ua.custom_icon       ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS custom_icon,
+        (array_remove(array_agg(ua.custom_emoji      ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS custom_emoji,
+        (array_remove(array_agg(ua.account_name_hint ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS account_name_hint,
+        (array_remove(array_agg(ua.primary_type      ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS primary_type,
+        (array_remove(array_agg(ua.primary_subtype   ORDER BY ua.updated_at DESC NULLS LAST, ua.created_at DESC, ua.id DESC), NULL))[1] AS primary_subtype,
         bool_and(ua.is_hidden) AS all_hidden
     FROM dupes d
     JOIN user_accounts ua ON ua.id = d.id
@@ -235,12 +249,14 @@ SET conditions = (
 )
 WHERE EXISTS (
     SELECT 1
-    FROM jsonb_array_elements(cr.conditions) AS c,
-         losers l3,
-         jsonb_array_elements_text(c->'value') AS v_text
+    FROM jsonb_array_elements(cr.conditions) AS c
     WHERE c->>'type' = 'account_id'
       AND jsonb_typeof(c->'value') = 'array'
-      AND l3.loser_id::text = v_text
+      AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(c->'value') AS v_text, losers l3
+          WHERE l3.loser_id::text = v_text
+      )
 );
 
 -- =============================================================================

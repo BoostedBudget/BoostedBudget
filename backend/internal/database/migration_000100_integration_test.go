@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,20 +44,35 @@ func connectMigrationTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// ─── Down/Up SQL snippets ────────────────────────────────────────────────────
+// ─── SQL file readers ────────────────────────────────────────────────────────
 
-// migration000100Down undoes migration 000100: drops the unique index and
-// restores the non-unique index. This is safe to run inside a Postgres
-// transaction (DDL is transactional in Postgres).
-const migration000100Down = `
-DROP INDEX IF EXISTS unique_user_accounts_inst_mask_blind;
-CREATE INDEX IF NOT EXISTS idx_user_accounts_inst_mask_blind
-    ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx);
-`
+// migrationDir returns the absolute path to backend/migrations/ by walking up
+// from the test file's location. go test sets CWD to the package directory, so
+// the relative path "../../migrations" is stable under `go test ./internal/database/...`.
+func migrationDir(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok, "runtime.Caller failed")
+	// thisFile = .../backend/internal/database/migration_000100_integration_test.go
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+}
 
-// migration000100PreflightSQL is the Step 1 DO block from the up migration.
+// readMigrationFile reads a migration file from backend/migrations/.
+func readMigrationFile(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(migrationDir(t), name))
+	require.NoError(t, err, "failed to read migration file %s", name)
+	return string(b)
+}
+
+// migration000100PreflightSQL is the Step 1 preflight-only DO block.
+// Used by Scenario D to exercise just the preflight check in isolation.
+// Must match the actual Step 1 block in 000100...up.sql.
 const migration000100PreflightSQL = `
 DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM user_accounts WHERE institution_id_blind_idx IS NULL) THEN
+    RAISE EXCEPTION '#1334: un-backfilled user_accounts (NULL institution_id_blind_idx); run cmd/encrypt-migrate --table user_accounts first';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM user_accounts
     WHERE institution_id_blind_idx IS NOT NULL
@@ -64,211 +81,10 @@ DO $$ BEGIN
   ) THEN
     RAISE EXCEPTION '#1334: user_accounts rows have mask but NULL mask_blind_idx; run cmd/encrypt-migrate --table user_accounts first';
   END IF;
+  IF EXISTS (SELECT 1 FROM user_accounts WHERE mask IS NULL AND mask_blind_idx IS NOT NULL) THEN
+    RAISE EXCEPTION '#1334: user_accounts rows have NULL mask but non-NULL mask_blind_idx; data inconsistency — fix before migrating';
+  END IF;
 END $$;
-`
-
-// migration000100DeduplicateSQL contains Steps 2–6 of the up migration
-// (merge customizations, rewrite JSONB, re-point FK, delete losers).
-const migration000100DeduplicateSQL = `
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-agg AS (
-    SELECT
-        d.survivor_id,
-        (array_remove(array_agg(ua.nickname          ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS nickname,
-        (array_remove(array_agg(ua.custom_color      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_color,
-        (array_remove(array_agg(ua.custom_icon       ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_icon,
-        (array_remove(array_agg(ua.custom_emoji      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS custom_emoji,
-        (array_remove(array_agg(ua.account_name_hint ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS account_name_hint,
-        (array_remove(array_agg(ua.primary_type      ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS primary_type,
-        (array_remove(array_agg(ua.primary_subtype   ORDER BY ua.updated_at DESC NULLS LAST), NULL))[1] AS primary_subtype,
-        bool_and(ua.is_hidden) AS all_hidden
-    FROM dupes d
-    JOIN user_accounts ua ON ua.id = d.id
-    GROUP BY d.survivor_id
-    HAVING count(*) > 1
-)
-UPDATE user_accounts ua
-SET
-    nickname          = COALESCE(ua.nickname,          agg.nickname),
-    custom_color      = COALESCE(ua.custom_color,      agg.custom_color),
-    custom_icon       = COALESCE(ua.custom_icon,       agg.custom_icon),
-    custom_emoji      = COALESCE(ua.custom_emoji,      agg.custom_emoji),
-    account_name_hint = COALESCE(ua.account_name_hint, agg.account_name_hint),
-    primary_type      = COALESCE(ua.primary_type,      agg.primary_type),
-    primary_subtype   = COALESCE(ua.primary_subtype,   agg.primary_subtype),
-    is_hidden         = agg.all_hidden,
-    updated_at        = now()
-FROM agg
-WHERE ua.id = agg.survivor_id;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE boosts b
-SET actions = jsonb_set(b.actions, '{transfer,from_user_account_id}', to_jsonb(l.survivor_id::text))
-FROM losers l
-WHERE b.boost_type = 'transfer_suggestion'
-  AND b.actions->'transfer'->>'from_user_account_id' = l.loser_id::text;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE boosts b
-SET actions = jsonb_set(b.actions, '{transfer,to_user_account_id}', to_jsonb(l.survivor_id::text))
-FROM losers l
-WHERE b.boost_type = 'transfer_suggestion'
-  AND b.actions->'transfer'->>'to_user_account_id' = l.loser_id::text;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE boosts b
-SET trigger_config = jsonb_set(b.trigger_config, '{filters,user_account_id}', to_jsonb(l.survivor_id::text))
-FROM losers l
-WHERE b.trigger_config->>'type' = 'event'
-  AND b.trigger_config->'filters'->>'user_account_id' = l.loser_id::text;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE categorization_rules cr
-SET conditions = (
-    SELECT COALESCE(jsonb_agg(
-        CASE
-            WHEN (cond->>'type') = 'account_id'
-                AND jsonb_typeof(cond->'value') = 'string'
-            THEN jsonb_set(
-                cond, '{value}',
-                COALESCE(
-                    (SELECT to_jsonb(l2.survivor_id::text)
-                     FROM losers l2
-                     WHERE l2.loser_id::text = cond->>'value'
-                     LIMIT 1),
-                    cond->'value'
-                )
-            )
-            ELSE cond
-        END
-    ), '[]'::jsonb)
-    FROM jsonb_array_elements(cr.conditions) AS cond
-)
-WHERE EXISTS (
-    SELECT 1
-    FROM jsonb_array_elements(cr.conditions) AS c,
-         losers l3
-    WHERE c->>'type' = 'account_id'
-      AND jsonb_typeof(c->'value') = 'string'
-      AND l3.loser_id::text = c->>'value'
-);
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE accounts a
-SET user_account_id = l.survivor_id
-FROM losers l
-WHERE a.user_account_id = l.loser_id;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-UPDATE transactions t
-SET user_account_id = l.survivor_id
-FROM losers l
-WHERE t.user_account_id = l.loser_id;
-
-WITH dupes AS (
-    SELECT id,
-           first_value(id) OVER (
-               PARTITION BY user_id, institution_id_blind_idx, mask_blind_idx
-               ORDER BY created_at ASC, id ASC
-               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-           ) AS survivor_id
-    FROM user_accounts
-    WHERE institution_id_blind_idx IS NOT NULL
-),
-losers AS (
-    SELECT id AS loser_id, survivor_id FROM dupes WHERE id <> survivor_id
-)
-DELETE FROM user_accounts ua USING losers l WHERE ua.id = l.loser_id;
-`
-
-// migration000100IndexSQL is Step 7: drop old index, create unique index.
-const migration000100IndexSQL = `
-DROP INDEX IF EXISTS idx_user_accounts_inst_mask_blind;
-CREATE UNIQUE INDEX IF NOT EXISTS unique_user_accounts_inst_mask_blind
-    ON user_accounts (user_id, institution_id_blind_idx, mask_blind_idx)
-    NULLS NOT DISTINCT
-    WHERE institution_id_blind_idx IS NOT NULL;
 `
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -303,21 +119,24 @@ func seedMigTestLinkedItem(t *testing.T, tx pgx.Tx, userID, suffix string) strin
 }
 
 // seedUserAccount inserts a user_accounts row and returns its UUID string.
-// blindIdx and maskBlindIdx may be empty (NULL).
+// Pass empty strings for instBlindIdx / mask / maskBlindIdx to get SQL NULL.
+// When maskBlindIdx is empty the row is treated as no-mask (mask stored as NULL).
 func seedUserAccount(t *testing.T, tx pgx.Tx, userID, instBlindIdx, mask, maskBlindIdx string, createdAt time.Time) string {
 	t.Helper()
 	uaID := uuid.New().String()
 	var err error
 	if instBlindIdx == "" {
+		// No institution blind index → fully un-backfilled row (all blind cols NULL)
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO user_accounts (id, user_id, institution_id, created_at, updated_at)
 			VALUES ($1, $2, 'enc-inst', $3, $3)
 		`, uaID, userID, createdAt)
 	} else if maskBlindIdx == "" {
+		// No mask blind index → no-mask row (mask IS NULL, mask_blind_idx IS NULL)
 		_, err = tx.Exec(context.Background(), `
-			INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, created_at, updated_at)
-			VALUES ($1, $2, 'enc-inst', $3, $4, $5, $5)
-		`, uaID, userID, mask, instBlindIdx, createdAt)
+			INSERT INTO user_accounts (id, user_id, institution_id, institution_id_blind_idx, created_at, updated_at)
+			VALUES ($1, $2, 'enc-inst', $3, $4, $4)
+		`, uaID, userID, instBlindIdx, createdAt)
 	} else {
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO user_accounts (id, user_id, institution_id, mask, institution_id_blind_idx, mask_blind_idx, created_at, updated_at)
@@ -328,23 +147,23 @@ func seedUserAccount(t *testing.T, tx pgx.Tx, userID, instBlindIdx, mask, maskBl
 	return uaID
 }
 
-// rollbackMigration000100 drops the unique index and restores the non-unique index in tx.
+// rollbackMigration000100 applies the real 000100 down SQL in tx:
+// drops the unique index and restores the non-unique index.
 func rollbackMigration000100(t *testing.T, tx pgx.Tx) {
 	t.Helper()
-	_, err := tx.Exec(context.Background(), migration000100Down)
+	downSQL := readMigrationFile(t, "000100_add_user_accounts_blind_idx_unique_index.down.sql")
+	_, err := tx.Exec(context.Background(), downSQL)
 	require.NoError(t, err, "rollback migration 000100 failed")
 }
 
-// applyMigration000100 runs the full migration 000100 up SQL (steps 1–7) in tx.
+// applyMigration000100 runs the real 000100 up SQL in tx (steps 1–7).
+// Reading from the actual file guarantees the test exercises the production SQL,
+// including the full JSONB rewrites and all 8 FK re-points.
 func applyMigration000100(t *testing.T, tx pgx.Tx) {
 	t.Helper()
-	ctx := context.Background()
-	_, err := tx.Exec(ctx, migration000100PreflightSQL)
-	require.NoError(t, err, "migration 000100 preflight step failed")
-	_, err = tx.Exec(ctx, migration000100DeduplicateSQL)
-	require.NoError(t, err, "migration 000100 dedup+repoint step failed")
-	_, err = tx.Exec(ctx, migration000100IndexSQL)
-	require.NoError(t, err, "migration 000100 index step failed")
+	upSQL := readMigrationFile(t, "000100_add_user_accounts_blind_idx_unique_index.up.sql")
+	_, err := tx.Exec(context.Background(), upSQL)
+	require.NoError(t, err, "migration 000100 failed")
 }
 
 // ─── Test suite ──────────────────────────────────────────────────────────────
@@ -476,8 +295,6 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 			VALUES ($1, $2, $3, $4::jsonb)
 		`, ruleID, userID, "rule-B-"+suffix, ruleConditions)
 		require.NoError(t, err)
-
-		_ = liID // linked_item seeded but not needed for boost/rule
 
 		applyMigration000100(t, tx)
 
@@ -620,11 +437,8 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		`).Scan(&uniqueExists))
 		assert.False(t, uniqueExists, "unique index must not exist after down migration")
 
-		// Re-apply: steps 1–7 (no data changes needed since no dupes in this tx scope)
-		_, err = tx.Exec(ctx, migration000100PreflightSQL)
-		require.NoError(t, err)
-		_, err = tx.Exec(ctx, migration000100IndexSQL)
-		require.NoError(t, err)
+		// Re-apply: full migration up (preflight passes on empty tx scope, dedup is a no-op)
+		applyMigration000100(t, tx)
 
 		// Verify unique index is back
 		require.NoError(t, tx.QueryRow(ctx, `
@@ -682,8 +496,10 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 		assert.Equal(t, 1, uH1Count, "survivor U_H1 (NULL mask) must still exist after migration")
 	})
 
-	// ─── Scenario I: NULL institution_id_blind_idx rows untouched ────────────
-	t.Run("ScenarioI_NullBlindIdxUntouched", func(t *testing.T) {
+	// ─── Scenario I: NULL institution_id_blind_idx triggers strict preflight ──
+	// After G2, the migration aborts when ANY row has NULL institution_id_blind_idx.
+	// Operators must run cmd/encrypt-migrate --table user_accounts first.
+	t.Run("ScenarioI_NullBlindIdxTriggersStrictPreflight", func(t *testing.T) {
 		ctx := context.Background()
 		suffix := fmt.Sprintf("I-%d", time.Now().UnixNano())
 
@@ -695,20 +511,72 @@ func TestMigration000100_UserAccountsBlindIndex(t *testing.T) {
 
 		rollbackMigration000100(t, tx)
 
-		// Both rows have institution_id_blind_idx = NULL; the dedup CTE's
-		// WHERE institution_id_blind_idx IS NOT NULL predicate excludes them.
+		// Seed a row with NULL institution_id_blind_idx (un-backfilled).
 		tI1 := time.Now().Add(-2 * time.Hour)
-		uI1ID := seedUserAccount(t, tx, userID, "", "", "", tI1)
+		_ = seedUserAccount(t, tx, userID, "", "", "", tI1)
 
-		tI2 := time.Now().Add(-1 * time.Hour)
-		uI2ID := seedUserAccount(t, tx, userID, "", "", "", tI2)
+		// Running the full migration must fail — Guard 1 fires.
+		upSQL := readMigrationFile(t, "000100_add_user_accounts_blind_idx_unique_index.up.sql")
+		_, err = tx.Exec(ctx, upSQL)
+		require.Error(t, err, "migration must raise when rows have NULL institution_id_blind_idx")
+		assert.Contains(t, err.Error(), "#1334", "error must carry the issue reference")
+		assert.Contains(t, err.Error(), "institution_id_blind_idx", "error must name the column")
+	})
 
+	// ─── Scenario J: categorization_rules with string + array account_id ──────
+	// Regression guard for G1 (array-rewrite WHERE EXISTS abort).
+	// Seeds a categorization_rule with BOTH a string-valued and an array-valued
+	// account_id condition pointing at a loser — verifies both are rewritten.
+	t.Run("ScenarioJ_CategorizationRulesStringAndArrayConditions", func(t *testing.T) {
+		ctx := context.Background()
+		suffix := fmt.Sprintf("J-%d", time.Now().UnixNano())
+
+		userID := seedMigTestUser(t, pool, suffix)
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		rollbackMigration000100(t, tx)
+
+		instBlind := "blind-inst-J-" + suffix
+		maskBlind := "blind-mask-J-" + suffix
+
+		t1 := time.Now().Add(-2 * time.Hour)
+		u1ID := seedUserAccount(t, tx, userID, instBlind, "4321", maskBlind, t1)
+
+		t2 := time.Now().Add(-1 * time.Hour)
+		u2ID := seedUserAccount(t, tx, userID, instBlind, "4321", maskBlind, t2)
+
+		// Rule with both a string-valued and an array-valued account_id condition.
+		// The string condition directly references loser U2.
+		// The array condition contains loser U2 plus an unrelated ID.
+		ruleID := uuid.New().String()
+		ruleConditions := fmt.Sprintf(
+			`[{"type": "account_id", "value": "%s"}, {"type": "account_id", "value": ["%s", "unrelated-id"]}]`,
+			u2ID, u2ID,
+		)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO categorization_rules (id, user_id, name, conditions)
+			VALUES ($1, $2, $3, $4::jsonb)
+		`, ruleID, userID, "rule-J-"+suffix, ruleConditions)
+		require.NoError(t, err)
+
+		// applyMigration000100 would panic here before the G1 fix (array SRF error).
 		applyMigration000100(t, tx)
 
-		// Both rows must still exist — dedup does not touch NULL-blind-idx rows
-		var count int
-		require.NoError(t, tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_accounts WHERE id IN ($1, $2)", uI1ID, uI2ID).Scan(&count))
-		assert.Equal(t, 2, count, "rows with NULL institution_id_blind_idx must not be touched by dedup migration")
+		var gotConditions string
+		require.NoError(t, tx.QueryRow(ctx, "SELECT conditions::text FROM categorization_rules WHERE id = $1", ruleID).Scan(&gotConditions))
+
+		// Both the string condition AND the array element must be rewritten to U1.
+		// u1ID appears exactly twice: once from string rewrite, once from array rewrite.
+		// This proves both code paths ran — not just one of them.
+		assert.Equal(t, 2, strings.Count(gotConditions, u1ID),
+			"survivor U1 must appear exactly twice in conditions (string + array element)")
+		assert.NotContains(t, gotConditions, u2ID, "no condition must still reference loser U2")
+
+		// "unrelated-id" must be preserved (not blanked or mapped to U1).
+		assert.Contains(t, gotConditions, "unrelated-id", "unrelated array element must be preserved")
 	})
 
 	// ─── Scenario G: Customization merge ─────────────────────────────────────
