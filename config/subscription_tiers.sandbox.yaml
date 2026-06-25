@@ -39,7 +39,7 @@ tiers:
     users_included: 1
 
     limits:
-      accounts: 30
+      accounts: -1
       transaction_history_days: 730
       executions_per_day: 6
 
@@ -62,7 +62,7 @@ tiers:
     users_included: 2
 
     limits:
-      accounts: 60
+      accounts: -1
       transaction_history_days: 730
       executions_per_day: 12
 
@@ -85,7 +85,7 @@ tiers:
     users_included: 3
 
     limits:
-      accounts: 90
+      accounts: -1
       transaction_history_days: 730
       executions_per_day: 18
 
@@ -108,7 +108,7 @@ tiers:
     users_included: 4
 
     limits:
-      accounts: 120
+      accounts: -1
       transaction_history_days: 730
       executions_per_day: 24
 
@@ -131,7 +131,7 @@ tiers:
     users_included: 5
 
     limits:
-      accounts: 150
+      accounts: -1
       transaction_history_days: 730
       executions_per_day: 30
 
