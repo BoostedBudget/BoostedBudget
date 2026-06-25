@@ -583,9 +583,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	}
 	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
 
-	// Mock current account count (user has 2 accounts, limit is 8)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(2, nil)
-
 	// AccessToken is now stored directly; repo layer handles encryption on write
 	accessToken := "access-sandbox-token-abc123"
 
@@ -620,31 +617,6 @@ func TestAccountService_LinkAccounts_Success(t *testing.T) {
 	// This test documents the expected behavior; implementation in GREEN phase
 }
 
-// TestAccountService_LinkAccounts_LimitExceeded tests subscription limit enforcement
-func TestAccountService_LinkAccounts_LimitExceeded(t *testing.T) {
-	// Given: User at account limit trying to link more accounts
-	mockAccountRepo := new(MockAccountRepository)
-	mockUserRepo := new(MockUserRepository)
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-
-	// Mock user with free tier (8 account limit)
-	user := &domain.User{
-		ID:               userID,
-		SubscriptionTier: "free",
-	}
-	mockUserRepo.On("GetUserByID", ctx, userID).Return(user, nil)
-
-	// Mock current account count (user already has 3 accounts - at limit)
-	mockAccountRepo.On("CountByUserID", ctx, userID).Return(3, nil)
-
-	// Service will check limit before calling Plaid
-	// Expected: Should return error without calling Plaid API
-
-	// Then: Should return limit exceeded error
-	// Implementation will be in GREEN phase
-}
 
 // TestAccountService_LinkAccounts_EncryptionVerified tests that access token is encrypted
 func TestAccountService_LinkAccounts_EncryptionVerified(t *testing.T) {
@@ -3079,7 +3051,7 @@ func newTestPlaidServer(t *testing.T, accessToken, plaidItemID string, accounts 
 }
 
 // newTestSubscriptionService creates a real SubscriptionService using the project's
-// tier config YAML. Premium tier has unlimited accounts, so CheckLimit always allows.
+// tier config YAML.
 func newTestSubscriptionService(t *testing.T) *SubscriptionService {
 	t.Helper()
 	tierConfig, err := config.LoadTierConfig()

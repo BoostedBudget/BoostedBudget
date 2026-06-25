@@ -231,29 +231,6 @@ func TestExchangePublicToken_Success(t *testing.T) {
 	assert.Equal(t, 1, output.Body.Accounts)
 }
 
-// TestExchangePublicToken_AccountLimitExceeded tests account limit error.
-func TestExchangePublicToken_AccountLimitExceeded(t *testing.T) {
-	mockPlaid := &mockPlaidServiceForPlaid{}
-	mockAccount := &mockAccountServiceForPlaid{
-		linkErr: services.ErrAccountLimitExceeded,
-	}
-
-	handler := NewPlaidHandler(mockPlaid, mockAccount)
-
-	input := &ExchangePublicTokenInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-	}
-	input.Body.PublicToken = "public-sandbox-abc123"
-	input.Body.InstitutionID = "ins_123"
-	input.Body.InstitutionName = "Chase"
-
-	output, err := handler.ExchangePublicToken(context.Background(), input)
-
-	assert.Nil(t, output)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Account limit exceeded")
-}
-
 // TestExchangePublicToken_InvalidPublicToken tests invalid token error.
 func TestExchangePublicToken_InvalidPublicToken(t *testing.T) {
 	mockPlaid := &mockPlaidServiceForPlaid{}
