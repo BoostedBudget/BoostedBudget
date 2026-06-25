@@ -222,7 +222,7 @@ func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/users/{user_id}/subscription/override",
 		Summary:     "Create subscription resource override",
-		Description: "Create a per-user resource limit override (e.g. accounts, transaction_history_days, executions_per_day). Requires admin privileges.",
+		Description: "Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.",
 		Tags:        []string{"Admin Subscriptions"},
 		Security: []map[string][]string{
 			{"clerk": {}},
