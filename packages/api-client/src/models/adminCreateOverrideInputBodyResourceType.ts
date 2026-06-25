@@ -38,7 +38,6 @@ export type AdminCreateOverrideInputBodyResourceType = typeof AdminCreateOverrid
 
 
 export const AdminCreateOverrideInputBodyResourceType = {
-  accounts: 'accounts',
   transaction_history_days: 'transaction_history_days',
   executions_per_day: 'executions_per_day',
 } as const;

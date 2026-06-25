@@ -187,7 +187,7 @@ export function useGetAdminUserSubscription<TData = Awaited<ReturnType<typeof ge
 
 
 /**
- * Create a per-user resource limit override (e.g. accounts, transaction_history_days, executions_per_day). Requires admin privileges.
+ * Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.
  * @summary Create subscription resource override
  */
 export const createAdminSubscriptionOverride = (
