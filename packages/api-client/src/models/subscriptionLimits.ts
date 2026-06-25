@@ -32,7 +32,6 @@
  */
 
 export interface SubscriptionLimits {
-  accounts: number;
   executions_per_day: number;
   transaction_history_days: number;
 }

@@ -199,13 +199,7 @@ function SubscriptionOverrideForm({
                                 <h4 className="text-[0.8rem] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 m-0 pb-1.5 border-b border-border">
                                     <Layers size={14} /> Effective Limits
                                 </h4>
-                                <div className="grid grid-cols-3 gap-3">
-                                    <div className="flex flex-col items-center py-3 px-2 bg-muted border border-border rounded-lg text-center">
-                                        <span className="text-xl font-bold text-primary tabular-nums">
-                                            {sub.limits.accounts === -1 ? '∞' : sub.limits.accounts}
-                                        </span>
-                                        <span className="text-[0.7rem] text-muted-foreground mt-0.5 uppercase tracking-wider">Accounts</span>
-                                    </div>
+                                <div className="grid grid-cols-2 gap-3">
                                     <div className="flex flex-col items-center py-3 px-2 bg-muted border border-border rounded-lg text-center">
                                         <span className="text-xl font-bold text-primary tabular-nums">
                                             {sub.limits.transaction_history_days === -1

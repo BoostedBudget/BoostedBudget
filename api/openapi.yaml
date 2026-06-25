@@ -367,7 +367,6 @@ components:
         resource_type:
           description: The resource type to override
           enum:
-            - accounts
             - transaction_history_days
             - executions_per_day
           type: string
@@ -5150,9 +5149,6 @@ components:
     SubscriptionLimits:
       additionalProperties: false
       properties:
-        accounts:
-          format: int64
-          type: integer
         executions_per_day:
           format: int64
           type: integer
@@ -5160,7 +5156,6 @@ components:
           format: int64
           type: integer
       required:
-        - accounts
         - transaction_history_days
         - executions_per_day
       type: object
@@ -7503,7 +7498,7 @@ paths:
         - Admin Subscriptions
   /api/v1/admin/users/{user_id}/subscription/override:
     post:
-      description: Create a per-user resource limit override (e.g. accounts, transaction_history_days, executions_per_day). Requires admin privileges.
+      description: Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.
       operationId: create-admin-subscription-override
       parameters:
         - description: ID of the user to override
