@@ -144,8 +144,6 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("Category limit exceeded for your subscription tier. Upgrade to add more categories.")
 	case errors.Is(err, domain.ErrRuleLimitExceeded):
 		return huma.Error403Forbidden("Categorization rule limit exceeded for your subscription tier. Upgrade to add more rules.")
-	case errors.Is(err, services.ErrAccountLimitExceeded):
-		return huma.Error403Forbidden("Account limit exceeded for your subscription tier. Upgrade to link more accounts.")
 	case errors.Is(err, services.ErrForbiddenUpdate):
 		return huma.Error403Forbidden("You are not allowed to update this field")
 	case errors.Is(err, repository.ErrNotificationAccessDenied):

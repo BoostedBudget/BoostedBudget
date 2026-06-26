@@ -309,23 +309,4 @@ describe('AutoCategorizationPage', () => {
     })
   })
 
-  describe('Tier limits', () => {
-    it('should show tier limit warning when at limit', () => {
-      configureQuery({ data: [mockRule1] })
-      renderWithProviders(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
-      expect(screen.getByText(/rule limit reached/i)).toBeInTheDocument()
-    })
-
-    it('should disable create button when at limit', () => {
-      configureQuery({ data: [mockRule1] })
-      renderWithProviders(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
-      expect(screen.getByRole('button', { name: /create rule/i })).toBeDisabled()
-    })
-
-    it('should show upgrade prompt for free tier', () => {
-      configureQuery({ data: [mockRule1] })
-      renderWithProviders(<AutoCategorizationPage categories={mockCategories} maxRules={1} currentTier="free" />)
-      expect(screen.getByText(/upgrade/i)).toBeInTheDocument()
-    })
-  })
 })

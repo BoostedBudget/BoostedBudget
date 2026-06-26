@@ -92,8 +92,6 @@ func itemCleanupUniqueOpts() *queue.UniqueOpts {
 }
 
 var (
-	// ErrAccountLimitExceeded is returned when user tries to link more accounts than their tier allows
-	ErrAccountLimitExceeded = errors.New("account limit exceeded for current subscription tier")
 	// ErrInvalidPublicToken is returned when Plaid rejects the public token
 	ErrInvalidPublicToken = errors.New("invalid or expired public token")
 	// ErrPlaidAPIFailure is returned when Plaid API calls fail
@@ -158,17 +156,16 @@ type LinkAccountsResult struct {
 
 // accountService implements AccountService
 type accountService struct {
-	plaidService    PlaidService
-	subscriptionSvc *SubscriptionService
-	linkedItemRepo  repository.LinkedItemRepository
-	accountRepo     repository.AccountRepository
-	userRepo        repository.ProfileRepository
-	userAccountSvc  UserAccountService  // Issue #171: For re-link user_account matching
-	chainResolver   AccountChainResolver // Issue #1109: Active-only account resolution
-	db              *pgxpool.Pool
-	jobQueue        queue.JobQueue           // Issue #658: For auto-sync after linking (can be nil)
-	enc             *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
-	logger          *slog.Logger
+	plaidService   PlaidService
+	linkedItemRepo repository.LinkedItemRepository
+	accountRepo    repository.AccountRepository
+	userRepo       repository.ProfileRepository
+	userAccountSvc UserAccountService   // Issue #171: For re-link user_account matching
+	chainResolver  AccountChainResolver // Issue #1109: Active-only account resolution
+	db             *pgxpool.Pool
+	jobQueue       queue.JobQueue            // Issue #658: For auto-sync after linking (can be nil)
+	enc            *appcrypto.FieldEncryptor // Issue #1010: For fingerprint computation (can be nil)
+	logger         *slog.Logger
 }
 
 // AccountServiceOption is a functional option for configuring AccountService
@@ -260,7 +257,6 @@ func (s *accountService) checkFingerprintOwnership(ctx context.Context, blindIdx
 // NewAccountService creates a new AccountService instance
 func NewAccountService(
 	plaidService PlaidService,
-	subscriptionSvc *SubscriptionService,
 	linkedItemRepo repository.LinkedItemRepository,
 	accountRepo repository.AccountRepository,
 	userRepo repository.ProfileRepository,
@@ -268,14 +264,13 @@ func NewAccountService(
 	opts ...AccountServiceOption,
 ) AccountService {
 	svc := &accountService{
-		plaidService:    plaidService,
-		subscriptionSvc: subscriptionSvc,
-		linkedItemRepo:  linkedItemRepo,
-		accountRepo:     accountRepo,
-		userRepo:        userRepo,
-		chainResolver:   NewAccountChainResolver(accountRepo), // Issue #1109
-		db:              db,
-		logger:          slog.Default(),
+		plaidService:   plaidService,
+		linkedItemRepo: linkedItemRepo,
+		accountRepo:    accountRepo,
+		userRepo:       userRepo,
+		chainResolver:  NewAccountChainResolver(accountRepo), // Issue #1109
+		db:             db,
+		logger:         slog.Default(),
 	}
 
 	// Apply optional configuration
@@ -290,55 +285,26 @@ func NewAccountService(
 // NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 //
 // Flow:
-// 1. Fetch user by internal UUID to get subscription tier
-// 2. Check current account count against subscription limit (fail fast)
-// 3. Exchange public token for access token via Plaid API
-// 4. Fetch accounts from Plaid
-// 5. Verify combined count doesn't exceed limit
-// 6. Encrypt access token
-// 7. Issue #171: Check for re-link (existing item at same institution) and soft-delete old data
-// 8. Store linked item and accounts atomically in database
-// 9. Issue #171: For each account, match/create user_account for stable reference
+// 1. Fetch user by internal UUID
+// 2. Exchange public token for access token via Plaid API
+// 3. Fetch accounts from Plaid
+// 4. Issue #171: Check for re-link (existing item at same institution) and soft-delete old data
+// 5. Store linked item and accounts atomically in database
+// 6. Issue #171: For each account, match/create user_account for stable reference
 //
-// Returns ErrAccountLimitExceeded if user is at or over their account limit
 // Returns ErrInvalidPublicToken if Plaid rejects the token
 // Returns ErrPlaidAPIFailure if other Plaid API errors occur
 func (s *accountService) LinkAccounts(
 	ctx context.Context,
 	userID, publicToken, institutionID, institutionName string,
 ) (*LinkAccountsResult, error) {
-	// Step 1: Fetch user by internal UUID to get subscription tier
+	// Step 1: Fetch user by internal UUID
 	user, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user: %w", err)
 	}
 
-	// Step 2: Check current account count against subscription limit (fail fast)
-	currentAccountCount, err := s.accountRepo.CountByUserID(ctx, user.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to count user accounts: %w", err)
-	}
-
-	// Check limit before making Plaid API call (fail fast)
-	limitCheck, err := s.subscriptionSvc.CheckLimit(
-		ctx,
-		user,
-		domain.ResourceAccounts,
-		currentAccountCount,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check account limit: %w", err)
-	}
-
-	if !limitCheck.Allowed {
-		return nil, fmt.Errorf("%w: current=%d, limit=%d, tier=%s",
-			ErrAccountLimitExceeded,
-			limitCheck.CurrentUsage,
-			limitCheck.Limit,
-			user.SubscriptionTier)
-	}
-
-	// Step 3: Exchange public token for access token via Plaid API
+	// Step 2: Exchange public token for access token via Plaid API
 	client := s.plaidService.GetClient()
 
 	exchangeReq := plaid.NewItemPublicTokenExchangeRequest(publicToken)
@@ -354,7 +320,7 @@ func (s *accountService) LinkAccounts(
 	accessToken := exchangeResp.GetAccessToken()
 	itemID := exchangeResp.GetItemId()
 
-	// Step 4: Fetch accounts from Plaid
+	// Step 3: Fetch accounts from Plaid
 	accountsReq := plaid.NewAccountsGetRequest(accessToken)
 	accountsResp, _, err := client.PlaidApi.AccountsGet(ctx).AccountsGetRequest(*accountsReq).Execute()
 	if err != nil {
@@ -363,13 +329,13 @@ func (s *accountService) LinkAccounts(
 
 	plaidAccounts := accountsResp.GetAccounts()
 
-	// Step 4b: Validate that Plaid returned at least one account
+	// Step 3b: Validate that Plaid returned at least one account
 	// Issue #668: Prevent creating billable Plaid items with zero accounts
 	if len(plaidAccounts) == 0 {
 		return nil, fmt.Errorf("%w: the institution returned no accounts to link - please ensure you select accounts during the connection process", ErrNoAccountsAvailable)
 	}
 
-	// Step 4c: Issue #1010 — Cross-user fingerprint ownership check.
+	// Step 3c: Issue #1010 — Cross-user fingerprint ownership check.
 	// Uses server-provided institution_id (trusted) for fallback fingerprint.
 	plaidItem := accountsResp.GetItem()
 	if serverInstID := plaidItem.GetInstitutionId(); serverInstID != "" && serverInstID != institutionID {
@@ -406,18 +372,7 @@ func (s *accountService) LinkAccounts(
 		}
 	}
 
-	// Step 5: Verify combined count doesn't exceed limit
-	// Skip this check for unlimited tiers (limit=-1)
-	newTotalCount := currentAccountCount + len(plaidAccounts)
-	if !limitCheck.IsUnlimited && newTotalCount > limitCheck.Limit {
-		return nil, fmt.Errorf("%w: linking %d accounts would exceed limit (current=%d, limit=%d)",
-			ErrAccountLimitExceeded,
-			len(plaidAccounts),
-			currentAccountCount,
-			limitCheck.Limit)
-	}
-
-	// Step 7: Issue #171 - Check for re-link (existing active item at same institution)
+	// Step 4: Issue #171 — Check for re-link (existing active item at same institution)
 	var existingLinkedItem *domain.LinkedItem
 	existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
 		ctx, user.ID, institutionID, string(domain.LinkedItemStatusActive),
@@ -427,7 +382,7 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to check for existing linked item: %w", err)
 	}
 
-	// Step 7b: Issue #896 - Fallback: check for disconnected item (re-subscription reconnection)
+	// Step 4b: Issue #896 — Fallback: check for disconnected item (re-subscription reconnection)
 	if existingLinkedItem == nil {
 		existingLinkedItem, err = s.linkedItemRepo.GetByUserAndInstitution(
 			ctx, user.ID, institutionID, string(domain.LinkedItemStatusDisconnected),
@@ -443,7 +398,7 @@ func (s *accountService) LinkAccounts(
 		}
 	}
 
-	// Step 8: Create new linked item (stores access token and links accounts)
+	// Step 5: Create new linked item (stores access token and links accounts)
 	linkedItem := &domain.LinkedItem{
 		UserID:          user.ID,
 		ItemID:          itemID,
@@ -459,7 +414,7 @@ func (s *accountService) LinkAccounts(
 		return nil, fmt.Errorf("failed to create linked item: %w", err)
 	}
 
-	// Step 9: Issue #171 and #896 - If this is a re-link, soft-delete the old linked_item and accounts
+	// Step 5b: Issue #171 and #896 — If this is a re-link, soft-delete the old linked_item and accounts
 	if existingLinkedItem != nil {
 		s.logger.Info("re-link detected, soft-deleting old linked item",
 			"old_item_id", existingLinkedItem.ID,
@@ -500,7 +455,7 @@ func (s *accountService) LinkAccounts(
 		}
 	}
 
-	// Step 9b: Convert Plaid accounts to domain accounts with user_account_id
+	// Step 6: Convert Plaid accounts to domain accounts with user_account_id
 	institutionIDFromPlaid := plaidItem.GetInstitutionId()
 	accounts := make([]domain.Account, len(plaidAccounts))
 	for i, plaidAccount := range plaidAccounts {
@@ -555,14 +510,14 @@ func (s *accountService) LinkAccounts(
 		accounts[i] = account
 	}
 
-	// Step 10: Create accounts in batch
+	// Step 6b: Create accounts in batch
 	if err := s.accountRepo.CreateBatch(ctx, accounts); err != nil {
 		// TODO: Consider rollback mechanism if account creation fails
 		// For now, the linked_item → accounts CASCADE DELETE will clean up on item deletion
 		return nil, fmt.Errorf("failed to create accounts: %w", err)
 	}
 
-	// Step 11: Issue #658 - Enqueue initial sync job to fetch transactions
+	// Step 6c: Issue #658 — Enqueue initial sync job to fetch transactions
 	// This is non-blocking - if it fails, account linking still succeeds
 	s.enqueueInitialSync(ctx, linkedItem.ID, user.ID)
 

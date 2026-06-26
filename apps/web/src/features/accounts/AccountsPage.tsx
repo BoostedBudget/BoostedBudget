@@ -12,7 +12,6 @@ import { PlaidLinkButton } from './PlaidLinkButton'
 import { AccountCard } from './AccountCard'
 import { AccountTable, type SortColumn as AccountSortColumn, type SortDirection } from './components/AccountTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
-import { UpgradeBanner } from './UpgradeBanner'
 import { ReadOnlyGuard } from '@/auth/ReadOnlyGuard'
 import { AccountCustomizationModal } from './components/AccountCustomizationModal'
 import { ListViewToggle } from '@/shared/components/ListViewToggle'
@@ -24,8 +23,6 @@ import {
   getGetAccountsQueryKey,
 } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import { useProfile } from '../profile/hooks/useProfile'
-import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
-import { useTierLimits } from '../subscription/hooks/useTierLimits'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
 import type { Account, UpdateAccountRequest } from './types'
@@ -80,8 +77,7 @@ export function AccountsPage() {
   const accounts = accountsData?.accounts ?? []
   const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
 
-  const { user, loading: userLoading, refetch: refetchProfile } = useProfile()
-  const { tiers, loading: tiersLoading } = useSubscriptionTiers()
+  const { loading: userLoading, refetch: refetchProfile } = useProfile()
 
   const loading = accountsLoading || userLoading
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
@@ -280,12 +276,6 @@ export function AccountsPage() {
     }
   }, [accountsData?.accounts])
 
-  const { isAtLimit, shouldShowUpgradeBanner, accountCountDisplay } = useTierLimits({
-    user,
-    tiers,
-    currentAccountCount: activeAccountsCount,
-  })
-
   if (error) {
     return (
       <div className="p-8 max-w-[1200px] mx-auto">
@@ -334,15 +324,12 @@ export function AccountsPage() {
           <ReadOnlyGuard>
             <PlaidLinkButton
               onSuccess={handleAccountsLinked}
-              disabled={isAtLimit}
             />
           </ReadOnlyGuard>
         </div>
       </div>
 
-      {shouldShowUpgradeBanner && <UpgradeBanner />}
-
-      {!(loading || tiersLoading) && accounts.length === 0 ? (
+      {!loading && accounts.length === 0 ? (
         <EmptyState
           icon={<Landmark />}
           title="Connect your first bank account"
@@ -351,7 +338,6 @@ export function AccountsPage() {
             <ReadOnlyGuard>
               <PlaidLinkButton
                 onSuccess={handleAccountsLinked}
-                disabled={isAtLimit}
               />
             </ReadOnlyGuard>
           }
@@ -360,7 +346,7 @@ export function AccountsPage() {
       ) : (
         <div>
           <p className="text-base text-muted-foreground mb-4">
-            {accountCountDisplay}
+            {activeAccountsCount} {activeAccountsCount === 1 ? 'account' : 'accounts'}
             {hiddenCount > 0 && !showHidden && (
               <span className="text-muted-foreground italic"> ({hiddenCount} hidden)</span>
             )}
@@ -369,7 +355,7 @@ export function AccountsPage() {
           {view === 'table' ? (
             <AccountTable
               accounts={displayedAccounts}
-              loading={loading || tiersLoading}
+              loading={loading}
               onEdit={handleEditAccount}
               onDelete={(account) => setAccountToDelete(account)}
               onRowClick={(account) => navigate(`/accounts/${account.id}`)}
@@ -384,7 +370,7 @@ export function AccountsPage() {
               balanceRange={balanceRange}
               onBalanceRangeChange={setBalanceRange}
             />
-          ) : (loading || tiersLoading) && displayedAccounts.length === 0 ? (
+          ) : loading && displayedAccounts.length === 0 ? (
             <div role="status">
               <span className="sr-only">Loading accounts…</span>
               <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} aria-hidden="true">

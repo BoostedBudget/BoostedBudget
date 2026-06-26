@@ -3,6 +3,7 @@
  *
  * Shared mock data for subscription-related tests.
  * These fixtures match the generated types from the OpenAPI spec.
+ * All tiers have unlimited executions_per_day (-1); users_included is the main differentiator.
  */
 
 import type {
@@ -15,7 +16,7 @@ import type {
 
 /**
  * Complete mock subscription tiers response matching the generated types.
- * All tiers have unlimited accounts and executions_per_day (-1).
+ * All tiers have unlimited executions_per_day (-1).
  * The only differentiator between tiers is users_included.
  */
 export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
@@ -31,7 +32,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         users_included: 1,
       },
       limits: {
-        accounts: -1,
         executions_per_day: -1,
         transaction_history_days: 730,
       },
@@ -55,7 +55,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         users_included: 2,
       },
       limits: {
-        accounts: -1,
         executions_per_day: -1,
         transaction_history_days: 730,
       },
@@ -79,7 +78,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         users_included: 3,
       },
       limits: {
-        accounts: -1,
         executions_per_day: -1,
         transaction_history_days: 730,
       },
@@ -103,7 +101,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         users_included: 4,
       },
       limits: {
-        accounts: -1,
         executions_per_day: -1,
         transaction_history_days: 730,
       },
@@ -127,7 +124,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         users_included: 5,
       },
       limits: {
-        accounts: -1,
         executions_per_day: -1,
         transaction_history_days: 730,
       },
@@ -165,7 +161,6 @@ export function createMockTier(overrides: Partial<SubscriptionTier> = {}): Subsc
  */
 export function createMockLimits(overrides: Partial<SubscriptionLimits> = {}): SubscriptionLimits {
   return {
-    accounts: -1,
     executions_per_day: -1,
     transaction_history_days: 730,
     ...overrides,
