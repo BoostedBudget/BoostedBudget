@@ -248,7 +248,7 @@ This project follows strict development guidelines:
 
 1. **TDD (Test-Driven Development):** Red-Green-Refactor for all business logic
 2. **Issue-Driven:** Every change needs Issue → Branch → PR
-3. **Test Coverage:** Backend ≥69% statements (hard gate), Frontend ≥82% lines (hard gate). Aspirational goal: ≥80% on both sides (active campaign — issue #1286).
+3. **Test Coverage:** Backend ≥73% statements (hard gate), Frontend ≥82% lines (hard gate). Aspirational goal: ≥80% on both sides.
 4. **Code Review:** All PRs require review before merge
 
 See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines.
