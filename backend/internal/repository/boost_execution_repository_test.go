@@ -74,7 +74,7 @@ func TestBoostExecutionRepository_Create_Success(t *testing.T) {
 		WithArgs(
 			pgxmock.AnyArg(), // id (generated)
 			execution.BoostID,
-			pgxmock.AnyArg(), // status (defaulted)
+			domain.ExecutionStatusPending, // status (defaulted)
 			pgxmock.AnyArg(), // started_at (defaulted)
 			pgxmock.AnyArg(), // completed_at (nil)
 			pgxmock.AnyArg(), // execution_duration_ms (nil)
@@ -84,7 +84,7 @@ func TestBoostExecutionRepository_Create_Success(t *testing.T) {
 			pgxmock.AnyArg(), // error_code
 			pgxmock.AnyArg(), // error_message
 			pgxmock.AnyArg(), // retry_count
-			pgxmock.AnyArg(), // max_retries (defaulted to 3)
+			3, // max_retries (defaulted to 3)
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
