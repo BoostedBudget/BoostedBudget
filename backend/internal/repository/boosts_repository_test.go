@@ -564,7 +564,7 @@ func TestBoostsRepository_Create_Success(t *testing.T) {
 			boost.BoostType,
 			pgxmock.AnyArg(), // trigger_config JSON
 			pgxmock.AnyArg(), // conditions JSON
-			pgxmock.AnyArg(), // condition_logic (defaulted to AND)
+			"AND", // condition_logic (defaulted to AND)
 			pgxmock.AnyArg(), // actions
 			pgxmock.AnyArg(), // execution_count
 			pgxmock.AnyArg(), // last_executed_at
