@@ -38,7 +38,6 @@ export interface TransferSuggestion {
   boost_execution_id?: string;
   boost_id?: string;
   boost_name?: string;
-  can_confirm_match?: boolean;
   completed_at?: string;
   completion_source?: string;
   created_at: string;
