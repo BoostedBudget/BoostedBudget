@@ -774,12 +774,9 @@ type TransferSuggestion struct {
 
 	// MatchState is a server-derived enum describing the match lifecycle for the UI.
 	// Set by the list handler BEFORE maskReservation clears MatchedTransactionID.
-	// Values: "completed", "confirmable", "unmatched", "reserved".
-	// ("reserved" is defined for forward-compat but not currently emitted — today every
-	// held reservation is actionable, so reserved ≡ confirmable.)
+	// Values: "completed", "confirmable", "unmatched".
 	// Omitted (empty/nil) for pending, rejected, and expired suggestions.
-	// Supersedes CanConfirmMatch (CanConfirmMatch == true ⟺ MatchState == "confirmable").
-	MatchState *string `json:"match_state,omitempty" db:"-" enum:"completed,confirmable,unmatched,reserved"`
+	MatchState *string `json:"match_state,omitempty" db:"-" enum:"completed,confirmable,unmatched"`
 }
 
 // Validate checks that the transfer suggestion has all required fields and valid values.
