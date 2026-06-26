@@ -168,9 +168,6 @@ func (h *TransferSuggestionHandler) GetTransferSuggestions(ctx context.Context, 
 
 	for i := range items {
 		// Compute server-derived fields BEFORE masking clears matched_transaction_id.
-		canConfirm := items[i].MatchedTransactionID != nil &&
-			items[i].Status == domain.SuggestionStatusAccepted
-		items[i].CanConfirmMatch = &canConfirm
 		if ms := items[i].ComputeMatchState(); ms != "" {
 			items[i].MatchState = &ms
 		}
