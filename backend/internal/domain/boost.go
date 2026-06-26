@@ -772,14 +772,6 @@ type TransferSuggestion struct {
 	BoostName            *string    `json:"boost_name,omitempty"             db:"-"`
 	MatchedTransactionAt *time.Time `json:"matched_transaction_at,omitempty" db:"-"`
 
-	// CanConfirmMatch is a server-derived flag set by the API handler before masking.
-	// True when the suggestion is accepted AND holds a reservation (matched_transaction_id
-	// non-nil), allowing the Boosts UI to enable the "Mark Done" button accurately.
-	// Computed before maskReservation clears matched_transaction_id, so the UI always
-	// receives the correct value regardless of the masking applied.
-	// Deprecated: use MatchState == "confirmable" instead.
-	CanConfirmMatch *bool `json:"can_confirm_match,omitempty" db:"-"`
-
 	// MatchState is a server-derived enum describing the match lifecycle for the UI.
 	// Set by the list handler BEFORE maskReservation clears MatchedTransactionID.
 	// Values: "completed", "confirmable", "unmatched", "reserved".
