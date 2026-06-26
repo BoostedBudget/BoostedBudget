@@ -138,8 +138,6 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 
 	if err != nil {
 		switch err {
-		case services.ErrAccountLimitExceeded:
-			return nil, huma.Error403Forbidden("Account limit exceeded for your subscription tier")
 		case services.ErrInvalidPublicToken:
 			return nil, huma.Error400BadRequest("Invalid or expired public token")
 		case services.ErrPlaidAPIFailure:

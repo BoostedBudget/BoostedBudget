@@ -23,7 +23,7 @@
 # - Removed free tier entirely (users get a 60-day premium trial instead)
 # - Switched from Stripe to Paddle for payment processing
 # - Rules, categories, tags, API calls are now UNLIMITED for all tiers
-# - Only 3 configurable limits remain: accounts, transaction_history_days, executions_per_day
+# - Only 2 configurable limits remain: transaction_history_days, executions_per_day
 #
 # Tiers: premium, household_2, household_3, household_4, household_5
 #
@@ -42,7 +42,6 @@ tiers:
     users_included: 1
 
     limits:
-      accounts: 30
       transaction_history_days: 730
       executions_per_day: 6
 
@@ -65,7 +64,6 @@ tiers:
     users_included: 2
 
     limits:
-      accounts: 60
       transaction_history_days: 730
       executions_per_day: 12
 
@@ -88,7 +86,6 @@ tiers:
     users_included: 3
 
     limits:
-      accounts: 90
       transaction_history_days: 730
       executions_per_day: 18
 
@@ -111,7 +108,6 @@ tiers:
     users_included: 4
 
     limits:
-      accounts: 120
       transaction_history_days: 730
       executions_per_day: 24
 
@@ -134,7 +130,6 @@ tiers:
     users_included: 5
 
     limits:
-      accounts: 150
       transaction_history_days: 730
       executions_per_day: 30
 

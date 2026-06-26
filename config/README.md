@@ -42,7 +42,6 @@ tiers:
     price_monthly: 0.00
     price_yearly: 0.00
     limits:
-      accounts: 8          # Max linked bank accounts
       rules: 2             # Max automation rules
       executions_per_day: 1
       min_execution_interval_minutes: 1440  # 24 hours

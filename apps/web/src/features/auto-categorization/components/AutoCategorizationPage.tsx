@@ -23,8 +23,6 @@ export interface AutoCategorizationPageProps {
   plaidPrimaries?: Primary[]
   accounts?: Account[]
   tags?: UserTag[]  // User tags for target tags autocomplete
-  maxRules?: number
-  currentTier?: string
 }
 
 type EditorMode = 'create' | 'edit' | null
@@ -41,7 +39,7 @@ const getInitialView = (): ListView => {
   return 'cards'
 }
 
-export function AutoCategorizationPage({ categories, plaidPrimaries = [], accounts = [], tags = [], maxRules, currentTier }: AutoCategorizationPageProps) {
+export function AutoCategorizationPage({ categories, plaidPrimaries = [], accounts = [], tags = [] }: AutoCategorizationPageProps) {
   const {
     rules,
     loading,
@@ -72,9 +70,6 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
 
   const sortColumn = sort?.columnId as RuleSortColumn | undefined
   const sortDirection: SortDirection = sort?.direction ?? 'asc'
-
-  const isAtLimit = maxRules !== undefined && rules.length >= maxRules
-  const showTierWarning = isAtLimit && currentTier === 'free'
 
   const handleCreateClick = useCallback(() => {
     setEditingRule(null)
@@ -301,23 +296,11 @@ export function AutoCategorizationPage({ categories, plaidPrimaries = [], accoun
             onChange={handleViewChange}
             storageKey={STORAGE_KEY_LIST_VIEW}
           />
-          <Button onClick={handleCreateClick} disabled={isAtLimit}>
+          <Button onClick={handleCreateClick}>
             Create Rule
           </Button>
         </div>
       </div>
-
-      {showTierWarning && (
-        <div className="flex items-center justify-between gap-4 px-4 py-3 mb-4 bg-warning/10 border border-warning/30 rounded-md">
-          <p className="m-0 text-sm text-warning-foreground">
-            <strong>Rule limit reached.</strong> You&apos;ve reached the maximum of{' '}
-            {maxRules} rule{maxRules !== 1 ? 's' : ''} for the free tier.
-          </p>
-          <a href="/settings/subscription" className="flex-shrink-0 text-sm font-medium text-primary hover:underline">
-            Upgrade for more rules
-          </a>
-        </div>
-      )}
 
       <div className="mt-4">
         {view === 'cards' ? (

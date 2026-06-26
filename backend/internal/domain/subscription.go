@@ -59,7 +59,6 @@ type SubscriptionTier struct {
 
 // SubscriptionLimits defines resource limits for a tier
 type SubscriptionLimits struct {
-	Accounts               int `yaml:"accounts" json:"accounts"`
 	TransactionHistoryDays int `yaml:"transaction_history_days" json:"transaction_history_days"`
 	ExecutionsPerDay       int `yaml:"executions_per_day" json:"executions_per_day"`
 }
@@ -95,7 +94,7 @@ func IsUnlimited(value int) bool {
 type UserSubscriptionOverride struct {
 	ID           int64      `json:"id" db:"id"`
 	UserID       string     `json:"user_id" db:"user_id"`
-	ResourceType string     `json:"resource_type" db:"resource_type"` // see ResourceType constants: "accounts", "transaction_history_days", "executions_per_day"
+	ResourceType string     `json:"resource_type" db:"resource_type"` // see ResourceType constants: "transaction_history_days", "executions_per_day"
 	LimitValue   int        `json:"limit_value" db:"limit_value"`     // -1 for unlimited
 	Reason       *string    `json:"reason,omitempty" db:"reason"`     // "enterprise_deal", "addon_purchase", "promo"
 	ExpiresAt    *time.Time `json:"expires_at,omitempty" db:"expires_at"` // null for permanent
@@ -119,7 +118,6 @@ type EffectiveSubscription struct {
 type ResourceType string
 
 const (
-	ResourceAccounts               ResourceType = "accounts"
 	ResourceTransactionHistoryDays ResourceType = "transaction_history_days"
 	ResourceExecutionsPerDay       ResourceType = "executions_per_day"
 )
@@ -128,7 +126,6 @@ const (
 // It must stay in sync with the const block above and the GetLimit/SetLimit switches.
 // The admin override endpoint's enum tag is tested against this slice (issue #1288).
 var AllResourceTypes = []ResourceType{
-	ResourceAccounts,
 	ResourceTransactionHistoryDays,
 	ResourceExecutionsPerDay,
 }
@@ -136,8 +133,6 @@ var AllResourceTypes = []ResourceType{
 // GetLimit returns the limit value for a specific resource type
 func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 	switch resourceType {
-	case ResourceAccounts:
-		return l.Accounts
 	case ResourceTransactionHistoryDays:
 		return l.TransactionHistoryDays
 	case ResourceExecutionsPerDay:
@@ -150,8 +145,6 @@ func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 // SetLimit updates the limit value for a specific resource type
 func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 	switch resourceType {
-	case ResourceAccounts:
-		l.Accounts = value
 	case ResourceTransactionHistoryDays:
 		l.TransactionHistoryDays = value
 	case ResourceExecutionsPerDay:
