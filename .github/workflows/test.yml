@@ -529,23 +529,26 @@ jobs:
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: |
+          # -coverpkg scopes the denominator to real testable packages only.
+          # cmd/server, cmd/encrypt-migrate, scripts/generate-openapi are entrypoints
+          # with no unit tests; including them at 0% drags the total unfairly.
+          # cmd/plaid_validation/validators IS real logic and IS included.
+          go test -v -race \
+            -coverprofile=coverage.out -covermode=atomic \
+            -coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
+            ./...
 
-      - name: Check Go coverage threshold (≥60%)
+      - name: Check Go coverage threshold (≥69%)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Checking coverage threshold"
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "Current coverage: ${COVERAGE}%"
-
-          COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
-
-          if [ "$COVERAGE_INT" -lt 60 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below threshold 60%"
-            exit 1
-          else
-            echo "::notice::✅ Coverage ${COVERAGE}% meets threshold 60%"
-          fi
+          # Delegates to scripts/check-coverage.sh for decimal-safe comparison.
+          # Threshold raised from 60% to 69% after scoping denominator to real packages
+          # (./internal/... + ./cmd/plaid_validation/validators/...) per issue #1286.
+          bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-coverage.sh \
+            coverage.out \
+            69
           echo "::endgroup::"
 
       - name: Generate Go coverage HTML report
