@@ -68,14 +68,15 @@ backend-run:
 # CI Testing
 test-ci:
 	@echo "Running CI tests with coverage enforcement..."
-	cd backend && go test -v -race \
+	@cd backend && go test -v -race \
 		-coverprofile=coverage.out -covermode=atomic \
 		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
 		./...
 	@echo "Checking backend coverage threshold (≥69%)..."
-	./scripts/check-coverage.sh backend/coverage.out 69
-	cd apps/web && bun run test:ci
+	@./scripts/check-coverage.sh backend/coverage.out 69
+	@cd apps/web && bun run test:ci
 	@echo "Checking frontend coverage threshold (≥82% lines)..."
+	@# lcov is required for test-ci (CI always has it); for local dev use test-all which gracefully skips
 	@./scripts/check-frontend-coverage.sh apps/web 82
 	@echo "All CI tests passed!"
 
@@ -167,25 +168,12 @@ test-all:
 	@echo ""
 	@echo "3️⃣  Frontend Tests (bun:test + combined coverage)..."
 	@cd apps/web && bun run test:ci
-	@echo "Combining frontend coverage (coverage/ + coverage-conflict/)..."
-	@if command -v lcov &> /dev/null; then \
-		lcov_files=""; \
-		[ -f apps/web/coverage/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage/lcov.info"; \
-		for group in a b c d; do \
-			[ -f "apps/web/coverage-conflict/group-$$group/lcov.info" ] && lcov_files="$$lcov_files -a apps/web/coverage-conflict/group-$$group/lcov.info"; \
-		done; \
-		if [ -n "$$lcov_files" ]; then \
-			lcov $$lcov_files -o apps/web/coverage/combined.lcov; \
-			echo "✅ Frontend combined coverage: apps/web/coverage/combined.lcov"; \
-		fi; \
-	else \
-		echo "⚠️  lcov not installed — skipping coverage combine (install: brew install lcov)"; \
-	fi
 	@echo "📊 Checking frontend coverage threshold (≥82% lines)..."
+	@echo "   (merges coverage/ + coverage-conflict/, filters generated api-client, writes apps/web/coverage/combined.lcov)"
 	@if command -v lcov &> /dev/null; then \
 		./scripts/check-frontend-coverage.sh apps/web 82; \
 	else \
-		echo "⚠️  lcov not installed — skipping frontend threshold check"; \
+		echo "⚠️  lcov not installed — skipping frontend threshold check (install: brew install lcov)"; \
 	fi
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."

@@ -31,13 +31,16 @@ if ! command -v lcov >/dev/null 2>&1; then
   exit 1
 fi
 
-# Write intermediate files to /tmp to avoid dirtying the working tree during local runs.
-# CI runs in a fresh checkout so location does not matter there.
+# Intermediate merge goes to /tmp; filtered result goes to $WEB_DIR/coverage/combined.lcov.
+# Writing the final file in-tree lets CI upload it as an artifact.
 COMBINED="/tmp/bbudget-frontend-coverage-$$.lcov"
-FILTERED="/tmp/bbudget-frontend-coverage-$$-filtered.lcov"
 
-# Clean up temp files on exit regardless of success or failure
-trap "rm -f '$COMBINED' '$FILTERED'" EXIT
+# Ensure the coverage directory exists (bun test creates it, but guard for safety)
+mkdir -p "$WEB_DIR/coverage"
+FILTERED="$WEB_DIR/coverage/combined.lcov"
+
+# Clean up only the temp intermediate on exit
+trap "rm -f '$COMBINED'" EXIT
 
 # --- Merge all lcov groups ---
 LCOV_ARGS=""
