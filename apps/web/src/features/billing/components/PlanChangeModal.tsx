@@ -180,7 +180,6 @@ export function PlanChangeModal({
                   </div>
                   <div className="text-sm space-y-1">
                     <div className="text-foreground">{tier.pricing.users_included} users</div>
-                    <div className="text-foreground">{tier.limits.accounts} accounts</div>
                   </div>
                 </div>
               )
@@ -234,7 +233,7 @@ export function PlanChangeModal({
               />
               <label htmlFor="downgrade-confirm" className="text-sm text-foreground">
                 I understand I'll be switching to {selectedTierData?.display_name} with{' '}
-                {selectedTierData?.limits.accounts} accounts and {selectedTierData?.pricing.users_included} users
+                {selectedTierData?.pricing.users_included} users
               </label>
             </div>
           )}

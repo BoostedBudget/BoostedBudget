@@ -14,8 +14,7 @@ const createMockTier = (
   displayName: string,
   priceMonthly: number,
   priceYearly: number,
-  usersIncluded: number,
-  accounts: number
+  usersIncluded: number
 ) => ({
   name,
   display_name: displayName,
@@ -26,7 +25,6 @@ const createMockTier = (
     users_included: usersIncluded,
   },
   limits: {
-    accounts,
     executions_per_day: Math.max(10, usersIncluded * 100),
     transaction_history_days: 365,
   },
@@ -34,10 +32,10 @@ const createMockTier = (
 })
 
 const mockTiers = {
-  premium: createMockTier('premium', 'Premium', 9.99, 99.0, 3, 30),
-  household_2: createMockTier('household_2', 'Household (2 users)', 14.99, 149.0, 2, 50),
-  household_3: createMockTier('household_3', 'Household (3 users)', 19.99, 199.0, 3, 100),
-  free: createMockTier('free', 'Free', 0, 0, 1, 3),
+  premium: createMockTier('premium', 'Premium', 9.99, 99.0, 3),
+  household_2: createMockTier('household_2', 'Household (2 users)', 14.99, 149.0, 2),
+  household_3: createMockTier('household_3', 'Household (3 users)', 19.99, 199.0, 3),
+  free: createMockTier('free', 'Free', 0, 0, 1),
 }
 
 const createMockPreviewReturn = (overrides = {}) => ({
@@ -196,7 +194,7 @@ describe('PlanChangeModal', () => {
     expect(screen.getByText(/\$149/)).toBeDefined()
   })
 
-  it('should show users_included and accounts per tier', () => {
+  it('should show users_included per tier', () => {
     render(
       <PlanChangeModal
         open={true}
@@ -209,9 +207,8 @@ describe('PlanChangeModal', () => {
       />
     )
 
-    // household_2: 2 users, 50 accounts
+    // household_2: 2 users
     expect(screen.getAllByText(/2.*users/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/50.*accounts/i).length).toBeGreaterThan(0)
   })
 
   it('should call preview API when a tier is selected', async () => {

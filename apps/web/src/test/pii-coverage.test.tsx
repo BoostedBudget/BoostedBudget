@@ -1017,13 +1017,13 @@ describe('PII coverage — Round 8: billing components (personal charge surfaces
       standard: {
         display_name: 'Standard',
         pricing: { price_monthly: 4.99, price_yearly: 49.99, users_included: 1 },
-        limits: { accounts: 5 },
+        limits: {},
         features: [],
       },
       premium: {
         display_name: 'Premium',
         pricing: { price_monthly: 8.99, price_yearly: 89.99, users_included: 2 },
-        limits: { accounts: 20 },
+        limits: {},
         features: [],
       },
     }

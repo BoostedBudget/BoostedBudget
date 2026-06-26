@@ -36,7 +36,6 @@ const SUB_DETAIL = {
     effective_tier: 'premium',
     subscription_status: 'active',
     limits: {
-        accounts: -1,
         transaction_history_days: 730,
         executions_per_day: -1,
     },

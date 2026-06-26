@@ -5,11 +5,8 @@ import type { ReactNode } from 'react'
 import type { Account } from '../../accounts/types'
 import type { UserTag } from '../../tags/types'
 import type { CustomCategory } from '../../categories/types'
-import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 import { mockUseGetUserTags } from '@/test/mocks/tags-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
-import { mockUseGetUserProfile, mockRefetchUserProfile } from '@/test/mocks/profile-api'
-import { mockUseGetSubscriptionTiers, mockRefetchSubscriptionTiers } from '@/test/mocks/subscription-api'
 // Issue #1323: Use centralized categories-api mock (preloaded via bunfig.toml).
 // Inline mock.module() would clobber the global mock and pollute downstream tests.
 import {
@@ -18,13 +15,11 @@ import {
 } from '@/test/mocks/categories-api'
 
 mock.module('./AutoCategorizationPage', () => ({
-  AutoCategorizationPage: ({ categories, accounts, tags, maxRules, currentTier }: { categories: string[][], accounts?: Account[], tags?: UserTag[], maxRules?: number, currentTier?: string }) => (
+  AutoCategorizationPage: ({ categories, accounts, tags }: { categories: string[][], accounts?: Account[], tags?: UserTag[] }) => (
     <div data-testid="auto-categorization-page">
       <span data-testid="categories-count">{categories.length}</span>
       <span data-testid="accounts-count">{accounts?.length ?? 0}</span>
       <span data-testid="tags-count">{tags?.length ?? 0}</span>
-      <span data-testid="max-rules">{maxRules ?? 'undefined'}</span>
-      <span data-testid="current-tier">{currentTier ?? 'undefined'}</span>
     </div>
   ),
 }))
@@ -85,29 +80,12 @@ describe('AutoCategorizationPageWrapper', () => {
 
   const mockPlaidCategories = ['FOOD_AND_DRINK', 'GENERAL_MERCHANDISE', 'TRAVEL']
 
-  const mockUser = {
-    id: 'user-1',
-    clerk_user_id: 'user_test123',
-    email: 'test@example.com',
-    email_verified: true,
-    subscription_tier: 'premium' as const,
-    subscription_status: 'active',
-    primary_region: 'iad',
-    is_active: true,
-    is_deleted: false,
-    created_at: '2025-01-01T00:00:00Z',
-    updated_at: '2025-01-01T00:00:00Z',
-    last_login_at: '2025-01-01T00:00:00Z',
-  }
-
   function configureHooks(overrides?: {
     categories?: CustomCategory[] | null
     categoriesError?: Error | null
     plaidCategories?: string[] | null
     accounts?: Account[] | null
     tags?: UserTag[] | null
-    user?: typeof mockUser | null
-    tiers?: typeof mockSubscriptionTiersResponse | null
   }) {
     mockUseGetUserCategories.mockReturnValue({
       data: overrides?.categories === undefined ? mockCategories : overrides?.categories,
@@ -132,21 +110,6 @@ describe('AutoCategorizationPageWrapper', () => {
       isLoading: false,
       error: null,
     })
-
-    // Use centralized API mocks - the wrapper hooks will use these
-    mockUseGetUserProfile.mockReturnValue({
-      data: overrides?.user === undefined ? mockUser : overrides?.user,
-      isLoading: false,
-      error: null,
-      refetch: mockRefetchUserProfile,
-    })
-
-    mockUseGetSubscriptionTiers.mockReturnValue({
-      data: overrides?.tiers === undefined ? mockSubscriptionTiersResponse : overrides?.tiers,
-      isLoading: false,
-      error: null,
-      refetch: mockRefetchSubscriptionTiers,
-    })
   }
 
   beforeEach(() => {
@@ -154,8 +117,6 @@ describe('AutoCategorizationPageWrapper', () => {
     mockUseGetPlaidCategories.mockClear()
     mockUseGetAccounts.mockClear()
     mockUseGetUserTags.mockClear()
-    mockUseGetUserProfile.mockClear()
-    mockUseGetSubscriptionTiers.mockClear()
     configureHooks()
   })
 
@@ -174,33 +135,12 @@ describe('AutoCategorizationPageWrapper', () => {
     })
   })
 
-  it('should pass maxRules as undefined (unlimited rules for all tiers)', async () => {
+  it('should render when user is null', async () => {
+    configureHooks()
     render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
     await waitFor(() => {
       expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
     })
-    // All tiers now have unlimited rules, so maxRules is undefined
-    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
-  })
-
-  it('should pass currentTier from user profile', async () => {
-    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
-    await waitFor(() => {
-      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('current-tier')).toHaveTextContent('premium')
-  })
-
-  it('should default to premium tier when user is null', async () => {
-    configureHooks({ user: null })
-    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
-    await waitFor(() => {
-      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
-    })
-    // Default tier is now 'premium' instead of 'free'
-    expect(screen.getByTestId('current-tier')).toHaveTextContent('premium')
-    // All tiers have unlimited rules
-    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
   })
 
   it('should handle data fetch error gracefully', async () => {
@@ -223,15 +163,6 @@ describe('AutoCategorizationPageWrapper', () => {
     await waitFor(() => {
       expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
     })
-  })
-
-  it('should handle undefined tiers gracefully', async () => {
-    configureHooks({ tiers: null })
-    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
-    await waitFor(() => {
-      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('max-rules')).toHaveTextContent('undefined')
   })
 
   it('should exclude replaced accounts from the accounts list (Issue #1109)', async () => {

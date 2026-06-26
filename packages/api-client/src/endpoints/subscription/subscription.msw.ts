@@ -15,13 +15,13 @@
  *
  * No free tier. New users get a 60-day Premium trial.
  *
- * | Tier        | Users | Accounts  | Transaction History | Executions/Day | Price     |
- * |-------------|-------|-----------|---------------------|----------------|-----------|
- * | premium     | 1     | Unlimited | 730 days            | Unlimited      | $8.99/mo  |
- * | household_2 | 2     | Unlimited | 730 days            | Unlimited      | $12.99/mo |
- * | household_3 | 3     | Unlimited | 730 days            | Unlimited      | $14.99/mo |
- * | household_4 | 4     | Unlimited | 730 days            | Unlimited      | $16.99/mo |
- * | household_5 | 5+    | Unlimited | 730 days            | Unlimited      | $18.99/mo |
+ * | Tier        | Users | Transaction History | Executions/Day | Price     |
+ * |-------------|-------|---------------------|----------------|-----------|
+ * | premium     | 1     | 730 days            | Unlimited      | $8.99/mo  |
+ * | household_2 | 2     | 730 days            | Unlimited      | $12.99/mo |
+ * | household_3 | 3     | 730 days            | Unlimited      | $14.99/mo |
+ * | household_4 | 4     | 730 days            | Unlimited      | $16.99/mo |
+ * | household_5 | 5+    | 730 days            | Unlimited      | $18.99/mo |
  *
  * ## Regions
  *
@@ -65,7 +65,7 @@ export const getGetCurrentSubscriptionResponseMock = (overrideResponse: Partial<
 export const getPreviewPaddleSubscriptionUpdateResponseMock = (overrideResponse: Partial<Extract<PreviewUpdateOutputBody, object>> = {}): PreviewUpdateOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), currency: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_amount: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_date: faker.string.alpha({length: {min: 10, max: 20}}), proration_amount: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getGetSubscriptionTiersResponseMock = (overrideResponse: Partial<Extract<SubscriptionTiersResponse, object>> = {}): SubscriptionTiersResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), default_tier: faker.string.alpha({length: {min: 10, max: 20}}), tiers: {
-        [faker.string.alphanumeric(5)]: {description: faker.string.alpha({length: {min: 10, max: 20}}), display_name: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {accounts: faker.number.int(), executions_per_day: faker.number.int(), transaction_history_days: faker.number.int()}, name: faker.string.alpha({length: {min: 10, max: 20}}), pricing: {mobile_price_yearly: faker.number.float({fractionDigits: 2}), paddle_price_id_monthly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), paddle_price_id_yearly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), price_monthly: faker.number.float({fractionDigits: 2}), price_yearly: faker.number.float({fractionDigits: 2}), users_included: faker.number.int()}}
+        [faker.string.alphanumeric(5)]: {description: faker.string.alpha({length: {min: 10, max: 20}}), display_name: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), ai_insights: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {executions_per_day: faker.number.int(), transaction_history_days: faker.number.int()}, name: faker.string.alpha({length: {min: 10, max: 20}}), pricing: {mobile_price_yearly: faker.number.float({fractionDigits: 2}), paddle_price_id_monthly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), paddle_price_id_yearly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), price_monthly: faker.number.float({fractionDigits: 2}), price_yearly: faker.number.float({fractionDigits: 2}), users_included: faker.number.int()}}
       }, ...overrideResponse})
 
 export const getUpdatePaddleSubscriptionResponseMock = (overrideResponse: Partial<Extract<UpdateSubscriptionOutputBody, object>> = {}): UpdateSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})

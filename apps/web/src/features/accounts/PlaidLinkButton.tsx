@@ -40,7 +40,7 @@ function mapErrorToMessage(error: unknown): string {
       return 'Please log in again to continue.'
     }
     if (error.response.status === 403) {
-      return 'Account limit reached for your subscription tier. Please upgrade to add more accounts.'
+      return 'Unable to link this account. Please contact support.'
     }
     if (error.response.status === 400) {
       return 'Invalid or expired connection. Please try again.'
