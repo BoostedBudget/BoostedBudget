@@ -2,7 +2,7 @@
 
 **Supercharge your finances with intelligent automation**
 
-[![CI/CD Pipeline](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/ci-cd.yml)
+[![Test Suite](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/test.yml/badge.svg)](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/test.yml)
 
 BoostedBudget is a global budgeting platform that helps users optimize their finances through customizable automation rules, GDPR-compliant data handling, and intelligent insights.
 
@@ -248,7 +248,7 @@ This project follows strict development guidelines:
 
 1. **TDD (Test-Driven Development):** Red-Green-Refactor for all business logic
 2. **Issue-Driven:** Every change needs Issue → Branch → PR
-3. **Test Coverage:** >80% required
+3. **Test Coverage:** Backend ≥68% statements (hard gate), Frontend ≥74% lines (hard gate). Aspirational goal: ≥80% on both sides (active campaign — issue #1286).
 4. **Code Review:** All PRs require review before merge
 
 See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines.
