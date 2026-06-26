@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockClerkUserGetter is a mock implementation for fetching Clerk users.
@@ -344,4 +345,17 @@ func TestAdminService_ConcurrentAccess_ThreadSafe(t *testing.T) {
 	for result := range results {
 		assert.True(t, result)
 	}
+}
+
+// TestNewAdminService_ReturnsNonNilService verifies that NewAdminService returns a valid service
+// without calling any external APIs. It uses a fake Clerk key to avoid a real API call.
+func TestNewAdminService_ReturnsNonNilService(t *testing.T) {
+	// NewAdminService calls clerk.SetKey internally — that's a no-op for key format validation.
+	// It does NOT call the Clerk API; it just initializes the service struct.
+	svc := NewAdminService("sk_test_fakekeyfortest", []string{"admin@example.com"})
+
+	require.NotNil(t, svc, "NewAdminService must return a non-nil service")
+	// Verify hardcoded admin emails are respected
+	assert.True(t, svc.IsHardcodedAdmin("admin@example.com"), "hardcoded admin must be recognized")
+	assert.False(t, svc.IsHardcodedAdmin("other@example.com"), "non-admin must not be recognized")
 }
