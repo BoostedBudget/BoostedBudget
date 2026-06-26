@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -1843,4 +1844,33 @@ func TestCancelSuggestion_AlreadyActioned(t *testing.T) {
 	_, err := handler.CancelSuggestion(context.Background(), input)
 
 	require.Error(t, err)
+}
+
+// TestGetTransferSuggestions_CanConfirmMatchAbsentInResponse proves can_confirm_match
+// must not appear in the serialized JSON response.
+func TestGetTransferSuggestions_CanConfirmMatchAbsentInResponse(t *testing.T) {
+	userID := "user-absent-test"
+	item := newTestSuggestionItem("s-absent-1", userID)
+	item.Status = domain.SuggestionStatusAccepted
+	txnID := "txn-absent-1"
+	item.MatchedTransactionID = &txnID
+
+	svc := &mockTransferSuggestionService{
+		getSuggestionsByStatResult: []*domain.TransferSuggestion{item},
+		getSuggestionsByStatTotal:  1,
+	}
+	handler := NewTransferSuggestionHandler(svc)
+	input := &GetTransferSuggestionsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		Status:             "accepted",
+		Limit:              20,
+	}
+	output, err := handler.GetTransferSuggestions(context.Background(), input)
+	require.NoError(t, err)
+	require.Len(t, output.Body.Items, 1)
+
+	b, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "can_confirm_match",
+		"can_confirm_match must not appear in any serialized response item")
 }
