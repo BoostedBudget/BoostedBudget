@@ -42,11 +42,13 @@ jobs:
               - 'backend/**'
               - 'go.mod'
               - 'go.sum'
+              - 'scripts/**'
             frontend:
               - 'apps/web/**'
               - 'packages/**'
               - 'package.json'
               - 'bun.lock'
+              - 'scripts/**'
             api:
               - 'api/**'
               - 'api/openapi.yaml'
