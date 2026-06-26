@@ -53,28 +53,14 @@ print_info "Coverage file: $COVERAGE_FILE"
 print_info "Current coverage: ${COVERAGE}%"
 print_info "Required threshold: ${THRESHOLD}%"
 
-# Compare coverage with threshold using bc for float comparison
-if command -v bc >/dev/null 2>&1; then
-  # Use bc for precise comparison if available
-  if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
-    print_error "Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
-    echo ""
-    echo "Coverage breakdown:"
-    go tool cover -func="$COVERAGE_FILE" | grep -v "^mode:" | tail -n 10
-    exit 1
-  fi
-else
-  # Fallback to integer comparison
-  COVERAGE_INT=$(echo "$COVERAGE" | cut -d. -f1)
-  THRESHOLD_INT=$(echo "$THRESHOLD" | cut -d. -f1)
-
-  if [ "$COVERAGE_INT" -lt "$THRESHOLD_INT" ]; then
-    print_error "Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
-    echo ""
-    echo "Coverage breakdown:"
-    go tool cover -func="$COVERAGE_FILE" | grep -v "^mode:" | tail -n 10
-    exit 1
-  fi
+# Decimal-safe comparison via awk (no external dependency)
+if awk -v actual="$COVERAGE" -v threshold="$THRESHOLD" \
+       'BEGIN { exit !(actual + 0 < threshold + 0) }'; then
+  print_error "Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+  echo ""
+  echo "Coverage breakdown:"
+  go tool cover -func="$COVERAGE_FILE" | grep -v "^mode:" | tail -n 10
+  exit 1
 fi
 
 print_success "Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
