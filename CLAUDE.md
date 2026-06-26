@@ -101,7 +101,7 @@ config/
 1. **RED**: Write failing test FIRST (before any implementation)
 2. **GREEN**: Write minimal code to make test pass
 3. **REFACTOR**: Clean up while keeping tests green
-- Enforced floors: ≥69% backend statements, ≥82% frontend lines (as of #1286). Aspirational target: ≥80% both sides (active campaign).
+- Enforced floors: ≥73% backend statements, ≥82% frontend lines (as of #1286). Aspirational target: ≥80% both sides.
 - **Never skip TDD** for business logic, handlers, services, repositories
 
 ### Issue-Driven Development
