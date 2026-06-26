@@ -1,7 +1,6 @@
 package river_test
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -136,7 +135,6 @@ func TestDefaultRetryPolicy(t *testing.T) {
 
 func TestRetryPolicy_NextRetry(t *testing.T) {
 	rp := river.DefaultRetryPolicy()
-	_ = errors.New("some error") // unused but documents intent
 
 	tests := []struct {
 		name            string
