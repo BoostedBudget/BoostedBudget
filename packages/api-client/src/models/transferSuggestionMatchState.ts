@@ -38,5 +38,4 @@ export const TransferSuggestionMatchState = {
   completed: 'completed',
   confirmable: 'confirmable',
   unmatched: 'unmatched',
-  reserved: 'reserved',
 } as const;
