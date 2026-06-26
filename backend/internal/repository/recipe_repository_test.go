@@ -77,7 +77,7 @@ func TestRecipeRepository_Create_Success(t *testing.T) {
 			recipe.UserID,
 			recipe.Name,
 			recipe.Description,
-			pgxmock.AnyArg(), // specJSON (marshaled)
+			[]byte("[]"), // specJSON (marshaled empty slice)
 			recipe.Schedule,
 			recipe.Enabled,
 		).
