@@ -737,7 +737,7 @@ func TestBoostsRepository_GetByUserIDFiltered_WithFilter(t *testing.T) {
 
 	// The production code passes typeStrs ([]string) as the $2 arg
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
-		WithArgs(userID, pgxmock.AnyArg()). // $1=userID, $2=type array
+		WithArgs(userID, []string{"transfer_suggestion"}). // $1=userID, $2=type array
 		WillReturnRows(rows)
 
 	results, err := repo.GetByUserIDFiltered(ctx, userID, []domain.BoostType{domain.BoostTypeTransferSuggestion})
