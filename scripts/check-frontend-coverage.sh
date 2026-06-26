@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# check-frontend-coverage.sh — merge frontend lcov groups, filter generated code, enforce threshold
+#
+# Usage: ./scripts/check-frontend-coverage.sh <web-dir> <lines-threshold>
+#   web-dir          Path to apps/web (relative or absolute)
+#   lines-threshold  Minimum lines coverage % (integer or decimal, e.g. 82)
+#
+# Example: ./scripts/check-frontend-coverage.sh apps/web 82
+
+set -euo pipefail
+
+# Locale: lcov panics on non-C locales on some macOS configurations
+export LC_ALL=C
+export LANG=C
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_error()   { echo -e "${RED}❌ $1${NC}"; }
+print_success() { echo -e "${GREEN}✅ $1${NC}"; }
+print_info()    { echo -e "${YELLOW}ℹ  $1${NC}"; }
+
+WEB_DIR="${1:?Usage: check-frontend-coverage.sh <web-dir> <threshold>}"
+THRESHOLD="${2:?Usage: check-frontend-coverage.sh <web-dir> <threshold>}"
+
+# Ensure lcov is available
+if ! command -v lcov >/dev/null 2>&1; then
+  print_error "lcov is required but not installed. Install with: brew install lcov"
+  exit 1
+fi
+
+# Write intermediate files to /tmp to avoid dirtying the working tree during local runs.
+# CI runs in a fresh checkout so location does not matter there.
+COMBINED="/tmp/bbudget-frontend-coverage-$$.lcov"
+FILTERED="/tmp/bbudget-frontend-coverage-$$-filtered.lcov"
+
+# Clean up temp files on exit regardless of success or failure
+trap "rm -f '$COMBINED' '$FILTERED'" EXIT
+
+# --- Merge all lcov groups ---
+LCOV_ARGS=""
+add_lcov() { [ -f "$1" ] && LCOV_ARGS="$LCOV_ARGS -a $1" || true; }
+
+add_lcov "$WEB_DIR/coverage/lcov.info"
+for group in a b c d; do
+  add_lcov "$WEB_DIR/coverage-conflict/group-$group/lcov.info"
+done
+
+if [ -z "$LCOV_ARGS" ]; then
+  print_error "No lcov.info files found under $WEB_DIR/coverage/ or coverage-conflict/. Run bun run test:ci first."
+  exit 1
+fi
+
+print_info "Merging lcov groups..."
+# shellcheck disable=SC2086
+lcov $LCOV_ARGS -o "$COMBINED"
+
+# --- Filter generated packages/api-client code ---
+# packages/api-client is orval-generated — not unit-testable, should not be in denominator.
+# packages/shared-types/matching.ts is hand-written and IS counted (do not exclude it).
+print_info "Filtering generated packages/api-client/** from denominator..."
+lcov --remove "$COMBINED" '*/packages/api-client/*' -o "$FILTERED"
+
+# --- Parse Lines coverage ---
+SUMMARY=$(lcov --summary "$FILTERED" 2>&1)
+print_info "Post-filter coverage summary:"
+echo "$SUMMARY" | grep -E "(lines|source files)" || true
+
+LINES=$(echo "$SUMMARY" | grep "lines" | grep -oE '[0-9]+([.][0-9]+)?%' | head -1 | sed 's/%//' || true)
+
+if [ -z "$LINES" ]; then
+  print_error "Could not parse Lines coverage from lcov summary. Raw output:"
+  echo "$SUMMARY"
+  exit 1
+fi
+
+print_info "Lines coverage: ${LINES}% (threshold: ${THRESHOLD}%)"
+
+# Decimal-safe comparison
+if awk -v actual="$LINES" -v threshold="$THRESHOLD" \
+       'BEGIN { exit !(actual + 0 < threshold + 0) }'; then
+  print_error "Frontend Lines coverage ${LINES}% is below threshold ${THRESHOLD}%"
+  exit 1
+fi
+
+print_success "Frontend Lines coverage ${LINES}% meets threshold ${THRESHOLD}%"
