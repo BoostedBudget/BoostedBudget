@@ -745,7 +745,6 @@ func main() {
 				// Create account service with all dependencies
 				accountService = services.NewAccountService(
 					plaidService,
-					subscriptionService,
 					linkedItemRepo,
 					accountRepo,
 					profileRepo,

@@ -145,7 +145,7 @@ type AdminCreateOverrideInput struct {
 	inputs.AdminAuthenticatedInput
 	UserID string `path:"user_id" doc:"ID of the user to override"`
 	Body   struct {
-		ResourceType string `json:"resource_type" enum:"accounts,transaction_history_days,executions_per_day" doc:"The resource type to override"`
+		ResourceType string `json:"resource_type" enum:"transaction_history_days,executions_per_day" doc:"The resource type to override"`
 		LimitValue   int    `json:"limit_value" doc:"The new limit value (-1 for unlimited)"`
 		Reason       string `json:"reason" required:"true" doc:"Reason for the override"`
 	}
@@ -222,7 +222,7 @@ func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/admin/users/{user_id}/subscription/override",
 		Summary:     "Create subscription resource override",
-		Description: "Create a per-user resource limit override (e.g. accounts, transaction_history_days, executions_per_day). Requires admin privileges.",
+		Description: "Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.",
 		Tags:        []string{"Admin Subscriptions"},
 		Security: []map[string][]string{
 			{"clerk": {}},

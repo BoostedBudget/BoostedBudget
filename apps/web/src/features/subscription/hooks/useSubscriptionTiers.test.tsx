@@ -91,8 +91,6 @@ describe('useSubscriptionTiers', () => {
 
       const premiumTier = result.current.tiers?.tiers.premium
       expect(premiumTier?.display_name).toBe('Premium')
-      // All tiers now have unlimited accounts
-      expect(premiumTier?.limits.accounts).toBe(-1)
       expect(premiumTier?.limits.executions_per_day).toBe(-1)
     })
 
@@ -102,7 +100,6 @@ describe('useSubscriptionTiers', () => {
       })
 
       const household5 = result.current.tiers?.tiers.household_5
-      expect(household5?.limits.accounts).toBe(-1)
       expect(household5?.limits.executions_per_day).toBe(-1)
       expect(household5?.features.ai_insights).toBe(true)
     })

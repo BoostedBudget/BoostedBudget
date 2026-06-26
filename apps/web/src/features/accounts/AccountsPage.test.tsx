@@ -76,7 +76,6 @@ mock.module('./hooks/useAccountFilters', () => ({
 // ============================================================================
 
 import { AccountsPage } from './AccountsPage'
-import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
 // Import centralized mocks for configuration
 import {
@@ -88,10 +87,6 @@ import {
   mockUseGetUserProfile,
   mockRefetchUserProfile,
 } from '@/test/mocks/profile-api'
-import {
-  mockUseGetSubscriptionTiers,
-  mockRefetchSubscriptionTiers,
-} from '@/test/mocks/subscription-api'
 import {
   mockUseCreateLinkToken,
   mockCreateLinkTokenMutateAsync,
@@ -144,7 +139,6 @@ describe('AccountsPage', () => {
     mockUseGetAccounts.mockClear()
     mockUseDeleteAccount.mockClear()
     mockUseGetUserProfile.mockClear()
-    mockUseGetSubscriptionTiers.mockClear()
     mockUseCreateLinkToken.mockClear()
     mockCreateLinkTokenMutateAsync.mockClear()
     mockUseExchangePublicToken.mockClear()
@@ -156,13 +150,6 @@ describe('AccountsPage', () => {
       isLoading: false,
       error: null,
       refetch: mockRefetchUserProfile,
-    })
-
-    mockUseGetSubscriptionTiers.mockReturnValue({
-      data: mockSubscriptionTiersResponse,
-      isLoading: false,
-      error: null,
-      refetch: mockRefetchSubscriptionTiers,
     })
 
     mockUseCreateLinkToken.mockReturnValue({
