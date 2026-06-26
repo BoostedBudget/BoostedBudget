@@ -5584,8 +5584,6 @@ components:
           type: string
         boost_name:
           type: string
-        can_confirm_match:
-          type: boolean
         completed_at:
           format: date-time
           type: string
@@ -5612,7 +5610,6 @@ components:
             - completed
             - confirmable
             - unmatched
-            - reserved
           type: string
         matched_transaction_at:
           format: date-time
