@@ -39,7 +39,11 @@ if [ ! -f "$COVERAGE_FILE" ]; then
 fi
 
 # Extract coverage percentage from go tool cover
-COVERAGE_OUTPUT=$(go tool cover -func="$COVERAGE_FILE" | grep total)
+# Must run from the directory containing go.mod (backend/) so go tool cover
+# can resolve package paths in the coverage file.
+COVERAGE_DIR=$(dirname "$COVERAGE_FILE")
+COVERAGE_BASENAME=$(basename "$COVERAGE_FILE")
+COVERAGE_OUTPUT=$(cd "$COVERAGE_DIR" && go tool cover -func="$COVERAGE_BASENAME" | grep total)
 
 if [ -z "$COVERAGE_OUTPUT" ]; then
   print_error "Could not extract coverage from $COVERAGE_FILE"
@@ -59,7 +63,7 @@ if awk -v actual="$COVERAGE" -v threshold="$THRESHOLD" \
   print_error "Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
   echo ""
   echo "Coverage breakdown:"
-  go tool cover -func="$COVERAGE_FILE" | grep -v "^mode:" | tail -n 10
+  (cd "$COVERAGE_DIR" && go tool cover -func="$COVERAGE_BASENAME") | grep -v "^mode:" | tail -n 10
   exit 1
 fi
 
@@ -69,7 +73,7 @@ print_success "Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
 if [ "${VERBOSE:-false}" = "true" ]; then
   echo ""
   echo "Detailed coverage breakdown:"
-  go tool cover -func="$COVERAGE_FILE" | grep -v "^mode:"
+  (cd "$COVERAGE_DIR" && go tool cover -func="$COVERAGE_BASENAME") | grep -v "^mode:"
 fi
 
 exit 0
