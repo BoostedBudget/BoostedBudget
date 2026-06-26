@@ -1664,8 +1664,7 @@ func TestGetTransferSuggestions_MaskingPreserved_MultiStatus(t *testing.T) {
 }
 
 // TestGetTransferSuggestions_MatchState_SetBeforeMasking proves match_state is computed
-// before maskReservation clears matched_transaction_id, and that can_confirm_match is
-// unaffected (backwards compat). Cases:
+// before maskReservation clears matched_transaction_id. Cases:
 //   - accepted + reservation        → match_state "confirmable", matched_transaction_id masked
 //   - accepted + no reservation     → match_state "unmatched"
 //   - completed + reservation       → match_state "completed", matched_transaction_id exposed
