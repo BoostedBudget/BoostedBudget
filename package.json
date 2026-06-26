@@ -17,7 +17,7 @@
     "basic-ftp": "^6.0.1",
     "serve": "^14.2.6",
     "size-limit": "^12.1.0",
-    "turbo": "^2.9.18"
+    "turbo": "^2.10.0"
   },
   "overrides": {
     "js-cookie": ">=3.0.7",
@@ -39,9 +39,10 @@
     "protocol-buffers-schema": ">=3.6.1",
     "fast-uri": ">=3.1.2",
     "esbuild": "0.28.1",
-    "hono": ">=4.12.25"
+    "hono": ">=4.12.25",
+    "linkify-it": ">=5.0.1"
   },
   "dependencies": {
-    "axios": "^1.18.0"
+    "axios": "^1.18.1"
   }
 }
