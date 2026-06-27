@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/plaid/plaid-go/v23/plaid"
 	"github.com/stretchr/testify/assert"
@@ -1407,4 +1408,28 @@ func TestInvestmentSyncService_ProcessWebhook_MissingItemID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "item_id")
 	assert.NotNil(t, webhook.ProcessingError)
+}
+
+// mockAnalyticsForInvestmentSync is a minimal phclient.Analytics stub for setter tests.
+type mockAnalyticsForInvestmentSync struct{}
+
+func (m *mockAnalyticsForInvestmentSync) Capture(distinctID, event string, properties map[string]interface{}) {
+}
+func (m *mockAnalyticsForInvestmentSync) Identify(distinctID string, properties map[string]interface{}) {
+}
+func (m *mockAnalyticsForInvestmentSync) Close() {}
+
+var _ phclient.Analytics = (*mockAnalyticsForInvestmentSync)(nil)
+
+func TestInvestmentSyncService_SetAnalytics_DoesNotPanic(t *testing.T) {
+	svc, _ := setupInvestmentSyncService(t)
+	iss := svc.(*investmentSyncService)
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(&mockAnalyticsForInvestmentSync{})
+	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, iss.analytics, "analytics field should be set after SetAnalytics(non-nil)")
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(nil)
+	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, iss.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }

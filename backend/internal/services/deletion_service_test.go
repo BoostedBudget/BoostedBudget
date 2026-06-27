@@ -8,9 +8,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockProfileRepositoryForDeletion for testing deletion service
@@ -1026,4 +1028,32 @@ func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
 		callOrder,
 		"Execution order must be: Paddle cancel, Paddle archive, Plaid remove, DB cascade",
 	)
+}
+
+// mockAnalyticsForDeletion is a minimal phclient.Analytics stub for setter tests.
+type mockAnalyticsForDeletion struct{}
+
+func (m *mockAnalyticsForDeletion) Capture(distinctID, event string, properties map[string]interface{}) {
+}
+func (m *mockAnalyticsForDeletion) Identify(distinctID string, properties map[string]interface{}) {}
+func (m *mockAnalyticsForDeletion) Close()                                                        {}
+
+var _ phclient.Analytics = (*mockAnalyticsForDeletion)(nil)
+
+func TestDeletionService_SetAnalytics_DoesNotPanic(t *testing.T) {
+	repo := new(MockProfileRepositoryForDeletion)
+	email := new(MockEmailService)
+	clerkSvc := new(MockClerkService)
+	auditLog := new(MockAuditLogger)
+	plaid := new(MockPlaidItemCleanupService)
+	svc := NewDeletionService(repo, email, clerkSvc, auditLog, plaid, 30, "test-secret-key")
+	ds := svc.(*deletionService)
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(&mockAnalyticsForDeletion{})
+	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, ds.analytics, "analytics field should be set after SetAnalytics(non-nil)")
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(nil)
+	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, ds.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }

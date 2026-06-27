@@ -68,12 +68,17 @@ backend-run:
 # CI Testing
 test-ci:
 	@echo "Running CI tests with coverage enforcement..."
-	cd backend && go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-	@echo "Checking backend coverage threshold..."
-	./scripts/check-coverage.sh backend/coverage.out 60
-	cd apps/web && bun run test:ci
+	@cd backend && go test -v -race \
+		-coverprofile=coverage.out -covermode=atomic \
+		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
+		./...
+	@echo "Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
+	@cd apps/web && bun run test:ci
+	@echo "Checking frontend coverage threshold (≥82% lines)..."
+	@# lcov is required for test-ci (CI always has it); for local dev use test-all which gracefully skips
+	@./scripts/check-frontend-coverage.sh apps/web 82
 	@echo "All CI tests passed!"
-	@echo "Note: combine + threshold enforcement is handled in CI workflow (lcov inline)"
 
 # Fast Tests (No E2E) - For rapid iteration during development
 # Use this in pre-push hook for fast feedback (1-2 minutes, ~700MB)
@@ -95,18 +100,13 @@ test-fast:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@cd backend && go test ./... -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
+	@cd backend && go test ./... -race -p=2 -parallel=4 \
+		-coverprofile=coverage.out -covermode=atomic \
+		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
+		./...
 	@echo ""
-	@echo "📊 Checking backend coverage threshold (≥60%)..."
-	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
-		COVERAGE_INT=$$(echo "$$COVERAGE" | cut -d. -f1); \
-		echo "Current coverage: $${COVERAGE}%"; \
-		if [ "$$COVERAGE_INT" -lt 60 ]; then \
-			echo "❌ Coverage $${COVERAGE}% is below threshold 60%"; \
-			exit 1; \
-		else \
-			echo "✅ Coverage $${COVERAGE}% meets threshold 60%"; \
-		fi
+	@echo "📊 Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
@@ -154,18 +154,13 @@ test-all:
 	fi
 	@echo ""
 	@echo "2️⃣  Backend Tests..."
-	@cd backend && go test ./... -v -race -p=2 -parallel=4 -coverprofile=coverage.out -covermode=atomic ./...
+	@cd backend && go test ./... -v -race -p=2 -parallel=4 \
+		-coverprofile=coverage.out -covermode=atomic \
+		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
+		./...
 	@echo ""
-	@echo "📊 Checking backend coverage threshold (≥60%)..."
-	@cd backend && COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
-		COVERAGE_INT=$$(echo "$$COVERAGE" | cut -d. -f1); \
-		echo "Current coverage: $${COVERAGE}%"; \
-		if [ "$$COVERAGE_INT" -lt 60 ]; then \
-			echo "❌ Coverage $${COVERAGE}% is below threshold 60%"; \
-			exit 1; \
-		else \
-			echo "✅ Coverage $${COVERAGE}% meets threshold 60%"; \
-		fi
+	@echo "📊 Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
@@ -173,19 +168,12 @@ test-all:
 	@echo ""
 	@echo "3️⃣  Frontend Tests (bun:test + combined coverage)..."
 	@cd apps/web && bun run test:ci
-	@echo "Combining frontend coverage (coverage/ + coverage-conflict/)..."
+	@echo "📊 Checking frontend coverage threshold (≥82% lines)..."
+	@echo "   (merges coverage/ + coverage-conflict/, filters generated api-client, writes apps/web/coverage/combined.lcov)"
 	@if command -v lcov &> /dev/null; then \
-		lcov_files=""; \
-		[ -f apps/web/coverage/lcov.info ] && lcov_files="$$lcov_files -a apps/web/coverage/lcov.info"; \
-		for group in a b c d; do \
-			[ -f "apps/web/coverage-conflict/group-$$group/lcov.info" ] && lcov_files="$$lcov_files -a apps/web/coverage-conflict/group-$$group/lcov.info"; \
-		done; \
-		if [ -n "$$lcov_files" ]; then \
-			lcov $$lcov_files -o apps/web/coverage/combined.lcov; \
-			echo "✅ Frontend combined coverage: apps/web/coverage/combined.lcov"; \
-		fi; \
+		./scripts/check-frontend-coverage.sh apps/web 82; \
 	else \
-		echo "⚠️  lcov not installed — skipping coverage combine (install: brew install lcov)"; \
+		echo "⚠️  lcov not installed — skipping frontend threshold check (install: brew install lcov)"; \
 	fi
 	@echo ""
 	@echo "4️⃣  MCP Server Tests..."

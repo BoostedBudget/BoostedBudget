@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 
@@ -57,4 +58,19 @@ func TestPFCDetailedDisplayName_DelegatesToPFCPackage(t *testing.T) {
 	assert.Equal(t, "Fast Food", PFCDetailedDisplayName("FOOD_AND_DRINK", "FOOD_AND_DRINK_FAST_FOOD"))
 	assert.Equal(t, "Auto", PFCDetailedDisplayName("LOAN_DISBURSEMENTS", "LOAN_DISBURSEMENTS_AUTO"),
 		"LOAN_DISBURSEMENTS_AUTO shim should return 'Auto'")
+}
+
+func TestAllPFCPrimaries_NonEmpty(t *testing.T) {
+	primaries := AllPFCPrimaries()
+	require.NotNil(t, primaries, "AllPFCPrimaries must not return nil")
+	assert.NotEmpty(t, primaries, "AllPFCPrimaries must return at least one primary category")
+}
+
+func TestAllPFCDetailed_NonEmptyAndLargerThanPrimaries(t *testing.T) {
+	detailed := AllPFCDetailed()
+	primaries := AllPFCPrimaries()
+	require.NotNil(t, detailed, "AllPFCDetailed must not return nil")
+	assert.NotEmpty(t, detailed, "AllPFCDetailed must return at least one detailed category")
+	assert.Greater(t, len(detailed), len(primaries),
+		"AllPFCDetailed must have more entries than AllPFCPrimaries")
 }

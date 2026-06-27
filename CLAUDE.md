@@ -101,7 +101,7 @@ config/
 1. **RED**: Write failing test FIRST (before any implementation)
 2. **GREEN**: Write minimal code to make test pass
 3. **REFACTOR**: Clean up while keeping tests green
-- Target: >60% backend, >80% overall
+- Enforced floors: ≥74% backend statements, ≥82% frontend lines (as of #1286). Aspirational target: ≥80% both sides (active campaign). ⚠ Frontend 82% gate is denominator-limited to test-imported files (bun 1.3.x has no --coverage-include); see issue #1345 for follow-up.
 - **Never skip TDD** for business logic, handlers, services, repositories
 
 ### Issue-Driven Development

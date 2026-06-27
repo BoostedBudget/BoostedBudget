@@ -64,7 +64,6 @@ func (m *mockDashboardService) GetNetWorthHistory(ctx context.Context, userID st
 	return m.netWorthHistory, nil
 }
 
-// Helper functions to create test data
 func createTestBalanceSummary() *domain.BalanceSummaryResponse {
 	return &domain.BalanceSummaryResponse{
 		AsOfDate:     time.Now(),
@@ -111,7 +110,6 @@ func createTestAccountTypes() *domain.AccountTypesResponse {
 	}
 }
 
-// TestGetBalanceSummary_Success tests successful retrieval of balance summary.
 func TestGetBalanceSummary_Success(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceSummary: createTestBalanceSummary(),
@@ -131,7 +129,6 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 	assert.Len(t, output.Body.ByType, 2)
 }
 
-// TestGetBalanceSummary_WithFilters tests balance summary with account type filters.
 func TestGetBalanceSummary_WithFilters(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceSummary: createTestBalanceSummary(),
@@ -151,7 +148,6 @@ func TestGetBalanceSummary_WithFilters(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetBalanceSummary_InvalidDate tests error handling for invalid date format.
 func TestGetBalanceSummary_InvalidDate(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceSummary: createTestBalanceSummary(),
@@ -171,7 +167,6 @@ func TestGetBalanceSummary_InvalidDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid as_of_date")
 }
 
-// TestGetBalanceSummary_ServiceError tests error handling for service errors.
 func TestGetBalanceSummary_ServiceError(t *testing.T) {
 	mockService := &mockDashboardService{
 		summaryErr: errors.New("database error"),
@@ -189,7 +184,6 @@ func TestGetBalanceSummary_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetBalanceHistory_Success tests successful retrieval of balance history.
 func TestGetBalanceHistory_Success(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceHistory: createTestBalanceHistory(),
@@ -209,7 +203,6 @@ func TestGetBalanceHistory_Success(t *testing.T) {
 	assert.Len(t, output.Body.Snapshots, 2)
 }
 
-// TestGetBalanceHistory_WithFilters tests balance history with filters.
 func TestGetBalanceHistory_WithFilters(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceHistory: createTestBalanceHistory(),
@@ -231,7 +224,6 @@ func TestGetBalanceHistory_WithFilters(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetBalanceHistory_InvalidStartDate tests error handling for invalid start_date.
 func TestGetBalanceHistory_InvalidStartDate(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceHistory: createTestBalanceHistory(),
@@ -251,7 +243,6 @@ func TestGetBalanceHistory_InvalidStartDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid start_date")
 }
 
-// TestGetBalanceHistory_InvalidEndDate tests error handling for invalid end_date.
 func TestGetBalanceHistory_InvalidEndDate(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceHistory: createTestBalanceHistory(),
@@ -271,7 +262,6 @@ func TestGetBalanceHistory_InvalidEndDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid end_date")
 }
 
-// TestGetAccountTypes_Success tests successful retrieval of account types.
 func TestGetAccountTypes_Success(t *testing.T) {
 	mockService := &mockDashboardService{
 		accountTypes: createTestAccountTypes(),
@@ -291,7 +281,6 @@ func TestGetAccountTypes_Success(t *testing.T) {
 	assert.Equal(t, "checking", output.Body.Types[0].Key)
 }
 
-// TestGetAccountTypes_ServiceError tests error handling for service errors.
 func TestGetAccountTypes_ServiceError(t *testing.T) {
 	mockService := &mockDashboardService{
 		typesErr: errors.New("database error"),
@@ -309,7 +298,6 @@ func TestGetAccountTypes_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestDashboardRouteRegistration tests that routes are properly registered.
 func TestDashboardRouteRegistration(t *testing.T) {
 	mockService := &mockDashboardService{
 		balanceSummary: createTestBalanceSummary(),
@@ -328,7 +316,6 @@ func TestDashboardRouteRegistration(t *testing.T) {
 	assert.Contains(t, body, "User not authenticated")
 }
 
-// TestDashboardDefaultLayoutRoute tests the public default-layout route.
 func TestDashboardDefaultLayoutRoute(t *testing.T) {
 	mockService := &mockDashboardService{}
 
@@ -343,7 +330,6 @@ func TestDashboardDefaultLayoutRoute(t *testing.T) {
 	assert.NotEqual(t, http.StatusUnauthorized, resp.Code, "Default layout should not require authentication")
 }
 
-// TestDashboardResponseJSON tests JSON serialization of response.
 func TestDashboardResponseJSON(t *testing.T) {
 	mockService := &mockDashboardService{}
 
@@ -358,4 +344,105 @@ func TestDashboardResponseJSON(t *testing.T) {
 	var errorResp map[string]interface{}
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
+}
+
+func TestGetWidgetTypes_ReturnsList(t *testing.T) {
+	output, err := GetWidgetTypes(context.Background(), &GetWidgetTypesInput{})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.NotEmpty(t, output.Body.WidgetTypes, "WidgetTypes should not be empty")
+}
+
+func TestGetNetWorth_Success(t *testing.T) {
+	expected := &domain.NetWorthResponse{
+		NetWorth: 50000.00,
+	}
+	mockService := &mockDashboardService{netWorth: expected}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetNetWorth_InvalidDate(t *testing.T) {
+	mockService := &mockDashboardService{}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "not-a-date",
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorth_ServiceError(t *testing.T) {
+	mockService := &mockDashboardService{netWorthErr: errors.New("service failed")}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorthHistory_Success(t *testing.T) {
+	expected := &domain.NetWorthHistoryResponse{
+		Granularity: "monthly",
+	}
+	mockService := &mockDashboardService{netWorthHistory: expected}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetNetWorthHistory_InvalidStartDate(t *testing.T) {
+	mockService := &mockDashboardService{}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "bad-date",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorthHistory_ServiceError(t *testing.T) {
+	mockService := &mockDashboardService{netWorthHistErr: errors.New("service failed")}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
 }

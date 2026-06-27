@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -372,4 +373,30 @@ func TestInvestmentService_ListInvestmentTransactions_ForwardsSecurityFields(t *
 	require.NotNil(t, result[0].SecurityName, "service must forward SecurityName from repo")
 	assert.Equal(t, "Microsoft Corporation", *result[0].SecurityName)
 	invTxnRepo.AssertExpectations(t)
+}
+
+// mockAnalyticsForInvestment is a minimal phclient.Analytics stub for setter tests.
+type mockAnalyticsForInvestment struct{}
+
+func (m *mockAnalyticsForInvestment) Capture(distinctID, event string, properties map[string]interface{}) {
+}
+func (m *mockAnalyticsForInvestment) Identify(distinctID string, properties map[string]interface{}) {}
+func (m *mockAnalyticsForInvestment) Close()                                                        {}
+
+var _ phclient.Analytics = (*mockAnalyticsForInvestment)(nil)
+
+func TestInvestmentService_SetAnalytics_DoesNotPanic(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	is := svc.(*investmentService)
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(&mockAnalyticsForInvestment{})
+	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, is.analytics, "analytics field should be set after SetAnalytics(non-nil)")
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(nil)
+	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, is.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }

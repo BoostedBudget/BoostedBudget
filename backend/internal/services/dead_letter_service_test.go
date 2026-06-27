@@ -281,6 +281,66 @@ func TestDeadLetterService_GetStats_Success(t *testing.T) {
 	assert.Equal(t, byKind, resp.ByKind)
 }
 
+// --- GetRawArgs ---
+
+func TestDeadLetterService_GetRawArgs_Success(t *testing.T) {
+	repo := &mockDLQRepo{}
+	svc := NewDeadLetterService(repo, nil)
+
+	ctx := context.Background()
+	job := makeDLQJob(5, "plaid_sync", "default", nil)
+	repo.On("GetByID", ctx, int64(5)).Return(job, nil)
+
+	rawArgs, err := svc.GetRawArgs(ctx, 5)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"user_id":"u1"}`, string(rawArgs))
+	repo.AssertExpectations(t)
+}
+
+func TestDeadLetterService_GetRawArgs_NotFound(t *testing.T) {
+	repo := &mockDLQRepo{}
+	svc := NewDeadLetterService(repo, nil)
+
+	ctx := context.Background()
+	repo.On("GetByID", ctx, int64(99)).Return(nil, ErrDeadLetterJobNotFound)
+
+	_, err := svc.GetRawArgs(ctx, 99)
+	require.ErrorIs(t, err, ErrDeadLetterJobNotFound)
+	repo.AssertExpectations(t)
+}
+
+// --- DeleteByFilters ---
+
+func TestDeadLetterService_DeleteByFilters_Success(t *testing.T) {
+	repo := &mockDLQRepo{}
+	svc := NewDeadLetterService(repo, nil)
+
+	ctx := context.Background()
+	kindFilter := "plaid_sync"
+	filters := domain.DeadLetterJobFilters{Kind: &kindFilter}
+
+	repo.On("DeleteByFilters", ctx, filters).Return(int64(3), nil)
+
+	count, err := svc.DeleteByFilters(ctx, filters)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), count)
+	repo.AssertExpectations(t)
+}
+
+func TestDeadLetterService_DeleteByFilters_RepoError(t *testing.T) {
+	repo := &mockDLQRepo{}
+	svc := NewDeadLetterService(repo, nil)
+
+	ctx := context.Background()
+	filters := domain.DeadLetterJobFilters{}
+
+	repo.On("DeleteByFilters", ctx, filters).Return(int64(0), errors.New("db error"))
+
+	_, err := svc.DeleteByFilters(ctx, filters)
+	require.Error(t, err)
+	repo.AssertExpectations(t)
+}
+
 // --- Cleanup ---
 
 func TestDeadLetterService_Cleanup_Success(t *testing.T) {
