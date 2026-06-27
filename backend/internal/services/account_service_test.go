@@ -4018,3 +4018,16 @@ func TestAccountService_ListActiveByUser_ExcludesReplaced(t *testing.T) {
 
 	mockAccountRepo.AssertExpectations(t)
 }
+
+func TestAccountService_SetJobQueue_DoesNotPanic(t *testing.T) {
+	svc := &accountService{logger: slog.Default()}
+	mockJQ := &MockJobQueue{}
+	require.NotPanics(t, func() {
+		svc.SetJobQueue(mockJQ)
+	}, "SetJobQueue with a valid queue must not panic")
+	assert.Equal(t, mockJQ, svc.jobQueue, "jobQueue field should hold the value passed to SetJobQueue")
+	require.NotPanics(t, func() {
+		svc.SetJobQueue(nil)
+	}, "SetJobQueue with nil must not panic")
+	assert.Nil(t, svc.jobQueue, "jobQueue field should be nil after SetJobQueue(nil)")
+}

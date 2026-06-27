@@ -2,14 +2,15 @@ package repository
 
 import (
 	"context"
-	
+	"errors"
 	"regexp"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -492,5 +493,515 @@ func TestTransferSuggestionsTable_SetNullOnAccountDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, nullAccountID) // from_account_id should be NULL, not deleted
 
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// =============================================================================
+// Repository-level CRUD tests (testing BoostsRepository methods)
+// =============================================================================
+
+// setupBoostsRepoDB creates a pgxmock pool AND a real BoostsRepository for method testing.
+func setupBoostsRepoDB(t *testing.T) (pgxmock.PgxPoolIface, BoostsRepository) {
+	t.Helper()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	repo := NewBoostsRepository(mock)
+	return mock, repo
+}
+
+// boostSelectColumns is the exact SELECT column list used in every boosts query.
+var boostSelectColumns = []string{
+	"id", "user_id", "name", "description", "enabled", "priority",
+	"boost_type", "trigger_config", "conditions", "condition_logic",
+	"actions", "execution_count", "last_executed_at", "last_successful_at",
+	"created_at", "updated_at",
+}
+
+func makeBoostRow(id, userID, name string) []interface{} {
+	return []interface{}{
+		id,
+		userID,
+		name,
+		(*string)(nil),       // description
+		true,                 // enabled
+		10,                   // priority
+		"transfer_suggestion",// boost_type
+		[]byte("{}"),         // trigger_config JSONB
+		[]byte("[]"),         // conditions JSONB
+		"AND",                // condition_logic
+		[]byte("{}"),         // actions JSONB
+		int64(0),             // execution_count
+		(*time.Time)(nil),    // last_executed_at
+		(*time.Time)(nil),    // last_successful_at
+		time.Now(),           // created_at
+		time.Now(),           // updated_at
+	}
+}
+
+// --- Create ---
+
+func TestBoostsRepository_Create_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boost := &domain.Boost{
+		UserID:   uuid.New().String(),
+		Name:     "My Boost",
+		BoostType: domain.BoostTypeTransferSuggestion,
+		Enabled:  true,
+		Priority: 5,
+	}
+
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
+		WithArgs(
+			pgxmock.AnyArg(), // id (generated)
+			boost.UserID,
+			boost.Name,
+			pgxmock.AnyArg(), // description
+			boost.Enabled,
+			boost.Priority,
+			boost.BoostType,
+			pgxmock.AnyArg(), // trigger_config JSON
+			pgxmock.AnyArg(), // conditions JSON
+			"AND", // condition_logic (defaulted to AND)
+			pgxmock.AnyArg(), // actions
+			pgxmock.AnyArg(), // execution_count
+			pgxmock.AnyArg(), // last_executed_at
+			pgxmock.AnyArg(), // last_successful_at
+			pgxmock.AnyArg(), // created_at
+			pgxmock.AnyArg(), // updated_at
+		).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	err := repo.Create(ctx, boost)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, boost.ID)
+	assert.Equal(t, "AND", boost.ConditionLogic)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_Create_Error(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boost := &domain.Boost{
+		UserID:    uuid.New().String(),
+		Name:      "My Boost",
+		BoostType: domain.BoostTypeTransferSuggestion,
+	}
+
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO boosts`)).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(errors.New("db error"))
+
+	err := repo.Create(ctx, boost)
+
+	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetByID ---
+
+func TestBoostsRepository_GetByID_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(boostID, userID, "Test Boost")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(boostID).
+		WillReturnRows(rows)
+
+	result, err := repo.GetByID(ctx, boostID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, boostID, result.ID)
+	assert.Equal(t, userID, result.UserID)
+	assert.Equal(t, "Test Boost", result.Name)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_GetByID_NotFound(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(boostID).
+		WillReturnError(pgx.ErrNoRows)
+
+	result, err := repo.GetByID(ctx, boostID)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetByUserID ---
+
+func TestBoostsRepository_GetByUserID_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+	id2 := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Boost One")...)
+	rows.AddRow(makeBoostRow(id2, userID, "Boost Two")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	results, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	assert.Equal(t, id1, results[0].ID)
+	assert.Equal(t, id2, results[1].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_GetByUserID_Empty(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	results, err := repo.GetByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetByUserIDFiltered ---
+
+func TestBoostsRepository_GetByUserIDFiltered_NoFilter(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	// Empty boostTypes → falls through to GetByUserID
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Boost")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	results, err := repo.GetByUserIDFiltered(ctx, userID, []domain.BoostType{})
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, id1, results[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_GetByUserIDFiltered_WithFilter(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Transfer Boost")...)
+
+	// The production code passes typeStrs ([]string) as the $2 arg
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID, []string{"transfer_suggestion"}). // $1=userID, $2=type array
+		WillReturnRows(rows)
+
+	results, err := repo.GetByUserIDFiltered(ctx, userID, []domain.BoostType{domain.BoostTypeTransferSuggestion})
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, id1, results[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetEnabledByUserID ---
+
+func TestBoostsRepository_GetEnabledByUserID_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Enabled Boost")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	results, err := repo.GetEnabledByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, id1, results[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- Update ---
+
+func TestBoostsRepository_Update_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boost := &domain.Boost{
+		ID:             uuid.New().String(),
+		Name:           "Updated Boost",
+		Enabled:        true,
+		Priority:       5,
+		ConditionLogic: "AND",
+	}
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(
+			boost.Name,
+			boost.Description,
+			boost.Enabled,
+			boost.Priority,
+			pgxmock.AnyArg(), // trigger_config JSON
+			pgxmock.AnyArg(), // conditions JSON
+			boost.ConditionLogic,
+			pgxmock.AnyArg(), // actions
+			pgxmock.AnyArg(), // updated_at
+			boost.ID,
+		).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.Update(ctx, boost)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- Delete ---
+
+func TestBoostsRepository_Delete_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
+		WithArgs(boostID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+	err := repo.Delete(ctx, boostID)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_Delete_NotFound(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM boosts WHERE id = $1`)).
+		WithArgs(boostID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+	err := repo.Delete(ctx, boostID)
+
+	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- CountByUserID ---
+
+func TestBoostsRepository_CountByUserID_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(7)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM boosts WHERE user_id = $1`)).
+		WithArgs(userID).
+		WillReturnRows(countRows)
+
+	count, err := repo.CountByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_CountByUserID_Zero(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	countRows := pgxmock.NewRows([]string{"count"}).AddRow(0)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM boosts WHERE user_id = $1`)).
+		WithArgs(userID).
+		WillReturnRows(countRows)
+
+	count, err := repo.CountByUserID(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- IncrementExecutionCount ---
+
+func TestBoostsRepository_IncrementExecutionCount_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(pgxmock.AnyArg(), boostID). // $1=time.Now(), $2=boostID
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.IncrementExecutionCount(ctx, boostID)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_IncrementExecutionCount_NotFound(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	boostID := uuid.New().String()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE boosts`)).
+		WithArgs(pgxmock.AnyArg(), boostID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.IncrementExecutionCount(ctx, boostID)
+
+	assert.ErrorIs(t, err, domain.ErrBoostNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetBoostsByType ---
+
+func TestBoostsRepository_GetBoostsByType_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Transfer Boost")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID, domain.BoostTypeTransferSuggestion).
+		WillReturnRows(rows)
+
+	results, err := repo.GetBoostsByType(ctx, userID, domain.BoostTypeTransferSuggestion)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, id1, results[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_GetBoostsByType_Empty(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WithArgs(userID, domain.BoostTypeBudgetAlert).
+		WillReturnRows(rows)
+
+	results, err := repo.GetBoostsByType(ctx, userID, domain.BoostTypeBudgetAlert)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// --- GetBoostsByScheduleTrigger ---
+
+func TestBoostsRepository_GetBoostsByScheduleTrigger_Success(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	id1 := uuid.New().String()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	rows.AddRow(makeBoostRow(id1, userID, "Scheduled Boost")...)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WillReturnRows(rows)
+
+	results, err := repo.GetBoostsByScheduleTrigger(ctx)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, id1, results[0].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBoostsRepository_GetBoostsByScheduleTrigger_Empty(t *testing.T) {
+	mock, repo := setupBoostsRepoDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows(boostSelectColumns)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, name`)).
+		WillReturnRows(rows)
+
+	results, err := repo.GetBoostsByScheduleTrigger(ctx)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

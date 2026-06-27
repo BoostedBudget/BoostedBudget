@@ -666,3 +666,8 @@ func TestCustomCategoryService_UpdateCategory_EnqueueErrorDoesNotFail(t *testing
 	mockCategoryRepo.AssertExpectations(t)
 	mockQueue.AssertExpectations(t)
 }
+
+func TestEffectiveCategoryRefreshJobArgs_Kind(t *testing.T) {
+	args := effectiveCategoryRefreshJobArgs{}
+	assert.Equal(t, "effective_category_refresh", args.Kind(), "Kind() must return the expected job type identifier")
+}
