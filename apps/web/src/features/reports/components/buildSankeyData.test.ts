@@ -13,7 +13,7 @@ function makeExpense(category: string, display: string, total: number): Spending
 describe('buildSankeyData', () => {
   describe('empty/zero cases', () => {
     it('returns empty when both totals are zero', () => {
-      expect(buildSankeyData([], [], 0, 0)).toEqual({ nodes: [], links: [] })
+      expect(buildSankeyData([], [], 0, 0)).toEqual({ nodes: [], links: [], hubTotal: 0 })
     })
 
     it('returns empty when items exist but all totals are zero', () => {
@@ -22,7 +22,7 @@ describe('buildSankeyData', () => {
         [makeExpense('FOOD', 'Food', 0)],
         0, 0,
       )
-      expect(result).toEqual({ nodes: [], links: [] })
+      expect(result).toEqual({ nodes: [], links: [], hubTotal: 0 })
     })
 
     it('filters out income items with total <= 0', () => {
@@ -213,6 +213,26 @@ describe('buildSankeyData', () => {
       const ids = nodes.map(n => n.id)
       expect(ids).toContain('in:TRANSFER_IN')
       expect(ids).toContain('out:TRANSFER_OUT')
+    })
+  })
+
+  describe('hub invariant with mismatched passed-in totals (G5 — Codex fix #5 regression guard)', () => {
+    it('hub inflow equals hub outflow even when passed totalIncome/totalExpenses diverge from array sums', () => {
+      const income = [makeIncome('WAGES', 'Wages', 3000)]
+      const expenses = [makeExpense('FOOD', 'Food', 2000)]
+      // Pass intentionally wrong totals (simulates API total including filtered rows)
+      const { links } = buildSankeyData(income, expenses, /*wrong*/ 9999, /*wrong*/ 50)
+      const inflow = links.filter(l => l.target === 'hub').reduce((s, l) => s + l.value, 0)
+      const outflow = links.filter(l => l.source === 'hub').reduce((s, l) => s + l.value, 0)
+      expect(inflow).toBeCloseTo(outflow)
+    })
+
+    it('hubTotal in the result equals max of filtered array sums, not passed-in params', () => {
+      const income = [makeIncome('WAGES', 'Wages', 3000)]
+      const expenses = [makeExpense('FOOD', 'Food', 2000)]
+      // Correct hubTotal = max(3000, 2000) = 3000; wrong params should be ignored
+      const { hubTotal } = buildSankeyData(income, expenses, /*wrong*/ 9999, /*wrong*/ 50)
+      expect(hubTotal).toBe(3000)
     })
   })
 

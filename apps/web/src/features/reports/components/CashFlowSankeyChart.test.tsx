@@ -222,4 +222,85 @@ describe('CashFlowSankeyChart', () => {
       expect(mockNavigate).toHaveBeenCalled()
     })
   })
+
+  describe('lineStyle gradient (G1)', () => {
+    it('sets lineStyle.color to "gradient" regardless of theme', () => {
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      type OptionType = { series?: Array<{ lineStyle?: { color?: string; opacity?: number } }> }
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as OptionType
+      expect(option.series?.[0]?.lineStyle?.color).toBe('gradient')
+      expect(option.series?.[0]?.lineStyle?.opacity).toBe(0.5)
+    })
+  })
+
+  describe('edge-click guard (G4)', () => {
+    it('does NOT navigate when ECharts fires a link/edge click (dataType set but not "node")', () => {
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      // The mock trigger buttons fire { dataIndex } with no dataType — they exercise the
+      // test-mock branch. To test the real-ECharts edge-click guard we grab the handler
+      // directly and call it with a synthetic edge event.
+      type EventsType = { click?: (p: unknown) => void }
+      const clickHandler = MockEChartsChart.mock.calls.at(-1)?.[0]?.onEvents as EventsType | undefined
+      clickHandler?.click?.({ dataType: 'edge', dataIndex: 2 })
+      expect(mockNavigate).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('PII — sr-only table data-ph-mask (G6)', () => {
+    it('the sr-only table has data-ph-mask so currency amounts are masked', () => {
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      const table = screen.getByRole('table', { hidden: true })
+      // Attribute presence is what posthog-pii-masking.ts checks (hasMaskedAncestor uses
+      // hasAttribute, not the value). JSX boolean `data-ph-mask` renders as "true" in DOM.
+      expect(table.hasAttribute('data-ph-mask')).toBe(true)
+    })
+  })
+
+  describe('label formatter — name not id (G11)', () => {
+    it('label formatter returns the display name, not the internal out: id', () => {
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      type OptionType = { series?: Array<{ label?: { formatter?: (p: unknown) => string } }> }
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as OptionType
+      const formatter = option.series?.[0]?.label?.formatter
+      expect(formatter).toBeDefined()
+      // Should return the escaped display name — not 'out:FOOD_AND_DRINK'
+      const result = formatter!({ data: { id: 'out:FOOD_AND_DRINK', name: 'Food & Drink' } })
+      expect(result).toBe('Food &amp; Drink')
+      expect(result).not.toContain('out:')
+    })
+  })
+
+  describe('percentage base — uses filtered array sums, not diverged API totals (G10/Task F)', () => {
+    it('tooltip percentage is based on filtered expense sum, not API total_spent when they diverge', () => {
+      // Scenario: expenses total_spent=1950 (API total includes a filtered refund row)
+      // Valid expense sum = 1200+800 = 2000 (the refund has total:-50, filtered out)
+      // income=1500 < expenses=2000 → deficit scenario
+      // hubTotal (correct, from array sums) = max(1500, 2000) = 2000
+      // hubTotal (OLD bug, from API totals) = max(1500, 1950) = 1950
+      const divergedCategoryData: SpendingByCategoryResponse = {
+        start_date: '2024-01-01',
+        end_date: '2024-01-31',
+        total_spent: 1950, // API total diverges from valid sum
+        categories: [
+          { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food & Drink', total: 1200, percentage: 60, transaction_count: 20 },
+          { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 800, percentage: 40, transaction_count: 8 },
+          { category: 'REFUNDS', pfc_primary_display: 'Refunds', total: -50, percentage: 0, transaction_count: 1 },
+        ],
+      }
+      render(
+        <CashFlowSankeyChart
+          {...defaultProps}
+          incomeData={{ ...mockIncomeData, total_income: 1500, sources: [{ category: 'INCOME_WAGES', pfc_primary_display: 'Wages', total: 1500, percentage: 100, transaction_count: 2 }] }}
+          categoryData={divergedCategoryData}
+        />
+      )
+      type OptionType = { tooltip?: { formatter?: (p: unknown) => string } }
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as OptionType
+      const formatter = option.tooltip!.formatter!
+      // Wages→hub link value = 1500; correct hubTotal = 2000 → pct = 0.75 → "0.75%"
+      // With the old bug hubTotal was 1950 → pct ≈ 0.769 → "0.77%"
+      const result = formatter({ value: 1500, name: 'Wages' })
+      expect(result).toContain('0.75%')
+    })
+  })
 })

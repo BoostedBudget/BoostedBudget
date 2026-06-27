@@ -5,6 +5,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
 import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 import { mockNavigate } from '@/test/mocks/react-router'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
 import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/models'
 import type { CustomCategory } from '@boostedbudget/api-client/models'
@@ -255,5 +257,94 @@ describe('SpendingReportsPage custom category filter', () => {
     const calls = mockUseGetSpendingByCategory.mock.calls as unknown as Array<[{ custom_category_ids?: string } | undefined]>
     const lastParams = calls[calls.length - 1]?.[0]
     expect(lastParams?.custom_category_ids).toBe('cc-1')
+  })
+})
+
+describe('SpendingReportsPage privacy toggle analytics (G2)', () => {
+  beforeEach(() => {
+    mockTrackEvent.mockClear()
+  })
+
+  it('fires REPORT_SANKEY_PRIVACY_TOGGLED with enabled:true when toggling from visible to hidden', () => {
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /hide amounts/i }))
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.REPORT_SANKEY_PRIVACY_TOGGLED,
+      { enabled: true },
+    )
+  })
+
+  it('fires REPORT_SANKEY_PRIVACY_TOGGLED with enabled:false when toggling back to visible', () => {
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /hide amounts/i })) // → hidden
+    mockTrackEvent.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /show amounts/i })) // → visible
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.REPORT_SANKEY_PRIVACY_TOGGLED,
+      { enabled: false },
+    )
+  })
+})
+
+describe('SpendingReportsPage Sankey drilldown immunity (G3 — Codex fix #4 regression guard)', () => {
+  const pfcCategoryData: SpendingByCategoryResponse = {
+    start_date: '2024-01-01',
+    end_date: '2024-03-31',
+    total_spent: 2000,
+    categories: [
+      {
+        category: 'FOOD_AND_DRINK',
+        pfc_primary_display: 'Food And Drink',
+        total: 1200,
+        percentage: 60,
+        transaction_count: 20,
+      },
+      {
+        category: 'TRANSPORTATION',
+        pfc_primary_display: 'Transportation',
+        total: 800,
+        percentage: 40,
+        transaction_count: 8,
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    mockUseGetSpendingByCategory.mockReturnValue({
+      data: pfcCategoryData,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    })
+  })
+
+  afterEach(() => {
+    mockUseGetSpendingByCategory.mockClear()
+  })
+
+  it('Sankey top-level fetch remains without category param after a drilldown click', () => {
+    renderPage()
+    mockUseGetSpendingByCategory.mockClear()
+
+    // Click a PFC category in the category chart to trigger drilldown
+    const categoryChart = screen.getByTestId('category-chart')
+    fireEvent.click(within(categoryChart).getByTestId('echarts-point-0')) // FOOD_AND_DRINK
+
+    // After re-render: two useSpendingByCategory calls happen simultaneously —
+    // one for the Sankey (no category) and one for the category chart (with category).
+    type ParamsCall = [{ category?: string } | undefined, unknown]
+    const calls = mockUseGetSpendingByCategory.mock.calls as ParamsCall[]
+
+    // At least one call should have category === undefined (the Sankey top-level fetch).
+    const hasSankeyTopLevelCall = calls.some(
+      ([params]) => params != null && params.category === undefined,
+    )
+    // And at least one call should have category set (the drilldown chart fetch).
+    const hasDrilldownCall = calls.some(
+      ([params]) => params?.category === 'FOOD_AND_DRINK',
+    )
+
+    expect(hasSankeyTopLevelCall).toBe(true)
+    expect(hasDrilldownCall).toBe(true)
   })
 })
