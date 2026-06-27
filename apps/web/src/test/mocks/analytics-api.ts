@@ -71,6 +71,14 @@ export const mockUseGetPortfolioAllocationBreakdown = mock(() => ({
   isError: false,
 }))
 
+// === useGetIncomeSourceBreakdown (#958) ===
+export const mockUseGetIncomeSourceBreakdown = mock(() => ({
+  data: null,
+  isLoading: false,
+  error: null,
+  refetch: createMockRefetch(),
+}))
+
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   ...RealAnalyticsModule,
@@ -83,4 +91,5 @@ mock.module('@boostedbudget/api-client/endpoints/analytics/analytics', () => ({
   useGetSpendingByMerchant: mockUseGetSpendingByMerchant,
   useGetSpendingTrends: mockUseGetSpendingTrends,
   useGetPortfolioAllocationBreakdown: mockUseGetPortfolioAllocationBreakdown,
+  useGetIncomeSourceBreakdown: mockUseGetIncomeSourceBreakdown,
 }))

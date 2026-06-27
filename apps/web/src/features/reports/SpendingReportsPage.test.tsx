@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import React from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
@@ -55,6 +55,28 @@ describe('SpendingReportsPage', () => {
     expect(screen.getByTestId('trends-chart')).toBeDefined()
     expect(screen.getByTestId('merchants-table')).toBeDefined()
   })
+
+  it('renders Cash Flow section heading', () => {
+    renderPage()
+    expect(screen.getByText('Cash Flow')).toBeDefined()
+  })
+
+  it('renders sankey chart component', () => {
+    renderPage()
+    expect(screen.getByTestId('sankey-chart')).toBeDefined()
+  })
+
+  it('renders privacy toggle button', () => {
+    renderPage()
+    expect(screen.getByRole('button', { name: /hide amounts/i })).toBeDefined()
+  })
+
+  it('toggles privacy mode when privacy button is clicked', () => {
+    renderPage()
+    const btn = screen.getByRole('button', { name: /hide amounts/i })
+    fireEvent.click(btn)
+    expect(screen.getByRole('button', { name: /show amounts/i })).toBeDefined()
+  })
 })
 
 describe('SpendingReportsPage drill-down guard', () => {
@@ -95,8 +117,10 @@ describe('SpendingReportsPage drill-down guard', () => {
 
   it('does not enter drilldown when a custom-category slice is clicked', () => {
     renderPage()
-    // echarts-point-0 corresponds to customCategoryData.categories[0] = 'custom:uuid-123'
-    fireEvent.click(screen.getByTestId('echarts-point-0'))
+    // Scope to category-chart to avoid matching Sankey trigger buttons
+    const categoryChart = screen.getByTestId('category-chart')
+    // echarts-point-0 within category-chart = customCategoryData.categories[0] = 'custom:uuid-123'
+    fireEvent.click(within(categoryChart).getByTestId('echarts-point-0'))
     // guard should prevent drilldown; description must stay on the top-level prompt
     expect(screen.queryByText('Click a subcategory to view its transactions.')).toBeNull()
     expect(screen.getByText('Click a category to drill into subcategories.')).toBeDefined()
@@ -104,8 +128,10 @@ describe('SpendingReportsPage drill-down guard', () => {
 
   it('enters drilldown when a PFC category slice is clicked', () => {
     renderPage()
-    // echarts-point-1 corresponds to customCategoryData.categories[1] = 'FOOD_AND_DRINK'
-    fireEvent.click(screen.getByTestId('echarts-point-1'))
+    // Scope to category-chart to avoid matching Sankey trigger buttons
+    const categoryChart = screen.getByTestId('category-chart')
+    // echarts-point-1 within category-chart = customCategoryData.categories[1] = 'FOOD_AND_DRINK'
+    fireEvent.click(within(categoryChart).getByTestId('echarts-point-1'))
     expect(screen.getByText('Click a subcategory to view its transactions.')).toBeDefined()
   })
 })
