@@ -150,7 +150,7 @@ export function SpendingReportsPage() {
               <div>
                 <h2 id="cashflow-heading" className="text-lg font-semibold">Cash Flow</h2>
                 <p className="text-sm text-muted-foreground">
-                  Income sources flowing into expense categories. Percentage of {Math.max(incomeData?.total_income ?? 0, sankeyTopLevelData?.total_spent ?? 0) > 0 ? 'total flow' : '—'}.
+                  Income sources flowing into expense categories, as a percentage of total flow.
                 </p>
               </div>
               <button

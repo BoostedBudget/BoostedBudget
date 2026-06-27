@@ -79,7 +79,7 @@ export function CashFlowSankeyChart({
         formatter: (params: unknown) => {
           const p = params as { value?: number; name?: string }
           if (!p || typeof p.value !== 'number') return ''
-          const pct = sankeyData.hubTotal > 0 ? p.value / sankeyData.hubTotal : 0
+          const pct = sankeyData.hubTotal > 0 ? (p.value / sankeyData.hubTotal) * 100 : 0
           const label = escapeHtml(p.name ?? '')
           if (privacyMode) return `${label} ${formatPercent(pct)}`
           return `${label}<br>${formatCurrencyFull(p.value)} (${formatPercent(pct)})`
@@ -141,7 +141,7 @@ export function CashFlowSankeyChart({
           {sankeyData.links.map((link, i) => {
             const sourceNode = sankeyData.nodes.find(n => n.id === link.source)
             const targetNode = sankeyData.nodes.find(n => n.id === link.target)
-            const pct = sankeyData.hubTotal > 0 ? link.value / sankeyData.hubTotal : 0
+            const pct = sankeyData.hubTotal > 0 ? (link.value / sankeyData.hubTotal) * 100 : 0
             const navigableNode = targetNode?.navigable ? targetNode : sourceNode?.navigable ? sourceNode : undefined
             const label = `${sourceNode?.name ?? link.source} → ${targetNode?.name ?? link.target}`
             return (
