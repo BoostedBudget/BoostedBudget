@@ -1423,10 +1423,13 @@ var _ phclient.Analytics = (*mockAnalyticsForInvestmentSync)(nil)
 
 func TestInvestmentSyncService_SetAnalytics_DoesNotPanic(t *testing.T) {
 	svc, _ := setupInvestmentSyncService(t)
+	iss := svc.(*investmentSyncService)
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(&mockAnalyticsForInvestmentSync{})
 	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, iss.analytics, "analytics field should be set after SetAnalytics(non-nil)")
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, iss.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }

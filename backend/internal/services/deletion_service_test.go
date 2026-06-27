@@ -1047,10 +1047,13 @@ func TestDeletionService_SetAnalytics_DoesNotPanic(t *testing.T) {
 	auditLog := new(MockAuditLogger)
 	plaid := new(MockPlaidItemCleanupService)
 	svc := NewDeletionService(repo, email, clerkSvc, auditLog, plaid, 30, "test-secret-key")
+	ds := svc.(*deletionService)
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(&mockAnalyticsForDeletion{})
 	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, ds.analytics, "analytics field should be set after SetAnalytics(non-nil)")
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, ds.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }
