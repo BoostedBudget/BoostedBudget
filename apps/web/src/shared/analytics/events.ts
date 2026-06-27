@@ -67,6 +67,7 @@ export const ANALYTICS_EVENTS = {
   REPORT_DATE_CHANGED: 'report_date_changed',
   REPORT_CATEGORY_CLICKED: 'report_category_clicked',
   REPORT_MERCHANT_CLICKED: 'report_merchant_clicked',
+  REPORT_SANKEY_PRIVACY_TOGGLED: 'report_sankey_privacy_toggled',
 
   // Admin
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
