@@ -1,14 +1,6 @@
-/**
- * Spending Reports Page
- * Issue #953: Spending Reports Page
- *
- * Provides category breakdown, spending trends, and top merchants
- * for a user-selected date range.
- */
-
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BarChart3 } from 'lucide-react'
+import { BarChart3, Eye, EyeOff } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { DateRangePicker } from '@/shared/dates/DateRangePicker'
 import { getDateRange } from '@/shared/dates'
@@ -19,9 +11,11 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { useSpendingByCategory } from './hooks/useSpendingByCategory'
 import { useSpendingByMerchant } from './hooks/useSpendingByMerchant'
 import { useSpendingTrends } from './hooks/useSpendingTrends'
+import { useIncomeSourceBreakdown } from './hooks/useIncomeSourceBreakdown'
 import { CategoryBreakdownChart } from './components/CategoryBreakdownChart'
 import { CategoryDrilldownHeading } from './components/CategoryDrilldownHeading'
 import { CustomCategoryFilter } from './components/CustomCategoryFilter'
+import { CashFlowSankeyChart } from './components/CashFlowSankeyChart'
 import { SpendingTrendsChart } from './components/SpendingTrendsChart'
 import { TopMerchantsTable } from './components/TopMerchantsTable'
 import type { SortState } from '@/shared/components/DataTable'
@@ -36,18 +30,27 @@ export function SpendingReportsPage() {
   const [drilldown, setDrilldown] = useState<{ category: string; displayLabel: string } | undefined>()
   const [customCategoryIds, setCustomCategoryIds] = useState<string[]>([])
   const [merchantSort, setMerchantSort] = useState<SortState>({ columnId: 'total', direction: 'desc' })
+  const [privacyMode, setPrivacyMode] = useState(false)
 
   const derivedRange = preset !== 'custom' ? getDateRange(preset) : null
   const startDate = preset === 'custom' ? customStartDate : (derivedRange?.startDate ?? '')
   const endDate = preset === 'custom' ? customEndDate : (derivedRange?.endDate ?? '')
 
-  // Track page view
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.REPORTS_VIEWED)
   }, [trackEvent])
 
   const filters = { startDate, endDate }
   const enabled = Boolean(startDate && endDate)
+
+  const { data: incomeData, loading: incomeLoading } = useIncomeSourceBreakdown({ filters, enabled })
+
+  // Top-level fetch (no drilldown) used by the Sankey so drilling into a category
+  // doesn't corrupt the expense universe shown in the chart.
+  const { data: sankeyTopLevelData, loading: sankeyTopLevelLoading } = useSpendingByCategory({
+    filters: { ...filters, customCategoryIds },
+    enabled,
+  })
 
   const { data: categoryData, loading: categoryLoading } = useSpendingByCategory({
     filters: { ...filters, category: drilldown?.category, customCategoryIds },
@@ -93,6 +96,13 @@ export function SpendingReportsPage() {
     }
   }
 
+  const handlePrivacyToggle = () => {
+    setPrivacyMode(prev => {
+      trackEvent(ANALYTICS_EVENTS.REPORT_SANKEY_PRIVACY_TOGGLED, { enabled: !prev })
+      return !prev
+    })
+  }
+
   const handleMerchantClick = ({ id, name }: { id?: string | null; name: string }) => {
     trackEvent(ANALYTICS_EVENTS.REPORT_MERCHANT_CLICKED)
     if (!startDate || !endDate || !id) return
@@ -111,7 +121,6 @@ export function SpendingReportsPage() {
         </p>
       </div>
 
-      {/* Date range picker */}
       <div className="mb-8">
         <DateRangePicker
           preset={preset}
@@ -136,7 +145,37 @@ export function SpendingReportsPage() {
         />
       ) : (
         <div className="space-y-10">
-          {/* Category Breakdown */}
+          <section aria-labelledby="cashflow-heading">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 id="cashflow-heading" className="text-lg font-semibold">Cash Flow</h2>
+                <p className="text-sm text-muted-foreground">
+                  Income sources flowing into expense categories, as a percentage of total flow.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-pressed={privacyMode}
+                aria-label={privacyMode ? 'Show amounts' : 'Hide amounts'}
+                onClick={handlePrivacyToggle}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {privacyMode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {privacyMode ? 'Show' : 'Hide'}
+              </button>
+            </div>
+            <Card>
+              <CashFlowSankeyChart
+                incomeData={incomeData}
+                categoryData={sankeyTopLevelData}
+                loading={incomeLoading || sankeyTopLevelLoading}
+                privacyMode={privacyMode}
+                startDate={startDate}
+                endDate={endDate}
+              />
+            </Card>
+          </section>
+
           <section aria-labelledby="category-heading">
             <div className="mb-4">
               <CategoryDrilldownHeading drilldown={drilldown} onBack={() => setDrilldown(undefined)} />
@@ -155,7 +194,6 @@ export function SpendingReportsPage() {
             </Card>
           </section>
 
-          {/* Spending Trends */}
           <section aria-labelledby="trends-heading">
             <div className="mb-4">
               <h2 id="trends-heading" className="text-lg font-semibold">
@@ -173,7 +211,6 @@ export function SpendingReportsPage() {
             </Card>
           </section>
 
-          {/* Top Merchants */}
           <section aria-labelledby="merchants-heading">
             <div className="mb-4">
               <h2 id="merchants-heading" className="text-lg font-semibold">

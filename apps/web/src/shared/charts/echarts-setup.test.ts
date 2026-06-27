@@ -132,4 +132,20 @@ describe('echarts-setup', () => {
     chart.dispose()
     container.remove()
   })
+
+  it('has SankeyChart registered (sankey series are renderable)', () => {
+    const container = makeContainer()
+    const chart = initChart(container)
+    expect(() => {
+      chart.setOption({
+        series: [{
+          type: 'sankey',
+          data: [{ name: 'a' }, { name: 'b' }, { name: 'c' }],
+          links: [{ source: 'a', target: 'b', value: 10 }, { source: 'b', target: 'c', value: 5 }],
+        }],
+      })
+    }).not.toThrow()
+    chart.dispose()
+    container.remove()
+  })
 })
