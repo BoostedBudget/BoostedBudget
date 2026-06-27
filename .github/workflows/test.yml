@@ -660,6 +660,8 @@ jobs:
           #   2. Filters packages/api-client/** (orval-generated, not unit-testable)
           #   3. Enforces Lines >= 82% (raised from 63% after excluding generated code, #1286)
           # Functions/Branches gates removed: Bun LCOV emits no per-fn/branch data.
+          # ⚠ Denominator caveat: bun 1.3.x measures only test-imported files (no --coverage-include).
+          #   ~84% applies to the measured subset, not all of apps/web/src/. See #1345 for follow-up.
           bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-frontend-coverage.sh \
             . \
             82
