@@ -390,10 +390,13 @@ func TestInvestmentService_SetAnalytics_DoesNotPanic(t *testing.T) {
 	snapshotRepo := new(MockPortfolioSnapshotRepository)
 	invTxnRepo := new(MockInvestmentTransactionRepository)
 	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	is := svc.(*investmentService)
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(&mockAnalyticsForInvestment{})
 	}, "SetAnalytics with a valid analytics must not panic")
+	assert.NotNil(t, is.analytics, "analytics field should be set after SetAnalytics(non-nil)")
 	require.NotPanics(t, func() {
 		svc.SetAnalytics(nil)
 	}, "SetAnalytics with nil must not panic")
+	assert.Nil(t, is.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }
