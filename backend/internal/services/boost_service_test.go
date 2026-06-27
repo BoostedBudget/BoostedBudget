@@ -795,3 +795,244 @@ func TestUpdateBoost_CategoryNotInSelectedBudget_Returns400(t *testing.T) {
 	assert.True(t, errors.Is(err, domain.ErrInvalidBoost),
 		"category-not-in-budget must be wrapped as domain.ErrInvalidBoost (400), got: %v", err)
 }
+
+// ===========================================================================
+// Priority 2: Boost service read/write methods — zero coverage
+// ===========================================================================
+
+// TestBoostService_GetUserBoosts_ReturnsUserBoosts verifies GetUserBoosts delegates to repo.
+func TestBoostService_GetUserBoosts_ReturnsUserBoosts(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+
+	boost1 := &domain.Boost{ID: "b1", UserID: userID, Name: "Rule 1", BoostType: domain.BoostTypeBudgetAlert}
+	boost2 := &domain.Boost{ID: "b2", UserID: userID, Name: "Rule 2", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost1, boost2}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetUserBoosts(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, boosts, 2)
+	assert.Equal(t, "b1", boosts[0].ID)
+	assert.Equal(t, "b2", boosts[1].ID)
+}
+
+// TestBoostService_GetUserBoosts_EmptyWhenNoBoosts verifies empty slice returned for unknown user.
+func TestBoostService_GetUserBoosts_EmptyWhenNoBoosts(t *testing.T) {
+	ctx := context.Background()
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetUserBoosts(ctx, "nobody")
+
+	require.NoError(t, err)
+	assert.Empty(t, boosts)
+}
+
+// TestBoostService_GetUserBoostsFiltered_ByType verifies type filtering is applied.
+func TestBoostService_GetUserBoostsFiltered_ByType(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+
+	b1 := &domain.Boost{ID: "b1", UserID: userID, BoostType: domain.BoostTypeBudgetAlert}
+	b2 := &domain.Boost{ID: "b2", UserID: userID, BoostType: domain.BoostTypeTransferSuggestion}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{b1, b2}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetUserBoostsFiltered(ctx, userID, []domain.BoostType{domain.BoostTypeBudgetAlert})
+
+	require.NoError(t, err)
+	assert.Len(t, boosts, 1)
+	assert.Equal(t, "b1", boosts[0].ID)
+}
+
+// TestBoostService_GetUserBoostsFiltered_EmptyFilter_ReturnsAll verifies no filter returns all boosts.
+func TestBoostService_GetUserBoostsFiltered_EmptyFilter_ReturnsAll(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+
+	b1 := &domain.Boost{ID: "b1", UserID: userID, BoostType: domain.BoostTypeBudgetAlert}
+	b2 := &domain.Boost{ID: "b2", UserID: userID, BoostType: domain.BoostTypeTransferSuggestion}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{b1, b2}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetUserBoostsFiltered(ctx, userID, nil)
+
+	require.NoError(t, err)
+	assert.Len(t, boosts, 2)
+}
+
+// TestBoostService_GetBoostByID_ReturnsBoost verifies GetBoostByID returns the correct boost.
+func TestBoostService_GetBoostByID_ReturnsBoost(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+	boostID := "b1"
+
+	boost := &domain.Boost{ID: boostID, UserID: userID, Name: "My Rule", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	result, err := svc.GetBoostByID(ctx, userID, boostID)
+
+	require.NoError(t, err)
+	assert.Equal(t, boostID, result.ID)
+	assert.Equal(t, userID, result.UserID)
+}
+
+// TestBoostService_GetBoostByID_RejectsWrongOwner verifies ownership check prevents IDOR.
+func TestBoostService_GetBoostByID_RejectsWrongOwner(t *testing.T) {
+	ctx := context.Background()
+	ownerID := "user-owner"
+	attackerID := "user-attacker"
+	boostID := "b1"
+
+	boost := &domain.Boost{ID: boostID, UserID: ownerID, Name: "My Rule", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	_, err := svc.GetBoostByID(ctx, attackerID, boostID)
+
+	require.ErrorIs(t, err, domain.ErrBoostNotFound)
+}
+
+// TestBoostService_GetBoostByID_NotFound verifies not-found error propagated.
+func TestBoostService_GetBoostByID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{}}
+
+	svc := NewBoostService(boostRepo)
+	_, err := svc.GetBoostByID(ctx, "user-abc", "nonexistent")
+
+	require.Error(t, err)
+}
+
+// TestBoostService_DeleteBoost_RemovesBoost verifies DeleteBoost removes the boost.
+func TestBoostService_DeleteBoost_RemovesBoost(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+	boostID := "b1"
+
+	boost := &domain.Boost{ID: boostID, UserID: userID, Name: "My Rule", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	err := svc.DeleteBoost(ctx, userID, boostID)
+
+	require.NoError(t, err)
+	// Verify boost was actually removed from the repo
+	remaining, _ := boostRepo.GetByUserID(ctx, userID)
+	assert.Empty(t, remaining)
+}
+
+// TestBoostService_DeleteBoost_RejectsWrongOwner verifies DeleteBoost prevents cross-user delete.
+func TestBoostService_DeleteBoost_RejectsWrongOwner(t *testing.T) {
+	ctx := context.Background()
+	ownerID := "user-owner"
+	attackerID := "user-attacker"
+	boostID := "b1"
+
+	boost := &domain.Boost{ID: boostID, UserID: ownerID, Name: "My Rule", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	err := svc.DeleteBoost(ctx, attackerID, boostID)
+
+	require.ErrorIs(t, err, domain.ErrBoostNotFound)
+	// Verify the boost was NOT deleted
+	remaining, _ := boostRepo.GetByUserID(ctx, ownerID)
+	assert.Len(t, remaining, 1)
+}
+
+// TestBoostService_ToggleBoost_EnablesBoost verifies ToggleBoost enables the boost.
+func TestBoostService_ToggleBoost_EnablesBoost(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+	boostID := "b1"
+
+	boost := &domain.Boost{
+		ID: boostID, UserID: userID, Name: "My Rule",
+		Enabled: false, BoostType: domain.BoostTypeBudgetAlert,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeSchedule, Cron: "0 9 * * *"},
+		Actions:        json.RawMessage(`{}`),
+		ConditionLogic: "AND",
+	}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	result, err := svc.ToggleBoost(ctx, userID, boostID, true)
+
+	require.NoError(t, err)
+	assert.True(t, result.Enabled)
+}
+
+// TestBoostService_ToggleBoost_DisablesBoost verifies ToggleBoost disables the boost.
+func TestBoostService_ToggleBoost_DisablesBoost(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+	boostID := "b1"
+
+	boost := &domain.Boost{
+		ID: boostID, UserID: userID, Name: "My Rule",
+		Enabled: true, BoostType: domain.BoostTypeBudgetAlert,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeSchedule, Cron: "0 9 * * *"},
+		Actions:        json.RawMessage(`{}`),
+		ConditionLogic: "AND",
+	}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	result, err := svc.ToggleBoost(ctx, userID, boostID, false)
+
+	require.NoError(t, err)
+	assert.False(t, result.Enabled)
+}
+
+// TestBoostService_ToggleBoost_RejectsWrongOwner verifies ownership check on toggle.
+func TestBoostService_ToggleBoost_RejectsWrongOwner(t *testing.T) {
+	ctx := context.Background()
+	ownerID := "user-owner"
+	boostID := "b1"
+
+	boost := &domain.Boost{ID: boostID, UserID: ownerID, Name: "Rule", BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{boost}}
+
+	svc := NewBoostService(boostRepo)
+	_, err := svc.ToggleBoost(ctx, "attacker", boostID, true)
+
+	require.ErrorIs(t, err, domain.ErrBoostNotFound)
+}
+
+// TestBoostService_GetEnabledBoosts_ReturnsOnlyEnabled verifies only enabled boosts are returned.
+func TestBoostService_GetEnabledBoosts_ReturnsOnlyEnabled(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+
+	enabled := &domain.Boost{ID: "b1", UserID: userID, Name: "Enabled", Enabled: true, BoostType: domain.BoostTypeBudgetAlert}
+	disabled := &domain.Boost{ID: "b2", UserID: userID, Name: "Disabled", Enabled: false, BoostType: domain.BoostTypeBudgetAlert}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{enabled, disabled}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetEnabledBoosts(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Len(t, boosts, 1)
+	assert.Equal(t, "b1", boosts[0].ID)
+}
+
+// TestBoostService_GetBoostsByType_ReturnsMatchingType verifies type filter applied.
+func TestBoostService_GetBoostsByType_ReturnsMatchingType(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+
+	b1 := &domain.Boost{ID: "b1", UserID: userID, Enabled: true, BoostType: domain.BoostTypeBudgetAlert}
+	b2 := &domain.Boost{ID: "b2", UserID: userID, Enabled: true, BoostType: domain.BoostTypeTransferSuggestion}
+	boostRepo := &mockBoostsRepository{boosts: []*domain.Boost{b1, b2}}
+
+	svc := NewBoostService(boostRepo)
+	boosts, err := svc.GetBoostsByType(ctx, userID, domain.BoostTypeBudgetAlert)
+
+	require.NoError(t, err)
+	assert.Len(t, boosts, 1)
+	assert.Equal(t, "b1", boosts[0].ID)
+}

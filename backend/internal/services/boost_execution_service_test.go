@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -3562,3 +3563,162 @@ func TestCategoryEventDataKeyContract(t *testing.T) {
 	// No extra keys
 	assert.Len(t, catMap, len(expectedKeys), "category event data must have exactly %d keys", len(expectedKeys))
 }
+
+// ===========================================================================
+// Priority 1: SetAnalytics, SetNotificationRepo — zero coverage
+// ===========================================================================
+
+// mockAnalyticsForBoostExec is a minimal phclient.Analytics mock for setter tests.
+type mockAnalyticsForBoostExec struct{}
+
+func (m *mockAnalyticsForBoostExec) Capture(distinctID, event string, properties map[string]interface{}) {
+}
+func (m *mockAnalyticsForBoostExec) Identify(distinctID string, properties map[string]interface{}) {}
+func (m *mockAnalyticsForBoostExec) Close()                                                        {}
+
+var _ phclient.Analytics = (*mockAnalyticsForBoostExec)(nil)
+
+// mockNotificationRepoForExec is a minimal repository.NotificationRepository mock for setter tests.
+type mockNotificationRepoForExec struct{}
+
+func (m *mockNotificationRepoForExec) Create(ctx context.Context, notification *domain.Notification) error {
+	return nil
+}
+func (m *mockNotificationRepoForExec) Update(ctx context.Context, notification *domain.Notification) error {
+	return nil
+}
+func (m *mockNotificationRepoForExec) GetByUserID(ctx context.Context, userID string, limit int) ([]domain.Notification, error) {
+	return nil, nil
+}
+func (m *mockNotificationRepoForExec) MarkAsRead(ctx context.Context, id, userID string) error {
+	return nil
+}
+func (m *mockNotificationRepoForExec) MarkAllAsRead(ctx context.Context, userID string) (int64, error) {
+	return 0, nil
+}
+func (m *mockNotificationRepoForExec) GetUnreadCount(ctx context.Context, userID string) (int, error) {
+	return 0, nil
+}
+func (m *mockNotificationRepoForExec) GetUnsentEmails(ctx context.Context, limit int) ([]domain.Notification, error) {
+	return nil, nil
+}
+func (m *mockNotificationRepoForExec) GetOpenByTransferSuggestionID(ctx context.Context, transferSuggestionID string, notificationType string) (*domain.Notification, error) {
+	return nil, nil
+}
+
+var _ repository.NotificationRepository = (*mockNotificationRepoForExec)(nil)
+
+// TestBoostExecutionService_SetAnalytics verifies SetAnalytics assigns the analytics client.
+func TestBoostExecutionService_SetAnalytics(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+
+	analytics := &mockAnalyticsForBoostExec{}
+	require.NotPanics(t, func() {
+		svc.SetAnalytics(analytics)
+	}, "SetAnalytics must not panic")
+}
+
+// TestBoostExecutionService_SetNotificationRepo verifies SetNotificationRepo assigns the repo.
+func TestBoostExecutionService_SetNotificationRepo(t *testing.T) {
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+
+	notifRepo := &mockNotificationRepoForExec{}
+	require.NotPanics(t, func() {
+		svc.SetNotificationRepo(notifRepo)
+	}, "SetNotificationRepo must not panic")
+}
+
+// ===========================================================================
+// Priority 1: containsValue and ptrTime pure utility functions
+// ===========================================================================
+
+// TestContainsValue verifies containsValue parses comma-separated lists correctly.
+func TestContainsValue(t *testing.T) {
+	tests := []struct {
+		list     string
+		value    string
+		expected bool
+	}{
+		{"a,b,c", "b", true},
+		{"a,b,c", "d", false},
+		{"", "a", false},
+		{" a , b , c ", "a", true},
+		{" a , b , c ", "c", true},
+		{" a , b , c ", "d", false},
+		{"single", "single", true},
+		{"single", "other", false},
+	}
+
+	for _, tc := range tests {
+		result := containsValue(tc.list, tc.value)
+		assert.Equal(t, tc.expected, result,
+			"containsValue(%q, %q) should be %v", tc.list, tc.value, tc.expected)
+	}
+}
+
+// TestPtrTime verifies ptrTime returns a non-nil pointer equal to the input.
+func TestPtrTime(t *testing.T) {
+	now := time.Now()
+	result := ptrTime(now)
+
+	require.NotNil(t, result, "ptrTime must return non-nil pointer")
+	assert.Equal(t, now, *result, "ptrTime result must equal input time")
+}
+
+// ===========================================================================
+// Priority 2: GetExecutionHistoryWithFilter — zero coverage
+// ===========================================================================
+
+// TestBoostExecutionService_GetExecutionHistoryWithFilter_NoFilter verifies unfiltered results.
+func TestBoostExecutionService_GetExecutionHistoryWithFilter_NoFilter(t *testing.T) {
+	ctx := context.Background()
+	boostID := "rule-1"
+
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	results, total, err := svc.GetExecutionHistoryWithFilter(ctx, boostID, nil, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Len(t, results, 2)
+}
+
+// TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter verifies status filtering.
+func TestBoostExecutionService_GetExecutionHistoryWithFilter_WithStatusFilter(t *testing.T) {
+	ctx := context.Background()
+	boostID := "rule-1"
+	status := domain.ExecutionStatusCompleted
+
+	execRepo := &mockBoostExecutionRepository{
+		executions: []*domain.BoostExecution{
+			{ID: "e1", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
+			{ID: "e2", BoostID: boostID, Status: domain.ExecutionStatusFailed},
+			{ID: "e3", BoostID: boostID, Status: domain.ExecutionStatusCompleted},
+		},
+	}
+	svc := NewBoostExecutionService(execRepo, &mockTransferSuggestionRepository{}, &mockBoostsRepository{}, nil)
+
+	results, total, err := svc.GetExecutionHistoryWithFilter(ctx, boostID, &status, 10, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	assert.Len(t, results, 2)
+	for _, r := range results {
+		assert.Equal(t, domain.ExecutionStatusCompleted, r.Status)
+	}
+}
+

@@ -1063,3 +1063,47 @@ func TestEnsureCustomer_ActiveWhitespaceUserIdCustomData_FailsClosed(t *testing.
 	mockSDK.AssertNotCalled(t, "UpdateCustomer")
 	mockSDK.AssertExpectations(t)
 }
+
+// --- buildCatalogItem ---
+
+func TestBuildCatalogItem_NoItems_DefaultsToQuantityOne(t *testing.T) {
+	sub := &paddle.Subscription{Items: nil}
+	item := buildCatalogItem("pri_abc123", sub)
+	require.NotNil(t, item)
+	assert.Equal(t, "pri_abc123", item.PriceID)
+	assert.Equal(t, 1, item.Quantity, "quantity must default to 1 when subscription has no items")
+}
+
+func TestBuildCatalogItem_ExistingItems_UsesFirstItemQuantity(t *testing.T) {
+	sub := &paddle.Subscription{
+		Items: []paddle.SubscriptionItem{
+			{Quantity: 3},
+		},
+	}
+	item := buildCatalogItem("pri_xyz789", sub)
+	require.NotNil(t, item)
+	assert.Equal(t, "pri_xyz789", item.PriceID)
+	assert.Equal(t, 3, item.Quantity, "quantity must match the first subscription item")
+}
+
+// --- parseProrationMode ---
+
+func TestParseProrationMode(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected paddle.ProrationBillingMode
+	}{
+		{"prorated_immediately", paddle.ProrationBillingModeProratedImmediately},
+		{"full_immediately", paddle.ProrationBillingModeFullImmediately},
+		{"full_next_billing_period", paddle.ProrationBillingModeFullNextBillingPeriod},
+		{"unknown_value", paddle.ProrationBillingModeProratedImmediately},
+		{"", paddle.ProrationBillingModeProratedImmediately},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			result := parseProrationMode(tc.input)
+			assert.Equal(t, tc.expected, result, "parseProrationMode(%q)", tc.input)
+		})
+	}
+}

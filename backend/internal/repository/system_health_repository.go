@@ -4,17 +4,16 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
 // SystemHealthRepository handles system health related database operations
 type SystemHealthRepository struct {
-	db *pgxpool.Pool
+	db DB
 }
 
 // NewSystemHealthRepository creates a new SystemHealthRepository
-func NewSystemHealthRepository(db *pgxpool.Pool) *SystemHealthRepository {
+func NewSystemHealthRepository(db DB) *SystemHealthRepository {
 	return &SystemHealthRepository{db: db}
 }
 

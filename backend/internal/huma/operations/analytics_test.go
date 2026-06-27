@@ -47,6 +47,10 @@ type mockAnalyticsService struct {
 	unusualSpendErr                         error
 	netWorthTrendErr                        error
 	budgetVsActualErr                       error
+	categoryTotalResponse                   *domain.CategoryTotalResponse
+	categoryTotalErr                        error
+	topExpenseResponse                      *domain.TopExpenseResponse
+	topExpenseErr                           error
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
@@ -76,11 +80,11 @@ func (m *mockAnalyticsService) GetSpendingTrends(ctx context.Context, userID str
 }
 
 func (m *mockAnalyticsService) GetCategoryTotalForPeriod(_ context.Context, _ string, _ string, _ time.Time, _ time.Time) (*domain.CategoryTotalResponse, error) {
-	return nil, nil
+	return m.categoryTotalResponse, m.categoryTotalErr
 }
 
 func (m *mockAnalyticsService) GetTopExpense(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.TopExpenseResponse, error) {
-	return nil, nil
+	return m.topExpenseResponse, m.topExpenseErr
 }
 
 func (m *mockAnalyticsService) GetAverageMonthlySpend(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.AverageMonthlySpendResponse, error) {
@@ -123,7 +127,6 @@ func (m *mockAnalyticsService) GetBudgetVsActual(_ context.Context, _ string, _ 
 	return m.budgetVsActualResponse, m.budgetVsActualErr
 }
 
-// Helper functions to create test data
 func createTestCashFlowSummary() *domain.CashFlowSummaryResponse {
 	return &domain.CashFlowSummaryResponse{
 		StartDate:    time.Now().AddDate(0, -1, 0),
@@ -154,7 +157,6 @@ func createTestCashFlowHistory() *domain.CashFlowHistoryResponse {
 	}
 }
 
-// TestGetCashFlowSummary_Success tests successful retrieval of cash flow summary.
 func TestGetCashFlowSummary_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -177,7 +179,6 @@ func TestGetCashFlowSummary_Success(t *testing.T) {
 	assert.Equal(t, 2000.00, output.Body.NetCashFlow)
 }
 
-// TestGetCashFlowSummary_WithFilters tests cash flow summary with all filters.
 func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -199,7 +200,6 @@ func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetCashFlowSummary_MissingStartDate tests error for missing start_date.
 func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -217,7 +217,6 @@ func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "start_date is required")
 }
 
-// TestGetCashFlowSummary_MissingEndDate tests error for missing end_date.
 func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -235,7 +234,6 @@ func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "end_date is required")
 }
 
-// TestGetCashFlowSummary_InvalidStartDate tests error for invalid start_date format.
 func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -254,7 +252,6 @@ func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid start_date format")
 }
 
-// TestGetCashFlowSummary_InvalidEndDate tests error for invalid end_date format.
 func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -273,7 +270,6 @@ func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid end_date format")
 }
 
-// TestGetCashFlowSummary_EndBeforeStart tests error when end_date is before start_date.
 func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -292,7 +288,6 @@ func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "end_date cannot be before start_date")
 }
 
-// TestGetCashFlowSummary_InvalidIncludeTransfers tests error for invalid include_transfers.
 func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -312,7 +307,6 @@ func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid")
 }
 
-// TestGetCashFlowSummary_ServiceError tests error handling for service errors.
 func TestGetCashFlowSummary_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryErr: errors.New("database error"),
@@ -332,7 +326,6 @@ func TestGetCashFlowSummary_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetCashFlowHistory_Success tests successful retrieval of cash flow history.
 func TestGetCashFlowHistory_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		historyResponse: createTestCashFlowHistory(),
@@ -354,7 +347,6 @@ func TestGetCashFlowHistory_Success(t *testing.T) {
 	assert.Len(t, output.Body.Periods, 1)
 }
 
-// TestGetCashFlowHistory_WithGrouping tests cash flow history with explicit grouping.
 func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		historyResponse: createTestCashFlowHistory(),
@@ -375,7 +367,6 @@ func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetCashFlowHistory_InvalidGrouping tests error for invalid grouping.
 func TestGetCashFlowHistory_InvalidGrouping(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -395,7 +386,6 @@ func TestGetCashFlowHistory_InvalidGrouping(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid grouping")
 }
 
-// TestAnalyticsRouteRegistration tests that routes are properly registered.
 func TestAnalyticsRouteRegistration(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -414,7 +404,6 @@ func TestAnalyticsRouteRegistration(t *testing.T) {
 	assert.Contains(t, body, "User not authenticated")
 }
 
-// TestAnalyticsResponseJSON tests JSON serialization of response.
 func TestAnalyticsResponseJSON(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -431,7 +420,6 @@ func TestAnalyticsResponseJSON(t *testing.T) {
 	require.NoError(t, err, "Error response should be valid JSON")
 }
 
-// TestGetSpendingByCategory_Success tests successful spending by category retrieval.
 func TestGetSpendingByCategory_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		spendingByCategoryResponse: &domain.SpendingByCategoryResponse{
@@ -1504,4 +1492,119 @@ func TestGetFinancialSummary_InvalidDateRange(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "end_date cannot be before start_date")
+}
+
+// --- GetCategoryTotalForPeriod tests ---
+
+func TestGetCategoryTotalForPeriod_Success(t *testing.T) {
+	expected := &domain.CategoryTotalResponse{
+		Category:          "FOOD_AND_DRINK",
+		PFCPrimaryDisplay: "Food & Drink",
+		Total:             450.00,
+		TransactionCount:  12,
+		StartDate:         "2024-01-01",
+		EndDate:           "2024-01-31",
+	}
+	mockSvc := &mockAnalyticsService{categoryTotalResponse: expected}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetCategoryTotalForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Category:           "FOOD_AND_DRINK",
+	}
+	output, err := handler.GetCategoryTotalForPeriod(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetCategoryTotalForPeriod_InvalidDateRange(t *testing.T) {
+	mockSvc := &mockAnalyticsService{}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetCategoryTotalForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-31",
+		EndDate:            "2024-01-01", // end before start
+		Category:           "FOOD_AND_DRINK",
+	}
+	output, err := handler.GetCategoryTotalForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetCategoryTotalForPeriod_ServiceError(t *testing.T) {
+	mockSvc := &mockAnalyticsService{categoryTotalErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetCategoryTotalForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Category:           "FOOD_AND_DRINK",
+	}
+	output, err := handler.GetCategoryTotalForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// --- GetTopExpense tests ---
+
+func TestGetTopExpense_Success(t *testing.T) {
+	expected := &domain.TopExpenseResponse{
+		TransactionID: "txn-123",
+		MerchantName:  "ACME Store",
+		Amount:        299.99,
+		Category:      "SHOPPING",
+		StartDate:     "2024-01-01",
+		EndDate:       "2024-01-31",
+	}
+	mockSvc := &mockAnalyticsService{topExpenseResponse: expected}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetTopExpenseInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetTopExpense(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetTopExpense_InvalidDateRange(t *testing.T) {
+	mockSvc := &mockAnalyticsService{}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetTopExpenseInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "not-a-date",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetTopExpense(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetTopExpense_ServiceError(t *testing.T) {
+	mockSvc := &mockAnalyticsService{topExpenseErr: errors.New("db error")}
+	handler := NewAnalyticsHandler(mockSvc)
+
+	input := &GetTopExpenseInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetTopExpense(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
 }
