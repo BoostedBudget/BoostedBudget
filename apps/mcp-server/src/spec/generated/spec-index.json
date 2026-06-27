@@ -1229,8 +1229,8 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "read",
-      "excluded": true,
+      "manifestClass": "write",
+      "excluded": false,
       "description": "Creates a new categorization rule for the authenticated user."
     },
     {
@@ -1262,8 +1262,8 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "read",
-      "excluded": true,
+      "manifestClass": "write",
+      "excluded": false,
       "description": "Updates a categorization rule's configuration.",
       "parameters": [
         {
@@ -1283,8 +1283,8 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "read",
-      "excluded": true,
+      "manifestClass": "write",
+      "excluded": false,
       "description": "Removes a categorization rule.",
       "parameters": [
         {
@@ -1304,8 +1304,8 @@
       "tags": [
         "Auto-Categorization"
       ],
-      "manifestClass": "read",
-      "excluded": true,
+      "manifestClass": "write",
+      "excluded": false,
       "description": "Enables or disables a categorization rule.",
       "parameters": [
         {
@@ -2512,6 +2512,96 @@
           "in": "path",
           "required": true,
           "description": "Recipe ID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getMerchants",
+      "method": "GET",
+      "path": "/api/v1/merchants",
+      "summary": "List merchants",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Lists all distinct merchants for the authenticated user with spend totals and override status."
+    },
+    {
+      "operationId": "getMerchantDuplicateSuggestions",
+      "method": "GET",
+      "path": "/api/v1/merchants/duplicate-suggestions",
+      "summary": "Get merchant duplicate suggestions",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns groups of merchants that appear to be duplicates based on fuzzy name similarity."
+    },
+    {
+      "operationId": "mergeMerchants",
+      "method": "POST",
+      "path": "/api/v1/merchants/merge",
+      "summary": "Merge merchants",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Creates per-user merge overrides so source merchants display under the target merchant name."
+    },
+    {
+      "operationId": "bulkSetMerchantOverrides",
+      "method": "POST",
+      "path": "/api/v1/merchants/overrides/bulk",
+      "summary": "Bulk set merchant name overrides",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Upserts multiple merchant name overrides in a single request. MCP-friendly."
+    },
+    {
+      "operationId": "setMerchantOverride",
+      "method": "PUT",
+      "path": "/api/v1/merchants/{merchantId}/override",
+      "summary": "Set merchant name override",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Creates or updates a per-user merchant name override or merge pointer.",
+      "parameters": [
+        {
+          "name": "merchantId",
+          "in": "path",
+          "required": true,
+          "description": "Merchant UUID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "clearMerchantOverride",
+      "method": "DELETE",
+      "path": "/api/v1/merchants/{merchantId}/override",
+      "summary": "Clear merchant name override",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "write",
+      "excluded": false,
+      "description": "Removes the per-user override for a merchant, reverting to the system normalized name.",
+      "parameters": [
+        {
+          "name": "merchantId",
+          "in": "path",
+          "required": true,
+          "description": "Merchant UUID",
           "type": "string"
         }
       ]

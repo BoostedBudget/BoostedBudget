@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -121,6 +122,7 @@ type transactionSyncService struct {
 	profileRepo               repository.ProfileRepository          // For fetching user subscription tier (historical depth)
 	balanceSnapshotRepo       repository.BalanceSnapshotRepository  // Issue #353: For storing balance snapshots
 	merchantRepo              repository.MerchantRepo               // Issue #1163: Batch-upsert merchants before CreateBatch
+	normalize                 func(string) string                   // Issue #957: merchant name normalizer
 	plaidService              PlaidService
 	subscriptionService       *SubscriptionService          // For tier-based historical depth limit
 	ruleApplicationService    RuleApplicationService        // Issue #346: Apply categorization rules to new transactions
@@ -165,6 +167,7 @@ func NewTransactionSyncService(
 		profileRepo:               profileRepo,
 		balanceSnapshotRepo:       balanceSnapshotRepo,
 		merchantRepo:              merchantRepo,
+		normalize:                 merchant.Normalize,
 		plaidService:              plaidService,
 		subscriptionService:       subscriptionService,
 		ruleApplicationService:    ruleApplicationService,
@@ -522,7 +525,7 @@ func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactio
 		names = append(names, name)
 	}
 
-	merchantIDs, err := s.merchantRepo.GetOrCreateMerchants(ctx, names)
+	merchantIDs, err := s.merchantRepo.GetOrCreateMerchantsWithNormalize(ctx, names, s.normalize)
 	if err != nil {
 		s.logger.Warn("failed to upsert merchants, continuing without merchant_id", "err", err)
 		return nil

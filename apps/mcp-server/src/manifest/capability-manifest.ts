@@ -154,12 +154,16 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('update-admin-user-tier', REASON_ADMIN),
 
   // ── Auto-Categorization ─────────────────────────────────────────────────
+  // Rule mutations un-excluded per Issue #957 (Q1 decision). Mitigations:
+  // audit logging on every write, one-time confirmation tokens, and PR
+  // owner sign-off on MCP standing-effect risk. Follow-up planned for a
+  // proper standing-auth model.
   read('getUserRules'),
   read('getRuleByID'),
-  excluded('createRule', REASON_RULES_UNATTENDED),
-  excluded('updateRule', REASON_RULES_UNATTENDED),
-  excluded('deleteRule', REASON_RULES_UNATTENDED),
-  excluded('toggleRule', REASON_RULES_UNATTENDED),
+  write('createRule'),
+  write('updateRule', { idempotent: true }),
+  write('deleteRule', { destructive: true }),
+  write('toggleRule', { idempotent: true }),
 
   // ── Boosts ──────────────────────────────────────────────────────────────
   read('getBoosts'),
@@ -258,6 +262,17 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP),
   excluded('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP),
   excluded('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP),
+
+  // ── Merchants (Issue #957: merchant name handling + MCP exposure) ────────
+  // Reads: always available for browsing and duplicate detection.
+  // Writes: confirmation-gated with audit logging. overrides + merge have
+  // a standing display effect (like rules) — MCP owner sign-off in PR.
+  read('getMerchants'),
+  read('getMerchantDuplicateSuggestions'),
+  write('setMerchantOverride', { idempotent: true }),
+  write('clearMerchantOverride', { destructive: true }),
+  write('bulkSetMerchantOverrides', { idempotent: true }),
+  write('mergeMerchants', { idempotent: true }),
 
   // ── Tags ────────────────────────────────────────────────────────────────
   read('getUserTags'),
