@@ -16,6 +16,7 @@ import (
 type MerchantServiceInterface interface {
 	ListMerchants(ctx context.Context, userID string) ([]domain.MerchantSummary, error)
 	GetDuplicateSuggestions(ctx context.Context, userID string) ([][]domain.MerchantSummary, error)
+	GetMerchantOverrides(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error)
 	SetOverride(ctx context.Context, userID, merchantID string, displayName *string, mergedIntoMerchantID *string) (*domain.MerchantNameOverride, error)
 	ClearOverride(ctx context.Context, userID, merchantID string) error
 	BulkSetOverrides(ctx context.Context, userID string, reqs []services.SetOverrideRequest) ([]domain.MerchantNameOverride, error)
@@ -63,6 +64,20 @@ var _ huma.Resolver = (*GetMerchantsInput)(nil)
 
 type GetMerchantsOutput struct {
 	Body []domain.MerchantSummary
+}
+
+type GetMerchantOverridesInput struct {
+	merchantAuth
+}
+
+func (i *GetMerchantOverridesInput) Resolve(ctx huma.Context) []error {
+	return resolveMerchantUserID(ctx, &i.merchantAuth)
+}
+
+var _ huma.Resolver = (*GetMerchantOverridesInput)(nil)
+
+type GetMerchantOverridesOutput struct {
+	Body []domain.MerchantNameOverride
 }
 
 type GetDuplicateSuggestionsInput struct {
@@ -176,6 +191,15 @@ func (h *MerchantHandler) GetMerchants(ctx context.Context, input *GetMerchantsI
 	return &GetMerchantsOutput{Body: merchants}, nil
 }
 
+// GetMerchantOverrides handles GET /api/v1/merchants/overrides.
+func (h *MerchantHandler) GetMerchantOverrides(ctx context.Context, input *GetMerchantOverridesInput) (*GetMerchantOverridesOutput, error) {
+	overrides, err := h.service.GetMerchantOverrides(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	return &GetMerchantOverridesOutput{Body: overrides}, nil
+}
+
 // GetDuplicateSuggestions handles GET /api/v1/merchants/duplicate-suggestions.
 func (h *MerchantHandler) GetDuplicateSuggestions(ctx context.Context, input *GetDuplicateSuggestionsInput) (*GetDuplicateSuggestionsOutput, error) {
 	groups, err := h.service.GetDuplicateSuggestions(ctx, input.UserID)
@@ -211,9 +235,6 @@ func (h *MerchantHandler) BulkSetMerchantOverrides(ctx context.Context, input *B
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
-	if results == nil {
-		results = []domain.MerchantNameOverride{}
-	}
 	return &BulkSetOverridesOutput{Body: results}, nil
 }
 
@@ -222,9 +243,6 @@ func (h *MerchantHandler) MergeMerchants(ctx context.Context, input *MergeMercha
 	overrides, err := h.service.MergeMerchants(ctx, input.UserID, input.Body.MerchantIDs, input.Body.TargetMerchantID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
-	}
-	if overrides == nil {
-		overrides = []domain.MerchantNameOverride{}
 	}
 	return &MergeMerchantsOutput{Body: overrides}, nil
 }
@@ -240,6 +258,16 @@ func RegisterMerchantRoutes(api huma.API, handler *MerchantHandler) {
 		Tags:        []string{"Merchants"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetMerchants)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "getMerchantOverrides",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/merchants/overrides",
+		Summary:     "List merchant overrides",
+		Description: "Returns all per-user merchant name overrides, including renamed and merged merchants.",
+		Tags:        []string{"Merchants"},
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, handler.GetMerchantOverrides)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "getMerchantDuplicateSuggestions",

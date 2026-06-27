@@ -84,16 +84,7 @@ function formatDate(dateStr: string | null | undefined): string {
 
 export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
   const { isReadOnly } = useReadOnly()
-  const {
-    id,
-    name,
-    merchant_name,
-    amount,
-    date,
-    authorized_date,
-    tags,
-    pending,
-  } = transaction
+  const { id, name, merchant_name, effective_merchant_name, amount, date, authorized_date, tags, pending } = transaction
 
   const handleClick = () => {
     if (!isReadOnly) onEdit?.(transaction)
@@ -107,7 +98,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   }
 
   const displayDate = formatDate(authorized_date || date)
-  const displayName = merchant_name || name
+  const displayName = effective_merchant_name || merchant_name || name
 
   const effective = getEffectiveCategory(transaction)
   const categoryLabel = getEffectiveCategoryLabel(effective)

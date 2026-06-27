@@ -48,6 +48,7 @@ export interface Transaction {
   custom_category_override_id?: string;
   date: string;
   effective_category_name?: string;
+  effective_merchant_name?: string;
   effective_pfc_detailed?: string;
   effective_pfc_primary?: string;
   external_metadata?: string;

@@ -242,6 +242,8 @@ components:
           type: string
         effective_category_name:
           type: string
+        effective_merchant_name:
+          type: string
         effective_pfc_detailed:
           type: string
         effective_pfc_primary:
@@ -5627,6 +5629,8 @@ components:
           type: string
         effective_category_name:
           type: string
+        effective_merchant_name:
+          type: string
         effective_pfc_detailed:
           type: string
         effective_pfc_primary:
@@ -10992,6 +10996,32 @@ paths:
       security:
         - clerk: []
       summary: Merge merchants
+      tags:
+        - Merchants
+  /api/v1/merchants/overrides:
+    get:
+      description: Returns all per-user merchant name overrides, including renamed and merged merchants.
+      operationId: getMerchantOverrides
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MerchantNameOverride"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List merchant overrides
       tags:
         - Merchants
   /api/v1/merchants/overrides/bulk:

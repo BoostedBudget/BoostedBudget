@@ -341,6 +341,10 @@ export function createApiClient(mutator: FetchMutator) {
       mergeMerchants(data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/merchants/merge', method: 'POST', data, signal })
       },
+      /** GET /api/v1/merchants/overrides */
+      getMerchantOverrides(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants/overrides', method: 'GET', signal })
+      },
       /** POST /api/v1/merchants/overrides/bulk */
       bulkSetMerchantOverrides(data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/merchants/overrides/bulk', method: 'POST', data, signal })

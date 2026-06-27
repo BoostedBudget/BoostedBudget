@@ -344,6 +344,99 @@ export const useMergeMerchants = <TError = ErrorType<ErrorModel>,
       return useMutation(getMergeMerchantsMutationOptions(options), queryClient);
     }
     /**
+ * Returns all per-user merchant name overrides, including renamed and merged merchants.
+ * @summary List merchant overrides
+ */
+export const getMerchantOverrides = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<MerchantNameOverride[] | null>(
+      {url: `/api/v1/merchants/overrides`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetMerchantOverridesQueryKey = () => {
+    return [
+    `/api/v1/merchants/overrides`
+    ] as const;
+    }
+
+
+export const getGetMerchantOverridesQueryOptions = <TData = Awaited<ReturnType<typeof getMerchantOverrides>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetMerchantOverridesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getMerchantOverrides>>> = ({ signal }) => getMerchantOverrides(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetMerchantOverridesQueryResult = NonNullable<Awaited<ReturnType<typeof getMerchantOverrides>>>
+export type GetMerchantOverridesQueryError = ErrorType<ErrorModel>
+
+
+export function useGetMerchantOverrides<TData = Awaited<ReturnType<typeof getMerchantOverrides>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMerchantOverrides>>,
+          TError,
+          Awaited<ReturnType<typeof getMerchantOverrides>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMerchantOverrides<TData = Awaited<ReturnType<typeof getMerchantOverrides>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMerchantOverrides>>,
+          TError,
+          Awaited<ReturnType<typeof getMerchantOverrides>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetMerchantOverrides<TData = Awaited<ReturnType<typeof getMerchantOverrides>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List merchant overrides
+ */
+
+export function useGetMerchantOverrides<TData = Awaited<ReturnType<typeof getMerchantOverrides>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getMerchantOverrides>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetMerchantOverridesQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
  * Upserts multiple merchant name overrides in a single request. MCP-friendly.
  * @summary Bulk set merchant name overrides
  */

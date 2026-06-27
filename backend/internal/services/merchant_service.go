@@ -68,14 +68,12 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 		}
 		displayName = &trimmed
 	}
-
-	override := domain.MerchantNameOverride{
+	return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
 		UserID:               userID,
 		MerchantID:           merchantID,
 		DisplayName:          displayName,
 		MergedIntoMerchantID: mergedIntoMerchantID,
-	}
-	return s.merchantOverrideRepo.Upsert(ctx, override)
+	})
 }
 
 // ClearOverride removes the per-user override for a merchant, reverting to the
@@ -97,23 +95,35 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		if req.DisplayName == nil && req.MergedIntoMerchantID == nil {
 			return nil, fmt.Errorf("override for merchant_id %q: at least one of display_name or merged_into_merchant_id must be set", req.MerchantID)
 		}
-		dn := req.DisplayName
-		if dn != nil {
-			trimmed := strings.TrimSpace(*dn)
+		displayName := req.DisplayName
+		if displayName != nil {
+			trimmed := strings.TrimSpace(*displayName)
 			if trimmed == "" {
 				return nil, fmt.Errorf("override for merchant_id %q: display_name must not be blank", req.MerchantID)
 			}
-			dn = &trimmed
+			displayName = &trimmed
 		}
 		overrides = append(overrides, domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           req.MerchantID,
-			DisplayName:          dn,
+			DisplayName:          displayName,
 			MergedIntoMerchantID: req.MergedIntoMerchantID,
 		})
 	}
-
 	return s.merchantOverrideRepo.BulkUpsert(ctx, overrides)
+}
+
+// GetMerchantOverrides returns all per-user merchant name overrides for a user,
+// ordered by created_at DESC.
+func (s *MerchantService) GetMerchantOverrides(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error) {
+	overrides, err := s.merchantOverrideRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if overrides != nil {
+		return overrides, nil
+	}
+	return []domain.MerchantNameOverride{}, nil
 }
 
 // MergeMerchants creates overrides that point each source merchantID to the
@@ -130,13 +140,11 @@ func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, mer
 		if id == targetMerchantID {
 			continue
 		}
-		targetCopy := targetMerchantID
 		overrides = append(overrides, domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           id,
-			MergedIntoMerchantID: &targetCopy,
+			MergedIntoMerchantID: &targetMerchantID,
 		})
 	}
-
 	return s.merchantOverrideRepo.BulkUpsert(ctx, overrides)
 }
