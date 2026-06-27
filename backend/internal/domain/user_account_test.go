@@ -108,6 +108,7 @@ func TestUserAccount_Validate_ValidIcon(t *testing.T) {
 			break
 		}
 	}
+	require.NotEmpty(t, validIcon, "ValidAccountIcons must have at least one valid entry")
 	ua := &UserAccount{
 		UserID:        "user-123",
 		InstitutionID: "inst-456",
