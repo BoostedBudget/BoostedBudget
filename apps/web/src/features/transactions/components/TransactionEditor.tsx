@@ -122,7 +122,7 @@ export function TransactionEditor({
 
   if (!isOpen) return null
 
-  const displayName = transaction.merchant_name || transaction.name
+  const displayName = transaction.effective_merchant_name || transaction.merchant_name || transaction.name
 
   return (
     <div

@@ -199,6 +199,10 @@ func (m *mockTransactionRepoForBudget) GetInflowTransactionsForAccount(ctx conte
 	return nil, nil
 }
 
+func (m *mockTransactionRepoForBudget) ResolveEffectiveMerchantNames(_ context.Context, _ string, _ []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 // mockCustomCategoryRepoForBudget is a minimal no-op mock of repository.CustomCategoryRepository
 // used by budget handler tests that construct a real TransactionService.
 type mockCustomCategoryRepoForBudget struct{}

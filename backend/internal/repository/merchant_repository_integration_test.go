@@ -5,10 +5,15 @@ package repository
 // Integration tests for MerchantRepository methods that involve GROUP BY, aggregation,
 // or JOINs which pgxmock cannot validate (type/aggregate errors).
 //
+// Also covers ResolveEffectiveMerchantNames (TransactionRepository), which exercises the
+// three-way LEFT JOIN (source override, merge topology, target override) that pgxmock
+// cannot validate at the type/aggregate level (G6b + G7 from issue #957).
+//
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/repository/... \
-//	  -run 'TestMerchant.*Integration' -tags integration -v
+//	  -run 'TestMerchant.*Integration|TestResolveEffectiveMerchantNames.*Integration' \
+//	  -tags integration -v
 
 import (
 	"context"
@@ -266,4 +271,115 @@ func TestGetDuplicateSuggestions_NoResults_Integration(t *testing.T) {
 	groups, err := txRepo.GetDuplicateSuggestions(ctx, userID.String(), 0.99)
 	require.NoError(t, err)
 	assert.Empty(t, groups, "with threshold=0.99 and a single unique merchant, no groups expected")
+}
+
+// ── ResolveEffectiveMerchantNames integration tests (G6b + G7, issue #957) ──────────────
+//
+// These tests exercise the three-way LEFT JOIN SQL that pgxmock cannot validate:
+//   source_override → merge topology → target_override → normalized_name → name
+
+// TestResolveEffectiveMerchantNames_DirectOverride_Integration verifies that when a user
+// has set a direct display_name override on a merchant, that name is returned.
+func TestResolveEffectiveMerchantNames_DirectOverride_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantID := seedMerchantFixture(ctx, t, tx, "resolve-direct")
+
+	// Set a direct display_name override.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Whole Foods Market', NOW(), NOW())
+	`, uuid.New(), userID, merchantID)
+	require.NoError(t, err, "seed direct override")
+
+	repo := NewTransactionRepository(tx, enc)
+	result, err := repo.ResolveEffectiveMerchantNames(ctx, userID.String(), []string{merchantID.String()})
+	require.NoError(t, err)
+	require.Contains(t, result, merchantID.String())
+	assert.Equal(t, "Whole Foods Market", result[merchantID.String()], "direct override must take priority")
+}
+
+// TestResolveEffectiveMerchantNames_NormalizedName_Integration verifies that when no override
+// exists, the merchant's normalized_name is returned.
+func TestResolveEffectiveMerchantNames_NormalizedName_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantID := seedMerchantFixture(ctx, t, tx, "resolve-norm")
+	// seedMerchantFixture seeds merchant with normalized_name="Coffee Shop"
+
+	repo := NewTransactionRepository(tx, enc)
+	result, err := repo.ResolveEffectiveMerchantNames(ctx, userID.String(), []string{merchantID.String()})
+	require.NoError(t, err)
+	require.Contains(t, result, merchantID.String())
+	assert.Equal(t, "Coffee Shop", result[merchantID.String()], "normalized_name used when no override")
+}
+
+// TestResolveEffectiveMerchantNames_MergeWithTargetOverride_Integration is the G6b regression
+// test: when merchant A is merged into merchant B, and B has a display_name override, the
+// effective name for A must be B's override (not B's normalized_name). This is the bug that
+// the prior Round-2 enrich query missed (it only joined the source merchant's override row).
+func TestResolveEffectiveMerchantNames_MergeWithTargetOverride_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed user + two merchants: sourceID (garbled) and targetID (canonical).
+	userID, sourceID := seedMerchantFixture(ctx, t, tx, "resolve-mergetgt-src")
+
+	targetID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Starbucks Corp', 'Starbucks', NOW())
+	`, targetID)
+	require.NoError(t, err, "seed target merchant")
+
+	// User merges source → target (no direct display_name on source row).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW(), NOW())
+	`, uuid.New(), userID, sourceID, targetID)
+	require.NoError(t, err, "seed source→target merge")
+
+	// User also renamed the target merchant with a display_name override.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Starbucks Coffee', NOW(), NOW())
+	`, uuid.New(), userID, targetID)
+	require.NoError(t, err, "seed target display_name override")
+
+	repo := NewTransactionRepository(tx, enc)
+	result, err := repo.ResolveEffectiveMerchantNames(ctx, userID.String(), []string{sourceID.String()})
+	require.NoError(t, err)
+	require.Contains(t, result, sourceID.String(), "source merchant must appear in result")
+	assert.Equal(t, "Starbucks Coffee", result[sourceID.String()],
+		"G6b: target's display override must be used when source is merged into target")
+}
+
+// TestResolveEffectiveMerchantNames_NoMerchantID_Integration verifies that an empty merchantIDs
+// slice returns an empty map without hitting the DB.
+func TestResolveEffectiveMerchantNames_EmptyInput_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	repo := NewTransactionRepository(pool, enc)
+	result, err := repo.ResolveEffectiveMerchantNames(ctx, "user-nobody", []string{})
+	require.NoError(t, err)
+	assert.Empty(t, result, "empty merchantIDs must return empty map")
 }

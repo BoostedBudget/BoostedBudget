@@ -318,7 +318,7 @@ export function ReviewInboxPage() {
     {
       id: 'merchant',
       header: 'Transaction',
-      render: (tx) => <span className="font-medium text-foreground">{tx.merchant_name || tx.name}</span>,
+      render: (tx) => <span className="font-medium text-foreground">{tx.effective_merchant_name || tx.merchant_name || tx.name}</span>,
     },
     {
       id: 'status',

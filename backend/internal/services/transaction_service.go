@@ -290,6 +290,12 @@ func (s *transactionService) ListTransactionsByCursor(
 			return nil, err
 		}
 
+		// Resolve effective merchant display names for banking rows (G6 fix, #957).
+		// Uses the same SQL as the banking-only keyset path so overrides/merges apply consistently.
+		if err := s.enrichEffectiveMerchantNamesForItems(ctx, userID, items); err != nil {
+			return nil, err
+		}
+
 		// Populate ActivityItem.Account for investment rows so the drawer can resolve
 		// the account nickname immediately on cold load, before accountsMap resolves (#1329).
 		if err := s.enrichAccountForInvestmentItems(ctx, userID, items); err != nil {
@@ -668,6 +674,79 @@ func (s *transactionService) enrichAccountForInvestmentItems(ctx context.Context
 	return nil
 }
 
+// enrichEffectiveMerchantNamesForItems resolves per-user merchant display names for
+// ActivityItem slices (unified feed path) in one extra DB round-trip.
+// Only banking rows with a non-nil MerchantID are enriched; investment rows are skipped.
+// This mirrors enrichEffectiveMerchantNames (Transaction slices) and shares the same SQL via
+// repo.ResolveEffectiveMerchantNames so the two paths never diverge (G6 fix, #957).
+func (s *transactionService) enrichEffectiveMerchantNamesForItems(ctx context.Context, userID string, items []*domain.ActivityItem) error {
+	merchantIDSet := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item.Source == domain.FeedSourceBanking && item.MerchantID != nil && *item.MerchantID != "" {
+			merchantIDSet[*item.MerchantID] = struct{}{}
+		}
+	}
+	if len(merchantIDSet) == 0 {
+		return nil
+	}
+
+	merchantIDs := make([]string, 0, len(merchantIDSet))
+	for id := range merchantIDSet {
+		merchantIDs = append(merchantIDs, id)
+	}
+
+	nameByID, err := s.repo.ResolveEffectiveMerchantNames(ctx, userID, merchantIDs)
+	if err != nil {
+		return fmt.Errorf("enrichEffectiveMerchantNamesForItems: %w", err)
+	}
+
+	for _, item := range items {
+		if item.Source == domain.FeedSourceBanking && item.MerchantID != nil {
+			if name, ok := nameByID[*item.MerchantID]; ok {
+				nameCopy := name
+				item.EffectiveMerchantName = &nameCopy
+			}
+		}
+	}
+	return nil
+}
+
+// enrichEffectiveMerchantNamesForTransactions resolves per-user merchant display names for
+// Transaction slices (offset/budget-category paths) that are enriched at the service layer.
+// Transactions without a MerchantID are skipped. Shares the same SQL via
+// repo.ResolveEffectiveMerchantNames so all paths stay in sync (G10 fix, #957).
+func (s *transactionService) enrichEffectiveMerchantNamesForTransactions(ctx context.Context, userID string, txns []*domain.Transaction) error {
+	merchantIDSet := make(map[string]struct{}, len(txns))
+	for _, tx := range txns {
+		if tx.MerchantID != nil && *tx.MerchantID != "" {
+			merchantIDSet[*tx.MerchantID] = struct{}{}
+		}
+	}
+	if len(merchantIDSet) == 0 {
+		return nil
+	}
+
+	merchantIDs := make([]string, 0, len(merchantIDSet))
+	for id := range merchantIDSet {
+		merchantIDs = append(merchantIDs, id)
+	}
+
+	nameByID, err := s.repo.ResolveEffectiveMerchantNames(ctx, userID, merchantIDs)
+	if err != nil {
+		return fmt.Errorf("enrichEffectiveMerchantNamesForTransactions: %w", err)
+	}
+
+	for _, tx := range txns {
+		if tx.MerchantID != nil {
+			if name, ok := nameByID[*tx.MerchantID]; ok {
+				nameCopy := name
+				tx.EffectiveMerchantName = &nameCopy
+			}
+		}
+	}
+	return nil
+}
+
 // GetReviewSummary returns pre-computed review-state counts and top unreviewed categories (Issue #1210).
 // Delegates directly to the repository's single-query CTE implementation.
 func (s *transactionService) GetReviewSummary(ctx context.Context, userID string, filters domain.ReviewSummaryFilters) (*domain.ReviewSummaryResponse, error) {
@@ -690,6 +769,9 @@ func (s *transactionService) ListByBudgetCategory(ctx context.Context, userID st
 		ptrs[i] = &transactions[i]
 	}
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, ptrs); err != nil {
+		return nil, 0, 0, err
+	}
+	if err := s.enrichEffectiveMerchantNamesForTransactions(ctx, userID, ptrs); err != nil {
 		return nil, 0, 0, err
 	}
 	return transactions, totalCount, totalAmount, nil

@@ -107,7 +107,7 @@ export function TriageDetailView({
     enabled: !showHelp && !showRecategorize && !isPending && !externalOverlayOpen,
   })
 
-  const displayName = transaction.merchant_name || transaction.name
+  const displayName = transaction.effective_merchant_name || transaction.merchant_name || transaction.name
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < total - 1
 
