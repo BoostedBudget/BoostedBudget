@@ -8,10 +8,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,6 +94,267 @@ func validRecipeBody() domain.CreateMCPRecipeRequest {
 		Name: "Test Recipe",
 		Spec: []domain.MCPRecipeCall{{OperationID: "getCashFlowSummary"}},
 	}
+}
+
+// fullMockRecipeService is a testify mock implementing the full services.RecipeService interface.
+type fullMockRecipeService struct {
+	mock.Mock
+}
+
+func (m *fullMockRecipeService) Create(ctx context.Context, userID string, req domain.CreateMCPRecipeRequest) (*domain.MCPRecipe, error) {
+	args := m.Called(ctx, userID, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.MCPRecipe), args.Error(1)
+}
+
+func (m *fullMockRecipeService) List(ctx context.Context, userID string) ([]domain.MCPRecipe, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.MCPRecipe), args.Error(1)
+}
+
+func (m *fullMockRecipeService) Get(ctx context.Context, id string, userID string) (*domain.MCPRecipe, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.MCPRecipe), args.Error(1)
+}
+
+func (m *fullMockRecipeService) Update(ctx context.Context, id string, userID string, req domain.UpdateMCPRecipeRequest) (*domain.MCPRecipe, error) {
+	args := m.Called(ctx, id, userID, req)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.MCPRecipe), args.Error(1)
+}
+
+func (m *fullMockRecipeService) Delete(ctx context.Context, id string, userID string) error {
+	args := m.Called(ctx, id, userID)
+	return args.Error(0)
+}
+
+func (m *fullMockRecipeService) Run(ctx context.Context, id string, userID string) (*domain.MCPRecipeRunResult, error) {
+	args := m.Called(ctx, id, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.MCPRecipeRunResult), args.Error(1)
+}
+
+// ===========================================================================
+// Recipe handler tests (Priority 3): ListRecipes, GetRecipe, UpdateRecipe,
+// DeleteRecipe, RunRecipe
+// ===========================================================================
+
+// TestRecipeHandler_ListRecipes_ReturnsRecipes verifies ListRecipes delegates to service.
+func TestRecipeHandler_ListRecipes_ReturnsRecipes(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipes := []domain.MCPRecipe{
+		{ID: "r1", UserID: userID, Name: "Recipe 1"},
+		{ID: "r2", UserID: userID, Name: "Recipe 2"},
+	}
+	svc.On("List", ctx, userID).Return(recipes, nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &ListRecipesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+	}
+
+	result, err := handler.ListRecipes(ctx, input)
+
+	require.NoError(t, err)
+	assert.Len(t, result.Body, 2)
+	assert.Equal(t, "r1", result.Body[0].ID)
+	svc.AssertExpectations(t)
+}
+
+// TestRecipeHandler_ListRecipes_ReturnsEmptyArrayWhenNil verifies nil → empty array.
+func TestRecipeHandler_ListRecipes_ReturnsEmptyArrayWhenNil(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	svc.On("List", ctx, userID).Return(nil, nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &ListRecipesInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+	}
+
+	result, err := handler.ListRecipes(ctx, input)
+
+	require.NoError(t, err)
+	assert.NotNil(t, result.Body, "body must not be nil even when service returns nil")
+	assert.Empty(t, result.Body)
+}
+
+// TestRecipeHandler_GetRecipe_ReturnsRecipe verifies GetRecipe delegates to service.
+func TestRecipeHandler_GetRecipe_ReturnsRecipe(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	recipe := &domain.MCPRecipe{ID: recipeID, UserID: userID, Name: "My Recipe"}
+	svc.On("Get", ctx, recipeID, userID).Return(recipe, nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &GetRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	result, err := handler.GetRecipe(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, recipeID, result.Body.ID)
+	svc.AssertExpectations(t)
+}
+
+// TestRecipeHandler_GetRecipe_NotFound verifies error when recipe not found.
+func TestRecipeHandler_GetRecipe_NotFound(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r-nonexistent"
+	svc.On("Get", ctx, recipeID, userID).Return(nil, errors.New("not found"))
+
+	handler := NewRecipeHandler(svc)
+	input := &GetRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	_, err := handler.GetRecipe(ctx, input)
+	require.Error(t, err)
+}
+
+// TestRecipeHandler_UpdateRecipe_UpdatesRecipe verifies UpdateRecipe delegates to service.
+func TestRecipeHandler_UpdateRecipe_UpdatesRecipe(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	newName := "Updated Recipe"
+	req := domain.UpdateMCPRecipeRequest{Name: &newName}
+	updated := &domain.MCPRecipe{ID: recipeID, UserID: userID, Name: newName}
+	svc.On("Update", ctx, recipeID, userID, req).Return(updated, nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &UpdateRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+		Body:               req,
+	}
+
+	result, err := handler.UpdateRecipe(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, newName, result.Body.Name)
+	svc.AssertExpectations(t)
+}
+
+// TestRecipeHandler_DeleteRecipe_DeletesRecipe verifies DeleteRecipe delegates to service.
+func TestRecipeHandler_DeleteRecipe_DeletesRecipe(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	svc.On("Delete", ctx, recipeID, userID).Return(nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &DeleteRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	result, err := handler.DeleteRecipe(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	svc.AssertExpectations(t)
+}
+
+// TestRecipeHandler_DeleteRecipe_ServiceError verifies error propagation on delete.
+func TestRecipeHandler_DeleteRecipe_ServiceError(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	svc.On("Delete", ctx, recipeID, userID).Return(errors.New("delete failed"))
+
+	handler := NewRecipeHandler(svc)
+	input := &DeleteRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	_, err := handler.DeleteRecipe(ctx, input)
+	require.Error(t, err)
+}
+
+// TestRecipeHandler_RunRecipe_ReturnsResult verifies RunRecipe delegates to service.
+func TestRecipeHandler_RunRecipe_ReturnsResult(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	runResult := &domain.MCPRecipeRunResult{RecipeID: recipeID}
+	svc.On("Run", ctx, recipeID, userID).Return(runResult, nil)
+
+	handler := NewRecipeHandler(svc)
+	input := &RunRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	result, err := handler.RunRecipe(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, recipeID, result.Body.RecipeID)
+	svc.AssertExpectations(t)
+}
+
+// TestRecipeHandler_RunRecipe_ServiceError verifies error propagation on run.
+func TestRecipeHandler_RunRecipe_ServiceError(t *testing.T) {
+	ctx := context.Background()
+	svc := new(fullMockRecipeService)
+	userID := "user-1"
+	recipeID := "r1"
+	svc.On("Run", ctx, recipeID, userID).Return(nil, errors.New("run failed"))
+
+	handler := NewRecipeHandler(svc)
+	input := &RunRecipeInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID},
+		ID:                 recipeID,
+	}
+
+	_, err := handler.RunRecipe(ctx, input)
+	require.Error(t, err)
+}
+
+// ===========================================================================
+// Priority 4: RegisterRecipeRoutes
+// ===========================================================================
+
+// TestRegisterRecipeRoutes_RegistersAllRoutes verifies all recipe routes are registered.
+func TestRegisterRecipeRoutes_RegistersAllRoutes(t *testing.T) {
+	_, api := humatest.New(t)
+	svc := &mockRecipeService{}
+	handler := NewRecipeHandler(svc)
+
+	// Should not panic
+	require.NotPanics(t, func() {
+		RegisterRecipeRoutes(api, handler)
+	}, "RegisterRecipeRoutes must not panic")
 }
 
 func TestRecipeHandler_CreateRecipe_IdempotencyKey(t *testing.T) {

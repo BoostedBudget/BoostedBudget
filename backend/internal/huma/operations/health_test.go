@@ -206,3 +206,22 @@ func TestHealthHandler_AllServicesDown(t *testing.T) {
 	// Assert 503 status (DB is critical)
 	assert.Equal(t, http.StatusServiceUnavailable, resp.Code)
 }
+
+// ===========================================================================
+// Priority 3: HealthError methods — zero coverage
+// ===========================================================================
+
+// TestHealthError_Error_ReturnsString verifies the Error() method returns expected string.
+func TestHealthError_Error_ReturnsString(t *testing.T) {
+	err := &HealthError{StatusCode: 503, Response: HealthResponse{Status: "unhealthy"}}
+	assert.Equal(t, "system unhealthy", err.Error(), "Error() must return 'system unhealthy'")
+}
+
+// TestHealthError_GetStatus_ReturnsStatusCode verifies GetStatus() returns the HTTP status code.
+func TestHealthError_GetStatus_ReturnsStatusCode(t *testing.T) {
+	err := &HealthError{StatusCode: 503}
+	assert.Equal(t, 503, err.GetStatus(), "GetStatus() must return 503")
+
+	err200 := &HealthError{StatusCode: 200}
+	assert.Equal(t, 200, err200.GetStatus(), "GetStatus() must return 200")
+}
