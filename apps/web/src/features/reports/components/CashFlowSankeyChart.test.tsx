@@ -173,6 +173,24 @@ describe('CashFlowSankeyChart', () => {
       expect(url).toContain('amount_type=income')
     })
 
+    it('income navigation appends start_date and end_date (G14)', () => {
+      render(<CashFlowSankeyChart {...defaultProps} />)
+      fireEvent.click(screen.getByTestId('echarts-point-1')) // Wages income node
+      const [url] = mockNavigate.mock.calls[0] as [string]
+      expect(url).toContain('start_date=2024-01-01')
+      expect(url).toContain('end_date=2024-01-31')
+    })
+
+    it('omits start_date and end_date from URL when they are empty (G14)', () => {
+      render(
+        <CashFlowSankeyChart {...defaultProps} startDate="" endDate="" />,
+      )
+      fireEvent.click(screen.getByTestId('echarts-point-2')) // Food expense node
+      const [url] = mockNavigate.mock.calls[0] as [string]
+      expect(url).not.toContain('start_date')
+      expect(url).not.toContain('end_date')
+    })
+
     it('does NOT navigate when the hub node is clicked', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
       fireEvent.click(screen.getByTestId('echarts-point-0'))
@@ -297,10 +315,11 @@ describe('CashFlowSankeyChart', () => {
       type OptionType = { tooltip?: { formatter?: (p: unknown) => string } }
       const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as OptionType
       const formatter = option.tooltip!.formatter!
-      // Wages→hub link value = 1500; correct hubTotal = 2000 → pct = 0.75 → "0.75%"
-      // With the old bug hubTotal was 1950 → pct ≈ 0.769 → "0.77%"
+      // Wages→hub link value = 1500; correct hubTotal = 2000
+      // pct = (1500/2000)*100 = 75.0 → "75.00%"
+      // With the old bug hubTotal was 1950 → pct ≈ 76.9 → "76.92%"
       const result = formatter({ value: 1500, name: 'Wages' })
-      expect(result).toContain('0.75%')
+      expect(result).toContain('75.00%')
     })
   })
 })

@@ -69,7 +69,9 @@ Drilling into a PFC category changes `categoryData` without affecting `sankeyTop
 
 ## Percentage base (single source of truth)
 
-The tooltip and sr-only table express each link as `value / hubTotal`. `hubTotal` is now returned by `buildSankeyData` directly (computed from `max(incomeSum, expenseSum)` — the filtered array sums) rather than recomputed in the component from the API's `total_income`/`total_spent` fields. This ensures percentages and link widths always use the same denominator even when filtered rows cause the API total to diverge from the visible sum (Codex fix #5 + G10 gap fix).
+The tooltip and sr-only table express each link as a percentage: `(value / hubTotal) * 100`, passed to `formatPercent()` which expects percentage **points** (0–100), not a ratio. `hubTotal` is returned by `buildSankeyData` directly (`max(filteredIncomeSum, filteredExpenseSum)`) rather than recomputed in the component from the API's `total_income`/`total_spent` fields. This ensures percentages and link widths always use the same denominator even when filtered rows cause the API total to diverge from the visible sum (Codex fix #5 + G10 + G12 fixes).
+
+**Privacy mode and the sr-only table**: privacy mode hides dollar amounts in the visual ECharts tooltip (shows `label % only`). The sr-only accessibility table **always shows amounts**, even in privacy mode. Rationale: privacy mode is scoped to *screenshot sharing* (sr-only content never appears in a screenshot); a screen-reader user viewing their own finances should retain full dollar figures. This is a deliberate product decision confirmed in Round-2 gap review.
 
 ---
 
@@ -93,4 +95,6 @@ Privacy mode (Eye / EyeOff button in the Cash Flow section header) switches the 
 
 **Implementation review (post-impl, 5 MAJOR — all fixed in PR #1346 initial commit):** edge-click guard; `data-ph-mask` on sr-only table; `focus-visible:not-sr-only` on sr-only buttons; separate top-level Sankey fetch; hub invariant from array sums.
 
-**Gap analysis (`/requirements-gap-analysis`):** one functional gap found (percentage denominator inconsistency, G10 — fixed in PR #1346 second commit); test-coverage gaps G1/G2/G3/G4/G5/G6/G11 addressed; G7/G9 downgraded (transitively covered). Secondary review by `feature-dev:code-reviewer` (Codex fallback per CLAUDE.md) caught G10 and confirmed all other gaps.
+**Gap analysis Round 1 (`/requirements-gap-analysis`):** one functional gap (G10 — percentage denominator used API totals instead of filtered array sums, fixed in PR #1346 second commit); test-coverage gaps G1–G6/G11 addressed; G7/G9 downgraded (transitively covered). Secondary review: `codex:codex-rescue` stalled (600s watchdog) → fresh-context `feature-dev:code-reviewer` fallback per CLAUDE.md; it caught G10 that the primary pass missed.
+
+**Gap analysis Round 2 (`/requirements-gap-analysis`, post-remediation):** Codex (`codex:codex-rescue`) completed and caught G12 — `formatPercent` expects percentage points (0–100) but the Sankey passed a raw ratio (0–1), rendering every percentage 100× too small (e.g. "0.75%" instead of "75.00%"). Fixed: both `pct` sites in `CashFlowSankeyChart.tsx` now compute `(value / hubTotal) * 100`. The round-1 G10 regression test was corrected to assert `'75.00%'`. G13 (residual `Math.max` on API aggregates in label copy) cleaned up. G14 date-range nav tests added. Privacy/sr-only table behavior confirmed deliberate (see §Percentage base). Second independent pass was load-bearing both rounds.
