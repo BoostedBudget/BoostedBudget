@@ -131,6 +131,7 @@ const { PortfolioSummaryWidget } = await import('@/features/dashboard/widgets/Po
 const { PortfolioHoldingsWidget } = await import('@/features/dashboard/widgets/PortfolioHoldingsWidget')
 const { AssetAllocationWidget } = await import('@/features/dashboard/widgets/AssetAllocationWidget')
 
+const { CashFlowSankeyChart } = await import('@/features/reports/components/CashFlowSankeyChart')
 const { AccountCustomizationModal } = await import('@/features/accounts/components/AccountCustomizationModal')
 const { ReviewInboxPage } = await import('@/features/transactions/review/ReviewInboxPage')
 const { TransferActionForm } = await import('@/features/boosts/components/actions/TransferActionForm')
@@ -625,6 +626,57 @@ describe('PII coverage — Spending Reports page', () => {
     ]
     await waitForSentinels(sentinels)
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
+  })
+})
+
+describe('PII coverage — Cash Flow Sankey (G6 — Codex fix #2 regression guard)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseDarkMode.mockReturnValue(false)
+  })
+
+  test('currency amounts in sr-only table are covered by data-ph-mask; ECharts wrapper carries data-ph-mask', async () => {
+    const incomeData = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      total_income: 5000,
+      sources: [
+        { category: 'INCOME_WAGES', pfc_primary_display: 'Wages', total: 5000, percentage: 100, transaction_count: 2 },
+      ],
+    }
+    const categoryData = {
+      start_date: '2024-01-01',
+      end_date: '2024-01-31',
+      total_spent: 3000,
+      categories: [
+        { category: 'FOOD_AND_DRINK', pfc_primary_display: 'Food & Drink', total: 1800, percentage: 60, transaction_count: 20 },
+        { category: 'TRANSPORTATION', pfc_primary_display: 'Transportation', total: 1200, percentage: 40, transaction_count: 8 },
+      ],
+    }
+
+    render(
+      <CashFlowSankeyChart
+        incomeData={incomeData}
+        categoryData={categoryData}
+        loading={false}
+        privacyMode={false}
+        startDate="2024-01-01"
+        endDate="2024-01-31"
+      />,
+      { wrapper: createWrapper() },
+    )
+
+    // Wait for the sr-only table (rendered when there are links to display)
+    await waitFor(() => { expect(document.querySelector('table')).not.toBeNull() }, { timeout: 3000 })
+
+    // ECharts wrapper must carry data-ph-mask (chart canvas)
+    const echartsWrapper = document.querySelector('[data-testid="echarts-chart"]')
+    expect(echartsWrapper).not.toBeNull()
+    expect(echartsWrapper?.getAttribute('data-ph-mask')).toBe('')
+
+    // No currency text should be visible outside a masked ancestor.
+    // The sr-only table has data-ph-mask — all its currency cells should be covered.
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })
 
