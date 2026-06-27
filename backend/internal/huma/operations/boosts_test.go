@@ -17,10 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ============================================================================
-// Mock Services
-// ============================================================================
-
 // MockBoostService implements services.BoostService for testing.
 type MockBoostService struct {
 	mock.Mock
@@ -138,10 +134,6 @@ func (m *MockBoostExecutionService) TestBoost(ctx context.Context, boost *domain
 	return args.Get(0).(*domain.BoostTestResult), args.Error(1)
 }
 
-// ============================================================================
-// Test Helpers
-// ============================================================================
-
 func createMockBoost(id, userID string) *domain.Boost {
 	return &domain.Boost{
 		ID:       id,
@@ -156,10 +148,6 @@ func createMockBoost(id, userID string) *domain.Boost {
 		Actions: json.RawMessage("[]"),
 	}
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 func TestBoostHandler_GetBoosts(t *testing.T) {
 	mockService := new(MockBoostService)
@@ -453,10 +441,6 @@ func TestBoostHandler_DeleteBoost(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
-// ============================================================================
-// Mock Manual Provider for Testing
-// ============================================================================
-
 type mockManualProvider struct {
 	execution       *domain.BoostExecution
 	lastTriggerData map[string]interface{}
@@ -482,10 +466,6 @@ func (m *mockManualProvider) TriggerBoost(ctx context.Context, boostID string, t
 	m.lastTriggerData = triggerData
 	return m.execution, nil
 }
-
-// ============================================================================
-// Issue #38: Test, Enable, Disable, Executions Handler Tests
-// ============================================================================
 
 func TestBoostHandler_TestBoostExecution_Success(t *testing.T) {
 	mockBoostService := new(MockBoostService)

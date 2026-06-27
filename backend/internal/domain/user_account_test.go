@@ -101,8 +101,6 @@ func TestUserAccount_Validate_InvalidIcon(t *testing.T) {
 }
 
 func TestUserAccount_Validate_ValidIcon(t *testing.T) {
-	// Pick a valid icon from the set (we know "bank" is valid from account.go)
-	// Find any valid icon
 	var validIcon string
 	for k := range ValidAccountIcons {
 		if ValidAccountIcons[k] {
