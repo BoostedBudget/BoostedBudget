@@ -127,7 +127,6 @@ func (m *mockAnalyticsService) GetBudgetVsActual(_ context.Context, _ string, _ 
 	return m.budgetVsActualResponse, m.budgetVsActualErr
 }
 
-// Helper functions to create test data
 func createTestCashFlowSummary() *domain.CashFlowSummaryResponse {
 	return &domain.CashFlowSummaryResponse{
 		StartDate:    time.Now().AddDate(0, -1, 0),
@@ -158,7 +157,6 @@ func createTestCashFlowHistory() *domain.CashFlowHistoryResponse {
 	}
 }
 
-// TestGetCashFlowSummary_Success tests successful retrieval of cash flow summary.
 func TestGetCashFlowSummary_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -181,7 +179,6 @@ func TestGetCashFlowSummary_Success(t *testing.T) {
 	assert.Equal(t, 2000.00, output.Body.NetCashFlow)
 }
 
-// TestGetCashFlowSummary_WithFilters tests cash flow summary with all filters.
 func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -203,7 +200,6 @@ func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetCashFlowSummary_MissingStartDate tests error for missing start_date.
 func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -221,7 +217,6 @@ func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "start_date is required")
 }
 
-// TestGetCashFlowSummary_MissingEndDate tests error for missing end_date.
 func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -239,7 +234,6 @@ func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "end_date is required")
 }
 
-// TestGetCashFlowSummary_InvalidStartDate tests error for invalid start_date format.
 func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -258,7 +252,6 @@ func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid start_date format")
 }
 
-// TestGetCashFlowSummary_InvalidEndDate tests error for invalid end_date format.
 func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -277,7 +270,6 @@ func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid end_date format")
 }
 
-// TestGetCashFlowSummary_EndBeforeStart tests error when end_date is before start_date.
 func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -296,7 +288,6 @@ func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "end_date cannot be before start_date")
 }
 
-// TestGetCashFlowSummary_InvalidIncludeTransfers tests error for invalid include_transfers.
 func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -316,7 +307,6 @@ func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid")
 }
 
-// TestGetCashFlowSummary_ServiceError tests error handling for service errors.
 func TestGetCashFlowSummary_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryErr: errors.New("database error"),
@@ -336,7 +326,6 @@ func TestGetCashFlowSummary_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestGetCashFlowHistory_Success tests successful retrieval of cash flow history.
 func TestGetCashFlowHistory_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		historyResponse: createTestCashFlowHistory(),
@@ -358,7 +347,6 @@ func TestGetCashFlowHistory_Success(t *testing.T) {
 	assert.Len(t, output.Body.Periods, 1)
 }
 
-// TestGetCashFlowHistory_WithGrouping tests cash flow history with explicit grouping.
 func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		historyResponse: createTestCashFlowHistory(),
@@ -379,7 +367,6 @@ func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 	require.NotNil(t, output)
 }
 
-// TestGetCashFlowHistory_InvalidGrouping tests error for invalid grouping.
 func TestGetCashFlowHistory_InvalidGrouping(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -399,7 +386,6 @@ func TestGetCashFlowHistory_InvalidGrouping(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid grouping")
 }
 
-// TestAnalyticsRouteRegistration tests that routes are properly registered.
 func TestAnalyticsRouteRegistration(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		summaryResponse: createTestCashFlowSummary(),
@@ -418,7 +404,6 @@ func TestAnalyticsRouteRegistration(t *testing.T) {
 	assert.Contains(t, body, "User not authenticated")
 }
 
-// TestAnalyticsResponseJSON tests JSON serialization of response.
 func TestAnalyticsResponseJSON(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
@@ -435,7 +420,6 @@ func TestAnalyticsResponseJSON(t *testing.T) {
 	require.NoError(t, err, "Error response should be valid JSON")
 }
 
-// TestGetSpendingByCategory_Success tests successful spending by category retrieval.
 func TestGetSpendingByCategory_Success(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		spendingByCategoryResponse: &domain.SpendingByCategoryResponse{

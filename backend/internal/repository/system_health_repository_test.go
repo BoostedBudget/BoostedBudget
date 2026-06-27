@@ -22,21 +22,18 @@ func setupSystemHealthMockDB(t *testing.T) (pgxmock.PgxPoolIface, *SystemHealthR
 	return mock, repo
 }
 
-// GetRiverJobStats
-
 func TestSystemHealthRepository_GetRiverJobStats_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	queue := "default"
 	rows := pgxmock.NewRows([]string{"pending", "running", "failed"}).
 		AddRow(int64(5), int64(2), int64(1))
 
 	mock.ExpectQuery(regexp.QuoteMeta("FROM river_job")).
-		WithArgs(queue).
+		WithArgs("default").
 		WillReturnRows(rows)
 
-	metrics, err := repo.GetRiverJobStats(context.Background(), queue)
+	metrics, err := repo.GetRiverJobStats(context.Background(), "default")
 
 	require.NoError(t, err)
 	assert.Equal(t, &domain.QueueMetrics{Pending: 5, Running: 2, Failed: 1}, metrics)
@@ -47,34 +44,28 @@ func TestSystemHealthRepository_GetRiverJobStats_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	queue := "default"
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("FROM river_job")).
-		WithArgs(queue).
-		WillReturnError(dbErr)
+		WithArgs("default").
+		WillReturnError(errors.New("db error"))
 
-	metrics, err := repo.GetRiverJobStats(context.Background(), queue)
+	metrics, err := repo.GetRiverJobStats(context.Background(), "default")
 
 	assert.Error(t, err)
 	assert.Nil(t, metrics)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetRiverJobsCompletedLastHour
-
 func TestSystemHealthRepository_GetRiverJobsCompletedLastHour_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	queue := "default"
 	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(42))
 
 	mock.ExpectQuery(regexp.QuoteMeta("AND state = 'completed'")).
-		WithArgs(queue).
+		WithArgs("default").
 		WillReturnRows(rows)
 
-	count, err := repo.GetRiverJobsCompletedLastHour(context.Background(), queue)
+	count, err := repo.GetRiverJobsCompletedLastHour(context.Background(), "default")
 
 	require.NoError(t, err)
 	assert.Equal(t, int64(42), count)
@@ -85,30 +76,23 @@ func TestSystemHealthRepository_GetRiverJobsCompletedLastHour_Error(t *testing.T
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	queue := "default"
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("AND state = 'completed'")).
-		WithArgs(queue).
-		WillReturnError(dbErr)
+		WithArgs("default").
+		WillReturnError(errors.New("db error"))
 
-	count, err := repo.GetRiverJobsCompletedLastHour(context.Background(), queue)
+	count, err := repo.GetRiverJobsCompletedLastHour(context.Background(), "default")
 
 	assert.Error(t, err)
 	assert.Equal(t, int64(0), count)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetActiveSyncCount
-
 func TestSystemHealthRepository_GetActiveSyncCount_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(3))
-
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE kind = 'plaid_sync'")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(3)))
 
 	count, err := repo.GetActiveSyncCount(context.Background())
 
@@ -121,10 +105,8 @@ func TestSystemHealthRepository_GetActiveSyncCount_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE kind = 'plaid_sync'")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	count, err := repo.GetActiveSyncCount(context.Background())
 
@@ -133,16 +115,12 @@ func TestSystemHealthRepository_GetActiveSyncCount_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetFailedSyncsLastHour
-
 func TestSystemHealthRepository_GetFailedSyncsLastHour_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(7))
-
 	mock.ExpectQuery(regexp.QuoteMeta("FROM linked_items")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(7)))
 
 	count, err := repo.GetFailedSyncsLastHour(context.Background())
 
@@ -155,10 +133,8 @@ func TestSystemHealthRepository_GetFailedSyncsLastHour_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("FROM linked_items")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	count, err := repo.GetFailedSyncsLastHour(context.Background())
 
@@ -167,16 +143,12 @@ func TestSystemHealthRepository_GetFailedSyncsLastHour_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetAverageSyncDuration
-
 func TestSystemHealthRepository_GetAverageSyncDuration_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	rows := pgxmock.NewRows([]string{"avg_ms"}).AddRow(int64(1500))
-
 	mock.ExpectQuery(regexp.QuoteMeta("COALESCE(AVG")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"avg_ms"}).AddRow(int64(1500)))
 
 	avgMs, err := repo.GetAverageSyncDuration(context.Background())
 
@@ -189,10 +161,8 @@ func TestSystemHealthRepository_GetAverageSyncDuration_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("COALESCE(AVG")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	avgMs, err := repo.GetAverageSyncDuration(context.Background())
 
@@ -201,16 +171,12 @@ func TestSystemHealthRepository_GetAverageSyncDuration_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetActiveSubscriptionCount
-
 func TestSystemHealthRepository_GetActiveSubscriptionCount_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(99))
-
 	mock.ExpectQuery(regexp.QuoteMeta("paddle_subscription_id IS NOT NULL")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(99)))
 
 	count, err := repo.GetActiveSubscriptionCount(context.Background())
 
@@ -223,10 +189,8 @@ func TestSystemHealthRepository_GetActiveSubscriptionCount_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("paddle_subscription_id IS NOT NULL")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	count, err := repo.GetActiveSubscriptionCount(context.Background())
 
@@ -235,16 +199,12 @@ func TestSystemHealthRepository_GetActiveSubscriptionCount_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetPaddleWebhookStats24h
-
 func TestSystemHealthRepository_GetPaddleWebhookStats24h_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	rows := pgxmock.NewRows([]string{"total", "failed"}).AddRow(int64(200), int64(4))
-
 	mock.ExpectQuery(regexp.QuoteMeta("FROM paddle_webhook_events")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"total", "failed"}).AddRow(int64(200), int64(4)))
 
 	total, failed, err := repo.GetPaddleWebhookStats24h(context.Background())
 
@@ -258,10 +218,8 @@ func TestSystemHealthRepository_GetPaddleWebhookStats24h_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("FROM paddle_webhook_events")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	total, failed, err := repo.GetPaddleWebhookStats24h(context.Background())
 
@@ -271,17 +229,13 @@ func TestSystemHealthRepository_GetPaddleWebhookStats24h_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// GetLastReconciliationRun
-
 func TestSystemHealthRepository_GetLastReconciliationRun_Success(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
 	expectedTime := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	rows := pgxmock.NewRows([]string{"max"}).AddRow(&expectedTime)
-
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE kind = 'paddle_reconciliation'")).
-		WillReturnRows(rows)
+		WillReturnRows(pgxmock.NewRows([]string{"max"}).AddRow(&expectedTime))
 
 	result, err := repo.GetLastReconciliationRun(context.Background())
 
@@ -309,10 +263,8 @@ func TestSystemHealthRepository_GetLastReconciliationRun_Error(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
 
-	dbErr := errors.New("db error")
-
 	mock.ExpectQuery(regexp.QuoteMeta("WHERE kind = 'paddle_reconciliation'")).
-		WillReturnError(dbErr)
+		WillReturnError(errors.New("db error"))
 
 	result, err := repo.GetLastReconciliationRun(context.Background())
 
