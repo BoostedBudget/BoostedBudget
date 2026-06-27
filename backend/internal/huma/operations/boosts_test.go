@@ -5,6 +5,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -740,3 +741,90 @@ func TestBoostHandler_GetBoostExecutions_BoostNotFound(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+// --- CreateBoost tests ---
+
+func TestBoostHandler_CreateBoost_Success(t *testing.T) {
+	mockSvc := new(MockBoostService)
+	handler := NewBoostHandler(mockSvc, nil)
+
+	req := domain.CreateBoostRequest{Name: "Test Boost"}
+	expected := createMockBoost("boost-1", "user-123")
+
+	mockSvc.On("CreateBoost", mock.Anything, "user-123", &req).Return(expected, nil)
+
+	input := &CreateBoostInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Body:               req,
+	}
+	output, err := handler.CreateBoost(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBoostHandler_CreateBoost_ServiceError(t *testing.T) {
+	mockSvc := new(MockBoostService)
+	handler := NewBoostHandler(mockSvc, nil)
+
+	req := domain.CreateBoostRequest{Name: "Bad Boost"}
+	mockSvc.On("CreateBoost", mock.Anything, "user-123", &req).Return(nil, errors.New("service failed"))
+
+	input := &CreateBoostInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Body:               req,
+	}
+	output, err := handler.CreateBoost(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	mockSvc.AssertExpectations(t)
+}
+
+// --- UpdateBoost tests ---
+
+func TestBoostHandler_UpdateBoost_Success(t *testing.T) {
+	mockSvc := new(MockBoostService)
+	handler := NewBoostHandler(mockSvc, nil)
+
+	req := domain.UpdateBoostRequest{Name: stringPtr("Updated Name")}
+	expected := createMockBoost("boost-1", "user-123")
+	expected.Name = "Updated Name"
+
+	mockSvc.On("UpdateBoost", mock.Anything, "user-123", "boost-1", &req).Return(expected, nil)
+
+	input := &UpdateBoostInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "boost-1",
+		Body:               req,
+	}
+	output, err := handler.UpdateBoost(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+	mockSvc.AssertExpectations(t)
+}
+
+func TestBoostHandler_UpdateBoost_ServiceError(t *testing.T) {
+	mockSvc := new(MockBoostService)
+	handler := NewBoostHandler(mockSvc, nil)
+
+	req := domain.UpdateBoostRequest{Name: stringPtr("Updated Name")}
+	mockSvc.On("UpdateBoost", mock.Anything, "user-123", "boost-1", &req).Return(nil, errors.New("not found"))
+
+	input := &UpdateBoostInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "boost-1",
+		Body:               req,
+	}
+	output, err := handler.UpdateBoost(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	mockSvc.AssertExpectations(t)
+}
+
+func stringPtr(s string) *string { return &s }
