@@ -245,6 +245,21 @@ func TestSystemHealthRepository_GetLastReconciliationRun_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSystemHealthRepository_GetLastReconciliationRun_NullResult(t *testing.T) {
+	// MAX() always returns one row; NULL means no completed reconciliation jobs exist.
+	mock, repo := setupSystemHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("WHERE kind = 'paddle_reconciliation'")).
+		WillReturnRows(pgxmock.NewRows([]string{"max"}).AddRow((*time.Time)(nil)))
+
+	result, err := repo.GetLastReconciliationRun(context.Background())
+
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSystemHealthRepository_GetLastReconciliationRun_ErrNoRows(t *testing.T) {
 	mock, repo := setupSystemHealthMockDB(t)
 	defer mock.Close()
