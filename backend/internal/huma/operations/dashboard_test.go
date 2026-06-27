@@ -359,3 +359,110 @@ func TestDashboardResponseJSON(t *testing.T) {
 	err := json.Unmarshal(resp.Body.Bytes(), &errorResp)
 	require.NoError(t, err, "Error response should be valid JSON")
 }
+
+// --- GetWidgetTypes tests ---
+
+func TestGetWidgetTypes_ReturnsList(t *testing.T) {
+	output, err := GetWidgetTypes(context.Background(), &GetWidgetTypesInput{})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.Body)
+	assert.NotEmpty(t, output.Body.WidgetTypes, "WidgetTypes should not be empty")
+}
+
+// --- GetNetWorth tests ---
+
+func TestGetNetWorth_Success(t *testing.T) {
+	expected := &domain.NetWorthResponse{
+		NetWorth: 50000.00,
+	}
+	mockService := &mockDashboardService{netWorth: expected}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetNetWorth_InvalidDate(t *testing.T) {
+	mockService := &mockDashboardService{}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		AsOfDate:           "not-a-date",
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorth_ServiceError(t *testing.T) {
+	mockService := &mockDashboardService{netWorthErr: errors.New("service failed")}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// --- GetNetWorthHistory tests ---
+
+func TestGetNetWorthHistory_Success(t *testing.T) {
+	expected := &domain.NetWorthHistoryResponse{
+		Granularity: "monthly",
+	}
+	mockService := &mockDashboardService{netWorthHistory: expected}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, expected, output.Body)
+}
+
+func TestGetNetWorthHistory_InvalidStartDate(t *testing.T) {
+	mockService := &mockDashboardService{}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "bad-date",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+func TestGetNetWorthHistory_ServiceError(t *testing.T) {
+	mockService := &mockDashboardService{netWorthHistErr: errors.New("service failed")}
+	handler := NewDashboardHandler(mockService)
+
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-12-31",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
