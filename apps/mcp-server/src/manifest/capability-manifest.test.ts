@@ -181,10 +181,13 @@ describe('excluded operations', () => {
     }
   })
 
-  it('excludes auto-categorization writes (deferred)', () => {
-    const autoCatWrites = ['createRule', 'updateRule', 'deleteRule', 'toggleRule']
-    for (const opId of autoCatWrites) {
-      expect(isExcluded(opId)).toBe(true)
+  it('allows auto-categorization writes with confirmation-gating (Issue #957 Q1)', () => {
+    // Rule mutations were un-excluded per Issue #957 Q1 decision.
+    // They are confirmation-gated writes, not excluded.
+    for (const opId of ['createRule', 'updateRule', 'deleteRule', 'toggleRule']) {
+      expect(isExcluded(opId)).toBe(false)
+      expect(getCapability(opId)?.class).toBe('write')
+      expect(getCapability(opId)?.confirmationRequired).toBe(true)
     }
   })
 
@@ -243,7 +246,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 170 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 176 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -252,8 +255,10 @@ describe('completeness', () => {
     // +4 from Issue #1300 M20: listSavingsGoalContributions, logSavingsGoalContribution,
     //   confirmSavingsGoalContribution, deleteSavingsGoalContribution
     // +1 from Issue #1300 R3-7: rejectSavingsGoalContribution (sticky tombstone)
+    // +6 from Issue #957: getMerchants, getMerchantDuplicateSuggestions,
+    //   setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides, mergeMerchants
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(170)
+    expect(ALL_OPERATION_IDS.length).toBe(176)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

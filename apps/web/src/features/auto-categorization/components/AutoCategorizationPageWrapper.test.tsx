@@ -24,6 +24,7 @@ mock.module('./AutoCategorizationPage', () => ({
   ),
 }))
 
+
 import { AutoCategorizationPageWrapper } from './AutoCategorizationPageWrapper'
 
 function createWrapper() {
@@ -189,5 +190,34 @@ describe('AutoCategorizationPageWrapper', () => {
     await waitFor(() => {
       expect(screen.getByTestId('accounts-count')).toHaveTextContent('2')
     })
+  })
+
+  // Issue #957: 2-tab bar (Rules | Merchants)
+  it('renders tab bar with Rules and Merchants tabs', async () => {
+    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('autocategorization-tabs')).toBeInTheDocument()
+      expect(screen.getByTestId('tab-rules')).toBeInTheDocument()
+      expect(screen.getByTestId('tab-merchants')).toBeInTheDocument()
+    })
+  })
+
+  it('defaults to Rules tab showing AutoCategorizationPage', async () => {
+    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-categorization-page')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('merchants-tab')).not.toBeInTheDocument()
+  })
+
+  it('shows Merchants tab trigger as a valid interactive element', async () => {
+    render(<AutoCategorizationPageWrapper />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('tab-merchants')).toBeInTheDocument()
+    })
+    // Verify trigger is an interactive button with correct role
+    const merchantsTrigger = screen.getByTestId('tab-merchants')
+    expect(merchantsTrigger.getAttribute('role')).toBe('tab')
+    expect(merchantsTrigger.getAttribute('data-state')).toBe('inactive')
   })
 })

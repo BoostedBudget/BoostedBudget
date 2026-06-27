@@ -2866,6 +2866,30 @@ func (m *MockMerchantRepo) GetOrCreateMerchants(ctx context.Context, names []str
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+func (m *MockMerchantRepo) GetOrCreateMerchantsWithNormalize(ctx context.Context, names []string, normalize func(string) string) (map[string]string, error) {
+	args := m.Called(ctx, names, normalize)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
+func (m *MockMerchantRepo) ListMerchants(ctx context.Context, userID string) ([]domain.MerchantSummary, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.MerchantSummary), args.Error(1)
+}
+
+func (m *MockMerchantRepo) GetDuplicateSuggestions(ctx context.Context, userID string, threshold float64) ([][]domain.MerchantSummary, error) {
+	args := m.Called(ctx, userID, threshold)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([][]domain.MerchantSummary), args.Error(1)
+}
+
 // TestProcessAddedTransactions_StampsMerchantID verifies that when transactions have
 // a MerchantName, GetOrCreateMerchants is called once and MerchantID is stamped on
 // each transaction before CreateBatch is invoked.
@@ -2901,10 +2925,10 @@ func TestProcessAddedTransactions_StampsMerchantID(t *testing.T) {
 		},
 	}
 
-	// GetOrCreateMerchants should be called exactly once with the deduplicated name set
-	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.MatchedBy(func(names []string) bool {
+	// GetOrCreateMerchantsWithNormalize should be called exactly once with the deduplicated name set
+	mockMerchantRepo.On("GetOrCreateMerchantsWithNormalize", ctx, mock.MatchedBy(func(names []string) bool {
 		return len(names) == 1 && names[0] == "Starbucks"
-	})).Return(map[string]string{"Starbucks": starbucksID}, nil)
+	}), mock.AnythingOfType("func(string) string")).Return(map[string]string{"Starbucks": starbucksID}, nil)
 
 	// CreateBatch must receive the transaction with MerchantID stamped
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -2958,7 +2982,7 @@ func TestProcessAddedTransactions_MerchantUpsertError_ContinuesSync(t *testing.T
 	}
 
 	// Simulate merchant upsert failure
-	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.Anything).Return(nil, errors.New("db error"))
+	mockMerchantRepo.On("GetOrCreateMerchantsWithNormalize", ctx, mock.Anything, mock.AnythingOfType("func(string) string")).Return(nil, errors.New("db error"))
 
 	// CreateBatch must still be called — MerchantID will be nil (best-effort)
 	mockTransactionRepo.On("CreateBatch", ctx, mock.MatchedBy(func(txns []domain.Transaction) bool {
@@ -3007,8 +3031,8 @@ func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.
 	err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
 
 	require.NoError(t, err)
-	// GetOrCreateMerchants must NOT have been called
-	mockMerchantRepo.AssertNotCalled(t, "GetOrCreateMerchants")
+	// GetOrCreateMerchantsWithNormalize must NOT have been called
+	mockMerchantRepo.AssertNotCalled(t, "GetOrCreateMerchantsWithNormalize")
 	mockTransactionRepo.AssertExpectations(t)
 }
 
@@ -3060,10 +3084,10 @@ func TestProcessModifiedTransactions_StampsMerchantID(t *testing.T) {
 		UserNotes:             &existingUserNotes,
 	}
 
-	// GetOrCreateMerchants must be called once with the merchant name from the batch
-	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.MatchedBy(func(names []string) bool {
+	// GetOrCreateMerchantsWithNormalize must be called once with the merchant name from the batch
+	mockMerchantRepo.On("GetOrCreateMerchantsWithNormalize", ctx, mock.MatchedBy(func(names []string) bool {
 		return len(names) == 1 && names[0] == "Starbucks"
-	})).Return(map[string]string{"Starbucks": starbucksID}, nil)
+	}), mock.AnythingOfType("func(string) string")).Return(map[string]string{"Starbucks": starbucksID}, nil)
 
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
 
@@ -3131,7 +3155,7 @@ func TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate(t *test
 	}
 
 	// Simulate merchant upsert failure
-	mockMerchantRepo.On("GetOrCreateMerchants", ctx, mock.Anything).Return(nil, errors.New("db error"))
+	mockMerchantRepo.On("GetOrCreateMerchantsWithNormalize", ctx, mock.Anything, mock.AnythingOfType("func(string) string")).Return(nil, errors.New("db error"))
 
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
 
