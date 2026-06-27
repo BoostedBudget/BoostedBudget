@@ -6,6 +6,17 @@
 #   lines-threshold  Minimum lines coverage % (integer or decimal, e.g. 82)
 #
 # Example: ./scripts/check-frontend-coverage.sh apps/web 82
+#
+# ⚠  DENOMINATOR CAVEAT (bun 1.3.x limitation, tracked in #1286):
+#    Bun's built-in test runner only instruments source files that are imported
+#    during test execution — there is no --coverage-include / --coverage-all flag.
+#    Production files that no test file imports are ABSENT from the LCOV data and
+#    therefore absent from this gate's denominator. The reported ~84% lines coverage
+#    applies only to the "measured" subset, not to all of apps/web/src/. Files
+#    known to be outside the denominator include (non-exhaustive): ErrorBoundary.tsx,
+#    PlaidLinkButton.tsx, CookieConsent.tsx, DataTable.tsx, and similar leaf components.
+#    See GitHub issue #1345 (FE coverage honesty follow-up) for the full list and the
+#    plan to add an all-source include once bun supports it or via vitest migration.
 
 set -euo pipefail
 
