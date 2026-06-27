@@ -201,6 +201,16 @@ type TransactionRepository interface {
 		cursor *domain.TransactionCursor,
 		limit int,
 	) ([]*domain.ActivityItem, *domain.TransactionCursor, error)
+
+	// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
+	// for the given set of merchant IDs and user, in one DB round-trip.
+	// Resolution follows the per-user merge topology and override chain:
+	//   COALESCE(source_override.display_name, target_override.display_name,
+	//            canonical_merchant.normalized_name, canonical_merchant.name)
+	// Merchant IDs absent from the merchants table are omitted from the result.
+	// Used by enrichEffectiveMerchantNames (Transaction slices) and
+	// enrichEffectiveMerchantNamesForItems (ActivityItem slices / unified feed).
+	ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -1002,9 +1012,61 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	return whereClause, args
 }
 
+// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
+// for the given merchant IDs and user, in one DB round-trip.
+//
+// Resolution follows the per-user merge + override chain (G6b fix):
+//
+//	COALESCE(
+//	  source_override.display_name,    -- user renamed the source merchant directly
+//	  target_override.display_name,    -- user renamed the canonical (merged-into) merchant
+//	  canonical_merchant.normalized_name,
+//	  canonical_merchant.name
+//	)
+//
+// When mno.merged_into_merchant_id is NULL, m2.id = m.id, so mno_t matches the same row as
+// mno and the COALESCE resolves to mno.display_name (direct rename) or normalized/raw name —
+// correct in both cases.
+func (r *transactionRepository) ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error) {
+	if len(merchantIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	const q = `
+		SELECT m.id::text,
+		       COALESCE(mno.display_name, mno_t.display_name, m2.normalized_name, m2.name) AS effective_name
+		FROM   merchants m
+		LEFT   JOIN merchant_name_overrides mno
+		            ON mno.merchant_id = m.id AND mno.user_id = $1
+		LEFT   JOIN merchants m2
+		            ON m2.id = COALESCE(mno.merged_into_merchant_id, m.id)
+		LEFT   JOIN merchant_name_overrides mno_t
+		            ON mno_t.merchant_id = m2.id AND mno_t.user_id = $1
+		WHERE  m.id = ANY($2::uuid[])`
+
+	rows, err := r.db.Query(ctx, q, userID, merchantIDs)
+	if err != nil {
+		return nil, fmt.Errorf("ResolveEffectiveMerchantNames: %w", err)
+	}
+	defer rows.Close()
+
+	nameByID := make(map[string]string, len(merchantIDs))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("ResolveEffectiveMerchantNames scan: %w", err)
+		}
+		nameByID[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nameByID, nil
+}
+
 // enrichEffectiveMerchantNames resolves per-user merchant display names for a slice of
-// transactions in a single extra DB round trip. The COALESCE chain matches the Merchants tab:
-// COALESCE(override.display_name, canonical.normalized_name, t.merchant_name).
+// transactions in a single extra DB round trip. Delegates to ResolveEffectiveMerchantNames
+// so that the unified feed path (enrichEffectiveMerchantNamesForItems) uses the same SQL.
 // Called after scanTransactions for user-facing list endpoints only.
 func (r *transactionRepository) enrichEffectiveMerchantNames(ctx context.Context, userID string, txns []domain.Transaction) error {
 	merchantIDSet := make(map[string]struct{}, len(txns))
@@ -1022,40 +1084,16 @@ func (r *transactionRepository) enrichEffectiveMerchantNames(ctx context.Context
 		merchantIDs = append(merchantIDs, id)
 	}
 
-	// Follow merge topology: if the user merged this merchant into another,
-	// resolve the canonical merchant's display name instead.
-	const q = `
-		SELECT m.id::text,
-		       COALESCE(mno.display_name, m2.normalized_name, m2.name) AS effective_name
-		FROM   merchants m
-		LEFT   JOIN merchant_name_overrides mno
-		            ON mno.merchant_id = m.id AND mno.user_id = $1
-		LEFT   JOIN merchants m2
-		            ON m2.id = COALESCE(mno.merged_into_merchant_id, m.id)
-		WHERE  m.id = ANY($2::uuid[])`
-
-	rows, err := r.db.Query(ctx, q, userID, merchantIDs)
+	nameByID, err := r.ResolveEffectiveMerchantNames(ctx, userID, merchantIDs)
 	if err != nil {
 		return fmt.Errorf("enrichEffectiveMerchantNames: %w", err)
-	}
-	defer rows.Close()
-
-	nameByID := make(map[string]string, len(merchantIDs))
-	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return fmt.Errorf("enrichEffectiveMerchantNames scan: %w", err)
-		}
-		nameByID[id] = name
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 
 	for i := range txns {
 		if txns[i].MerchantID != nil {
 			if name, ok := nameByID[*txns[i].MerchantID]; ok {
-				txns[i].EffectiveMerchantName = &name
+				nameCopy := name
+				txns[i].EffectiveMerchantName = &nameCopy
 			}
 		}
 	}

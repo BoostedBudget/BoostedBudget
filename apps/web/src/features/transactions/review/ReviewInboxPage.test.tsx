@@ -302,4 +302,16 @@ describe('ReviewInboxPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
+
+  it('shows effective_merchant_name in the merchant column when override is present', async () => {
+    const txWithOverride: Transaction = {
+      ...mockTx,
+      merchant_name: 'STARBKS #99',
+      effective_merchant_name: 'Starbucks',
+    }
+    configureBase([txWithOverride])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks')).toBeInTheDocument())
+    expect(screen.queryByText('STARBKS #99')).not.toBeInTheDocument()
+  })
 })
