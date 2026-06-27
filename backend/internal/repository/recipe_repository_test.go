@@ -108,7 +108,7 @@ func TestRecipeRepository_Create_Error(t *testing.T) {
 			recipe.UserID,
 			recipe.Name,
 			recipe.Description,
-			pgxmock.AnyArg(), // specJSON
+			[]byte("[]"), // specJSON: empty Spec marshals deterministically
 			recipe.Schedule,
 			recipe.Enabled,
 		).
@@ -308,7 +308,7 @@ func TestRecipeRepository_Update_Success(t *testing.T) {
 			recipe.ID,
 			recipe.Name,
 			recipe.Description,
-			pgxmock.AnyArg(), // specJSON
+			[]byte("[]"), // specJSON: empty Spec marshals deterministically
 			recipe.Schedule,
 			recipe.Enabled,
 			recipe.UserID,
@@ -340,7 +340,7 @@ func TestRecipeRepository_Update_Error(t *testing.T) {
 			recipe.ID,
 			recipe.Name,
 			recipe.Description,
-			pgxmock.AnyArg(), // specJSON
+			[]byte("[]"), // specJSON: empty Spec marshals deterministically
 			recipe.Schedule,
 			recipe.Enabled,
 			recipe.UserID,
