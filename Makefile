@@ -72,8 +72,8 @@ test-ci:
 		-coverprofile=coverage.out -covermode=atomic \
 		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
 		./...
-	@echo "Checking backend coverage threshold (≥73%)..."
-	@./scripts/check-coverage.sh backend/coverage.out 73
+	@echo "Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
 	@cd apps/web && bun run test:ci
 	@echo "Checking frontend coverage threshold (≥82% lines)..."
 	@# lcov is required for test-ci (CI always has it); for local dev use test-all which gracefully skips
@@ -105,8 +105,8 @@ test-fast:
 		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
 		./...
 	@echo ""
-	@echo "📊 Checking backend coverage threshold (≥73%)..."
-	@./scripts/check-coverage.sh backend/coverage.out 73
+	@echo "📊 Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html
@@ -159,8 +159,8 @@ test-all:
 		-coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
 		./...
 	@echo ""
-	@echo "📊 Checking backend coverage threshold (≥73%)..."
-	@./scripts/check-coverage.sh backend/coverage.out 73
+	@echo "📊 Checking backend coverage threshold (≥74%)..."
+	@./scripts/check-coverage.sh backend/coverage.out 74
 	@echo ""
 	@echo "📊 Generating backend HTML coverage report..."
 	@cd backend && go tool cover -html=coverage.out -o coverage.html

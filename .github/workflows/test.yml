@@ -541,15 +541,15 @@ jobs:
             -coverpkg=./internal/...,./cmd/plaid_validation/validators/... \
             ./...
 
-      - name: Check Go coverage threshold (≥73%)
+      - name: Check Go coverage threshold (≥74%)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           echo "::group::Checking coverage threshold"
           # Delegates to scripts/check-coverage.sh for decimal-safe comparison.
-          # Threshold history: 60% → 69% (#1286 scope fix) → 73% (#1286 test campaign)
+          # Threshold history: 60% → 69% (#1286 scope fix) → 73% (#1286 test campaign) → 74% (#1286 B4 gap-fill)
           bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-coverage.sh \
             coverage.out \
-            73
+            74
           echo "::endgroup::"
 
       - name: Generate Go coverage HTML report
