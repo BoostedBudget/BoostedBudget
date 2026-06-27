@@ -2553,6 +2553,18 @@
       "description": "Creates per-user merge overrides so source merchants display under the target merchant name."
     },
     {
+      "operationId": "getMerchantOverrides",
+      "method": "GET",
+      "path": "/api/v1/merchants/overrides",
+      "summary": "List merchant overrides",
+      "tags": [
+        "Merchants"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns all per-user merchant name overrides, including renamed and merged merchants."
+    },
+    {
       "operationId": "bulkSetMerchantOverrides",
       "method": "POST",
       "path": "/api/v1/merchants/overrides/bulk",

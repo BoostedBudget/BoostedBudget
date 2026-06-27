@@ -428,6 +428,54 @@ func TestMerchantService_MergeMerchants_RepoError(t *testing.T) {
 }
 
 // ============================================================================
+// GetMerchantOverrides
+// ============================================================================
+
+func TestMerchantService_GetMerchantOverrides_ReturnsOverrides(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	displayName := "Whole Foods"
+	expected := []domain.MerchantNameOverride{{ID: "ov-1", MerchantID: "m-1", DisplayName: &displayName}}
+	mor.On("GetByUserID", ctx, "user-1").Return(expected, nil)
+
+	result, err := svc.GetMerchantOverrides(ctx, "user-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestMerchantService_GetMerchantOverrides_NilBecomesEmpty(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	mor.On("GetByUserID", ctx, "user-1").Return(nil, nil)
+
+	result, err := svc.GetMerchantOverrides(ctx, "user-1")
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Empty(t, result)
+}
+
+func TestMerchantService_GetMerchantOverrides_RepoError(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	mor.On("GetByUserID", ctx, "user-1").Return(nil, errors.New("db error"))
+
+	_, err := svc.GetMerchantOverrides(ctx, "user-1")
+
+	require.Error(t, err)
+}
+
+// ============================================================================
 // NormalizeFunc wired in constructor
 // ============================================================================
 

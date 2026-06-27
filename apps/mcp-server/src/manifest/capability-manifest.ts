@@ -268,6 +268,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // Writes: confirmation-gated with audit logging. overrides + merge have
   // a standing display effect (like rules) — MCP owner sign-off in PR.
   read('getMerchants'),
+  read('getMerchantOverrides'),
   read('getMerchantDuplicateSuggestions'),
   write('setMerchantOverride', { idempotent: true }),
   write('clearMerchantOverride', { destructive: true }),

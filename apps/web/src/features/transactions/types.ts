@@ -49,6 +49,8 @@ export interface Transaction {
   authorized_date?: string | null // ISO 8601 date
   name: string
   merchant_name?: string | null
+  merchant_id?: string | null
+  effective_merchant_name?: string | null
   // PFC v2 canonical fields
   pfc_primary?: string | null
   pfc_detailed?: string | null
@@ -95,6 +97,7 @@ export interface BankingTransaction {
   name: string
   merchant_name?: string | null
   merchant_id?: string | null
+  effective_merchant_name?: string | null
   pending: boolean
   authorized_date?: string | null
   payment_channel?: string | null

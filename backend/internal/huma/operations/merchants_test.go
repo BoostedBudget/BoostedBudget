@@ -37,17 +37,19 @@ type MerchantServiceInterface = operations.MerchantServiceInterface
 // ── Mock MerchantService ───────────────────────────────────────────────────
 
 type mockMerchantSvc struct {
-	listMerchantsResult         []domain.MerchantSummary
-	listMerchantsErr            error
-	duplicateSuggestionsResult  [][]domain.MerchantSummary
-	duplicateSuggestionsErr     error
-	setOverrideResult           *domain.MerchantNameOverride
-	setOverrideErr              error
-	clearOverrideErr            error
-	bulkSetOverridesResult      []domain.MerchantNameOverride
-	bulkSetOverridesErr         error
-	mergeMerchantsResult        []domain.MerchantNameOverride
-	mergeMerchantsErr           error
+	listMerchantsResult          []domain.MerchantSummary
+	listMerchantsErr             error
+	duplicateSuggestionsResult   [][]domain.MerchantSummary
+	duplicateSuggestionsErr      error
+	setOverrideResult            *domain.MerchantNameOverride
+	setOverrideErr               error
+	clearOverrideErr             error
+	bulkSetOverridesResult       []domain.MerchantNameOverride
+	bulkSetOverridesErr          error
+	mergeMerchantsResult         []domain.MerchantNameOverride
+	mergeMerchantsErr            error
+	getMerchantOverridesResult   []domain.MerchantNameOverride
+	getMerchantOverridesErr      error
 }
 
 func (m *mockMerchantSvc) ListMerchants(ctx context.Context, userID string) ([]domain.MerchantSummary, error) {
@@ -67,6 +69,9 @@ func (m *mockMerchantSvc) BulkSetOverrides(ctx context.Context, userID string, r
 }
 func (m *mockMerchantSvc) MergeMerchants(ctx context.Context, userID string, merchantIDs []string, targetMerchantID string) ([]domain.MerchantNameOverride, error) {
 	return m.mergeMerchantsResult, m.mergeMerchantsErr
+}
+func (m *mockMerchantSvc) GetMerchantOverrides(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error) {
+	return m.getMerchantOverridesResult, m.getMerchantOverridesErr
 }
 
 // ── Test helpers ───────────────────────────────────────────────────────────
@@ -221,4 +226,32 @@ func TestMerchantHandler_MergeMerchants_EmptyIDs(t *testing.T) {
 	code, _ := merchantRequest(t, api, http.MethodPost, "/api/v1/merchants/merge",
 		`{"merchant_ids":[],"target_merchant_id":"m-1"}`)
 	assert.Equal(t, http.StatusBadRequest, code)
+}
+
+func TestMerchantHandler_GetMerchantOverrides_OK(t *testing.T) {
+	displayName := "Whole Foods"
+	svc := &mockMerchantSvc{
+		getMerchantOverridesResult: []domain.MerchantNameOverride{
+			{ID: "ov-1", MerchantID: "m-1", DisplayName: &displayName},
+		},
+	}
+	api := setupMerchantAPI(t, svc)
+	code, body := merchantRequest(t, api, http.MethodGet, "/api/v1/merchants/overrides", "")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "Whole Foods")
+}
+
+func TestMerchantHandler_GetMerchantOverrides_Empty(t *testing.T) {
+	svc := &mockMerchantSvc{getMerchantOverridesResult: []domain.MerchantNameOverride{}}
+	api := setupMerchantAPI(t, svc)
+	code, body := merchantRequest(t, api, http.MethodGet, "/api/v1/merchants/overrides", "")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "[]")
+}
+
+func TestMerchantHandler_GetMerchantOverrides_ServiceError(t *testing.T) {
+	svc := &mockMerchantSvc{getMerchantOverridesErr: errors.New("db error")}
+	api := setupMerchantAPI(t, svc)
+	code, _ := merchantRequest(t, api, http.MethodGet, "/api/v1/merchants/overrides", "")
+	assert.Equal(t, http.StatusInternalServerError, code)
 }

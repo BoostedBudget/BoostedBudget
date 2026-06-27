@@ -156,7 +156,7 @@ export function TransactionTable({
         return (
           <div>
             <div className="font-medium text-foreground">
-              {row.merchant_name || row.name}
+              {row.effective_merchant_name || row.merchant_name || row.name}
             </div>
             {row.tags && row.tags.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">

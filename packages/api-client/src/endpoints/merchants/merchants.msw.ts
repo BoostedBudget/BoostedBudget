@@ -55,6 +55,8 @@ export const getGetMerchantDuplicateSuggestionsResponseMock = (): (MerchantSumma
 
 export const getMergeMerchantsResponseMock = (): MerchantNameOverride[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), merchant_id: faker.string.alpha({length: {min: 10, max: 20}}), merged_into_merchant_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
 
+export const getGetMerchantOverridesResponseMock = (): MerchantNameOverride[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), merchant_id: faker.string.alpha({length: {min: 10, max: 20}}), merged_into_merchant_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
+
 export const getBulkSetMerchantOverridesResponseMock = (): MerchantNameOverride[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), merchant_id: faker.string.alpha({length: {min: 10, max: 20}}), merged_into_merchant_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
 
 export const getSetMerchantOverrideResponseMock = (overrideResponse: Partial<Extract<MerchantNameOverride, object>> = {}): MerchantNameOverride => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), merchant_id: faker.string.alpha({length: {min: 10, max: 20}}), merged_into_merchant_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
@@ -91,6 +93,18 @@ export const getMergeMerchantsMockHandler = (overrideResponse?: MerchantNameOver
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getMergeMerchantsResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetMerchantOverridesMockHandler = (overrideResponse?: MerchantNameOverride[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<MerchantNameOverride[] | null> | MerchantNameOverride[] | null), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/merchants/overrides', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetMerchantOverridesResponseMock(),
       { status: 200
       })
   }, options)
@@ -133,6 +147,7 @@ export const getMerchantsMock = () => [
   getGetMerchantsMockHandler(),
   getGetMerchantDuplicateSuggestionsMockHandler(),
   getMergeMerchantsMockHandler(),
+  getGetMerchantOverridesMockHandler(),
   getBulkSetMerchantOverridesMockHandler(),
   getClearMerchantOverrideMockHandler(),
   getSetMerchantOverrideMockHandler()
