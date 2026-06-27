@@ -22,6 +22,8 @@ export interface SankeyLink {
 export interface SankeyData {
   nodes: SankeyNode[]
   links: SankeyLink[]
+  /** Max of filtered income sum and filtered expense sum — the true hub throughput. */
+  hubTotal: number
 }
 
 export function buildSankeyData(
@@ -31,14 +33,14 @@ export function buildSankeyData(
   totalExpenses: number,
 ): SankeyData {
   if (totalIncome <= 0 && totalExpenses <= 0) {
-    return { nodes: [], links: [] }
+    return { nodes: [], links: [], hubTotal: 0 }
   }
 
   const validIncome = income.filter(i => i.total > 0)
   const validExpenses = expenses.filter(e => e.total > 0)
 
   if (validIncome.length === 0 && validExpenses.length === 0) {
-    return { nodes: [], links: [] }
+    return { nodes: [], links: [], hubTotal: 0 }
   }
 
   const nodes: SankeyNode[] = []
@@ -68,6 +70,7 @@ export function buildSankeyData(
   const incomeSum = validIncome.reduce((s, i) => s + i.total, 0)
   const expenseSum = validExpenses.reduce((s, e) => s + e.total, 0)
   const surplus = incomeSum - expenseSum
+  const hubTotal = Math.max(incomeSum, expenseSum)
   if (surplus < 0) {
     nodes.push({
       id: 'deficit',
@@ -79,11 +82,10 @@ export function buildSankeyData(
     links.push({ source: 'deficit', target: 'hub', value: -surplus })
   }
 
-  const topExpenses = [...validExpenses]
-    .sort((a, b) => b.total - a.total)
-    .slice(0, MAX_EXPENSE_NODES)
+  const sortedExpenses = [...validExpenses].sort((a, b) => b.total - a.total)
+  const topExpenses = sortedExpenses.slice(0, MAX_EXPENSE_NODES)
   const otherExpenses = validExpenses.length > MAX_EXPENSE_NODES
-    ? validExpenses.sort((a, b) => b.total - a.total).slice(MAX_EXPENSE_NODES)
+    ? sortedExpenses.slice(MAX_EXPENSE_NODES)
     : []
 
   topExpenses.forEach((exp, i) => {
@@ -123,5 +125,5 @@ export function buildSankeyData(
     links.push({ source: 'hub', target: 'savings', value: surplus })
   }
 
-  return { nodes, links }
+  return { nodes, links, hubTotal }
 }
