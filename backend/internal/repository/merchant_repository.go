@@ -32,9 +32,13 @@ type MerchantOverrideRepo interface {
 	// "" if no override exists or the override has no merge pointer. Used by MergeMerchants
 	// to resolve canonical targets and maintain depth-1 chain invariant.
 	GetMergeTarget(ctx context.Context, userID, merchantID string) (string, error)
-	// ReassignMergeTarget bulk-updates overrides whose merged_into_merchant_id == oldTargetID
-	// to point at newTargetID instead. Keeps existing chains flat after a target is re-merged.
-	ReassignMergeTarget(ctx context.Context, userID, oldTargetID, newTargetID string) error
+	// MergeAndFlatten atomically re-points every override whose merged_into_merchant_id
+	// references any ID in toFlatten to canonical (flattening depth-≥2 chains, both the
+	// source-side G20 fix and the pre-merged-target G17 fix), then bulk-upserts each
+	// source → canonical override. Both steps run inside a single transaction so callers
+	// never observe a half-flattened state. Maintains the depth-1 invariant so single-hop
+	// read resolvers in the transaction and merchant-list queries stay correct.
+	MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string) ([]domain.MerchantNameOverride, error)
 }
 
 // MerchantRepository handles data access for merchants.
@@ -186,6 +190,12 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
               AND  t.merchant_id IS NOT NULL
               AND  t.pending = false
               AND  m.normalized_name IS NOT NULL
+              AND  NOT EXISTS (
+                       SELECT 1 FROM merchant_name_overrides o
+                       WHERE  o.user_id = $1
+                         AND  o.merchant_id = t.merchant_id
+                         AND  o.merged_into_merchant_id IS NOT NULL
+                   )
         ),
         pairs AS (
             SELECT a.merchant_id AS id_a,

@@ -2,7 +2,10 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
@@ -175,8 +178,7 @@ func (r *MerchantOverrideRepository) GetMergeTarget(ctx context.Context, userID,
 	var target string
 	err := r.db.QueryRow(ctx, q, userID, merchantID).Scan(&target)
 	if err != nil {
-		// pgx returns pgx.ErrNoRows when there is no matching override; treat as no merge.
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 		return "", err
@@ -184,18 +186,75 @@ func (r *MerchantOverrideRepository) GetMergeTarget(ctx context.Context, userID,
 	return target, nil
 }
 
-// ReassignMergeTarget updates any overrides for userID whose merged_into_merchant_id equals
-// oldTargetID to point at newTargetID instead. This is used to flatten merge chains when a
-// target merchant is itself re-merged into a new canonical.
-func (r *MerchantOverrideRepository) ReassignMergeTarget(ctx context.Context, userID, oldTargetID, newTargetID string) error {
-	const q = `
-		UPDATE merchant_name_overrides
-		SET    merged_into_merchant_id = $3::uuid,
-		       updated_at = NOW()
-		WHERE  user_id = $1
-		  AND  merged_into_merchant_id = $2::uuid`
-	_, err := r.db.Exec(ctx, q, userID, oldTargetID, newTargetID)
-	return err
+// MergeAndFlatten atomically executes two steps inside a single transaction:
+//  1. Re-points every override whose merged_into_merchant_id references any ID in toFlatten
+//     to canonical (fixes both the source-side depth-2 gap G20 and the pre-merged-target case G17).
+//  2. Bulk-upserts each source → canonical override (one row per source).
+//
+// Running both steps in one transaction ensures callers never observe a half-flattened state.
+// sources must not include canonical (callers are responsible for filtering it out).
+func (r *MerchantOverrideRepository) MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string) ([]domain.MerchantNameOverride, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("MergeAndFlatten: begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Step 1: flatten inbound chains — re-point anything currently pointing at any toFlatten
+	// ID to the canonical. The extra guard (merchant_id != canonical) prevents a row from
+	// pointing at itself if canonical somehow appears in toFlatten.
+	if len(toFlatten) > 0 {
+		const flattenQ = `
+			UPDATE merchant_name_overrides
+			SET    merged_into_merchant_id = $2::uuid,
+			       updated_at = NOW()
+			WHERE  user_id = $1
+			  AND  merged_into_merchant_id = ANY($3::uuid[])
+			  AND  merchant_id != $2::uuid`
+		if _, err = tx.Exec(ctx, flattenQ, userID, canonical, toFlatten); err != nil {
+			return nil, fmt.Errorf("MergeAndFlatten: flatten chains: %w", err)
+		}
+	}
+
+	// Step 2: bulk-upsert each source → canonical override.
+	const upsertQ = `
+		INSERT INTO merchant_name_overrides
+		    (id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at)
+		SELECT gen_random_uuid(), $1, u.merchant_id::uuid, NULL, $2::uuid, NOW(), NOW()
+		FROM   unnest($3::text[]) AS u(merchant_id)
+		ON CONFLICT (user_id, merchant_id) DO UPDATE
+		    SET merged_into_merchant_id = EXCLUDED.merged_into_merchant_id,
+		        display_name            = merchant_name_overrides.display_name,
+		        updated_at              = NOW()
+		RETURNING id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at`
+
+	rows, err := tx.Query(ctx, upsertQ, userID, canonical, sources)
+	if err != nil {
+		return nil, fmt.Errorf("MergeAndFlatten: upsert sources: %w", err)
+	}
+
+	results := make([]domain.MerchantNameOverride, 0, len(sources))
+	for rows.Next() {
+		var o domain.MerchantNameOverride
+		if err = rows.Scan(&o.ID, &o.UserID, &o.MerchantID, &o.DisplayName, &o.MergedIntoMerchantID, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("MergeAndFlatten: scan: %w", err)
+		}
+		results = append(results, o)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("MergeAndFlatten: rows: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("MergeAndFlatten: commit: %w", err)
+	}
+	return results, nil
 }
 
 // Ensure MerchantOverrideRepository satisfies MerchantOverrideRepo at compile time.

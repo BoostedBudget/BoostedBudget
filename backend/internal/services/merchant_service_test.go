@@ -89,9 +89,12 @@ func (m *mockMerchantOverrideRepo) GetMergeTarget(ctx context.Context, userID, m
 	return args.String(0), args.Error(1)
 }
 
-func (m *mockMerchantOverrideRepo) ReassignMergeTarget(ctx context.Context, userID, oldTargetID, newTargetID string) error {
-	args := m.Called(ctx, userID, oldTargetID, newTargetID)
-	return args.Error(0)
+func (m *mockMerchantOverrideRepo) MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string) ([]domain.MerchantNameOverride, error) {
+	args := m.Called(ctx, userID, sources, canonical, toFlatten)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.MerchantNameOverride), args.Error(1)
 }
 
 // ============================================================================
@@ -387,22 +390,13 @@ func TestMerchantService_MergeMerchants_Success(t *testing.T) {
 		{ID: "ov-2", UserID: userID, MerchantID: "m2", MergedIntoMerchantID: &targetPtr2},
 	}
 
-	// target has no existing merge pointer — canonical is itself.
+	// target has no existing merge pointer — canonical is itself; toFlatten == sources only.
 	mor.On("GetMergeTarget", ctx, userID, targetID).Return("", nil)
-	mor.On("BulkUpsert", ctx, mock.MatchedBy(func(overrides []domain.MerchantNameOverride) bool {
-		if len(overrides) != 2 {
-			return false
-		}
-		for _, o := range overrides {
-			if o.MergedIntoMerchantID == nil || *o.MergedIntoMerchantID != targetID {
-				return false
-			}
-			if o.UserID != userID {
-				return false
-			}
-		}
-		return true
-	})).Return(expected, nil)
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m1", "m2"},   // sources
+		targetID,                // canonical
+		[]string{"m1", "m2"},   // toFlatten (no pre-merged target)
+	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, sourceIDs, targetID)
 
@@ -421,7 +415,7 @@ func TestMerchantService_MergeMerchants_EmptySourceIDs_ReturnsEmpty(t *testing.T
 
 	require.NoError(t, err)
 	assert.Empty(t, result)
-	mor.AssertNotCalled(t, "BulkUpsert")
+	mor.AssertNotCalled(t, "MergeAndFlatten")
 	mor.AssertNotCalled(t, "GetMergeTarget")
 }
 
@@ -432,7 +426,9 @@ func TestMerchantService_MergeMerchants_RepoError(t *testing.T) {
 	ctx := context.Background()
 
 	mor.On("GetMergeTarget", ctx, "user-1", "target").Return("", nil)
-	mor.On("BulkUpsert", ctx, mock.Anything).Return(nil, errors.New("db error"))
+	mor.On("MergeAndFlatten", ctx, "user-1",
+		[]string{"m1"}, "target", []string{"m1"},
+	).Return(nil, errors.New("db error"))
 
 	result, err := svc.MergeMerchants(ctx, "user-1", []string{"m1"}, "target")
 
@@ -445,8 +441,9 @@ func TestMerchantService_MergeMerchants_RepoError(t *testing.T) {
 
 func TestMerchantService_MergeMerchants_TargetAlreadyMerged_FlattensToCanonical(t *testing.T) {
 	// Scenario: m-B is already merged into m-C (chain B→C).
-	// Merging m-A → m-B should write m-A → m-C (canonical), not m-A → m-B.
-	// Existing overrides pointing at m-B are also re-flattened to m-C.
+	// Merging [m-A] → m-B: canonical resolves to m-C.
+	// toFlatten = [m-A, m-B] — includes both the source (G20) and the old target (G17).
+	// MergeAndFlatten re-points anything pointing at m-A or m-B → m-C atomically.
 	mr := new(mockMerchantRepo)
 	mor := new(mockMerchantOverrideRepo)
 	svc := newMerchantService(mr, mor)
@@ -456,16 +453,14 @@ func TestMerchantService_MergeMerchants_TargetAlreadyMerged_FlattensToCanonical(
 
 	mor.On("GetMergeTarget", ctx, userID, "m-B").Return("m-C", nil)
 	mor.On("GetMergeTarget", ctx, userID, "m-C").Return("", nil)
-	mor.On("ReassignMergeTarget", ctx, userID, "m-B", "m-C").Return(nil)
 	expected := []domain.MerchantNameOverride{
 		{ID: "ov-1", UserID: userID, MerchantID: "m-A", MergedIntoMerchantID: &canonicalID},
 	}
-	mor.On("BulkUpsert", ctx, mock.MatchedBy(func(overrides []domain.MerchantNameOverride) bool {
-		return len(overrides) == 1 &&
-			overrides[0].MerchantID == "m-A" &&
-			overrides[0].MergedIntoMerchantID != nil &&
-			*overrides[0].MergedIntoMerchantID == "m-C"
-	})).Return(expected, nil)
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-A"},            // sources
+		"m-C",                      // canonical
+		[]string{"m-A", "m-B"},     // toFlatten: source + old intermediate target
+	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, []string{"m-A"}, "m-B")
 
@@ -477,8 +472,8 @@ func TestMerchantService_MergeMerchants_TargetAlreadyMerged_FlattensToCanonical(
 }
 
 func TestMerchantService_MergeMerchants_SourceEqualsCanonicalTarget_Skipped(t *testing.T) {
-	// Merging [m-A, m-B] → m-A: m-A is both a source and the canonical target.
-	// m-A must be skipped; only m-B should be written.
+	// Merging [m-A, m-B] → m-A: m-A is both a source and the canonical target → skipped.
+	// Only m-B is a source; toFlatten = [m-B] (no pre-merged target since canonical == target).
 	mr := new(mockMerchantRepo)
 	mor := new(mockMerchantOverrideRepo)
 	svc := newMerchantService(mr, mor)
@@ -491,9 +486,11 @@ func TestMerchantService_MergeMerchants_SourceEqualsCanonicalTarget_Skipped(t *t
 	expected := []domain.MerchantNameOverride{
 		{ID: "ov-1", UserID: userID, MerchantID: "m-B", MergedIntoMerchantID: &targetPtr},
 	}
-	mor.On("BulkUpsert", ctx, mock.MatchedBy(func(overrides []domain.MerchantNameOverride) bool {
-		return len(overrides) == 1 && overrides[0].MerchantID == "m-B"
-	})).Return(expected, nil)
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-B"}, // sources (m-A skipped — equals canonical)
+		"m-A",           // canonical
+		[]string{"m-B"}, // toFlatten
+	).Return(expected, nil)
 
 	result, err := svc.MergeMerchants(ctx, userID, []string{"m-A", "m-B"}, "m-A")
 
@@ -540,6 +537,82 @@ func TestMerchantService_MergeMerchants_CycleGuard_ThreeNode_ReturnsError(t *tes
 	require.ErrorIs(t, err, ErrMergeCycle)
 }
 
+// G20: source-side transitive merge — a source that is itself a prior canonical must have
+// its inbound chains re-pointed to the new canonical atomically.
+
+func TestMerchantService_MergeMerchants_SourceAlreadyCanonical_FlattensIncomingChains(t *testing.T) {
+	// Pre-condition: A→C exists in DB (written by a prior merge [A,B]→C).
+	// Action: merge [C,D]→E (target=E, canonical=E — no pre-merge on E).
+	// Expected: MergeAndFlatten([C,D], E, toFlatten=[C,D]) called.
+	// The repo impl re-points A→C to A→E inside the transaction, closing the depth-2 gap.
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	canonical := "m-E"
+
+	mor.On("GetMergeTarget", ctx, userID, "m-E").Return("", nil) // E is canonical
+	canonicalCopy := canonical
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-C", UserID: userID, MerchantID: "m-C", MergedIntoMerchantID: &canonicalCopy},
+		{ID: "ov-D", UserID: userID, MerchantID: "m-D", MergedIntoMerchantID: &canonicalCopy},
+	}
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-C", "m-D"}, // sources
+		canonical,               // canonical
+		[]string{"m-C", "m-D"}, // toFlatten — the repo will UPDATE A→C to A→E
+	).Return(expected, nil)
+
+	result, err := svc.MergeMerchants(ctx, userID, []string{"m-C", "m-D"}, "m-E")
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	assert.Equal(t, "m-C", result[0].MerchantID)
+	assert.Equal(t, "m-D", result[1].MerchantID)
+	for _, r := range result {
+		assert.Equal(t, canonical, *r.MergedIntoMerchantID)
+	}
+	mor.AssertExpectations(t)
+}
+
+func TestMerchantService_MergeMerchants_TargetAndSourceBothPreMerged(t *testing.T) {
+	// Pre-condition: T→G and A→C both exist (two prior merges).
+	// Action: merge [C,D]→T (target=T, but T resolves to canonical G).
+	// Expected: MergeAndFlatten([C,D], G, toFlatten=[C,D,T]) called.
+	// The repo will: re-point A→C to A→G AND B→T to B→G in the same UPDATE, atomically.
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	canonical := "m-G"
+
+	// T→G chain: resolveCanonical("m-T") → GetMergeTarget("m-T")="m-G" → GetMergeTarget("m-G")="" → canonical="m-G"
+	mor.On("GetMergeTarget", ctx, userID, "m-T").Return("m-G", nil)
+	mor.On("GetMergeTarget", ctx, userID, "m-G").Return("", nil)
+
+	canonicalCopy := canonical
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-C", UserID: userID, MerchantID: "m-C", MergedIntoMerchantID: &canonicalCopy},
+		{ID: "ov-D", UserID: userID, MerchantID: "m-D", MergedIntoMerchantID: &canonicalCopy},
+	}
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-C", "m-D"},     // sources (neither is m-G)
+		canonical,                   // canonical = m-G
+		[]string{"m-C", "m-D", "m-T"}, // toFlatten: sources + old intermediate target m-T
+	).Return(expected, nil)
+
+	result, err := svc.MergeMerchants(ctx, userID, []string{"m-C", "m-D"}, "m-T")
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	for _, r := range result {
+		assert.Equal(t, canonical, *r.MergedIntoMerchantID)
+	}
+	mor.AssertExpectations(t)
+}
+
 // ============================================================================
 // GetMerchantOverrides
 // ============================================================================
@@ -559,7 +632,6 @@ func TestMerchantService_GetMerchantOverrides_ReturnsOverrides(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
-
 
 func TestMerchantService_GetMerchantOverrides_RepoError(t *testing.T) {
 	mr := new(mockMerchantRepo)
