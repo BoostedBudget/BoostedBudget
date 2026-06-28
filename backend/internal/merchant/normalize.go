@@ -51,7 +51,14 @@ func Normalize(raw string) string {
 	s = reWhitespace.ReplaceAllString(strings.TrimSpace(s), " ")
 	s = strings.TrimSpace(s)
 
-	// 4. Title-case
+	// 5. If normalization emptied the string (e.g. bare prefix "SQ *" with no name
+	// following it), fall back to the trimmed raw input. A blank display name is
+	// worse than showing the original garbled string.
+	if s == "" {
+		return strings.TrimSpace(raw)
+	}
+
+	// 6. Title-case
 	s = titleCase(s)
 
 	return s

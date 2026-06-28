@@ -202,27 +202,29 @@ export function MerchantsTab() {
         </div>
       )}
 
-      <DataTable
-        data={merchants}
-        columns={columns}
-        rowKey={(m) => m.merchant_id}
-        rowActions={rowActions}
-        sort={sort}
-        onSortChange={setSort}
-        filters={filters}
-        onFiltersChange={setFilters}
-        emptyState={
-          <div className="py-12 text-center text-sm text-muted-foreground">
-            No merchants found. Sync transactions to see your merchants here.
-          </div>
-        }
-        maskedColumnIds={['total_spend']}
-        columnVisibility={columnVisibility}
-        onColumnVisibilityChange={onColumnVisibilityChange}
-        columnOrder={columnOrder}
-        onColumnOrderChange={onColumnOrderChange}
-        loading={isLoading}
-      />
+      <div data-testid="data-table">
+        <DataTable
+          data={merchants}
+          columns={columns}
+          rowKey={(m) => m.merchant_id}
+          rowActions={rowActions}
+          sort={sort}
+          onSortChange={setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          emptyState={
+            <div data-testid="empty-state" className="py-12 text-center text-sm text-muted-foreground">
+              No merchants found. Sync transactions to see your merchants here.
+            </div>
+          }
+          maskedColumnIds={['total_spend']}
+          columnVisibility={columnVisibility}
+          onColumnVisibilityChange={onColumnVisibilityChange}
+          columnOrder={columnOrder}
+          onColumnOrderChange={onColumnOrderChange}
+          loading={isLoading}
+        />
+      </div>
 
       {renameTarget && (
         <div

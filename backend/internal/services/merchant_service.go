@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,10 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// ErrMergeCycle is returned by MergeMerchants when the merge chain for the
+// target merchant contains a cycle, indicating data corruption in the DB.
+var ErrMergeCycle = errors.New("merchant merge cycle detected")
 
 // duplicateThreshold is the default fuzzy-similarity threshold passed to
 // GetDuplicateSuggestions. Values are in [0,1]; 0.6 catches close-but-not-exact
@@ -116,35 +121,65 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 // GetMerchantOverrides returns all per-user merchant name overrides for a user,
 // ordered by created_at DESC.
 func (s *MerchantService) GetMerchantOverrides(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error) {
-	overrides, err := s.merchantOverrideRepo.GetByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if overrides != nil {
-		return overrides, nil
-	}
-	return []domain.MerchantNameOverride{}, nil
+	return s.merchantOverrideRepo.GetByUserID(ctx, userID)
 }
 
 // MergeMerchants creates overrides that point each source merchantID to the
-// targetMerchantID. Transactions for the source merchants will display under
-// the target merchant's name at read time. The target itself is excluded from
-// the source list to prevent self-merge.
+// canonical target (following any existing merge chain so all pointers stay at
+// depth-1). Sources equal to the canonical target are skipped. If the target
+// itself is already merged into another merchant, existing overrides pointing at
+// the old target are re-flattened to the canonical as well.
 func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, merchantIDs []string, targetMerchantID string) ([]domain.MerchantNameOverride, error) {
 	if len(merchantIDs) == 0 {
 		return []domain.MerchantNameOverride{}, nil
 	}
 
+	// Resolve the canonical target, following any existing merge chain.
+	canonicalTargetID, err := s.resolveCanonical(ctx, userID, targetMerchantID, make(map[string]struct{}))
+	if err != nil {
+		return nil, fmt.Errorf("MergeMerchants: resolve canonical: %w", err)
+	}
+
+	// If the target was itself already merged, re-flatten any existing overrides
+	// pointing at the intermediate target to keep depth-1 invariant.
+	if canonicalTargetID != targetMerchantID {
+		if err := s.merchantOverrideRepo.ReassignMergeTarget(ctx, userID, targetMerchantID, canonicalTargetID); err != nil {
+			return nil, fmt.Errorf("MergeMerchants: reassign existing chains: %w", err)
+		}
+	}
+
 	overrides := make([]domain.MerchantNameOverride, 0, len(merchantIDs))
 	for _, id := range merchantIDs {
-		if id == targetMerchantID {
-			continue
+		if id == canonicalTargetID {
+			continue // self-merge — skip
 		}
 		overrides = append(overrides, domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           id,
-			MergedIntoMerchantID: &targetMerchantID,
+			MergedIntoMerchantID: &canonicalTargetID,
 		})
 	}
+	if len(overrides) == 0 {
+		return []domain.MerchantNameOverride{}, nil
+	}
 	return s.merchantOverrideRepo.BulkUpsert(ctx, overrides)
+}
+
+// resolveCanonical follows the merge chain for merchantID until reaching a merchant
+// with no merge pointer (the canonical). A visited set detects cycles; if a cycle
+// is found, ErrMergeCycle is returned so the caller can surface the data corruption
+// rather than silently treating it as a valid canonical.
+func (s *MerchantService) resolveCanonical(ctx context.Context, userID, merchantID string, visited map[string]struct{}) (string, error) {
+	if _, seen := visited[merchantID]; seen {
+		return "", ErrMergeCycle
+	}
+	visited[merchantID] = struct{}{}
+	target, err := s.merchantOverrideRepo.GetMergeTarget(ctx, userID, merchantID)
+	if err != nil {
+		return "", err
+	}
+	if target == "" {
+		return merchantID, nil // no merge pointer — this is canonical
+	}
+	return s.resolveCanonical(ctx, userID, target, visited)
 }

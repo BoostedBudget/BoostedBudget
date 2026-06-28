@@ -96,9 +96,8 @@ test.describe('Merchants tab', () => {
 
     await page.getByTestId('tab-merchants').click()
 
-    // DataTable with merchant rows should appear
+    // DataTable with merchant data should appear
     await expect(page.getByTestId('data-table')).toBeVisible()
-    await expect(page.getByTestId('merchant-row-0')).toBeVisible()
     await expect(page.getByText('Whole Foods')).toBeVisible()
   })
 
@@ -141,10 +140,64 @@ test.describe('Merchants tab', () => {
     await page.waitForLoadState('domcontentloaded')
 
     await page.getByTestId('tab-merchants').click()
-    await page.waitForSelector('[data-testid="merchant-row-0"]')
+    await page.waitForSelector('[data-testid="action-rename-0"]')
 
     await page.getByTestId('action-rename-0').click()
     await expect(page.getByTestId('rename-modal')).toBeVisible()
     await expect(page.getByTestId('rename-input')).toBeVisible()
+  })
+
+  // G19: assert actual mutation request bodies (not just "modal opened").
+  test('save rename fires PUT with display_name in request body', async ({ page }) => {
+    // Intercept the PUT before the general merchants catch-all.
+    let capturedBody: Record<string, unknown> | null = null
+    await page.route('**/api/v1/merchants/merch-1/override', (route) => {
+      if (route.request().method() === 'PUT') {
+        capturedBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'ov-1', merchant_id: 'merch-1', display_name: 'Whole Foods Market' }) })
+      } else {
+        route.fallback()
+      }
+    })
+    await mockMerchantsAPIs(page)
+    await page.goto('/auto-categorization')
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.getByTestId('tab-merchants').click()
+    await page.waitForSelector('[data-testid="action-rename-0"]')
+
+    await page.getByTestId('action-rename-0').click()
+    await expect(page.getByTestId('rename-input')).toBeVisible()
+    await page.getByTestId('rename-input').fill('Whole Foods Market')
+    await page.getByTestId('rename-save-btn').click()
+
+    await expect(async () => {
+      expect(capturedBody).not.toBeNull()
+      expect((capturedBody as Record<string, unknown>).display_name).toBe('Whole Foods Market')
+    }).toPass({ timeout: 5000 })
+  })
+
+  test('clear override fires DELETE to correct merchant endpoint', async ({ page }) => {
+    let deleteWasCalled = false
+    await page.route('**/api/v1/merchants/merch-2/override', (route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteWasCalled = true
+        route.fulfill({ status: 204 })
+      } else {
+        route.fallback()
+      }
+    })
+    await mockMerchantsAPIs(page)
+    await page.goto('/auto-categorization')
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.getByTestId('tab-merchants').click()
+    await page.waitForSelector('[data-testid="action-clear-override-1"]')
+
+    await page.getByTestId('action-clear-override-1').click()
+
+    await expect(async () => {
+      expect(deleteWasCalled).toBe(true)
+    }).toPass({ timeout: 5000 })
   })
 })

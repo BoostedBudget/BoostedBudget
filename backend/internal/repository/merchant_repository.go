@@ -28,6 +28,13 @@ type MerchantOverrideRepo interface {
 	BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error)
 	GetByUserID(ctx context.Context, userID string) ([]domain.MerchantNameOverride, error)
 	Delete(ctx context.Context, userID, merchantID string) error
+	// GetMergeTarget returns the merged_into_merchant_id for the given user+merchant, or
+	// "" if no override exists or the override has no merge pointer. Used by MergeMerchants
+	// to resolve canonical targets and maintain depth-1 chain invariant.
+	GetMergeTarget(ctx context.Context, userID, merchantID string) (string, error)
+	// ReassignMergeTarget bulk-updates overrides whose merged_into_merchant_id == oldTargetID
+	// to point at newTargetID instead. Keeps existing chains flat after a target is re-merged.
+	ReassignMergeTarget(ctx context.Context, userID, oldTargetID, newTargetID string) error
 }
 
 // MerchantRepository handles data access for merchants.
@@ -112,8 +119,8 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
 	const q = `
         SELECT
             COALESCE(o.merged_into_merchant_id, t.merchant_id)::text        AS effective_merchant_id,
-            COALESCE(m2.normalized_name, m2.name)                           AS normalized_name,
-            MAX(COALESCE(o.display_name, m2.normalized_name, m2.name))      AS effective_display_name,
+            COALESCE(NULLIF(m2.normalized_name, ''), m2.name)               AS normalized_name,
+            MAX(COALESCE(o.display_name, NULLIF(m2.normalized_name, ''), m2.name)) AS effective_display_name,
             array_agg(DISTINCT m.name)                                       AS raw_variants,
             COUNT(*)                                                         AS transaction_count,
             COALESCE(SUM(ABS(t.amount)), 0)                                 AS total_spend,
@@ -162,9 +169,6 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-	if summaries == nil {
-		summaries = []domain.MerchantSummary{}
 	}
 	return summaries, nil
 }
