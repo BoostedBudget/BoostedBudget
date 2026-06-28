@@ -37,10 +37,14 @@ func TestNormalize(t *testing.T) {
 		{name: "tab_in_name", input: "TARGET\tSTORE", want: "Target Store"},
 		// Preserve multi-word names after stripping
 		{name: "multi_word_after_strip", input: "SQ *BLUE BOTTLE COFFEE #001", want: "Blue Bottle Coffee"},
-		// Edge: empty input
+		// Edge: empty and whitespace-only inputs
 		{name: "empty_string", input: "", want: ""},
-		// Edge: only a prefix — normalizes to empty or near-empty gracefully
-		{name: "just_sq_star", input: "SQ *", want: ""},
+		{name: "whitespace_only_spaces", input: "   ", want: ""},
+		{name: "whitespace_only_tab", input: "\t", want: ""},
+		// Edge: bare prefix (nothing after the asterisk) — falls back to trimmed raw;
+		// blank display is worse than showing the original garbled name.
+		{name: "just_sq_star", input: "SQ *", want: "SQ *"},
+		{name: "just_tst_star", input: "TST *", want: "TST *"},
 		// Edge: no transformation needed
 		{name: "clean_name", input: "Whole Foods Market", want: "Whole Foods Market"},
 		// Edge: multiple trailing codes

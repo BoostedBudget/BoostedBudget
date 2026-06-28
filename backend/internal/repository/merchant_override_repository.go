@@ -96,7 +96,7 @@ func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides [
 	}
 	defer rows.Close()
 
-	var results []domain.MerchantNameOverride
+	results := make([]domain.MerchantNameOverride, 0, len(overrides))
 	for rows.Next() {
 		var o domain.MerchantNameOverride
 		if err := rows.Scan(
@@ -114,9 +114,6 @@ func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides [
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-	if results == nil {
-		results = []domain.MerchantNameOverride{}
 	}
 	return results, nil
 }
@@ -154,8 +151,8 @@ func (r *MerchantOverrideRepository) GetByUserID(ctx context.Context, userID str
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if overrides == nil {
-		overrides = []domain.MerchantNameOverride{}
+	if len(overrides) == 0 {
+		return []domain.MerchantNameOverride{}, nil
 	}
 	return overrides, nil
 }
@@ -165,6 +162,39 @@ func (r *MerchantOverrideRepository) GetByUserID(ctx context.Context, userID str
 func (r *MerchantOverrideRepository) Delete(ctx context.Context, userID, merchantID string) error {
 	const q = `DELETE FROM merchant_name_overrides WHERE user_id = $1 AND merchant_id = $2`
 	_, err := r.db.Exec(ctx, q, userID, merchantID)
+	return err
+}
+
+// GetMergeTarget returns the merged_into_merchant_id for the given user+merchant as a string,
+// or "" if no override exists or the override has no merge pointer set.
+func (r *MerchantOverrideRepository) GetMergeTarget(ctx context.Context, userID, merchantID string) (string, error) {
+	const q = `
+		SELECT COALESCE(merged_into_merchant_id::text, '')
+		FROM   merchant_name_overrides
+		WHERE  user_id = $1 AND merchant_id = $2::uuid`
+	var target string
+	err := r.db.QueryRow(ctx, q, userID, merchantID).Scan(&target)
+	if err != nil {
+		// pgx returns pgx.ErrNoRows when there is no matching override; treat as no merge.
+		if err.Error() == "no rows in result set" {
+			return "", nil
+		}
+		return "", err
+	}
+	return target, nil
+}
+
+// ReassignMergeTarget updates any overrides for userID whose merged_into_merchant_id equals
+// oldTargetID to point at newTargetID instead. This is used to flatten merge chains when a
+// target merchant is itself re-merged into a new canonical.
+func (r *MerchantOverrideRepository) ReassignMergeTarget(ctx context.Context, userID, oldTargetID, newTargetID string) error {
+	const q = `
+		UPDATE merchant_name_overrides
+		SET    merged_into_merchant_id = $3::uuid,
+		       updated_at = NOW()
+		WHERE  user_id = $1
+		  AND  merged_into_merchant_id = $2::uuid`
+	_, err := r.db.Exec(ctx, q, userID, oldTargetID, newTargetID)
 	return err
 }
 

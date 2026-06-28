@@ -1034,7 +1034,7 @@ func (r *transactionRepository) ResolveEffectiveMerchantNames(ctx context.Contex
 
 	const q = `
 		SELECT m.id::text,
-		       COALESCE(mno.display_name, mno_t.display_name, m2.normalized_name, m2.name) AS effective_name
+		       COALESCE(mno.display_name, mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name) AS effective_name
 		FROM   merchants m
 		LEFT   JOIN merchant_name_overrides mno
 		            ON mno.merchant_id = m.id AND mno.user_id = $1

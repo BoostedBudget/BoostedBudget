@@ -22,20 +22,31 @@ import {
 } from '@/test/mocks/merchants-api'
 
 mock.module('@/shared/components/DataTable', () => ({
-  DataTable: ({ data, rowActions, emptyState }: {
+  DataTable: ({ data, columns, rowActions, emptyState, maskedColumnIds }: {
     data: unknown[]
-    columns: { id: string }[]
+    columns?: { id: string; render?: (row: unknown) => React.ReactNode }[]
     rowActions?: (row: unknown) => React.ReactNode
     emptyState?: React.ReactNode
+    maskedColumnIds?: string[]
   }) => (
-    <div data-testid="data-table">
-      {data.length === 0 && <div data-testid="empty-state">{emptyState}</div>}
+    <div>
+      {data.length === 0 && <>{emptyState}</>}
       {data.map((row: unknown, i: number) => {
         const merchant = row as MerchantSummary
+        const spendCol = columns?.find((c) => c.id === 'total_spend')
+        const isMasked = maskedColumnIds?.includes('total_spend')
         return (
           <div key={i} data-testid={`merchant-row-${i}`}>
             <span data-testid={`merchant-name-${i}`}>{merchant.effective_display_name}</span>
             <span data-testid={`merchant-txn-count-${i}`}>{merchant.transaction_count}</span>
+            {spendCol && (
+              <td
+                data-testid={`spend-cell-${i}`}
+                {...(isMasked ? { 'data-ph-mask': '' } : {})}
+              >
+                {spendCol.render?.(row)}
+              </td>
+            )}
             {rowActions?.(row)}
           </div>
         )
@@ -225,6 +236,21 @@ describe('MerchantsTab', () => {
       expect(screen.getByTestId('data-table')).toBeInTheDocument()
     })
     expect(screen.queryByTestId('duplicate-suggestions')).not.toBeInTheDocument()
+  })
+
+  // G19: data-ph-mask on spend cells — verifies maskedColumnIds is wired correctly.
+  it('spend column carries data-ph-mask for PII masking', async () => {
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByTestId('spend-cell-0')).toBeInTheDocument())
+    expect(screen.getByTestId('spend-cell-0')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByTestId('spend-cell-0')).toHaveTextContent('$450.50')
+  })
+
+  it('spend column renders formatted currency', async () => {
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByTestId('spend-cell-1')).toBeInTheDocument())
+    // merchant2.total_spend = 8750
+    expect(screen.getByTestId('spend-cell-1')).toHaveTextContent('$8750.00')
   })
 
   it('calls mergeMerchants when merge button clicked in suggestions', async () => {
