@@ -124,11 +124,17 @@ func (s *MerchantService) GetMerchantOverrides(ctx context.Context, userID strin
 	return s.merchantOverrideRepo.GetByUserID(ctx, userID)
 }
 
-// MergeMerchants creates overrides that point each source merchantID to the
-// canonical target (following any existing merge chain so all pointers stay at
-// depth-1). Sources equal to the canonical target are skipped. If the target
-// itself is already merged into another merchant, existing overrides pointing at
-// the old target are re-flattened to the canonical as well.
+// MergeMerchants creates overrides that point each source merchantID to the canonical target,
+// maintaining the depth-1 chain invariant atomically:
+//
+//   - The canonical is resolved by walking any existing merge chain on the target.
+//   - Every override currently pointing at any source or at the old intermediate target (if the
+//     target was itself already merged) is re-pointed to the canonical in a single UPDATE (G20 +
+//     G17 combined fix).
+//   - Source → canonical overrides are bulk-upserted in the same transaction.
+//
+// Sources equal to the canonical target are skipped. An ErrMergeCycle is returned if the target's
+// existing chain contains a cycle, indicating DB corruption.
 func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, merchantIDs []string, targetMerchantID string) ([]domain.MerchantNameOverride, error) {
 	if len(merchantIDs) == 0 {
 		return []domain.MerchantNameOverride{}, nil
@@ -140,29 +146,28 @@ func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, mer
 		return nil, fmt.Errorf("MergeMerchants: resolve canonical: %w", err)
 	}
 
-	// If the target was itself already merged, re-flatten any existing overrides
-	// pointing at the intermediate target to keep depth-1 invariant.
-	if canonicalTargetID != targetMerchantID {
-		if err := s.merchantOverrideRepo.ReassignMergeTarget(ctx, userID, targetMerchantID, canonicalTargetID); err != nil {
-			return nil, fmt.Errorf("MergeMerchants: reassign existing chains: %w", err)
-		}
-	}
-
-	overrides := make([]domain.MerchantNameOverride, 0, len(merchantIDs))
+	// Filter sources: skip any that equal the canonical (self-merge).
+	sources := make([]string, 0, len(merchantIDs))
 	for _, id := range merchantIDs {
-		if id == canonicalTargetID {
-			continue // self-merge — skip
+		if id != canonicalTargetID {
+			sources = append(sources, id)
 		}
-		overrides = append(overrides, domain.MerchantNameOverride{
-			UserID:               userID,
-			MerchantID:           id,
-			MergedIntoMerchantID: &canonicalTargetID,
-		})
 	}
-	if len(overrides) == 0 {
+	if len(sources) == 0 {
 		return []domain.MerchantNameOverride{}, nil
 	}
-	return s.merchantOverrideRepo.BulkUpsert(ctx, overrides)
+
+	// toFlatten = all IDs whose inbound chains must be re-pointed to canonical:
+	//   • all sources (G20: a source may itself be a prior canonical with inbound chains)
+	//   • the intermediate target if the target was pre-merged (G17: existing pointers at the
+	//     old target must also be re-pointed)
+	toFlatten := make([]string, 0, len(sources)+1)
+	toFlatten = append(toFlatten, sources...)
+	if canonicalTargetID != targetMerchantID {
+		toFlatten = append(toFlatten, targetMerchantID)
+	}
+
+	return s.merchantOverrideRepo.MergeAndFlatten(ctx, userID, sources, canonicalTargetID, toFlatten)
 }
 
 // resolveCanonical follows the merge chain for merchantID until reaching a merchant

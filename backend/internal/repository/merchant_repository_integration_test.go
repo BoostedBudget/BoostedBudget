@@ -383,3 +383,86 @@ func TestResolveEffectiveMerchantNames_EmptyInput_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, result, "empty merchantIDs must return empty map")
 }
+
+// ── G23: duplicate suggestions must exclude already-merged merchants ──────────────────────
+//
+// If a merchant has been merged into another (merged_into_merchant_id IS NOT NULL in
+// merchant_name_overrides), it must not appear in GetDuplicateSuggestions — otherwise the
+// user sees already-completed merges re-suggested and one-click re-merging creates depth-2 chains.
+
+func TestGetDuplicateSuggestions_ExcludesMergedMerchants_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed two very similar merchants and link transactions to both.
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g23-src-a")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token-g23b')
+	`, linkedItemID, userID, "item-g23b-"+linkedItemID.String())
+	require.NoError(t, err)
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, user_id, linked_item_id, plaid_account_id, name, type, subtype)
+		VALUES ($1, $2, $3, $4, 'Checking-G23', 'depository', 'checking')
+	`, accountID, userID, linkedItemID, "plaid-acct-g23-"+accountID.String())
+	require.NoError(t, err)
+
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Coffee Shope', 'Coffee Shope', NOW())
+	`, merchantB)
+	require.NoError(t, err)
+
+	txID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO transactions (id, user_id, account_id, merchant_id, plaid_transaction_id,
+			merchant_name, amount, date, pending)
+		VALUES ($1, $2, $3, $4, $5, 'Coffee Shope', -3.50, CURRENT_DATE, false)
+	`, txID, userID, accountID, merchantB, "plaid-tx-g23b-"+txID.String())
+	require.NoError(t, err)
+
+	txRepo := NewMerchantRepository(tx)
+
+	// Phase 1: before merge — both merchants should appear in suggestions.
+	groups, err := txRepo.GetDuplicateSuggestions(ctx, userID.String(), 0.5)
+	require.NoError(t, err)
+	preFoundA, preFoundB := false, false
+	for _, g := range groups {
+		for _, s := range g {
+			if s.MerchantID == merchantA.String() {
+				preFoundA = true
+			}
+			if s.MerchantID == merchantB.String() {
+				preFoundB = true
+			}
+		}
+	}
+	require.True(t, preFoundA || preFoundB, "at least one of the similar merchants should appear in suggestions before merge")
+
+	// Phase 2: merge A → B (A becomes the merged-away source).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides
+		    (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed merge override: A→B")
+
+	// Phase 3: after merge — merchantA must NOT appear in suggestions.
+	groups, err = txRepo.GetDuplicateSuggestions(ctx, userID.String(), 0.5)
+	require.NoError(t, err)
+	for _, g := range groups {
+		for _, s := range g {
+			assert.NotEqual(t, merchantA.String(), s.MerchantID,
+				"G23: already-merged merchant A must not appear in duplicate suggestions")
+		}
+	}
+}
