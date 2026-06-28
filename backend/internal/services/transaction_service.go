@@ -379,6 +379,9 @@ func (s *transactionService) GetTransactionByID(ctx context.Context, userID, tra
 	if err := s.enrichCustomCategoryDisplay(ctx, userID, []*domain.Transaction{tx}); err != nil {
 		return nil, err
 	}
+	if err := s.enrichEffectiveMerchantNamesForTransactions(ctx, userID, []*domain.Transaction{tx}); err != nil {
+		return nil, err
+	}
 	return tx, nil
 }
 

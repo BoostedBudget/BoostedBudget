@@ -897,6 +897,92 @@ func TestGetTransactionByID_NilDisplayWhenNoCustomCategory(t *testing.T) {
 	mockCategoryRepo.AssertExpectations(t)
 }
 
+// TestGetTransactionByID_EnrichesEffectiveMerchantName asserts that GetTransactionByID populates
+// EffectiveMerchantName from the shared resolver (G15 — single-GET path).
+func TestGetTransactionByID_EnrichesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-uuid-1"
+	txn := &domain.Transaction{ID: "txn-emn", UserID: "user-1", MerchantID: &mID}
+	mockRepo.On("GetByID", ctx, "txn-emn").Return(txn, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Whole Foods Market"}, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-emn")
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "EffectiveMerchantName must be populated by GetTransactionByID")
+	assert.Equal(t, "Whole Foods Market", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestGetTransactionByID_EnrichMerchant_ResolverError asserts that a resolver failure propagates.
+func TestGetTransactionByID_EnrichMerchant_ResolverError(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-err"
+	txn := &domain.Transaction{ID: "txn-err", UserID: "user-1", MerchantID: &mID}
+	mockRepo.On("GetByID", ctx, "txn-err").Return(txn, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(nil, errors.New("db unavailable"))
+
+	_, err := service.GetTransactionByID(ctx, "user-1", "txn-err")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db unavailable")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionTags_ResponseCarriesEffectiveMerchantName asserts that the mutation
+// response carries EffectiveMerchantName (enrichment is transitive via GetTransactionByID — G15).
+func TestUpdateTransactionTags_ResponseCarriesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-tags"
+	txn := &domain.Transaction{ID: "txn-tags-emn", UserID: "user-1", MerchantID: &mID}
+	tags := []string{"groceries"}
+
+	mockRepo.On("GetByID", ctx, "txn-tags-emn").Return(txn, nil)
+	mockRepo.On("UpdateTags", ctx, "txn-tags-emn", "user-1", tags, mock.AnythingOfType("[]domain.TagSource")).Return(nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Starbucks"}, nil)
+
+	result, err := service.UpdateTransactionTags(ctx, "user-1", "txn-tags-emn", tags)
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "mutation response must carry EffectiveMerchantName")
+	assert.Equal(t, "Starbucks", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionCategory_ResponseCarriesEffectiveMerchantName asserts that the mutation
+// response carries EffectiveMerchantName (enrichment is transitive via final GetTransactionByID — G15).
+func TestUpdateTransactionCategory_ResponseCarriesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-cat"
+	txn := &domain.Transaction{ID: "txn-cat-emn", UserID: "user-1", MerchantID: &mID}
+
+	// GetTransactionByID is called twice: once for ownership check, once to return result.
+	mockRepo.On("GetByID", ctx, "txn-cat-emn").Return(txn, nil).Times(2)
+	mockRepo.On("UpdateCategory", ctx, "txn-cat-emn", "user-1",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// ResolveEffectiveMerchantNames is called once per GetTransactionByID invocation that has a merchant_id.
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Amazon"}, nil).Times(2)
+
+	result, err := service.UpdateTransactionCategory(ctx, "user-1", "txn-cat-emn", "clear", nil, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "mutation response must carry EffectiveMerchantName")
+	assert.Equal(t, "Amazon", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestListTransactions_PopulatesCustomCategoryDisplay asserts that list enriches custom-category display.
 func TestListTransactions_PopulatesCustomCategoryDisplay(t *testing.T) {
 	ctx := context.Background()
