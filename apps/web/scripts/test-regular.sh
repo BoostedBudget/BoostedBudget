@@ -23,8 +23,9 @@ EXCLUDE_PATTERNS=(
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     "src/components/ui/toggle-group.test.tsx"
-    # Inline mock.module() pollution
+    # Inline mock.module() pollution (see feedback_bun_test_mock_module_global.md)
     "src/features/accounts/AccountsPage.test.tsx"
+    "src/features/auto-categorization/components/MerchantsTab.test.tsx"
     # Real-implementation hook tests
     "src/features/dashboard/hooks/useDashboardData.test.tsx"
     "src/features/dashboard/hooks/useDashboardLayout.test.tsx"

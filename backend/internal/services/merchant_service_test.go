@@ -217,6 +217,8 @@ func TestMerchantService_SetOverride_DisplayName(t *testing.T) {
 }
 
 func TestMerchantService_SetOverride_MergedInto(t *testing.T) {
+	// Merge pointer: SetOverride now routes through applyMergeFlatten (G24).
+	// Expects GetMergeTarget (resolveCanonical) + MergeAndFlatten, NOT Upsert.
 	mr := new(mockMerchantRepo)
 	mor := new(mockMerchantOverrideRepo)
 	svc := newMerchantService(mr, mor)
@@ -225,20 +227,25 @@ func TestMerchantService_SetOverride_MergedInto(t *testing.T) {
 	merchantID := "m1"
 	targetID := "m2"
 
-	expected := &domain.MerchantNameOverride{
+	targetCopy := targetID
+	expected := domain.MerchantNameOverride{
 		ID:                   "ov-2",
 		UserID:               userID,
 		MerchantID:           merchantID,
-		MergedIntoMerchantID: &targetID,
+		MergedIntoMerchantID: &targetCopy,
 	}
-	mor.On("Upsert", ctx, mock.MatchedBy(func(o domain.MerchantNameOverride) bool {
-		return o.UserID == userID && o.MerchantID == merchantID && o.MergedIntoMerchantID != nil && *o.MergedIntoMerchantID == targetID
-	})).Return(expected, nil)
+	// resolveCanonical: m2 has no merge pointer → canonical = m2
+	mor.On("GetMergeTarget", ctx, userID, targetID).Return("", nil)
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{merchantID}, targetID, []string{merchantID},
+	).Return([]domain.MerchantNameOverride{expected}, nil)
 
 	result, err := svc.SetOverride(ctx, userID, merchantID, nil, &targetID)
 
 	require.NoError(t, err)
-	assert.Equal(t, expected, result)
+	require.NotNil(t, result)
+	assert.Equal(t, &targetCopy, result.MergedIntoMerchantID)
+	mor.AssertNotCalled(t, "Upsert")
 	mor.AssertExpectations(t)
 }
 
@@ -644,6 +651,266 @@ func TestMerchantService_GetMerchantOverrides_RepoError(t *testing.T) {
 	_, err := svc.GetMerchantOverrides(ctx, "user-1")
 
 	require.Error(t, err)
+}
+
+// ============================================================================
+// G24: SetOverride/BulkSetOverrides merge writes routed through applyMergeFlatten
+// ============================================================================
+
+// SetOverride with a merge pointer must call GetMergeTarget + MergeAndFlatten, NOT Upsert.
+func TestSetOverride_WithMergePointer_RoutesThroughFlatten(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	merchantID := "m-B"
+	targetID := "m-C"
+
+	// C has no existing merge pointer → canonical is C
+	mor.On("GetMergeTarget", ctx, userID, targetID).Return("", nil)
+	canonicalCopy := targetID
+	expected := domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID, MergedIntoMerchantID: &canonicalCopy,
+	}
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{merchantID}, // sources
+		targetID,             // canonical
+		[]string{merchantID}, // toFlatten (no pre-merged target)
+	).Return([]domain.MerchantNameOverride{expected}, nil)
+
+	result, err := svc.SetOverride(ctx, userID, merchantID, nil, &targetID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, &canonicalCopy, result.MergedIntoMerchantID)
+	mor.AssertNotCalled(t, "Upsert")
+	mor.AssertExpectations(t)
+}
+
+// SetOverride with only a display name must call Upsert, NOT MergeAndFlatten.
+func TestSetOverride_PureRename_UsesUpsert(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	merchantID := "m-B"
+	displayName := "New Name"
+
+	expected := &domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID, DisplayName: &displayName,
+	}
+	mor.On("Upsert", ctx, mock.MatchedBy(func(o domain.MerchantNameOverride) bool {
+		return o.UserID == userID && o.MerchantID == merchantID &&
+			o.DisplayName != nil && *o.DisplayName == displayName &&
+			o.MergedIntoMerchantID == nil
+	})).Return(expected, nil)
+
+	result, err := svc.SetOverride(ctx, userID, merchantID, &displayName, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+	mor.AssertNotCalled(t, "MergeAndFlatten")
+	mor.AssertExpectations(t)
+}
+
+// SetOverride with both display_name and merged_into must set the display first (Upsert),
+// then route the merge through applyMergeFlatten (preserving the display via ON CONFLICT).
+func TestSetOverride_RenameAndMerge_RoutesThroughFlattenPreservingDisplayName(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	merchantID := "m-B"
+	targetID := "m-C"
+	displayName := "Custom Name"
+
+	upsertResult := &domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID, DisplayName: &displayName,
+	}
+	canonicalCopy := targetID
+	mergeResult := domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID,
+		DisplayName: &displayName, MergedIntoMerchantID: &canonicalCopy,
+	}
+
+	// Step 1: Upsert to persist display_name
+	mor.On("Upsert", ctx, mock.MatchedBy(func(o domain.MerchantNameOverride) bool {
+		return o.UserID == userID && o.MerchantID == merchantID && o.DisplayName != nil && *o.DisplayName == displayName
+	})).Return(upsertResult, nil)
+	// Step 2: C has no existing merge pointer
+	mor.On("GetMergeTarget", ctx, userID, targetID).Return("", nil)
+	// Step 3: MergeAndFlatten preserves display_name via ON CONFLICT
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{merchantID}, targetID, []string{merchantID},
+	).Return([]domain.MerchantNameOverride{mergeResult}, nil)
+
+	result, err := svc.SetOverride(ctx, userID, merchantID, &displayName, &targetID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, &displayName, result.DisplayName)
+	assert.Equal(t, &canonicalCopy, result.MergedIntoMerchantID)
+	mor.AssertExpectations(t)
+}
+
+// SetOverride with merge pointer pointing at a pre-merged target resolves to the canonical.
+func TestSetOverride_WithMergePointer_TargetPreMerged_ResolvesToCanonical(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	merchantID := "m-B"
+	targetID := "m-T" // T→G chain in DB
+	canonicalID := "m-G"
+
+	// resolveCanonical: T→G, G has no merge pointer
+	mor.On("GetMergeTarget", ctx, userID, targetID).Return(canonicalID, nil)
+	mor.On("GetMergeTarget", ctx, userID, canonicalID).Return("", nil)
+	canonicalCopy := canonicalID
+	expected := domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID, MergedIntoMerchantID: &canonicalCopy,
+	}
+	// MergeAndFlatten called with canonical=G, toFlatten includes source + old intermediate T
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{merchantID},          // sources
+		canonicalID,                   // canonical = G
+		[]string{merchantID, targetID}, // toFlatten: source + old T
+	).Return([]domain.MerchantNameOverride{expected}, nil)
+
+	result, err := svc.SetOverride(ctx, userID, merchantID, nil, &targetID)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, canonicalID, *result.MergedIntoMerchantID)
+	mor.AssertExpectations(t)
+}
+
+// BulkSetOverrides with a mixed batch: display-only entries → BulkUpsert,
+// merge-bearing entries → applyMergeFlatten (via GetMergeTarget + MergeAndFlatten).
+func TestBulkSetOverrides_SplitsMergeAndDisplayEntries(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	dn1 := "Starbucks"
+	target := "m-C"
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m1", DisplayName: &dn1},  // display-only → BulkUpsert
+		{MerchantID: "m2", MergedIntoMerchantID: &target}, // merge-bearing → MergeAndFlatten
+	}
+
+	displayResult := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: userID, MerchantID: "m1", DisplayName: &dn1},
+	}
+	canonicalCopy := target
+	mergeResult := []domain.MerchantNameOverride{
+		{ID: "ov-2", UserID: userID, MerchantID: "m2", MergedIntoMerchantID: &canonicalCopy},
+	}
+
+	// Display-only path
+	mor.On("BulkUpsert", ctx, mock.MatchedBy(func(overrides []domain.MerchantNameOverride) bool {
+		return len(overrides) == 1 && overrides[0].MerchantID == "m1"
+	})).Return(displayResult, nil)
+	// Merge path: target C has no existing merge pointer
+	mor.On("GetMergeTarget", ctx, userID, target).Return("", nil)
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m2"}, target, []string{"m2"},
+	).Return(mergeResult, nil)
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	// display result first, then merge result
+	assert.Equal(t, "m1", result[0].MerchantID)
+	assert.Equal(t, "m2", result[1].MerchantID)
+	assert.Equal(t, target, *result[1].MergedIntoMerchantID)
+	mor.AssertExpectations(t)
+}
+
+// BulkSetOverrides combined entry (both DisplayName and MergedIntoMerchantID) must
+// appear exactly once in the response — from MergeAndFlatten, not BulkUpsert.
+// Prevents a bug where the staging BulkUpsert result and the MergeAndFlatten result
+// both appear in the API response as duplicate rows for the same merchant.
+func TestBulkSetOverrides_CombinedEntry_NoDuplicateInResponse(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	dn := "Whole Foods"
+	target := "m-T"
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", DisplayName: &dn, MergedIntoMerchantID: &target},
+	}
+
+	// Staging BulkUpsert: called for display_name pre-seeding; result is discarded.
+	stagingResult := []domain.MerchantNameOverride{
+		{ID: "staging-ov", UserID: userID, MerchantID: "m-A", DisplayName: &dn},
+	}
+	mor.On("BulkUpsert", ctx, mock.MatchedBy(func(overrides []domain.MerchantNameOverride) bool {
+		return len(overrides) == 1 && overrides[0].MerchantID == "m-A"
+	})).Return(stagingResult, nil)
+
+	// Target T has no existing merge pointer.
+	mor.On("GetMergeTarget", ctx, userID, target).Return("", nil)
+	canonicalCopy := target
+	mergeResult := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: userID, MerchantID: "m-A", MergedIntoMerchantID: &canonicalCopy},
+	}
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-A"}, target, []string{"m-A"},
+	).Return(mergeResult, nil)
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1, "combined entry must appear exactly once (MergeAndFlatten result only)")
+	assert.Equal(t, "m-A", result[0].MerchantID)
+	assert.Equal(t, target, *result[0].MergedIntoMerchantID)
+	mor.AssertExpectations(t)
+}
+
+// BulkSetOverrides merge entry with a pre-merged target resolves to the canonical.
+func TestBulkSetOverrides_MergeEntry_TargetPreMerged_ResolvesToCanonical(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	target := "m-T"
+	canonical := "m-G"
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-B", MergedIntoMerchantID: &target}, // T→G in DB
+	}
+
+	// resolveCanonical: T→G, G is terminal
+	mor.On("GetMergeTarget", ctx, userID, target).Return(canonical, nil)
+	mor.On("GetMergeTarget", ctx, userID, canonical).Return("", nil)
+	canonicalCopy := canonical
+	mergeResult := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: userID, MerchantID: "m-B", MergedIntoMerchantID: &canonicalCopy},
+	}
+	mor.On("MergeAndFlatten", ctx, userID,
+		[]string{"m-B"},       // sources
+		canonical,             // canonical = G
+		[]string{"m-B", target}, // toFlatten: source + old T
+	).Return(mergeResult, nil)
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, canonical, *result[0].MergedIntoMerchantID)
+	mor.AssertExpectations(t)
 }
 
 // ============================================================================
