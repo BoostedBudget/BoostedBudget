@@ -191,9 +191,13 @@ func (r *MerchantOverrideRepository) GetMergeTarget(ctx context.Context, userID,
 //     to canonical (fixes both the source-side depth-2 gap G20 and the pre-merged-target case G17).
 //  2. Bulk-upserts each source → canonical override (one row per source).
 //
+// displayNames is an optional parallel slice aligned with sources. When displayNames[i] is
+// non-nil it is written as that source's display_name (COALESCE: new wins, existing preserved
+// if nil). When displayNames is nil all source display_names are preserved unchanged (G27).
+//
 // Running both steps in one transaction ensures callers never observe a half-flattened state.
 // sources must not include canonical (callers are responsible for filtering it out).
-func (r *MerchantOverrideRepository) MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string) ([]domain.MerchantNameOverride, error) {
+func (r *MerchantOverrideRepository) MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string, displayNames []*string) ([]domain.MerchantNameOverride, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("MergeAndFlatten: begin tx: %w", err)
@@ -221,18 +225,26 @@ func (r *MerchantOverrideRepository) MergeAndFlatten(ctx context.Context, userID
 	}
 
 	// Step 2: bulk-upsert each source → canonical override.
+	// displayNames is an optional parallel array; when present, COALESCE prefers the new name
+	// over the existing value (nil entry = keep existing). This eliminates the pre-Upsert
+	// non-atomicity that could transiently clear an existing merge pointer (G27).
+	dnSlice := make([]*string, len(sources))
+	if len(displayNames) > 0 {
+		copy(dnSlice, displayNames)
+	}
+
 	const upsertQ = `
 		INSERT INTO merchant_name_overrides
 		    (id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at)
-		SELECT gen_random_uuid(), $1, u.merchant_id::uuid, NULL, $2::uuid, NOW(), NOW()
-		FROM   unnest($3::text[]) AS u(merchant_id)
+		SELECT gen_random_uuid(), $1, u.merchant_id::uuid, u.display_name, $2::uuid, NOW(), NOW()
+		FROM   unnest($3::text[], $4::text[]) AS u(merchant_id, display_name)
 		ON CONFLICT (user_id, merchant_id) DO UPDATE
 		    SET merged_into_merchant_id = EXCLUDED.merged_into_merchant_id,
-		        display_name            = merchant_name_overrides.display_name,
+		        display_name            = COALESCE(EXCLUDED.display_name, merchant_name_overrides.display_name),
 		        updated_at              = NOW()
 		RETURNING id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at`
 
-	rows, err := tx.Query(ctx, upsertQ, userID, canonical, sources)
+	rows, err := tx.Query(ctx, upsertQ, userID, canonical, sources, dnSlice)
 	if err != nil {
 		return nil, fmt.Errorf("MergeAndFlatten: upsert sources: %w", err)
 	}

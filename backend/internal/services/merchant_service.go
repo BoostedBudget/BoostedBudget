@@ -67,6 +67,11 @@ func (s *MerchantService) GetDuplicateSuggestions(ctx context.Context, userID st
 // the depth-1 chain invariant is enforced — the target is resolved to its canonical and any
 // existing depth-≥2 edges are flattened atomically. This prevents MCP / direct-API callers
 // from creating depth-≥2 chains that the single-hop read resolvers cannot follow (G24).
+//
+// G27: when both displayName and mergedIntoMerchantID are set, the display_name is threaded
+// into MergeAndFlatten atomically (no pre-Upsert). A separate pre-Upsert with nil
+// merged_into would transiently clear an existing merge pointer before the flatten write — if
+// the flatten then fails, the row is left persistently unmerged.
 func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID string, displayName *string, mergedIntoMerchantID *string) (*domain.MerchantNameOverride, error) {
 	if displayName == nil && mergedIntoMerchantID == nil {
 		return nil, fmt.Errorf("at least one of display_name or merged_into_merchant_id must be set")
@@ -88,29 +93,33 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 		})
 	}
 
-	// Combined rename+merge: persist display_name first so MergeAndFlatten's ON CONFLICT
-	// clause (which keeps existing display_name) will preserve it on the source row.
+	// Merge (with optional rename): thread displayName into applyMergeFlatten so both the
+	// display write and the flatten happen inside a single transaction (G27 atomic fix).
+	// No pre-Upsert — avoids the transient NULL of an existing merge pointer.
+	var dn []*string
 	if displayName != nil {
-		if _, err := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
-			UserID:      userID,
-			MerchantID:  merchantID,
-			DisplayName: displayName,
-		}); err != nil {
-			return nil, err
-		}
+		dn = []*string{displayName}
 	}
-
-	// Route through the depth-1-invariant-enforcing flatten path.
-	results, err := s.applyMergeFlatten(ctx, userID, []string{merchantID}, *mergedIntoMerchantID)
+	canonicalID, results, err := s.applyMergeFlatten(ctx, userID, []string{merchantID}, *mergedIntoMerchantID, dn)
 	if err != nil {
 		return nil, err
 	}
 	if len(results) == 0 {
-		// merchantID == canonical (self-merge skipped); return a minimal representation.
+		// merchantID == canonical (self-merge skipped; no merge write occurred).
+		// G27 self-merge fallback: persist display_name if provided (the merge write was
+		// skipped entirely, so we must write the rename separately).
+		if displayName != nil {
+			return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+				UserID:      userID,
+				MerchantID:  merchantID,
+				DisplayName: displayName,
+			})
+		}
+		// G28: return the resolved canonical ID, not the raw request value.
 		return &domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           merchantID,
-			MergedIntoMerchantID: mergedIntoMerchantID,
+			MergedIntoMerchantID: &canonicalID,
 		}, nil
 	}
 	return &results[0], nil
@@ -128,10 +137,10 @@ func (s *MerchantService) ClearOverride(ctx context.Context, userID, merchantID 
 //
 // Entries are partitioned into two groups:
 //   - Display-only (no merge pointer): persisted via BulkUpsert; results included in response.
-//   - Merge-bearing: if display_name is also set, the name is staged via a separate BulkUpsert
-//     (so MergeAndFlatten's ON CONFLICT clause preserves it) but that staging result is NOT
-//     returned — only the MergeAndFlatten result is included, preventing duplicate rows.
-//     Each target group is then routed through applyMergeFlatten to enforce the depth-1 chain
+//   - Merge-bearing: display_name (if present) is threaded atomically into MergeAndFlatten
+//     via the displayNames parallel array (G27: no staging BulkUpsert). Only the
+//     MergeAndFlatten result is included in the response, preventing duplicate rows.
+//     Each target group is routed through applyMergeFlatten to enforce the depth-1 chain
 //     invariant (G24), matching the guarantee provided by the dedicated mergeMerchants endpoint.
 func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, reqs []SetOverrideRequest) ([]domain.MerchantNameOverride, error) {
 	if len(reqs) == 0 {
@@ -148,10 +157,10 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		}
 	}
 
-	var displayOnlyItems []domain.MerchantNameOverride      // included in response
-	var displayStagingItems []domain.MerchantNameOverride  // staging for combined entries, not in response
-	mergeGroups := make(map[string][]string)               // target → source IDs (first-seen order)
-	var mergeGroupOrder []string                           // targets in order encountered
+	var displayOnlyItems []domain.MerchantNameOverride // included in response
+	mergeGroups := make(map[string][]string)           // target → source IDs (first-seen order)
+	mergeDisplays := make(map[string][]*string)        // target → per-source display names (G27)
+	var mergeGroupOrder []string                       // targets in order encountered
 
 	for _, req := range reqs {
 		dn := req.DisplayName
@@ -167,21 +176,14 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 			})
 			continue
 		}
-		// Merge-bearing entry: stage display_name for BulkUpsert so MergeAndFlatten's
-		// ON CONFLICT clause can preserve it. MergeAndFlatten's result is authoritative
-		// (prevents duplicate rows in response).
-		if dn != nil {
-			displayStagingItems = append(displayStagingItems, domain.MerchantNameOverride{
-				UserID:      userID,
-				MerchantID:  req.MerchantID,
-				DisplayName: dn,
-			})
-		}
+		// Merge-bearing entry: track the source and its optional display_name.
+		// G27: no staging BulkUpsert — display_name is threaded into MergeAndFlatten atomically.
 		target := *req.MergedIntoMerchantID
 		if _, seen := mergeGroups[target]; !seen {
 			mergeGroupOrder = append(mergeGroupOrder, target)
 		}
 		mergeGroups[target] = append(mergeGroups[target], req.MerchantID)
+		mergeDisplays[target] = append(mergeDisplays[target], dn)
 	}
 
 	results := make([]domain.MerchantNameOverride, 0, len(reqs))
@@ -195,20 +197,48 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		results = append(results, bulkResults...)
 	}
 
-	// Stage display_name for combined entries so MergeAndFlatten's ON CONFLICT
-	// can preserve it. Results discarded (MergeAndFlatten is authoritative).
-	if len(displayStagingItems) > 0 {
-		if _, err := s.merchantOverrideRepo.BulkUpsert(ctx, displayStagingItems); err != nil {
-			return nil, err
-		}
-	}
-
+	// Route each merge group through applyMergeFlatten (depth-1 invariant + G27 atomic display).
 	for _, target := range mergeGroupOrder {
-		merged, err := s.applyMergeFlatten(ctx, userID, mergeGroups[target], target)
+		sources := mergeGroups[target]
+		displayNames := mergeDisplays[target]
+		// Only pass displayNames if at least one entry has a display_name to set;
+		// otherwise pass nil so MergeAndFlatten preserves all existing display values.
+		var dn []*string
+		for _, d := range displayNames {
+			if d != nil {
+				dn = displayNames
+				break
+			}
+		}
+		canonicalID, merged, err := s.applyMergeFlatten(ctx, userID, sources, target, dn)
 		if err != nil {
 			return nil, err
 		}
 		results = append(results, merged...)
+
+		// Self-merge fallback: any source equal to canonicalID was filtered out of the merge write.
+		// If it carried a display_name, persist the rename separately (mirrors SetOverride's G28 fallback).
+		for i, src := range sources {
+			if src != canonicalID {
+				continue
+			}
+			var srcDN *string
+			if i < len(displayNames) {
+				srcDN = displayNames[i]
+			}
+			if srcDN == nil {
+				continue
+			}
+			upserted, uErr := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+				UserID:      userID,
+				MerchantID:  src,
+				DisplayName: srcDN,
+			})
+			if uErr != nil {
+				return nil, uErr
+			}
+			results = append(results, *upserted)
+		}
 	}
 
 	return results, nil
@@ -225,28 +255,49 @@ func (s *MerchantService) GetMerchantOverrides(ctx context.Context, userID strin
 // self-merges, and atomically flattens depth-≥2 edges + upserts source→canonical overrides
 // via MergeAndFlatten. This is the single source of truth for the depth-1 chain invariant.
 //
+// displayNames is an optional parallel slice aligned with merchantIDs. When non-nil, each
+// entry's display name is threaded into MergeAndFlatten atomically (G27: no pre-Upsert).
+// Pass nil when no display_name change is needed (MergeMerchants path).
+//
+// Returns (canonicalTargetID, results, error). When all sources equal the canonical (self-merge),
+// results is empty and canonicalTargetID is the resolved canonical — the caller can use it to
+// handle the self-merge+rename fallback (G28).
+//
 // Used by: MergeMerchants, SetOverride (when mergedInto != nil), and BulkSetOverrides
 // (merge-bearing entries). ErrMergeCycle is returned on cycle detection.
-func (s *MerchantService) applyMergeFlatten(ctx context.Context, userID string, merchantIDs []string, targetMerchantID string) ([]domain.MerchantNameOverride, error) {
+func (s *MerchantService) applyMergeFlatten(ctx context.Context, userID string, merchantIDs []string, targetMerchantID string, displayNames []*string) (string, []domain.MerchantNameOverride, error) {
 	if len(merchantIDs) == 0 {
-		return []domain.MerchantNameOverride{}, nil
+		return "", []domain.MerchantNameOverride{}, nil
 	}
 
 	// Resolve the canonical target, following any existing merge chain.
 	canonicalTargetID, err := s.resolveCanonical(ctx, userID, targetMerchantID, make(map[string]struct{}))
 	if err != nil {
-		return nil, fmt.Errorf("applyMergeFlatten: resolve canonical: %w", err)
+		return "", nil, fmt.Errorf("applyMergeFlatten: resolve canonical: %w", err)
 	}
 
-	// Filter sources: skip any that equal the canonical (self-merge).
+	// Filter sources: skip any that equal the canonical (self-merge). Maintain the
+	// parallel displayNames slice so indices stay aligned with sources.
 	sources := make([]string, 0, len(merchantIDs))
-	for _, id := range merchantIDs {
+	var filteredDN []*string
+	if len(displayNames) > 0 {
+		filteredDN = make([]*string, 0, len(merchantIDs))
+	}
+	for i, id := range merchantIDs {
 		if id != canonicalTargetID {
 			sources = append(sources, id)
+			if filteredDN != nil {
+				if i < len(displayNames) {
+					filteredDN = append(filteredDN, displayNames[i])
+				} else {
+					filteredDN = append(filteredDN, nil)
+				}
+			}
 		}
 	}
 	if len(sources) == 0 {
-		return []domain.MerchantNameOverride{}, nil
+		// All sources were self-merges — return canonical so caller can handle display fallback.
+		return canonicalTargetID, []domain.MerchantNameOverride{}, nil
 	}
 
 	// toFlatten = all IDs whose inbound chains must be re-pointed to canonical:
@@ -259,7 +310,8 @@ func (s *MerchantService) applyMergeFlatten(ctx context.Context, userID string, 
 		toFlatten = append(toFlatten, targetMerchantID)
 	}
 
-	return s.merchantOverrideRepo.MergeAndFlatten(ctx, userID, sources, canonicalTargetID, toFlatten)
+	results, err := s.merchantOverrideRepo.MergeAndFlatten(ctx, userID, sources, canonicalTargetID, toFlatten, filteredDN)
+	return canonicalTargetID, results, err
 }
 
 // MergeMerchants creates overrides that point each source merchantID to the canonical target,
@@ -273,7 +325,9 @@ func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, mer
 	if len(merchantIDs) == 0 {
 		return []domain.MerchantNameOverride{}, nil
 	}
-	return s.applyMergeFlatten(ctx, userID, merchantIDs, targetMerchantID)
+	// Pass nil displayNames — MergeMerchants never carries a display_name.
+	_, results, err := s.applyMergeFlatten(ctx, userID, merchantIDs, targetMerchantID, nil)
+	return results, err
 }
 
 // resolveCanonical follows the merge chain for merchantID until reaching a merchant
