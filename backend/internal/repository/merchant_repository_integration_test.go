@@ -75,7 +75,6 @@ func seedMerchantFixture(ctx context.Context, t *testing.T, db DB, prefix string
 // a real PostgreSQL instance and returns correct aggregated data.
 func TestListMerchants_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewMerchantRepository(pool)
 	ctx := context.Background()
 
 	tx, err := pool.Begin(ctx)
@@ -191,7 +190,6 @@ func TestListMerchants_MergedMerchant_Integration(t *testing.T) {
 // executes valid SQL and correctly groups merchants with similar normalized names.
 func TestGetDuplicateSuggestions_Integration(t *testing.T) {
 	pool := connectTestDB(t)
-	repo := NewMerchantRepository(pool)
 	ctx := context.Background()
 
 	tx, err := pool.Begin(ctx)
@@ -389,6 +387,175 @@ func TestResolveEffectiveMerchantNames_EmptyInput_Integration(t *testing.T) {
 // If a merchant has been merged into another (merged_into_merchant_id IS NOT NULL in
 // merchant_name_overrides), it must not appear in GetDuplicateSuggestions — otherwise the
 // user sees already-completed merges re-suggested and one-click re-merging creates depth-2 chains.
+
+// ── G29: CASCADE delete + transitive re-point integration tests (issue #957 Round 9) ────────
+//
+// These tests exercise real-SQL behaviors that pgxmock cannot validate:
+//  1. Migration 000102 CASCADE: DELETE-ing a merge target removes merge-only overrides.
+//  2. MergeAndFlatten transitive re-point: calling MergeAndFlatten([B], C, [B]) re-points
+//     any existing A→B pointer to A→C inside a single atomic savepoint.
+
+// TestMerchantDelete_CascadesMergeOverride_Integration proves that migration 000102's
+// ON DELETE CASCADE removes a merge-only override row when its target merchant is deleted,
+// without triggering the CHECK constraint (display_name IS NOT NULL OR merged_into IS NOT NULL).
+func TestMerchantDelete_CascadesMergeOverride_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, sourceID := seedMerchantFixture(ctx, t, tx, "g29-cascade")
+
+	targetID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Target Merchant G29', 'Target Merchant G29', NOW())
+	`, targetID)
+	require.NoError(t, err, "seed target merchant C")
+
+	// Seed a merge-only override: source→target (display_name IS NULL).
+	overrideID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW(), NOW())
+	`, overrideID, userID, sourceID, targetID)
+	require.NoError(t, err, "seed merge-only override source→target")
+
+	var count int
+	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM merchant_name_overrides WHERE id = $1`, overrideID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "override must exist before merchant delete")
+
+	// DELETE the target merchant — ON DELETE CASCADE must drop the override, not NULL it.
+	_, err = tx.Exec(ctx, `DELETE FROM merchants WHERE id = $1`, targetID)
+	require.NoError(t, err, "DELETE target merchant must succeed — CASCADE removes the override row")
+
+	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM merchant_name_overrides WHERE id = $1`, overrideID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "G29: migration 000102 CASCADE must delete merge-only override when target merchant is deleted")
+}
+
+// TestMergeAndFlatten_TransitiveOverrideResolves_Integration is the end-to-end real-SQL
+// regression test for the G24 override-merge path. Scenario: A→B override exists; then
+// MergeAndFlatten([B], C, [B]) is called (simulating SetOverride(B, merged_into=C)).
+// The flatten UPDATE must re-point A→B to A→C. A transaction on A must resolve to C's name.
+func TestMergeAndFlatten_TransitiveOverrideResolves_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g29-transitive")
+
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Merchant B G29', 'Merchant B G29', NOW())
+	`, merchantB)
+	require.NoError(t, err, "seed merchant B")
+
+	cName := "Canonical C G29"
+	merchantC := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`, merchantC, cName, cName)
+	require.NoError(t, err, "seed merchant C")
+
+	// Seed existing A→B override (from a prior merge).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed A→B override")
+
+	// Call MergeAndFlatten([B], C, [B]) — pgx.Tx.Begin() creates a savepoint internally.
+	overrideRepo := NewMerchantOverrideRepository(tx)
+	results, err := overrideRepo.MergeAndFlatten(ctx, userID.String(),
+		[]string{merchantB.String()},
+		merchantC.String(),
+		[]string{merchantB.String()},
+		nil,
+	)
+	require.NoError(t, err, "MergeAndFlatten must succeed")
+	require.Len(t, results, 1, "expect one result row for the B→C upsert")
+	assert.Equal(t, merchantB.String(), results[0].MerchantID)
+
+	// Assert the A→B override is now A→C.
+	var newTarget string
+	err = tx.QueryRow(ctx, `
+		SELECT merged_into_merchant_id::text
+		FROM   merchant_name_overrides
+		WHERE  user_id = $1 AND merchant_id = $2
+	`, userID, merchantA).Scan(&newTarget)
+	require.NoError(t, err, "A override row must still exist after flatten")
+	assert.Equal(t, merchantC.String(), newTarget,
+		"G29: A→B must be re-pointed to A→C by the flatten UPDATE inside MergeAndFlatten")
+
+	// End-to-end: transaction on A must resolve to C's canonical name.
+	txRepo := NewTransactionRepository(tx, enc)
+	effective, err := txRepo.ResolveEffectiveMerchantNames(ctx, userID.String(), []string{merchantA.String()})
+	require.NoError(t, err)
+	assert.Equal(t, cName, effective[merchantA.String()],
+		"G29: transaction on A must resolve to C's name after transitive MergeAndFlatten re-point")
+}
+
+// TestMergeAndFlatten_DisplayNames_COALESCE_Integration exercises the riskiest G27 SQL path:
+// the unnest($3::text[], $4::text[]) + COALESCE(EXCLUDED.display_name, existing.display_name)
+// clause inside MergeAndFlatten. Two sub-cases verify both arms of COALESCE:
+//  1. non-nil displayNames entry → new name is written as the source's display_name.
+//  2. nil displayNames entry on a second call → existing display_name is preserved (COALESCE keeps it).
+func TestMergeAndFlatten_DisplayNames_COALESCE_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g27-coalesce")
+
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Merchant B COALESCE', 'Merchant B COALESCE', NOW())
+	`, merchantB)
+	require.NoError(t, err, "seed canonical merchant B")
+
+	overrideRepo := NewMerchantOverrideRepository(tx)
+
+	// Sub-case 1: call MergeAndFlatten with a non-nil displayNames entry.
+	// The upserted row for A must carry the provided display_name.
+	customName := "My Custom Shop"
+	results, err := overrideRepo.MergeAndFlatten(ctx, userID.String(),
+		[]string{merchantA.String()},
+		merchantB.String(),
+		[]string{merchantA.String()},
+		[]*string{&customName},
+	)
+	require.NoError(t, err, "MergeAndFlatten with non-nil displayNames must succeed")
+	require.Len(t, results, 1, "expect one result row for A→B upsert")
+	require.NotNil(t, results[0].DisplayName, "display_name must be set on the upserted row")
+	assert.Equal(t, customName, *results[0].DisplayName, "G27: non-nil displayNames entry must be written as display_name")
+	assert.Equal(t, merchantA.String(), results[0].MerchantID)
+
+	// Sub-case 2: call again with nil displayNames — COALESCE must preserve the existing display_name.
+	results2, err := overrideRepo.MergeAndFlatten(ctx, userID.String(),
+		[]string{merchantA.String()},
+		merchantB.String(),
+		[]string{merchantA.String()},
+		nil,
+	)
+	require.NoError(t, err, "MergeAndFlatten with nil displayNames must succeed")
+	require.Len(t, results2, 1, "expect one result row for A→B re-upsert")
+	require.NotNil(t, results2[0].DisplayName, "display_name must be preserved by COALESCE when new entry is nil")
+	assert.Equal(t, customName, *results2[0].DisplayName, "G27: nil displayNames entry must preserve existing display_name via COALESCE")
+}
 
 func TestGetDuplicateSuggestions_ExcludesMergedMerchants_Integration(t *testing.T) {
 	pool := connectTestDB(t)

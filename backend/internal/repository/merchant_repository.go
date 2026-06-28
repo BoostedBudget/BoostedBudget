@@ -38,7 +38,13 @@ type MerchantOverrideRepo interface {
 	// source → canonical override. Both steps run inside a single transaction so callers
 	// never observe a half-flattened state. Maintains the depth-1 invariant so single-hop
 	// read resolvers in the transaction and merchant-list queries stay correct.
-	MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string) ([]domain.MerchantNameOverride, error)
+	//
+	// displayNames is an optional parallel slice aligned with sources. When displayNames[i]
+	// is non-nil it is written as that source's display_name via COALESCE (new value wins,
+	// existing preserved if nil). Pass nil for displayNames when no display_name change is
+	// needed. This allows the caller to thread a rename atomically through the same
+	// transaction as the merge, eliminating the pre-Upsert non-atomicity (G27).
+	MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string, displayNames []*string) ([]domain.MerchantNameOverride, error)
 }
 
 // MerchantRepository handles data access for merchants.
