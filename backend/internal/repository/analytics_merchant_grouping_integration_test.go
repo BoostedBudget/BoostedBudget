@@ -1,0 +1,233 @@
+//go:build integration
+
+package repository
+
+// Integration tests for GetSpendingByMerchant effective-merchant grouping (issue #1348, Task 2).
+//
+// These tests require a real PostgreSQL instance (DATABASE_URL env var).
+// They exercise the 4-join override chain and synthetic GROUP BY key that pgxmock cannot validate.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -tags integration \
+//	  -run TestGetSpendingByMerchant_Integration -v
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+)
+
+func TestGetSpendingByMerchant_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	userStr := userID.String()
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userStr, "int-analmerch-"+userStr[:8]+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, access_token, source, institution_name,
+			institution_id, cursor_position, sync_status, sync_error, item_status,
+			created_at, updated_at)
+		VALUES ($1, $2, '', 'plaid', 'Test Bank', 'ins_test', '', 'synced', NULL, 'active', NOW(), NOW())
+	`, linkedItemID, userID)
+	require.NoError(t, err, "seed linked_item")
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, user_id, linked_item_id, external_account_id, source,
+			account_name, type, subtype, balance_current, balance_available, iso_currency_code,
+			status, created_at, updated_at)
+		VALUES ($1, $2, $3, 'ext_test', 'plaid', 'Test Account', 'depository', 'checking',
+			1000.00, 900.00, 'USD', 'active', NOW(), NOW())
+	`, accountID, userID, linkedItemID)
+	require.NoError(t, err, "seed account")
+
+	// Insert merchants
+	merchantCanonical := uuid.New() // target of merge — display name "Whole Foods"
+	merchantSource := uuid.New()    // merged into canonical — raw name "WHOLEFDSMRKT #123"
+	merchantRenamed := uuid.New()   // renamed only — raw "STARBUX" → display "Starbucks"
+
+	for _, mid := range []struct {
+		id   uuid.UUID
+		name string
+	}{
+		{merchantCanonical, "Whole Foods Market"},
+		{merchantSource, "WHOLEFDSMRKT #123"},
+		{merchantRenamed, "STARBUX"},
+	} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
+			VALUES ($1, $2, $2, NOW(), NOW())
+			ON CONFLICT (id) DO NOTHING
+		`, mid.id, mid.name)
+		require.NoError(t, err, "insert merchant %s", mid.name)
+	}
+
+	// Merge: merchantSource → merchantCanonical
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW(), NOW())
+	`, uuid.New(), userID, merchantSource, merchantCanonical)
+	require.NoError(t, err, "insert merge override source→canonical")
+
+	// Override canonical display name to "Whole Foods"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Whole Foods', NOW(), NOW())
+	`, uuid.New(), userID, merchantCanonical)
+	require.NoError(t, err, "insert display_name override for canonical")
+
+	// Rename: merchantRenamed display_name = "Starbucks"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Starbucks', NOW(), NOW())
+	`, uuid.New(), userID, merchantRenamed)
+	require.NoError(t, err, "insert display_name override for renamed")
+
+	// Use transaction-wrapped repo.
+	txRepo := NewAnalyticsRepository(tx)
+	baseDate := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	insertTx := func(txID uuid.UUID, name string, merchantID *uuid.UUID, merchantName *string, amount float64) {
+		var mid interface{} = nil
+		if merchantID != nil {
+			mid = *merchantID
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id,
+				source, external_transaction_id, external_transaction_id_blind_idx,
+				amount, date, name, merchant_name, merchant_id,
+				pending, effective_pfc_primary, pfc_primary, category_source,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, $4,
+				'plaid', $1, $1,
+				$5, $6, $7, $8, $9,
+				false, 'FOOD_AND_DRINK', 'FOOD_AND_DRINK', 'plaid',
+				NOW(), NOW())
+		`, txID, userID, accountID, linkedItemID, amount, baseDate, name, merchantName, mid)
+		require.NoError(t, err, "insert transaction %s", txID)
+	}
+
+	// Scenario A: two transactions both linked to merchantSource — should collapse with canonical display
+	wfRaw1 := "WHOLEFDSMRKT #123"
+	insertTx(uuid.New(), "Whole Foods Tx1", &merchantSource, &wfRaw1, 50.00)
+	insertTx(uuid.New(), "Whole Foods Tx2", &merchantSource, &wfRaw1, 30.00)
+
+	// Scenario B: one transaction linked to merchantCanonical directly
+	insertTx(uuid.New(), "Whole Foods Direct", &merchantCanonical, nil, 20.00)
+
+	// Scenario C: renamed merchant — one transaction
+	sbName := "STARBUX"
+	insertTx(uuid.New(), "Starbucks Tx", &merchantRenamed, &sbName, 15.00)
+
+	// Scenario D: unlinked raw merchant (merchant_name set, merchant_id NULL) — 'raw:' bucket
+	rawName := "SOME_RAW_MERCHANT"
+	insertTx(uuid.New(), "Raw Merchant Tx", nil, &rawName, 25.00)
+
+	// Scenario E: no merchant_name, no merchant_id — 'unknown' bucket
+	insertTx(uuid.New(), "Unknown Tx", nil, nil, 10.00)
+
+	filters := domain.SpendingFilters{
+		StartDate:        baseDate.Add(-24 * time.Hour),
+		EndDate:          baseDate.Add(24 * time.Hour),
+		IncludeTransfers: true, // skip transfer filter so we can control the data
+	}
+
+	t.Run("merge collapses source+canonical into one row with canonical display name", func(t *testing.T) {
+		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
+		require.NoError(t, err)
+
+		// Find the Whole Foods group
+		var wfRow *domain.SpendingByMerchant
+		for i := range results {
+			if results[i].MerchantName == "Whole Foods" {
+				wfRow = &results[i]
+				break
+			}
+		}
+		require.NotNil(t, wfRow, "expected a 'Whole Foods' merchant group in results; got: %+v", results)
+		// All 3 transactions (50+30 from source, 20 from canonical) should collapse into one group
+		assert.InDelta(t, 100.00, wfRow.Total, 0.01, "merged Whole Foods total should be 100")
+		assert.Equal(t, 3, wfRow.TransactionCount, "merged Whole Foods should have 3 transactions")
+		// merchant_id should be non-nil (canonical merchant)
+		require.NotNil(t, wfRow.MerchantID, "merged merchant_id should not be nil")
+		assert.Equal(t, merchantCanonical.String(), *wfRow.MerchantID)
+	})
+
+	t.Run("renamed merchant shows canonical display_name not raw name", func(t *testing.T) {
+		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
+		require.NoError(t, err)
+
+		var sbRow *domain.SpendingByMerchant
+		for i := range results {
+			if results[i].MerchantName == "Starbucks" {
+				sbRow = &results[i]
+				break
+			}
+		}
+		require.NotNil(t, sbRow, "expected a 'Starbucks' merchant group; raw name STARBUX should not appear")
+		assert.InDelta(t, 15.00, sbRow.Total, 0.01)
+		require.NotNil(t, sbRow.MerchantID)
+		assert.Equal(t, merchantRenamed.String(), *sbRow.MerchantID)
+	})
+
+	t.Run("unlinked raw merchant is distinct bucket with NULL merchant_id", func(t *testing.T) {
+		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
+		require.NoError(t, err)
+
+		var rawRow *domain.SpendingByMerchant
+		for i := range results {
+			if results[i].MerchantName == "SOME_RAW_MERCHANT" {
+				rawRow = &results[i]
+				break
+			}
+		}
+		require.NotNil(t, rawRow, "unlinked raw merchant should appear in results")
+		assert.InDelta(t, 25.00, rawRow.Total, 0.01)
+		assert.Nil(t, rawRow.MerchantID, "unlinked raw merchant_id must be NULL")
+	})
+
+	t.Run("no-name no-merchant transaction falls into unknown bucket with NULL merchant_id", func(t *testing.T) {
+		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
+		require.NoError(t, err)
+
+		var unknownRow *domain.SpendingByMerchant
+		for i := range results {
+			if results[i].MerchantName == "Unknown" {
+				unknownRow = &results[i]
+				break
+			}
+		}
+		require.NotNil(t, unknownRow, "unknown bucket should appear in results")
+		assert.InDelta(t, 10.00, unknownRow.Total, 0.01)
+		assert.Nil(t, unknownRow.MerchantID, "unknown bucket merchant_id must be NULL")
+	})
+
+	t.Run("raw STARBUX name does not appear as a separate group", func(t *testing.T) {
+		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
+		require.NoError(t, err)
+
+		for _, r := range results {
+			assert.NotEqual(t, "STARBUX", r.MerchantName, "raw STARBUX should not appear — must show as Starbucks")
+			assert.NotEqual(t, "WHOLEFDSMRKT #123", r.MerchantName, "raw WHOLEFDSMRKT should not appear — must show as Whole Foods")
+		}
+	})
+}

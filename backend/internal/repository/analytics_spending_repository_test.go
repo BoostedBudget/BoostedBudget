@@ -157,6 +157,82 @@ func TestGetSpendingByMerchant(t *testing.T) {
 		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
 		assert.Error(t, err)
 	})
+
+	// G2 structural tests — verify the SQL uses the full override join chain,
+	// CASE-based synthetic GROUP BY, and canonical target display name.
+
+	t.Run("query contains merchant_name_overrides join", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
+		mock.ExpectQuery(`(?i)merchant_name_overrides\s+mno`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query contains target override join mno_t", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
+		mock.ExpectQuery(`(?i)merchant_name_overrides\s+mno_t`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query groups by synthetic CASE key not raw merchant_name", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
+		// Must contain GROUP BY CASE WHEN t.merchant_id IS NOT NULL
+		mock.ExpectQuery(`(?i)GROUP BY\s+CASE`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query selects COALESCE merged id not MAX(m.id)", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
+		// Must contain COALESCE(mno.merged_into_merchant_id for the merchant_id SELECT
+		mock.ExpectQuery(`(?i)COALESCE\(mno\.merged_into_merchant_id`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("query uses canonical target display name via mno_t.display_name", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"merchant_name", "merchant_id", "total", "transaction_count"})
+		// Must use mno_t.display_name as first COALESCE arg for the merchant_name column
+		mock.ExpectQuery(`(?i)mno_t\.display_name`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, limit).
+			WillReturnRows(rows)
+
+		_, err := repo.GetSpendingByMerchant(ctx, userID, filters, limit)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }
 
 func TestGetSpendingTrends(t *testing.T) {
