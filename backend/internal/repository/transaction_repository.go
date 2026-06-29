@@ -201,6 +201,16 @@ type TransactionRepository interface {
 		cursor *domain.TransactionCursor,
 		limit int,
 	) ([]*domain.ActivityItem, *domain.TransactionCursor, error)
+
+	// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
+	// for the given set of merchant IDs and user, in one DB round-trip.
+	// Resolution follows the per-user merge topology and override chain:
+	//   COALESCE(source_override.display_name, target_override.display_name,
+	//            canonical_merchant.normalized_name, canonical_merchant.name)
+	// Merchant IDs absent from the merchants table are omitted from the result.
+	// Used by enrichEffectiveMerchantNames (Transaction slices) and
+	// enrichEffectiveMerchantNamesForItems (ActivityItem slices / unified feed).
+	ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error)
 }
 
 // transactionRepository implements TransactionRepository using PostgreSQL
@@ -666,7 +676,14 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 	}
 	defer rows.Close()
 
-	return r.scanTransactions(rows)
+	txns, err := r.scanTransactions(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.enrichEffectiveMerchantNames(ctx, userID, txns); err != nil {
+		return nil, err
+	}
+	return txns, nil
 }
 
 // CountByUserID returns the total count of transactions for a user with optional filters
@@ -993,6 +1010,94 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 
 	return whereClause, args
+}
+
+// ResolveEffectiveMerchantNames returns a map of merchant ID → effective display name
+// for the given merchant IDs and user, in one DB round-trip.
+//
+// Resolution follows the per-user merge + override chain (G6b fix):
+//
+//	COALESCE(
+//	  source_override.display_name,    -- user renamed the source merchant directly
+//	  target_override.display_name,    -- user renamed the canonical (merged-into) merchant
+//	  canonical_merchant.normalized_name,
+//	  canonical_merchant.name
+//	)
+//
+// When mno.merged_into_merchant_id is NULL, m2.id = m.id, so mno_t matches the same row as
+// mno and the COALESCE resolves to mno.display_name (direct rename) or normalized/raw name —
+// correct in both cases.
+func (r *transactionRepository) ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error) {
+	if len(merchantIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	const q = `
+		SELECT m.id::text,
+		       COALESCE(mno.display_name, mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name) AS effective_name
+		FROM   merchants m
+		LEFT   JOIN merchant_name_overrides mno
+		            ON mno.merchant_id = m.id AND mno.user_id = $1
+		LEFT   JOIN merchants m2
+		            ON m2.id = COALESCE(mno.merged_into_merchant_id, m.id)
+		LEFT   JOIN merchant_name_overrides mno_t
+		            ON mno_t.merchant_id = m2.id AND mno_t.user_id = $1
+		WHERE  m.id = ANY($2::uuid[])`
+
+	rows, err := r.db.Query(ctx, q, userID, merchantIDs)
+	if err != nil {
+		return nil, fmt.Errorf("ResolveEffectiveMerchantNames: %w", err)
+	}
+	defer rows.Close()
+
+	nameByID := make(map[string]string, len(merchantIDs))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("ResolveEffectiveMerchantNames scan: %w", err)
+		}
+		nameByID[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nameByID, nil
+}
+
+// enrichEffectiveMerchantNames resolves per-user merchant display names for a slice of
+// transactions in a single extra DB round trip. Delegates to ResolveEffectiveMerchantNames
+// so that the unified feed path (enrichEffectiveMerchantNamesForItems) uses the same SQL.
+// Called after scanTransactions for user-facing list endpoints only.
+func (r *transactionRepository) enrichEffectiveMerchantNames(ctx context.Context, userID string, txns []domain.Transaction) error {
+	merchantIDSet := make(map[string]struct{}, len(txns))
+	for _, tx := range txns {
+		if tx.MerchantID != nil && *tx.MerchantID != "" {
+			merchantIDSet[*tx.MerchantID] = struct{}{}
+		}
+	}
+	if len(merchantIDSet) == 0 {
+		return nil
+	}
+
+	merchantIDs := make([]string, 0, len(merchantIDSet))
+	for id := range merchantIDSet {
+		merchantIDs = append(merchantIDs, id)
+	}
+
+	nameByID, err := r.ResolveEffectiveMerchantNames(ctx, userID, merchantIDs)
+	if err != nil {
+		return fmt.Errorf("enrichEffectiveMerchantNames: %w", err)
+	}
+
+	for i := range txns {
+		if txns[i].MerchantID != nil {
+			if name, ok := nameByID[*txns[i].MerchantID]; ok {
+				nameCopy := name
+				txns[i].EffectiveMerchantName = &nameCopy
+			}
+		}
+	}
+	return nil
 }
 
 // scanTransactions scans SQL rows into Transaction structs
@@ -2026,6 +2131,9 @@ func (r *transactionRepository) GetByUserIDKeyset(
 
 	txs, err := r.scanTransactions(rows)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := r.enrichEffectiveMerchantNames(ctx, userID, txs); err != nil {
 		return nil, nil, err
 	}
 

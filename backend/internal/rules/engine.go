@@ -68,11 +68,21 @@ func (e *RuleEngine) EvaluateRules(tx *domain.Transaction, rules []*domain.Categ
 		return result, nil
 	}
 
-	// Sort rules by priority (highest first)
+	// Sort rules by priority (highest first).
+	// Tie-breaking (Codex review #957): equal-priority rules are ordered by
+	// CreatedAt descending (newer rule wins) then by ID for exact-timestamp ties,
+	// making the result deterministic regardless of the caller's slice order.
 	sortedRules := make([]*domain.CategorizationRule, len(rules))
 	copy(sortedRules, rules)
 	sort.Slice(sortedRules, func(i, j int) bool {
-		return sortedRules[i].Priority > sortedRules[j].Priority
+		a, b := sortedRules[i], sortedRules[j]
+		if a.Priority != b.Priority {
+			return a.Priority > b.Priority
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.After(b.CreatedAt)
+		}
+		return a.ID > b.ID
 	})
 
 	// Track tags to avoid duplicates

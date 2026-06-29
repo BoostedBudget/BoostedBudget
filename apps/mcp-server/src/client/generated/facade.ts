@@ -121,9 +121,25 @@ export function createApiClient(mutator: FetchMutator) {
       getUserRules(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/auto-categorization', method: 'GET', signal })
       },
+      /** POST /api/v1/auto-categorization */
+      createRule(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/auto-categorization', method: 'POST', data, signal })
+      },
       /** GET /api/v1/auto-categorization/{id} */
       getRuleByID(id: string, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/auto-categorization/${id}`, method: 'GET', signal })
+      },
+      /** PUT /api/v1/auto-categorization/{id} */
+      updateRule(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/auto-categorization/${id}`, method: 'PUT', data, signal })
+      },
+      /** DELETE /api/v1/auto-categorization/{id} */
+      deleteRule(id: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/auto-categorization/${id}`, method: 'DELETE', signal })
+      },
+      /** POST /api/v1/auto-categorization/{id}/toggle */
+      toggleRule(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/auto-categorization/${id}/toggle`, method: 'POST', data, signal })
       },
     } as const,
     boosts: {
@@ -310,6 +326,36 @@ export function createApiClient(mutator: FetchMutator) {
       /** POST /api/v1/mcp/recipes/{id}/run */
       runMCPRecipe(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: `/api/v1/mcp/recipes/${id}/run`, method: 'POST', data, signal })
+      },
+    } as const,
+    merchants: {
+      /** GET /api/v1/merchants */
+      getMerchants(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants', method: 'GET', signal })
+      },
+      /** GET /api/v1/merchants/duplicate-suggestions */
+      getMerchantDuplicateSuggestions(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants/duplicate-suggestions', method: 'GET', signal })
+      },
+      /** POST /api/v1/merchants/merge */
+      mergeMerchants(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants/merge', method: 'POST', data, signal })
+      },
+      /** GET /api/v1/merchants/overrides */
+      getMerchantOverrides(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants/overrides', method: 'GET', signal })
+      },
+      /** POST /api/v1/merchants/overrides/bulk */
+      bulkSetMerchantOverrides(data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/merchants/overrides/bulk', method: 'POST', data, signal })
+      },
+      /** PUT /api/v1/merchants/{merchantId}/override */
+      setMerchantOverride(merchantId: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/merchants/${merchantId}/override`, method: 'PUT', data, signal })
+      },
+      /** DELETE /api/v1/merchants/{merchantId}/override */
+      clearMerchantOverride(merchantId: string, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/merchants/${merchantId}/override`, method: 'DELETE', signal })
       },
     } as const,
     notifications: {

@@ -81,6 +81,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #1300 M20: Savings goal contribution API (D6 source-a manual log + confirm + delete)
 	contributionHandler := &ContributionHandler{}
 
+	// Issue #957: Merchant name handling
+	merchantHandler := &MerchantHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -136,4 +139,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1300 M20: Savings goal contribution API
 	RegisterContributionRoutes(api, contributionHandler)
+
+	// Issue #957: Merchant name handling
+	RegisterMerchantRoutes(api, merchantHandler)
 }

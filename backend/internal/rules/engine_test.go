@@ -2,6 +2,7 @@ package rules
 
 import (
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
@@ -567,5 +568,75 @@ func TestRuleEngine_EvaluateRules_ClearCategory_FirstMatchWins(t *testing.T) {
 
 	if result.CategoryRuleID != "rule-clear" {
 		t.Errorf("Expected CategoryRuleID = rule-clear, got %s", result.CategoryRuleID)
+	}
+}
+
+// TestRuleEngine_EvaluateRules_EqualPriority_DeterministicTieBreaker verifies that
+// when two rules share the same priority the engine always picks the same winner,
+// regardless of which order the caller passes the slice. Without a tie-breaker,
+// sort.Slice is unstable and the winner is nondeterministic across Go versions /
+// slice orderings — a P0 bug (Codex review #957).
+//
+// Tie-breaking semantics: among equal-priority rules the one with the later
+// CreatedAt wins (more-recently created rule is treated as more specific). The ID
+// string is a final tiebreaker for exact-timestamp ties.
+func TestRuleEngine_EvaluateRules_EqualPriority_DeterministicTieBreaker(t *testing.T) {
+	engine := NewRuleEngine()
+
+	older := &domain.CategorizationRule{
+		ID:       "rule-older",
+		Name:     "Older Rule",
+		Enabled:  true,
+		Priority: 5,
+		Conditions: []domain.RuleCondition{
+			{Type: domain.ConditionMerchantContains, Value: "starbucks"},
+		},
+		ConditionLogic:  "AND",
+		TargetKind:      strPtr("pfc"),
+		TargetPFCPrimary: strPtr("FOOD_AND_DRINK"),
+		TagBehavior:     "add",
+		Source:          "manual",
+		CreatedAt:       time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	newer := &domain.CategorizationRule{
+		ID:       "rule-newer",
+		Name:     "Newer Rule (same priority)",
+		Enabled:  true,
+		Priority: 5, // same priority
+		Conditions: []domain.RuleCondition{
+			{Type: domain.ConditionMerchantContains, Value: "starbucks"},
+		},
+		ConditionLogic:  "AND",
+		TargetKind:      strPtr("pfc"),
+		TargetPFCPrimary: strPtr("GENERAL_MERCHANDISE"),
+		TagBehavior:     "add",
+		Source:          "manual",
+		CreatedAt:       time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC), // later
+	}
+
+	tx := newTestTransaction("STARBUCKS COFFEE", -5.50, "in store", nil)
+
+	// Pass in [older, newer] order
+	result1, err := engine.EvaluateRules(tx, []*domain.CategorizationRule{older, newer})
+	if err != nil {
+		t.Fatalf("EvaluateRules() order1 error = %v", err)
+	}
+
+	// Pass in [newer, older] order — must produce the same winner
+	result2, err := engine.EvaluateRules(tx, []*domain.CategorizationRule{newer, older})
+	if err != nil {
+		t.Fatalf("EvaluateRules() order2 error = %v", err)
+	}
+
+	// The newer rule must always win (later CreatedAt = tiebreaker)
+	if result1.CategoryRuleID != "rule-newer" {
+		t.Errorf("order1: expected rule-newer to win, got %q", result1.CategoryRuleID)
+	}
+	if result2.CategoryRuleID != "rule-newer" {
+		t.Errorf("order2: expected rule-newer to win, got %q", result2.CategoryRuleID)
+	}
+	// Both orderings must agree on the winner
+	if result1.CategoryRuleID != result2.CategoryRuleID {
+		t.Errorf("nondeterministic: order1 winner=%q, order2 winner=%q", result1.CategoryRuleID, result2.CategoryRuleID)
 	}
 }

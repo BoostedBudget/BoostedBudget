@@ -181,11 +181,53 @@ describe('excluded operations', () => {
     }
   })
 
-  it('excludes auto-categorization writes (deferred)', () => {
-    const autoCatWrites = ['createRule', 'updateRule', 'deleteRule', 'toggleRule']
-    for (const opId of autoCatWrites) {
-      expect(isExcluded(opId)).toBe(true)
+  it('allows auto-categorization writes with confirmation-gating (Issue #957 Q1)', () => {
+    // Rule mutations were un-excluded per Issue #957 Q1 decision.
+    // They are confirmation-gated writes, not excluded.
+    for (const opId of ['createRule', 'updateRule', 'deleteRule', 'toggleRule']) {
+      expect(isExcluded(opId)).toBe(false)
+      expect(getCapability(opId)?.class).toBe('write')
+      expect(getCapability(opId)?.confirmationRequired).toBe(true)
     }
+  })
+
+  it('classifies getMerchantOverrides as read (Issue #957 gap fill)', () => {
+    const entry = getCapability('getMerchantOverrides')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.confirmationRequired).toBe(false)
+  })
+
+  // G40: explicit classification assertions for all 7 merchant ops (Issue #957)
+  it('classifies merchant read ops as read, not excluded, no confirmation (Issue #957 G40)', () => {
+    for (const opId of ['getMerchants', 'getMerchantDuplicateSuggestions']) {
+      const entry = getCapability(opId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe('read')
+      expect(entry?.excluded).toBe(false)
+      expect(entry?.confirmationRequired).toBeFalsy()
+    }
+  })
+
+  it('classifies merchant write ops as confirmation-gated writes (Issue #957 G40)', () => {
+    for (const opId of ['setMerchantOverride', 'bulkSetMerchantOverrides', 'mergeMerchants']) {
+      const entry = getCapability(opId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe('write')
+      expect(entry?.confirmationRequired).toBe(true)
+      expect(entry?.excluded).toBe(false)
+      expect(entry?.destructive).toBe(false)
+    }
+  })
+
+  it('classifies clearMerchantOverride as a destructive confirmation-gated write (Issue #957 G40)', () => {
+    const entry = getCapability('clearMerchantOverride')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.destructive).toBe(true)
   })
 
   it('excludes subscription writes (subscription management stays in-app)', () => {
@@ -243,7 +285,7 @@ describe('helper functions', () => {
 // ── Completeness: every known operationId is classified ───────────────────
 
 describe('completeness', () => {
-  it('covers all 170 known operationIds (no unknown ops in the spec)', async () => {
+  it('covers all 177 known operationIds (no unknown ops in the spec)', async () => {
     // We import the full list to ensure no ops are silently absent
     // +8 from Issue #138: getHoldings, getPortfolioSummary, getPortfolioHistory,
     //   getInvestmentTransactions, getPortfolioAllocationBreakdown, getTopMovers,
@@ -252,8 +294,10 @@ describe('completeness', () => {
     // +4 from Issue #1300 M20: listSavingsGoalContributions, logSavingsGoalContribution,
     //   confirmSavingsGoalContribution, deleteSavingsGoalContribution
     // +1 from Issue #1300 R3-7: rejectSavingsGoalContribution (sticky tombstone)
+    // +7 from Issue #957: getMerchants, getMerchantOverrides, getMerchantDuplicateSuggestions,
+    //   setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides, mergeMerchants
     const { ALL_OPERATION_IDS } = await import('./capability-manifest')
-    expect(ALL_OPERATION_IDS.length).toBe(170)
+    expect(ALL_OPERATION_IDS.length).toBe(177)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

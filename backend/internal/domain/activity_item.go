@@ -49,6 +49,7 @@ type ActivityItem struct {
 	AuthorizedDate        *time.Time     `json:"authorized_date,omitempty"`
 	MerchantName          *string        `json:"merchant_name,omitempty"`
 	MerchantID            *string        `json:"merchant_id,omitempty"`
+	EffectiveMerchantName *string        `json:"effective_merchant_name,omitempty"`
 	DataSource            *string        `json:"data_source,omitempty"` // "plaid" | "manual" (TransactionSource)
 	ExternalTransactionID *string        `json:"external_transaction_id,omitempty"`
 	PFCPrimary            *string        `json:"pfc_primary,omitempty"`
@@ -116,6 +117,7 @@ func NewBankingActivityItem(t *Transaction) *ActivityItem {
 		AuthorizedDate:                t.AuthorizedDate,
 		MerchantName:                  t.MerchantName,
 		MerchantID:                    t.MerchantID,
+		EffectiveMerchantName:         t.EffectiveMerchantName,
 		DataSource:                    &src,
 		ExternalTransactionID:         t.ExternalTransactionID,
 		PFCPrimary:                    t.PFCPrimary,

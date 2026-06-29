@@ -242,6 +242,8 @@ components:
           type: string
         effective_category_name:
           type: string
+        effective_merchant_name:
+          type: string
         effective_pfc_detailed:
           type: string
         effective_pfc_primary:
@@ -1197,6 +1199,26 @@ components:
         - total_spent
         - total_remaining
         - period
+      type: object
+    BulkSetOverridesBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BulkSetOverridesBody.json
+          format: uri
+          readOnly: true
+          type: string
+        overrides:
+          description: List of merchant overrides to upsert
+          items:
+            $ref: "#/components/schemas/SetOverrideRequest"
+          type:
+            - array
+            - "null"
+      required:
+        - overrides
       type: object
     BulkSetTransactionReviewedInputBody:
       additionalProperties: false
@@ -3567,6 +3589,102 @@ components:
       required:
         - message
       type: object
+    MerchantNameOverride:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MerchantNameOverride.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        display_name:
+          type: string
+        id:
+          type: string
+        merchant_id:
+          type: string
+        merged_into_merchant_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - user_id
+        - merchant_id
+        - created_at
+        - updated_at
+      type: object
+    MerchantSummary:
+      additionalProperties: false
+      properties:
+        dominant_category:
+          type: string
+        effective_display_name:
+          type: string
+        has_override:
+          type: boolean
+        is_merged:
+          type: boolean
+        merchant_id:
+          type: string
+        merged_into_merchant_id:
+          type: string
+        normalized_name:
+          type: string
+        raw_variants:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        total_spend:
+          format: double
+          type: number
+        transaction_count:
+          format: int64
+          type: integer
+      required:
+        - merchant_id
+        - normalized_name
+        - effective_display_name
+        - raw_variants
+        - transaction_count
+        - total_spend
+        - has_override
+        - is_merged
+      type: object
+    MergeMerchantsBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/MergeMerchantsBody.json
+          format: uri
+          readOnly: true
+          type: string
+        merchant_ids:
+          description: Source merchant UUIDs to merge (the duplicates)
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        target_merchant_id:
+          description: Target merchant UUID to merge into (the canonical)
+          type: string
+      required:
+        - merchant_ids
+        - target_merchant_id
+      type: object
     MonthOverMonthBucket:
       additionalProperties: false
       properties:
@@ -4933,6 +5051,35 @@ components:
         - clerk
         - plaid
       type: object
+    SetMerchantOverrideBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/SetMerchantOverrideBody.json
+          format: uri
+          readOnly: true
+          type: string
+        display_name:
+          description: Custom display name for the merchant
+          type: string
+        merged_into_merchant_id:
+          description: Target merchant UUID to merge this merchant into
+          type: string
+      type: object
+    SetOverrideRequest:
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        merchant_id:
+          type: string
+        merged_into_merchant_id:
+          type: string
+      required:
+        - merchant_id
+      type: object
     SetTransactionReviewedInputBody:
       additionalProperties: false
       properties:
@@ -5481,6 +5628,8 @@ components:
           format: date-time
           type: string
         effective_category_name:
+          type: string
+        effective_merchant_name:
           type: string
         effective_pfc_detailed:
           type: string
@@ -10761,6 +10910,213 @@ paths:
       summary: Run a recipe
       tags:
         - MCP Recipes
+  /api/v1/merchants:
+    get:
+      description: Lists all distinct merchants for the authenticated user with spend totals and override status.
+      operationId: getMerchants
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MerchantSummary"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List merchants
+      tags:
+        - Merchants
+  /api/v1/merchants/duplicate-suggestions:
+    get:
+      description: Returns groups of merchants that appear to be duplicates based on fuzzy name similarity.
+      operationId: getMerchantDuplicateSuggestions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  items:
+                    $ref: "#/components/schemas/MerchantSummary"
+                  type:
+                    - array
+                    - "null"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get merchant duplicate suggestions
+      tags:
+        - Merchants
+  /api/v1/merchants/merge:
+    post:
+      description: Creates per-user merge overrides so source merchants display under the target merchant name.
+      operationId: mergeMerchants
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergeMerchantsBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MerchantNameOverride"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Merge merchants
+      tags:
+        - Merchants
+  /api/v1/merchants/overrides:
+    get:
+      description: Returns all per-user merchant name overrides, including renamed and merged merchants.
+      operationId: getMerchantOverrides
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MerchantNameOverride"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List merchant overrides
+      tags:
+        - Merchants
+  /api/v1/merchants/overrides/bulk:
+    post:
+      description: Upserts multiple merchant name overrides in a single request. MCP-friendly.
+      operationId: bulkSetMerchantOverrides
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkSetOverridesBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/MerchantNameOverride"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Bulk set merchant name overrides
+      tags:
+        - Merchants
+  /api/v1/merchants/{merchantId}/override:
+    delete:
+      description: Removes the per-user override for a merchant, reverting to the system normalized name.
+      operationId: clearMerchantOverride
+      parameters:
+        - description: Merchant UUID
+          in: path
+          name: merchantId
+          required: true
+          schema:
+            description: Merchant UUID
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Clear merchant name override
+      tags:
+        - Merchants
+    put:
+      description: Creates or updates a per-user merchant name override or merge pointer.
+      operationId: setMerchantOverride
+      parameters:
+        - description: Merchant UUID
+          in: path
+          name: merchantId
+          required: true
+          schema:
+            description: Merchant UUID
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetMerchantOverrideBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MerchantNameOverride"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Set merchant name override
+      tags:
+        - Merchants
   /api/v1/notifications:
     get:
       description: Retrieves notifications for the authenticated user, ordered by created_at DESC.

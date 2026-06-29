@@ -331,6 +331,10 @@ func (m *MockTransactionRepository) GetInflowTransactionsForAccount(ctx context.
 	return nil, nil
 }
 
+func (m *MockTransactionRepository) ResolveEffectiveMerchantNames(_ context.Context, _ string, _ []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 // MockPlaidClient is a mock for Plaid API client
 type MockPlaidClient struct {
 	mock.Mock
