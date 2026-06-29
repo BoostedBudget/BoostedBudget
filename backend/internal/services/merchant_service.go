@@ -92,22 +92,21 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 		displayName = &trimmed
 	}
 
-	// Fire analytics event
-	if s.analytics != nil {
-		s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
-			"merchant_id":      merchantID,
-			"has_display_name": displayName != nil,
-			"is_merge":         mergedIntoMerchantID != nil,
-		})
-	}
-
 	// Pure rename (no merge pointer): fast path via Upsert.
 	if mergedIntoMerchantID == nil {
-		return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+		result, err := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
 			UserID:      userID,
 			MerchantID:  merchantID,
 			DisplayName: displayName,
 		})
+		if err == nil && s.analytics != nil {
+			s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+				"merchant_id":      merchantID,
+				"has_display_name": displayName != nil,
+				"is_merge":         false,
+			})
+		}
+		return result, err
 	}
 
 	// Merge (with optional rename): thread displayName into applyMergeFlatten so both the
@@ -126,18 +125,40 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 		// G27 self-merge fallback: persist display_name if provided (the merge write was
 		// skipped entirely, so we must write the rename separately).
 		if displayName != nil {
-			return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+			result, upsertErr := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
 				UserID:      userID,
 				MerchantID:  merchantID,
 				DisplayName: displayName,
 			})
+			if upsertErr == nil && s.analytics != nil {
+				s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+					"merchant_id":      merchantID,
+					"has_display_name": true,
+					"is_merge":         true,
+				})
+			}
+			return result, upsertErr
 		}
 		// G28: return the resolved canonical ID, not the raw request value.
+		if s.analytics != nil {
+			s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+				"merchant_id":      merchantID,
+				"has_display_name": false,
+				"is_merge":         true,
+			})
+		}
 		return &domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           merchantID,
 			MergedIntoMerchantID: &canonicalID,
 		}, nil
+	}
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+			"merchant_id":      merchantID,
+			"has_display_name": displayName != nil,
+			"is_merge":         true,
+		})
 	}
 	return &results[0], nil
 }
