@@ -178,9 +178,14 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 		name := fmt.Sprintf("%s_%s", tc.indexSuffix, strings.ToLower(tc.orderDir))
 		t.Run(name, func(t *testing.T) {
 			// First-page form: no keyset predicate, just ORDER BY + LIMIT.
+			// For merchant sort, inject merchantSortJoins to resolve the effectiveMerchantNameExpr aliases.
+			joins := ""
+			if tc.indexSuffix == "merchant" {
+				joins = " " + merchantSortJoins
+			}
 			firstPageSQL := fmt.Sprintf(
-				`SELECT id FROM transactions WHERE user_id = $1 ORDER BY %s %s, id ASC LIMIT 51`,
-				tc.sortExpr, tc.orderDir,
+				`SELECT t.id FROM transactions t WHERE t.user_id = $1%s ORDER BY %s %s, t.id ASC LIMIT 51`,
+				joins, tc.sortExpr, tc.orderDir,
 			)
 			plan := runExplain(ctx, t, db, firstPageSQL, "00000000-0000-0000-0000-000000000000")
 			assert.True(t,
