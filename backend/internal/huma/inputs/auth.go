@@ -20,6 +20,11 @@ const (
 	// SubscriptionStatusKey is the context key for the user's subscription status.
 	// Set by Clerk middleware; read by read-only enforcement middleware (#930).
 	SubscriptionStatusKey ContextKey = "subscription_status"
+
+	// ClerkUserIDHeader is the HTTP header used by test helpers to supply a user ID
+	// without going through JWT validation. In production, the Clerk middleware always
+	// sets UserIDKey in context first, so this header is never read.
+	ClerkUserIDHeader = "X-Clerk-User-Id"
 )
 
 // AuthenticatedInput provides user authentication resolution for all protected endpoints.

@@ -52,6 +52,18 @@ describe('TriageDetailView', () => {
     expect(screen.getByText('Coffee Shop')).toBeInTheDocument()
   })
 
+  it('prefers effective_merchant_name over merchant_name when both are set', () => {
+    renderTriage({
+      transaction: {
+        ...mockTx,
+        merchant_name: 'WHOLEFDSMRKT #10234',
+        effective_merchant_name: 'Whole Foods Market',
+      },
+    })
+    expect(screen.getByText('Whole Foods Market')).toBeInTheDocument()
+    expect(screen.queryByText('WHOLEFDSMRKT #10234')).not.toBeInTheDocument()
+  })
+
   it('renders ReviewBadge for unreviewed transaction', () => {
     renderTriage()
     expect(screen.getByText('Unreviewed')).toBeInTheDocument()

@@ -1414,6 +1414,13 @@ func main() {
 		operations.RegisterCategorizationRuleRoutes(humaAPI, humaRuleHandler)
 		appLogger.Info("Huma categorization rule routes registered")
 
+		// Register Huma merchant routes (Issue #957: Merchant name handling)
+		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
+		merchantService := services.NewMerchantService(merchantRepo, merchantOverrideRepo)
+		humaMerchantHandler := operations.NewMerchantHandler(merchantService)
+		operations.RegisterMerchantRoutes(humaAPI, humaMerchantHandler)
+		appLogger.Info("Huma merchant routes registered")
+
 		// Register Huma notification routes (Issue #559: Huma migration)
 		humaNotificationHandler := operations.NewNotificationHandler(notificationRepo)
 		operations.RegisterNotificationRoutes(humaAPI, humaNotificationHandler)

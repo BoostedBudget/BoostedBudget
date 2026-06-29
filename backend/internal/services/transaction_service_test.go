@@ -213,6 +213,14 @@ func (m *MockTransactionRepository) GetInflowTransactionsForAccount(ctx context.
 	return args.Get(0).([]*domain.SavingsInflowTransaction), args.Error(1)
 }
 
+func (m *MockTransactionRepository) ResolveEffectiveMerchantNames(ctx context.Context, userID string, merchantIDs []string) (map[string]string, error) {
+	args := m.Called(ctx, userID, merchantIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
 // TestTransactionService_ListTransactions_EnforcesMaxLimit tests that the service enforces a maximum limit of 100
 func TestTransactionService_ListTransactions_EnforcesMaxLimit(t *testing.T) {
 	mockRepo := new(MockTransactionRepository)
@@ -889,6 +897,92 @@ func TestGetTransactionByID_NilDisplayWhenNoCustomCategory(t *testing.T) {
 	mockCategoryRepo.AssertExpectations(t)
 }
 
+// TestGetTransactionByID_EnrichesEffectiveMerchantName asserts that GetTransactionByID populates
+// EffectiveMerchantName from the shared resolver (G15 — single-GET path).
+func TestGetTransactionByID_EnrichesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-uuid-1"
+	txn := &domain.Transaction{ID: "txn-emn", UserID: "user-1", MerchantID: &mID}
+	mockRepo.On("GetByID", ctx, "txn-emn").Return(txn, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Whole Foods Market"}, nil)
+
+	result, err := service.GetTransactionByID(ctx, "user-1", "txn-emn")
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "EffectiveMerchantName must be populated by GetTransactionByID")
+	assert.Equal(t, "Whole Foods Market", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestGetTransactionByID_EnrichMerchant_ResolverError asserts that a resolver failure propagates.
+func TestGetTransactionByID_EnrichMerchant_ResolverError(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-err"
+	txn := &domain.Transaction{ID: "txn-err", UserID: "user-1", MerchantID: &mID}
+	mockRepo.On("GetByID", ctx, "txn-err").Return(txn, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(nil, errors.New("db unavailable"))
+
+	_, err := service.GetTransactionByID(ctx, "user-1", "txn-err")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db unavailable")
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionTags_ResponseCarriesEffectiveMerchantName asserts that the mutation
+// response carries EffectiveMerchantName (enrichment is transitive via GetTransactionByID — G15).
+func TestUpdateTransactionTags_ResponseCarriesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-tags"
+	txn := &domain.Transaction{ID: "txn-tags-emn", UserID: "user-1", MerchantID: &mID}
+	tags := []string{"groceries"}
+
+	mockRepo.On("GetByID", ctx, "txn-tags-emn").Return(txn, nil)
+	mockRepo.On("UpdateTags", ctx, "txn-tags-emn", "user-1", tags, mock.AnythingOfType("[]domain.TagSource")).Return(nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Starbucks"}, nil)
+
+	result, err := service.UpdateTransactionTags(ctx, "user-1", "txn-tags-emn", tags)
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "mutation response must carry EffectiveMerchantName")
+	assert.Equal(t, "Starbucks", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestUpdateTransactionCategory_ResponseCarriesEffectiveMerchantName asserts that the mutation
+// response carries EffectiveMerchantName (enrichment is transitive via final GetTransactionByID — G15).
+func TestUpdateTransactionCategory_ResponseCarriesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockTransactionRepository)
+	service := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+
+	mID := "merchant-cat"
+	txn := &domain.Transaction{ID: "txn-cat-emn", UserID: "user-1", MerchantID: &mID}
+
+	// GetTransactionByID is called twice: once for ownership check, once to return result.
+	mockRepo.On("GetByID", ctx, "txn-cat-emn").Return(txn, nil).Times(2)
+	mockRepo.On("UpdateCategory", ctx, "txn-cat-emn", "user-1",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	// ResolveEffectiveMerchantNames is called once per GetTransactionByID invocation that has a merchant_id.
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, "user-1", []string{mID}).
+		Return(map[string]string{mID: "Amazon"}, nil).Times(2)
+
+	result, err := service.UpdateTransactionCategory(ctx, "user-1", "txn-cat-emn", "clear", nil, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result.EffectiveMerchantName, "mutation response must carry EffectiveMerchantName")
+	assert.Equal(t, "Amazon", *result.EffectiveMerchantName)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestListTransactions_PopulatesCustomCategoryDisplay asserts that list enriches custom-category display.
 func TestListTransactions_PopulatesCustomCategoryDisplay(t *testing.T) {
 	ctx := context.Background()
@@ -1240,6 +1334,76 @@ func TestEnrichAccount_NilSafe(t *testing.T) {
 	mockTxRepo.AssertExpectations(t)
 }
 
+// TestListTransactionsByCursor_UnifiedFeed_EnrichesEffectiveMerchantName verifies that
+// the default unified feed path (IncludeInvestmentActivity=true) populates
+// EffectiveMerchantName for banking rows via ResolveEffectiveMerchantNames (G6 fix).
+func TestListTransactionsByCursor_UnifiedFeed_EnrichesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-enrich-merchant-1"
+	merchantID := uuid.New().String()
+
+	bankingItem := &domain.ActivityItem{
+		Source:     domain.FeedSourceBanking,
+		ID:         uuid.New().String(),
+		UserID:     userID,
+		AccountID:  uuid.New().String(),
+		Name:       "WHOLEFDSMRKT #10234",
+		MerchantID: &merchantID,
+		Amount:     45.0,
+	}
+
+	mockTxRepo := new(MockTransactionRepository)
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
+		Return(map[string]string{merchantID: "Whole Foods Market"}, nil)
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+
+	item := resp.Transactions[0]
+	require.NotNil(t, item.EffectiveMerchantName, "EffectiveMerchantName must be populated on unified feed banking rows")
+	assert.Equal(t, "Whole Foods Market", *item.EffectiveMerchantName)
+
+	mockTxRepo.AssertExpectations(t)
+}
+
+// TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_NoMerchantID verifies that
+// banking rows without a merchant_id do not cause a resolve call or panic.
+func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_NoMerchantID(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-enrich-merchant-2"
+
+	bankingItem := &domain.ActivityItem{
+		Source:    domain.FeedSourceBanking,
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		AccountID: uuid.New().String(),
+		Name:      "Manual Entry",
+		Amount:    10.0,
+		// MerchantID intentionally nil
+	}
+
+	mockTxRepo := new(MockTransactionRepository)
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+	// ResolveEffectiveMerchantNames must NOT be called when there are no merchant IDs.
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+	assert.Nil(t, resp.Transactions[0].EffectiveMerchantName, "nil MerchantID must leave EffectiveMerchantName nil")
+
+	// Verify ResolveEffectiveMerchantNames was never called.
+	mockTxRepo.AssertNotCalled(t, "ResolveEffectiveMerchantNames", mock.Anything, mock.Anything, mock.Anything)
+	mockTxRepo.AssertExpectations(t)
+}
+
 // TestEnrichAccount_BankingScopeGuard verifies that banking rows in the same unified feed
 // are NOT given an embedded Account (out-of-scope for #1329).
 func TestEnrichAccount_BankingScopeGuard(t *testing.T) {
@@ -1275,4 +1439,135 @@ func TestEnrichAccount_BankingScopeGuard(t *testing.T) {
 	mockTxRepo.AssertExpectations(t)
 	// Verify the accounts repo was never queried — banking-only feeds must not pay the extra round-trip.
 	mockAcctRepo.AssertNotCalled(t, "GetAccountsWithInstitutionFiltered", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// ── G10: budget-category list enriches effective merchant name ───────────────
+
+// TestListByBudgetCategory_EnrichesEffectiveMerchantName asserts that the budget-category
+// transaction list resolves the effective merchant name via ResolveEffectiveMerchantNames.
+func TestListByBudgetCategory_EnrichesEffectiveMerchantName(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-budget-merchant-1"
+	merchantID := uuid.New().String()
+
+	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
+	rawName := "WHOLEFDSMRKT #10234"
+	txns := []domain.Transaction{
+		{ID: "txn-1", UserID: userID, MerchantID: &merchantID, MerchantName: &rawName},
+	}
+
+	mockRepo := new(MockTransactionRepository)
+	mockRepo.On("GetTransactionsForBudgetCategory", ctx, userID, category,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), 50, 0).
+		Return(txns, 1, 42.0, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
+		Return(map[string]string{merchantID: "Whole Foods Market"}, nil)
+
+	svc := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	now := time.Now()
+	result, _, _, err := svc.ListByBudgetCategory(ctx, userID, category, now, now, 50, 0)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].EffectiveMerchantName, "EffectiveMerchantName must be set for budget-category txn with a merchant override")
+	assert.Equal(t, "Whole Foods Market", *result[0].EffectiveMerchantName)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestListByBudgetCategory_EnrichMerchant_ResolverError asserts that an error from
+// ResolveEffectiveMerchantNames propagates through ListByBudgetCategory.
+func TestListByBudgetCategory_EnrichMerchant_ResolverError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-budget-merchant-err-1"
+	merchantID := uuid.New().String()
+
+	category := &domain.BudgetCategory{ID: "cat-1", BudgetID: "budget-1"}
+	rawName := "GARBLED #99"
+	txns := []domain.Transaction{
+		{ID: "txn-1", UserID: userID, MerchantID: &merchantID, MerchantName: &rawName},
+	}
+
+	mockRepo := new(MockTransactionRepository)
+	mockRepo.On("GetTransactionsForBudgetCategory", ctx, userID, category,
+		mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), 50, 0).
+		Return(txns, 1, 10.0, nil)
+	mockRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
+		Return(nil, errors.New("db error"))
+
+	svc := NewTransactionService(mockRepo, new(MockCustomCategoryRepository))
+	now := time.Now()
+	_, _, _, err := svc.ListByBudgetCategory(ctx, userID, category, now, now, 50, 0)
+	assert.Error(t, err, "resolver error must propagate from ListByBudgetCategory")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// ── G11: unified-feed propagates ResolveEffectiveMerchantNames error ─────────
+
+// TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_ResolverError asserts that an
+// error from ResolveEffectiveMerchantNames is propagated by ListTransactionsByCursor.
+func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_ResolverError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-merchant-err-1"
+	merchantID := uuid.New().String()
+
+	bankingItem := &domain.ActivityItem{
+		Source:     domain.FeedSourceBanking,
+		ID:         uuid.New().String(),
+		UserID:     userID,
+		AccountID:  uuid.New().String(),
+		Name:       "Garbled Name",
+		MerchantID: &merchantID,
+		Amount:     10.0,
+	}
+
+	mockTxRepo := new(MockTransactionRepository)
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
+		Return(nil, errors.New("db error"))
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+
+	_, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	assert.Error(t, err, "resolver error must propagate from ListTransactionsByCursor")
+
+	mockTxRepo.AssertExpectations(t)
+}
+
+// ── G12: absent merchant ID in resolver map leaves EffectiveMerchantName nil ─
+
+// TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_MerchantIDAbsentFromMap asserts
+// that a banking item whose merchant_id is missing from the resolver result map does not
+// panic and leaves EffectiveMerchantName nil.
+func TestListTransactionsByCursor_UnifiedFeed_EnrichMerchant_MerchantIDAbsentFromMap(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-merchant-absent-1"
+	merchantID := uuid.New().String()
+
+	bankingItem := &domain.ActivityItem{
+		Source:     domain.FeedSourceBanking,
+		ID:         uuid.New().String(),
+		UserID:     userID,
+		AccountID:  uuid.New().String(),
+		Name:       "Unknown Vendor",
+		MerchantID: &merchantID,
+		Amount:     5.0,
+	}
+
+	mockTxRepo := new(MockTransactionRepository)
+	mockTxRepo.On("GetByUserIDKeysetUnified", ctx, userID, investFilters(), (*domain.TransactionCursor)(nil), 50).
+		Return([]*domain.ActivityItem{bankingItem}, (*domain.TransactionCursor)(nil), nil)
+	// Resolver returns an empty map — merchant ID not found.
+	mockTxRepo.On("ResolveEffectiveMerchantNames", ctx, userID, []string{merchantID}).
+		Return(map[string]string{}, nil)
+
+	svc := NewTransactionService(mockTxRepo, new(MockCustomCategoryRepository))
+
+	resp, err := svc.ListTransactionsByCursor(ctx, userID, investFilters(), nil, 50)
+	require.NoError(t, err)
+	require.Len(t, resp.Transactions, 1)
+	assert.Nil(t, resp.Transactions[0].EffectiveMerchantName, "absent merchant ID must leave EffectiveMerchantName nil — no panic")
+
+	mockTxRepo.AssertExpectations(t)
 }
