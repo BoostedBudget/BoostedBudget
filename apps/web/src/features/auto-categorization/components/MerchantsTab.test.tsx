@@ -253,6 +253,23 @@ describe('MerchantsTab', () => {
     expect(screen.getByTestId('spend-cell-1')).toHaveTextContent('$8750.00')
   })
 
+  // G34: rename modal must use the shared Radix Dialog — hand-rolled div has no Escape handler.
+  it('closes rename modal when Escape key is pressed', async () => {
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('action-rename-0')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('action-rename-0'))
+    await waitFor(() => {
+      expect(screen.getByTestId('rename-modal')).toBeInTheDocument()
+    })
+    // Radix Dialog handles Escape natively; a hand-rolled div does not.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape', keyCode: 27 })
+    await waitFor(() => {
+      expect(screen.queryByTestId('rename-modal')).not.toBeInTheDocument()
+    })
+  })
+
   it('calls mergeMerchants when merge button clicked in suggestions', async () => {
     const group: MerchantSummary[] = [
       merchant1,
