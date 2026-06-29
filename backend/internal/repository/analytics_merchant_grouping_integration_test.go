@@ -349,7 +349,7 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		results, err := txRepo.GetCategoryBreakdownForMerchant(ctx, userStr, merchantCanonical.String(), filters)
 		require.NoError(t, err)
 
-		// Expect two rows: FOOD_AND_DRINK and GIFTS_AND_DONATIONS
+		// Expect two rows: FOOD_AND_DRINK and GENERAL_MERCHANDISE
 		require.Len(t, results, 2, "expected 2 category groups for merged merchant")
 
 		// Build a map by category for easier assertions
@@ -365,10 +365,10 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		assert.Equal(t, 2, foodRow.Count, "FOOD_AND_DRINK should have 2 transactions")
 
 		// GENERAL_MERCHANDISE: 30 (from source) = 30
-		giftsRow, ok := byCategory["GENERAL_MERCHANDISE"]
+		merchRow, ok := byCategory["GENERAL_MERCHANDISE"]
 		require.True(t, ok, "expected GENERAL_MERCHANDISE category in results")
-		assert.InDelta(t, 30.00, giftsRow.Total, 0.01, "GENERAL_MERCHANDISE should include source transaction")
-		assert.Equal(t, 1, giftsRow.Count, "GENERAL_MERCHANDISE should have 1 transaction")
+		assert.InDelta(t, 30.00, merchRow.Total, 0.01, "GENERAL_MERCHANDISE should include source transaction")
+		assert.Equal(t, 1, merchRow.Count, "GENERAL_MERCHANDISE should have 1 transaction")
 	})
 
 	t.Run("UUID filter excludes unrelated merchant transactions", func(t *testing.T) {
