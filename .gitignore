@@ -364,6 +364,7 @@ apps/web/coverage-conflict/
 apps/web/playwright-report/
 apps/web/test-results/
 apps/web/e2e/.env.test
+apps/web/e2e-*-diagnostic.png
 .playwright-mcp/
 
 # Wrangler
