@@ -24,6 +24,7 @@ import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/compone
 import { CategoryEditor } from '../../../categories/components/CategoryEditor'
 import { useTriageKeyboard } from '../hooks/useTriageKeyboard'
 import { KeyboardShortcutsHelp } from './KeyboardShortcutsHelp'
+import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import type { Transaction } from '../../types'
 import type { CustomCategory } from '../../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
@@ -107,7 +108,7 @@ export function TriageDetailView({
     enabled: !showHelp && !showRecategorize && !isPending && !externalOverlayOpen,
   })
 
-  const displayName = transaction.effective_merchant_name || transaction.merchant_name || transaction.name
+  const displayName = getMerchantDisplayName(transaction)
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < total - 1
 

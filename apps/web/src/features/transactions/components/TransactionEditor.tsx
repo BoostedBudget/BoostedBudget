@@ -11,6 +11,7 @@ import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
 import { useReviewMutations } from '../hooks/useReviewMutations'
 import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge'
 import {
   useUpdateTransactionTags,
@@ -122,7 +123,7 @@ export function TransactionEditor({
 
   if (!isOpen) return null
 
-  const displayName = transaction.effective_merchant_name || transaction.merchant_name || transaction.name
+  const displayName = getMerchantDisplayName(transaction)
 
   return (
     <div

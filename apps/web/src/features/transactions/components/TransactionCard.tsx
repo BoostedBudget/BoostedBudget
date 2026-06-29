@@ -6,6 +6,7 @@ import type { BudgetCategoryMatch } from '../../budgets/utils/transactionBudgetM
 import { getCategoryColor } from '@/shared/categories/pfcColors'
 import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
 import { formatTransactionAmount } from '@/shared/transactions/amount'
+import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -24,57 +25,33 @@ interface TransactionCardProps {
 }
 
 /**
- * Format date with relative labels (Today, Yesterday) or readable format
- * Uses local timezone for consistent comparison across environments
- * Handles both YYYY-MM-DD and RFC3339 (YYYY-MM-DDTHH:MM:SSZ) formats
+ * Format date with relative labels (Today, Yesterday) or readable format.
+ * Uses local timezone for consistent comparison across environments.
+ * Handles both YYYY-MM-DD and RFC3339 (YYYY-MM-DDTHH:MM:SSZ) formats.
  */
 function formatDate(dateStr: string | null | undefined): string {
-  // Validate input
-  if (!dateStr || typeof dateStr !== 'string') {
-    return 'Invalid Date'
-  }
+  if (!dateStr || typeof dateStr !== 'string') return 'Invalid Date'
 
-  // Extract date portion from RFC3339 format (e.g., "2025-11-12T00:00:00Z" -> "2025-11-12")
   const datePortion = dateStr.split('T')[0]
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) return 'Invalid Date'
 
-  // Validate YYYY-MM-DD format
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePortion)) {
-    return 'Invalid Date'
-  }
-
-  // Parse date components to avoid timezone issues
   const [year, month, day] = datePortion.split('-').map(Number)
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return 'Invalid Date'
 
-  // Validate parsed values
-  if (isNaN(year) || isNaN(month) || isNaN(day)) {
-    return 'Invalid Date'
-  }
-
-  const transactionDate = new Date(year, month - 1, day) // month is 0-indexed
-
-  // Validate resulting date
-  if (isNaN(transactionDate.getTime())) {
-    return 'Invalid Date'
-  }
+  const transactionDate = new Date(year, month - 1, day)
+  if (isNaN(transactionDate.getTime())) return 'Invalid Date'
 
   const today = new Date()
   today.setHours(0, 0, 0, 0)
+  transactionDate.setHours(0, 0, 0, 0)
+
+  const timeDiff = transactionDate.getTime() - today.getTime()
+  if (timeDiff === 0) return 'Today'
 
   const yesterday = new Date(today)
   yesterday.setDate(yesterday.getDate() - 1)
+  if (timeDiff === -1 * 24 * 60 * 60 * 1000) return 'Yesterday'
 
-  // Normalize transaction date to midnight local time
-  transactionDate.setHours(0, 0, 0, 0)
-
-  if (transactionDate.getTime() === today.getTime()) {
-    return 'Today'
-  }
-
-  if (transactionDate.getTime() === yesterday.getTime()) {
-    return 'Yesterday'
-  }
-
-  // Format as "Oct 25, 2025"
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
@@ -84,45 +61,25 @@ function formatDate(dateStr: string | null | undefined): string {
 
 export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
   const { isReadOnly } = useReadOnly()
-  const { id, name, merchant_name, effective_merchant_name, amount, date, authorized_date, tags, pending } = transaction
+  const { id, amount, date, authorized_date, tags, pending } = transaction
 
-  const handleClick = () => {
+  const handleEdit = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
     if (!isReadOnly) onEdit?.(transaction)
   }
 
-  const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      if (!isReadOnly) onEdit?.(transaction)
-    }
-  }
-
   const displayDate = formatDate(authorized_date || date)
-  const displayName = effective_merchant_name || merchant_name || name
-
+  const displayName = getMerchantDisplayName(transaction)
   const effective = getEffectiveCategory(transaction)
   const categoryLabel = getEffectiveCategoryLabel(effective)
-
-  // Check if should show warning indicator — no warning when PFC provides a fallback
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
   const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
-
   const ariaLabel = `Transaction, ${displayDate}${pending ? ', pending' : ''}`
-
-  // Issue #531: Get category color for the dot
   const categoryColor = getCategoryColor(categoryLabel)
-
-  // Issue #531: Account display name (nickname takes precedence)
   const accountDisplayName = account ? (account.nickname || account.name) : null
   const accountBackgroundColor = account?.custom_color || '#E5E7EB'
 
-  // Issue #531: Handle quick action clicks (prevent card click propagation)
-  const handleEditClick = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    onEdit?.(transaction)
-  }
-
-  const handleCategorizeClick = (e: React.MouseEvent) => {
+  const handleCategorize = (e: React.MouseEvent) => {
     e.stopPropagation()
     onCategorize?.(transaction)
   }
@@ -138,8 +95,13 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
       data-pending={pending}
       data-pfc-primary={transaction.pfc_primary || undefined}
       aria-label={ariaLabel}
-      onClick={onEdit ? handleClick : undefined}
-      onKeyDown={onEdit ? handleKeyDown : undefined}
+      onClick={onEdit ? handleEdit : undefined}
+      onKeyDown={onEdit ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          handleEdit()
+        }
+      } : undefined}
       role={onEdit ? 'button' : undefined}
       tabIndex={onEdit ? 0 : undefined}
     >
@@ -222,7 +184,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
               <ReadOnlyGuard message="Resubscribe to edit transactions">
                 <button
                   className="inline-flex items-center justify-center w-7 h-7 border border-border rounded-md bg-card text-muted-foreground cursor-pointer transition-all hover:bg-muted hover:text-foreground hover:border-input focus:outline-2 focus:outline-ring focus:outline-offset-2"
-                  onClick={handleEditClick}
+                  onClick={handleEdit}
                   aria-label="Edit transaction"
                   type="button"
                 >
@@ -234,7 +196,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
               <ReadOnlyGuard message="Resubscribe to categorize transactions">
                 <button
                   className="inline-flex items-center justify-center w-7 h-7 border border-border rounded-md bg-card text-muted-foreground cursor-pointer transition-all hover:bg-muted hover:text-foreground hover:border-input focus:outline-2 focus:outline-ring focus:outline-offset-2"
-                  onClick={handleCategorizeClick}
+                  onClick={handleCategorize}
                   aria-label="Categorize transaction"
                   type="button"
                 >
