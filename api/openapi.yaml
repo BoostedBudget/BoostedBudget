@@ -8331,6 +8331,7 @@ paths:
           required: true
           schema:
             description: Merchant UUID to filter by
+            format: uuid
             type: string
         - description: Comma-separated account types to filter
           explode: false

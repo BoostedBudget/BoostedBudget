@@ -867,13 +867,11 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	var args []interface{}
 	argIndex := 1
 
-	// Always filter by user_id
-	conditions = append(conditions, fmt.Sprintf("t.user_id = $%d", argIndex))
+	// ::uuid cast allows paired mno.user_id = $N::text joins without type-inference conflict
+	conditions = append(conditions, fmt.Sprintf("t.user_id = $%d::uuid", argIndex))
 	args = append(args, userID)
 	argIndex++
 
-	// Optional filter: account_id (single).
-	// Issue #1109: Chain-expand via user_account_id to include pre-relink transactions
 	if filters.AccountID != nil {
 		subq := fmt.Sprintf(
 			"(t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL)"+
@@ -885,8 +883,6 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex += 2
 	}
 
-	// Optional filter: account_ids (multi-value, Issue #529).
-	// Issue #1109: Chain-expand via user_account_id subquery to include pre-relink transactions
 	if len(filters.AccountIDs) > 0 {
 		placeholders := make([]string, len(filters.AccountIDs))
 		for i, id := range filters.AccountIDs {
@@ -911,14 +907,12 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, subq)
 	}
 
-	// Optional filter: start_date
 	if filters.StartDate != nil {
 		conditions = append(conditions, fmt.Sprintf("t.date >= $%d", argIndex))
 		args = append(args, *filters.StartDate)
 		argIndex++
 	}
 
-	// Optional filter: end_date
 	if filters.EndDate != nil {
 		conditions = append(conditions, fmt.Sprintf("t.date <= $%d", argIndex))
 		args = append(args, *filters.EndDate)
@@ -950,10 +944,6 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 	}
 
-	// Optional filter: custom_category_ids (multi-value) — matches the effective custom
-	// category. Issue #1203: rolls up children — selecting a parent custom category also
-	// matches transactions assigned to its children (parent_id). Leaf categories match
-	// only themselves, so this is a no-op for non-parent selections.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := make([]string, len(filters.CustomCategoryIDs))
 		for i, id := range filters.CustomCategoryIDs {
@@ -969,9 +959,6 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		))
 	}
 
-	// Optional filter: search (name OR merchant_name OR effective merchant name via JOINs).
-	// Uses a single $N for all three ILIKE conditions (same pattern argument).
-	// The effectiveMerchantNameExpr references m/mno/m2/mno_t aliases from merchantSortJoins.
 	if filters.Search != nil {
 		searchCondition := fmt.Sprintf(
 			"(t.name ILIKE $%d OR t.merchant_name ILIKE $%d OR "+effectiveMerchantNameExpr+" ILIKE $%d)",
@@ -982,21 +969,18 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex++
 	}
 
-	// Optional filter: pending status
 	if filters.Pending != nil {
 		conditions = append(conditions, fmt.Sprintf("t.pending = $%d", argIndex))
 		args = append(args, *filters.Pending)
 		argIndex++
 	}
 
-	// Optional filter: review state (Issue #1203)
 	if filters.Reviewed != nil {
 		conditions = append(conditions, fmt.Sprintf("t.reviewed = $%d", argIndex))
 		args = append(args, *filters.Reviewed)
 		argIndex++
 	}
 
-	// Optional filter: category_source (Issue #1210) — OR logic within the enum set
 	if len(filters.CategorySources) > 0 {
 		placeholders := make([]string, len(filters.CategorySources))
 		for i, s := range filters.CategorySources {
@@ -1007,23 +991,18 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		conditions = append(conditions, "t.category_source IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
-	// Optional filter: min_amount (Issue #529)
-	// Filters by absolute amount (users see positive amounts in UI)
 	if filters.MinAmount != nil {
 		conditions = append(conditions, fmt.Sprintf("ABS(t.amount) >= $%d", argIndex))
 		args = append(args, *filters.MinAmount)
 		argIndex++
 	}
 
-	// Optional filter: max_amount (Issue #529)
 	if filters.MaxAmount != nil {
 		conditions = append(conditions, fmt.Sprintf("ABS(t.amount) <= $%d", argIndex))
 		args = append(args, *filters.MaxAmount)
 		argIndex++
 	}
 
-	// Optional filter: amount_type (Issue #529)
-	// PFCv2 sign convention: income = inflow (negative amount), expense = outflow (positive amount)
 	if filters.AmountType != nil {
 		switch *filters.AmountType {
 		case "income":
@@ -1034,16 +1013,12 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		}
 	}
 
-	// Optional filter: user_account_id (Issue #1109)
-	// Filters by stable logical account identity across re-links
 	if filters.UserAccountID != nil {
 		conditions = append(conditions, fmt.Sprintf("t.user_account_id = $%d", argIndex))
 		args = append(args, *filters.UserAccountID)
 		argIndex++
 	}
 
-	// Optional filter: merchant_id (Issue #1163)
-	// Filters by exact merchant UUID match
 	if filters.MerchantID != nil {
 		conditions = append(conditions, fmt.Sprintf("t.merchant_id = $%d", argIndex))
 		args = append(args, *filters.MerchantID)
@@ -2839,7 +2814,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::float8
 		FROM transactions t
 		%s
-		WHERE t.user_id = $1
+		WHERE t.user_id = $1::uuid
 		  -- Chain-expansion active-account filter: include pre-relink rows whose
 		  -- account_id is replaced, as long as an active account shares the same
 		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
@@ -2847,7 +2822,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- accounts share a user_account_id (Issue #1304).
 		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
 		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on t.user_id = $1.  Parity with the investment
+		  -- query is already gated on t.user_id = $1::uuid.  Parity with the investment
 		  -- branch is intentional; diverging here would reintroduce asymmetry.
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active') -- NULL account_id always false here; falls through to chain leg below
