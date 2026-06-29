@@ -498,7 +498,7 @@ type GetCategoryBreakdownForMerchantInput struct {
 	inputs.AuthenticatedInput
 	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
-	MerchantID       string `query:"merchant_id" required:"true" doc:"Merchant UUID to filter by"`
+	MerchantID       string `query:"merchant_id" required:"true" doc:"Merchant UUID to filter by" format:"uuid"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 }

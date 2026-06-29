@@ -15,7 +15,6 @@ package repository
 
 import (
 	"context"
-	"os"
 	"slices"
 	"sort"
 	"testing"
@@ -28,19 +27,6 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
-
-// connectMerchantTestDB connects to the test database and skips if not available.
-func connectMerchantTestDB(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set — skipping merchant sort integration test")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	require.NoError(t, err, "connect to test database")
-	t.Cleanup(pool.Close)
-	return pool
-}
 
 // merchantTestFixture holds IDs for a test scenario.
 type merchantTestFixture struct {
@@ -180,7 +166,7 @@ func setupMerchantTestFixture(t *testing.T, db *pgxpool.Pool) merchantTestFixtur
 // TestTransactionMerchantSort_OverrideFlipsSortOrder verifies that a user's display_name
 // override changes the effective sort position vs the raw merchant name.
 func TestTransactionMerchantSort_OverrideFlipsSortOrder(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -220,7 +206,7 @@ func TestTransactionMerchantSort_OverrideFlipsSortOrder(t *testing.T) {
 // TestTransactionMerchantSort_MergeChain verifies that a transaction linked to a source
 // merchant (C) that was merged into a target (B) sorts by B's effective name.
 func TestTransactionMerchantSort_MergeChain(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -254,7 +240,7 @@ func TestTransactionMerchantSort_MergeChain(t *testing.T) {
 // TestTransactionMerchantSort_NullMerchantSortsByName verifies that a transaction with
 // NULL merchant_id sorts by t.name (EFF fallback) and doesn't disappear.
 func TestTransactionMerchantSort_NullMerchantSortsByName(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -276,7 +262,7 @@ func TestTransactionMerchantSort_NullMerchantSortsByName(t *testing.T) {
 // transaction with merchant_name set but merchant_id NULL sorts by merchant_name
 // (NULLIF fallback in effectiveMerchantNameExpr).
 func TestTransactionMerchantSort_MerchantNameNoIDSortsByMerchantName(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -303,7 +289,7 @@ func TestTransactionMerchantSort_MerchantNameNoIDSortsByMerchantName(t *testing.
 // TestTransactionMerchantSort_PaginationBoundary verifies that keyset pagination
 // over the full result set (asc + desc) produces no duplicates and no skips.
 func TestTransactionMerchantSort_PaginationBoundary(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -364,7 +350,7 @@ func TestTransactionMerchantSort_PaginationBoundary(t *testing.T) {
 // TestTransactionMerchantSort_SearchFindsByEffectiveName verifies that searching for
 // a user's display_name override finds the transaction (G8 search behavior).
 func TestTransactionMerchantSort_SearchFindsByEffectiveName(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 
@@ -391,7 +377,7 @@ func TestTransactionMerchantSort_SearchFindsByEffectiveName(t *testing.T) {
 // TestTransactionMerchantSort_OffsetPathParity verifies that GetByUserIDWithFilters
 // returns the same order as GetByUserIDKeyset (concatenated pages).
 func TestTransactionMerchantSort_OffsetPathParity(t *testing.T) {
-	db := connectMerchantTestDB(t)
+	db := connectTestDB(t)
 	ctx := context.Background()
 	f := setupMerchantTestFixture(t, db)
 

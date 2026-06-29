@@ -357,6 +357,8 @@ backend/test-output.json
 backend/test-results.json
 backend/coverage.html
 apps/web/test-results.json
+/test-results/
+apps/web/coverage-conflict/
 
 # Playwright E2E Tests
 apps/web/playwright-report/
