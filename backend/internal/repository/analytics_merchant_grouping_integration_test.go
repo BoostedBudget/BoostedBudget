@@ -231,3 +231,197 @@ func TestGetSpendingByMerchant_Integration(t *testing.T) {
 		}
 	})
 }
+
+func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New()
+	userStr := userID.String()
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userStr, "int-catmerch-"+userStr[:8]+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	linkedItemID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, access_token, source, institution_name,
+			institution_id, cursor_position, sync_status, sync_error, item_status,
+			created_at, updated_at)
+		VALUES ($1, $2, '', 'plaid', 'Test Bank', 'ins_test', '', 'synced', NULL, 'active', NOW(), NOW())
+	`, linkedItemID, userID)
+	require.NoError(t, err, "seed linked_item")
+
+	accountID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, user_id, linked_item_id, external_account_id, source,
+			account_name, type, subtype, balance_current, balance_available, iso_currency_code,
+			status, created_at, updated_at)
+		VALUES ($1, $2, $3, 'ext_test', 'plaid', 'Test Account', 'depository', 'checking',
+			1000.00, 900.00, 'USD', 'active', NOW(), NOW())
+	`, accountID, userID, linkedItemID)
+	require.NoError(t, err, "seed account")
+
+	// Insert merchants
+	merchantCanonical := uuid.New() // target of merge — display name "Whole Foods"
+	merchantSource := uuid.New()    // merged into canonical — raw name "WHOLEFDSMRKT #123"
+	merchantOther := uuid.New()     // unrelated merchant with its own transaction
+
+	for _, mid := range []struct {
+		id   uuid.UUID
+		name string
+	}{
+		{merchantCanonical, "Whole Foods Market"},
+		{merchantSource, "WHOLEFDSMRKT #123"},
+		{merchantOther, "Other Merchant"},
+	} {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
+			VALUES ($1, $2, $2, NOW(), NOW())
+			ON CONFLICT (id) DO NOTHING
+		`, mid.id, mid.name)
+		require.NoError(t, err, "insert merchant %s", mid.name)
+	}
+
+	// Merge: merchantSource → merchantCanonical
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NOW(), NOW())
+	`, uuid.New(), userID, merchantSource, merchantCanonical)
+	require.NoError(t, err, "insert merge override source→canonical")
+
+	// Override canonical display name to "Whole Foods"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Whole Foods', NOW(), NOW())
+	`, uuid.New(), userID, merchantCanonical)
+	require.NoError(t, err, "insert display_name override for canonical")
+
+	// Use transaction-wrapped repo.
+	txRepo := NewAnalyticsRepository(tx)
+	baseDate := time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	insertTx := func(txID uuid.UUID, name string, merchantID *uuid.UUID, merchantName *string, amount float64, category string) {
+		var mid interface{} = nil
+		if merchantID != nil {
+			mid = *merchantID
+		}
+		_, err := tx.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, linked_item_id,
+				source, external_transaction_id, external_transaction_id_blind_idx,
+				amount, date, name, merchant_name, merchant_id,
+				pending, effective_pfc_primary, pfc_primary, category_source,
+				created_at, updated_at)
+			VALUES ($1, $2, $3, $4,
+				'plaid', $1, $1,
+				$5, $6, $7, $8, $9,
+				false, $10, $10, 'plaid',
+				NOW(), NOW())
+		`, txID, userID, accountID, linkedItemID, amount, baseDate, name, merchantName, mid, category)
+		require.NoError(t, err, "insert transaction %s", txID)
+	}
+
+	// Scenario A: two transactions on merchantSource with different categories
+	wfRaw := "WHOLEFDSMRKT #123"
+	insertTx(uuid.New(), "Whole Foods Groceries", &merchantSource, &wfRaw, 50.00, "FOOD_AND_DRINK")
+	insertTx(uuid.New(), "Whole Foods Flowers", &merchantSource, &wfRaw, 30.00, "GIFTS_AND_DONATIONS")
+
+	// Scenario B: one transaction on merchantCanonical directly with different category
+	insertTx(uuid.New(), "Whole Foods Prepared", &merchantCanonical, nil, 20.00, "FOOD_AND_DRINK")
+
+	// Scenario C: transaction on unrelated merchant (should be filtered out)
+	otherName := "Other Merchant"
+	insertTx(uuid.New(), "Other Purchase", &merchantOther, &otherName, 100.00, "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate:        baseDate.Add(-24 * time.Hour),
+		EndDate:          baseDate.Add(24 * time.Hour),
+		IncludeTransfers: true,
+	}
+
+	t.Run("UUID filter finds all merged sources with canonical merchant", func(t *testing.T) {
+		results, err := txRepo.GetCategoryBreakdownForMerchant(ctx, userStr, merchantCanonical.String(), filters)
+		require.NoError(t, err)
+
+		// Expect two rows: FOOD_AND_DRINK and GIFTS_AND_DONATIONS
+		require.Len(t, results, 2, "expected 2 category groups for merged merchant")
+
+		// Build a map by category for easier assertions
+		byCategory := make(map[string]*domain.CategoryBreakdownForMerchantRow)
+		for i := range results {
+			byCategory[results[i].Category] = &results[i]
+		}
+
+		// FOOD_AND_DRINK: 50 (from source) + 20 (from canonical) = 70
+		foodRow, ok := byCategory["FOOD_AND_DRINK"]
+		require.True(t, ok, "expected FOOD_AND_DRINK category in results")
+		assert.InDelta(t, 70.00, foodRow.Total, 0.01, "FOOD_AND_DRINK should include both source and canonical transactions")
+		assert.Equal(t, 2, foodRow.Count, "FOOD_AND_DRINK should have 2 transactions")
+
+		// GIFTS_AND_DONATIONS: 30 (from source) = 30
+		giftsRow, ok := byCategory["GIFTS_AND_DONATIONS"]
+		require.True(t, ok, "expected GIFTS_AND_DONATIONS category in results")
+		assert.InDelta(t, 30.00, giftsRow.Total, 0.01, "GIFTS_AND_DONATIONS should include source transaction")
+		assert.Equal(t, 1, giftsRow.Count, "GIFTS_AND_DONATIONS should have 1 transaction")
+	})
+
+	t.Run("UUID filter excludes unrelated merchant transactions", func(t *testing.T) {
+		results, err := txRepo.GetCategoryBreakdownForMerchant(ctx, userStr, merchantCanonical.String(), filters)
+		require.NoError(t, err)
+
+		// Calculate total across all categories
+		var totalAmount float64
+		for _, row := range results {
+			totalAmount += row.Total
+		}
+
+		// Should be 70 + 30 = 100, NOT including the 100 from merchantOther
+		assert.InDelta(t, 100.00, totalAmount, 0.01, "total should not include unrelated merchant's transaction")
+		assert.NotContains(t, results, 100.00, "merchantOther's amount should not appear")
+	})
+
+	t.Run("direct canonical merchant without merge returns only its own transactions", func(t *testing.T) {
+		// Create a new merchant with no merge involved
+		directMerchant := uuid.New()
+		_, err := tx.Exec(ctx, `
+			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
+			VALUES ($1, 'Direct Merchant', 'Direct Merchant', NOW(), NOW())
+		`, directMerchant)
+		require.NoError(t, err, "insert direct merchant")
+
+		// Add transactions to direct merchant only
+		directName := "Direct Merchant"
+		insertTx(uuid.New(), "Direct Tx1", &directMerchant, &directName, 25.00, "FOOD_AND_DRINK")
+		insertTx(uuid.New(), "Direct Tx2", &directMerchant, &directName, 15.00, "ENTERTAINMENT")
+
+		results, err := txRepo.GetCategoryBreakdownForMerchant(ctx, userStr, directMerchant.String(), filters)
+		require.NoError(t, err)
+
+		// Expect two rows for the two categories
+		require.Len(t, results, 2, "expected 2 category groups for direct merchant")
+
+		// Map results by category
+		byCategory := make(map[string]*domain.CategoryBreakdownForMerchantRow)
+		for i := range results {
+			byCategory[results[i].Category] = &results[i]
+		}
+
+		// FOOD_AND_DRINK: 25
+		foodRow, ok := byCategory["FOOD_AND_DRINK"]
+		require.True(t, ok, "expected FOOD_AND_DRINK category")
+		assert.InDelta(t, 25.00, foodRow.Total, 0.01)
+		assert.Equal(t, 1, foodRow.Count)
+
+		// ENTERTAINMENT: 15
+		entRow, ok := byCategory["ENTERTAINMENT"]
+		require.True(t, ok, "expected ENTERTAINMENT category")
+		assert.InDelta(t, 15.00, entRow.Total, 0.01)
+		assert.Equal(t, 1, entRow.Count)
+	})
+}
