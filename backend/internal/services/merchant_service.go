@@ -257,9 +257,8 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		})
 	}
 
-	// Phase 3 preflight: Reject cycles within the request edges (G44).
-	// E.g. [{A→B},{B→A}] would violate depth-1 if persisted.
-	if err := detectRequestMergeCycle(groups); err != nil {
+	// Phase 3 preflight: Reject chains and cycles within the request edges (G44/G45).
+	if err := detectRequestMergeChain(groups); err != nil {
 		return nil, err
 	}
 
@@ -267,35 +266,21 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 	return s.merchantOverrideRepo.BulkApply(ctx, userID, displayOnlyItems, groups)
 }
 
-// detectRequestMergeCycle reports an error if the request edges form a cycle.
-// It builds a source→canonical map from all groups, then walks from each source;
-// a revisit signals a cycle. Since resolveCanonical precedes this, the canonical
-// values already incorporate pre-existing DB merges, making this the complete
-// condition to reject cycles within the request-edge set.
-func detectRequestMergeCycle(groups []repository.BulkMergeGroup) error {
-	// Map source IDs to their target canonicals.
-	sourceCanon := make(map[string]string, len(groups))
+// detectRequestMergeChain reports an error if any group's Canonical is itself a Source
+// in the same bulk request, which would produce a chain (G45) or cycle (G44) depending
+// on edge order. The check is order-independent since resolveCanonical (Phase 2)
+// already follows DB merges, making this the complete guarantee that each accepted
+// source points directly at its terminal canonical.
+func detectRequestMergeChain(groups []repository.BulkMergeGroup) error {
+	sources := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
 		for _, src := range g.Sources {
-			sourceCanon[src] = g.Canonical
+			sources[src] = struct{}{}
 		}
 	}
-	// Walk the chain from each source; revisit = cycle.
 	for _, g := range groups {
-		for _, src := range g.Sources {
-			visited := make(map[string]struct{})
-			cur := src
-			for {
-				if _, seen := visited[cur]; seen {
-					return fmt.Errorf("bulk overrides form a merge cycle: %q", cur)
-				}
-				visited[cur] = struct{}{}
-				next, ok := sourceCanon[cur]
-				if !ok {
-					break // cur is not a source — terminus reached
-				}
-				cur = next
-			}
+		if _, ok := sources[g.Canonical]; ok {
+			return fmt.Errorf("bulk overrides merge into merchant_id %q, which is itself merged in the same request; specify the final canonical merchant directly", g.Canonical)
 		}
 	}
 	return nil
