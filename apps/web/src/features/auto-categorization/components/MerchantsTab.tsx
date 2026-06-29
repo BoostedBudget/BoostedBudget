@@ -8,9 +8,11 @@
  */
 
 import { useState, useCallback, useMemo } from 'react'
-import { Pencil, X, Merge } from 'lucide-react'
+import { Pencil, X, Merge, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
@@ -38,7 +40,7 @@ const COLUMN_IDS = ['merchant', 'category', 'txn_count', 'total_spend', 'overrid
 export function MerchantsTab() {
   const trackEvent = useTrackEvent()
 
-  const { data: merchantsRaw, isLoading, error: merchantsError } = useGetMerchants()
+  const { data: merchantsRaw, isLoading, error: merchantsError, refetch } = useGetMerchants()
   const { data: duplicateGroupsRaw } = useGetMerchantDuplicateSuggestions()
 
   const { mutateAsync: setOverride } = useSetMerchantOverride()
@@ -165,25 +167,30 @@ export function MerchantsTab() {
 
   if (merchantsError) {
     return (
-      <div className="py-12 text-center text-sm text-destructive" data-testid="merchants-error">
-        Failed to load merchants. Please try again.
-      </div>
+      <Card data-testid="merchants-error">
+        <CardContent className="flex flex-col items-center py-12 px-8 text-center">
+          <p className="m-0 mb-4 text-destructive">Failed to load merchants.</p>
+          <Button variant="outline" onClick={() => refetch()}>Try again</Button>
+        </CardContent>
+      </Card>
     )
   }
 
   return (
     <div className="space-y-6">
       {duplicateGroups.length > 0 && (
-        <div data-testid="duplicate-suggestions" className="rounded-lg border bg-card p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <Merge className="h-4 w-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold">Suggested Duplicates</h3>
-            <Badge variant="secondary">{duplicateGroups.length}</Badge>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            These merchants look similar. Merging them collapses all transactions under one name.
-          </p>
-          <div className="space-y-2">
+        <Card data-testid="duplicate-suggestions">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Merge className="h-4 w-4 text-muted-foreground" />
+              Suggested Duplicates
+              <Badge variant="secondary">{duplicateGroups.length}</Badge>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              These merchants look similar. Merging them collapses all transactions under one name.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
             {duplicateGroups.map((group, i) => (
               <div key={i} className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
                 <div className="flex flex-wrap gap-1.5">
@@ -204,8 +211,8 @@ export function MerchantsTab() {
                 </Button>
               </div>
             ))}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
       <div data-testid="data-table">
@@ -219,9 +226,12 @@ export function MerchantsTab() {
           filters={filters}
           onFiltersChange={setFilters}
           emptyState={
-            <div data-testid="empty-state" className="py-12 text-center text-sm text-muted-foreground">
-              No merchants found. Sync transactions to see your merchants here.
-            </div>
+            <EmptyState
+              data-testid="empty-state"
+              icon={<Store />}
+              title="No merchants yet"
+              description="Sync transactions to see your merchants here."
+            />
           }
           maskedColumnIds={['total_spend']}
           columnVisibility={columnVisibility}

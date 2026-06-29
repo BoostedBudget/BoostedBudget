@@ -7,7 +7,7 @@ import type { Transaction, FeedRow } from '../types'
 import { isInvestmentRow } from '../types'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
-import { getCategoryColor } from '@/lib/category-colors'
+import { getCategoryColor, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
 import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
 import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
@@ -15,6 +15,7 @@ import type { CustomCategoryOption } from '@/shared/components/HierarchicalCateg
 import { CategoryIcon } from '@/shared/components/IconPicker'
 import { formatTransactionAmount, isOutflow } from '@/shared/transactions/amount'
 import { formatDate } from '@/shared/transactions/dates'
+import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, FilterState, SortState } from '@/shared/components/DataTable'
@@ -156,7 +157,7 @@ export function TransactionTable({
         return (
           <div>
             <div className="font-medium text-foreground">
-              {row.effective_merchant_name || row.merchant_name || row.name}
+              {getMerchantDisplayName(row)}
             </div>
             {row.tags && row.tags.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
@@ -231,7 +232,7 @@ export function TransactionTable({
             <span className="inline-flex items-center gap-1.5">
               <span
                 className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full"
-                style={{ backgroundColor: customMatch.color ?? '#6B7280', color: '#fff' }}
+                style={{ backgroundColor: customMatch.color ?? DEFAULT_CATEGORY_COLOR, color: '#fff' }}
                 aria-hidden
               >
                 <CategoryIcon name={customMatch.icon} className="h-2.5 w-2.5" />

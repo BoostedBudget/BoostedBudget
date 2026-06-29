@@ -253,6 +253,50 @@ describe('MerchantsTab', () => {
     expect(screen.getByTestId('spend-cell-1')).toHaveTextContent('$8750.00')
   })
 
+  // G35: empty state must use the shared EmptyState component (data-slot="empty-state").
+  it('renders empty state using the shared EmptyState component', async () => {
+    mockUseGetMerchants.mockReturnValue({ data: [], isLoading: false, error: null })
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      const el = screen.getByTestId('empty-state')
+      expect(el).toBeInTheDocument()
+      // Shared EmptyState adds data-slot="empty-state"; hand-rolled div does not.
+      expect(el.getAttribute('data-slot')).toBe('empty-state')
+    })
+  })
+
+  // G37: "Suggested Duplicates" panel must use shared Card (data-slot="card").
+  it('renders duplicate suggestions inside a shared Card', async () => {
+    mockUseGetMerchantDuplicateSuggestions.mockReturnValue({
+      data: [[merchant1, merchant2]],
+      isLoading: false,
+      error: null,
+    })
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      const panel = screen.getByTestId('duplicate-suggestions')
+      expect(panel).toBeInTheDocument()
+      // Shared Card adds data-slot="card"; hand-rolled div does not.
+      expect(panel.getAttribute('data-slot')).toBe('card')
+    })
+  })
+
+  // G36: error state must render inside a Card and expose a retry button that calls refetch.
+  it('renders error state with a retry button inside a Card', async () => {
+    const mockRefetch = mock(() => Promise.resolve())
+    mockUseGetMerchants.mockReturnValue({ data: undefined, isLoading: false, error: new Error('fail'), refetch: mockRefetch })
+    render(<MerchantsTab />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByTestId('merchants-error')).toBeInTheDocument()
+    })
+    // Must be inside a Card (data-slot="card") and expose a retry affordance.
+    expect(screen.getByTestId('merchants-error').getAttribute('data-slot')).toBe('card')
+    const retryBtn = screen.getByRole('button', { name: /try again/i })
+    expect(retryBtn).toBeInTheDocument()
+    fireEvent.click(retryBtn)
+    expect(mockRefetch).toHaveBeenCalledTimes(1)
+  })
+
   // G34: rename modal must use the shared Radix Dialog — hand-rolled div has no Escape handler.
   it('closes rename modal when Escape key is pressed', async () => {
     render(<MerchantsTab />, { wrapper: createWrapper() })

@@ -13,6 +13,7 @@
  */
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ClipboardCheck, Inbox } from 'lucide-react'
 import { toast } from 'sonner'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -318,7 +319,7 @@ export function ReviewInboxPage() {
     {
       id: 'merchant',
       header: 'Transaction',
-      render: (tx) => <span className="font-medium text-foreground">{tx.effective_merchant_name || tx.merchant_name || tx.name}</span>,
+      render: (tx) => <span className="font-medium text-foreground">{getMerchantDisplayName(tx)}</span>,
     },
     {
       id: 'status',
