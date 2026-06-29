@@ -11,6 +11,14 @@ import { useState, useCallback, useMemo } from 'react'
 import { Pencil, X, Merge } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
@@ -137,7 +145,6 @@ export function MerchantsTab() {
         data-testid={`action-rename-${merchants.indexOf(merchant)}`}
         className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         onClick={() => handleRename(merchant)}
-        aria-label={`Rename ${merchant.effective_display_name}`}
       >
         <Pencil className="h-3 w-3" />
         Rename
@@ -148,7 +155,6 @@ export function MerchantsTab() {
           data-testid={`action-clear-override-${merchants.indexOf(merchant)}`}
           className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           onClick={() => handleClearOverride(merchant)}
-          aria-label={`Clear override for ${merchant.effective_display_name}`}
         >
           <X className="h-3 w-3" />
           Clear override
@@ -226,45 +232,44 @@ export function MerchantsTab() {
         />
       </div>
 
-      {renameTarget && (
-        <div
-          data-testid="rename-modal"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          role="dialog"
-          aria-modal
-          aria-label="Rename merchant"
-        >
-          <div className="rounded-xl border bg-card shadow-lg w-full max-w-sm p-6 space-y-4">
-            <h2 className="text-base font-semibold">Rename merchant</h2>
-            <p className="text-sm text-muted-foreground">
-              Set a custom display name for{' '}
-              <span className="font-medium">{renameTarget.normalized_name}</span>.
-            </p>
-            <input
-              data-testid="rename-input"
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Custom display name"
-              autoFocus
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setRenameTarget(null)}>
-                Cancel
-              </Button>
-              <Button
-                data-testid="rename-save-btn"
-                size="sm"
-                onClick={handleRenameSubmit}
-                disabled={!renameValue.trim()}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null)
+        }}
+      >
+        <DialogContent data-testid="rename-modal">
+          <DialogHeader>
+            <DialogTitle>Rename merchant</DialogTitle>
+          </DialogHeader>
+          <DialogDescription>
+            Set a custom display name for{' '}
+            <span className="font-medium">{renameTarget?.normalized_name}</span>.
+          </DialogDescription>
+          <input
+            data-testid="rename-input"
+            type="text"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            className="w-full px-3 py-2 rounded-md border bg-background text-sm"
+            placeholder="Custom display name"
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRenameTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              data-testid="rename-save-btn"
+              size="sm"
+              onClick={handleRenameSubmit}
+              disabled={!renameValue.trim()}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
