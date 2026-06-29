@@ -178,7 +178,7 @@ test.describe('Spending Reports Page — TopMerchantsTable', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('merchants-table').getByRole('table')).toBeVisible({ timeout: 5000 })
   })
 
   test('renders merchant rows from API data', async ({ page }) => {
@@ -186,7 +186,7 @@ test.describe('Spending Reports Page — TopMerchantsTable', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('merchants-table').getByRole('table')).toBeVisible({ timeout: 5000 })
     await expect(page.getByText('Amazon')).toBeVisible()
     await expect(page.getByText('Starbucks')).toBeVisible()
   })
@@ -196,7 +196,7 @@ test.describe('Spending Reports Page — TopMerchantsTable', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('merchants-table').getByRole('table')).toBeVisible({ timeout: 5000 })
     await expect(page.getByRole('columnheader', { name: /merchant/i })).toBeVisible()
     // "Total" may include a currency symbol in the header label — use partial match
     await expect(page.getByRole('columnheader', { name: /total/i })).toBeVisible()
@@ -218,7 +218,7 @@ test.describe('Spending Reports Page — TopMerchantsTable Sort', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('merchants-table').getByRole('table')).toBeVisible({ timeout: 5000 })
 
     // The page defaults to total:desc sort; click Merchant to switch
     const merchantHeader = page.getByRole('columnheader', { name: /merchant/i })
@@ -235,7 +235,7 @@ test.describe('Spending Reports Page — TopMerchantsTable Sort', () => {
     await page.goto('/reports')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('merchants-table').getByRole('table')).toBeVisible({ timeout: 5000 })
 
     // Total column already sorted desc by default — click once to get asc (or null→asc)
     const totalHeader = page.getByRole('columnheader', { name: /total/i })

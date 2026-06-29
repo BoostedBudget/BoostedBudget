@@ -124,9 +124,29 @@ for f in \
     GROUP_D_PRELOAD_ARGS+=(--preload "$f")
 done
 
+# Group E: MerchantsTab — uses inline mock.module('@/shared/components/DataTable'), which is
+# process-global in bun:test. Must run isolated so the DataTable stub doesn't pollute
+# TransactionTable.test.tsx and other real-DataTable consumers. See feedback_bun_test_mock_module_global.md.
+GROUP_E_FILES=(
+    "$FRONTEND_DIR/src/features/auto-categorization/components/MerchantsTab.test.tsx"
+)
+GROUP_E_PRELOAD_ARGS=()
+for f in \
+    "$FRONTEND_DIR/src/test/happydom.ts" \
+    "$FRONTEND_DIR/src/test/testing-library.ts" \
+    "$FRONTEND_DIR/src/test/mocks/clerk.tsx" \
+    "$FRONTEND_DIR/src/test/mocks/merchants-api.ts" \
+    "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
+    "$FRONTEND_DIR/src/test/mocks/posthog.ts" \
+    "$FRONTEND_DIR/src/test/mocks/react-router.ts" \
+    "$FRONTEND_DIR/src/test/mocks/sonner.ts"; do
+    GROUP_E_PRELOAD_ARGS+=(--preload "$f")
+done
+
 run_group A "Minimal preloads" "${GROUP_A_PRELOAD_ARGS[@]}" "${GROUP_A_FILES[@]}"
 run_group B "Registry/context" "${GROUP_B_PRELOAD_ARGS[@]}" "${GROUP_B_FILES[@]}"
 run_group C "Inline mocks" "${GROUP_C_PRELOAD_ARGS[@]}" "${GROUP_C_FILES[@]}"
 run_group D "Real hooks" "${GROUP_D_PRELOAD_ARGS[@]}" "${GROUP_D_FILES[@]}"
+run_group E "MerchantsTab inline DataTable mock" "${GROUP_E_PRELOAD_ARGS[@]}" "${GROUP_E_FILES[@]}"
 
 echo "Process-isolated test groups completed!"

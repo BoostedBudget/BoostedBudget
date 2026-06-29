@@ -53,6 +53,28 @@ function renderEditor(transaction: Transaction) {
 }
 
 describe('TransactionEditor', () => {
+  describe('merchant display name precedence', () => {
+    it('prefers effective_merchant_name over merchant_name when both are set', () => {
+      renderEditor({
+        ...baseTransaction,
+        merchant_name: 'WHOLEFDSMRKT #10234',
+        effective_merchant_name: 'Whole Foods Market',
+      })
+      expect(screen.getByText('Whole Foods Market')).toBeInTheDocument()
+      expect(screen.queryByText('WHOLEFDSMRKT #10234')).not.toBeInTheDocument()
+    })
+
+    it('falls back to merchant_name when effective_merchant_name is absent', () => {
+      renderEditor({ ...baseTransaction, merchant_name: 'STARBUCKS #99' })
+      expect(screen.getByText('STARBUCKS #99')).toBeInTheDocument()
+    })
+
+    it('falls back to name when both effective_merchant_name and merchant_name are absent', () => {
+      renderEditor({ ...baseTransaction, merchant_name: null })
+      expect(screen.getByText('KFC')).toBeInTheDocument()
+    })
+  })
+
   describe('getEffectiveCategory — PFC v2 fields', () => {
     it('shows pfc_primary as initial category (CategoryEditor shows selectedCategory[0])', () => {
       const txn: Transaction = {
