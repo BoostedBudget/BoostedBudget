@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -555,6 +556,224 @@ func TestMergeAndFlatten_DisplayNames_COALESCE_Integration(t *testing.T) {
 	require.Len(t, results2, 1, "expect one result row for A→B re-upsert")
 	require.NotNil(t, results2[0].DisplayName, "display_name must be preserved by COALESCE when new entry is nil")
 	assert.Equal(t, customName, *results2[0].DisplayName, "G27: nil displayNames entry must preserve existing display_name via COALESCE")
+}
+
+// ── G31: Upsert/BulkUpsert must preserve an existing merge pointer on pure-rename ────────────
+//
+// Issue #957 Round 10: the ON CONFLICT SET clause unconditionally overwrites
+// merged_into_merchant_id with EXCLUDED.merged_into_merchant_id (NULL on a pure rename),
+// silently clearing a previously-set merge pointer and breaking AC5.
+
+// TestUpsert_PureRename_PreservesExistingMergePointer_Integration verifies that calling
+// Upsert with a display_name but no merged_into_merchant_id preserves an existing merge pointer.
+func TestUpsert_PureRename_PreservesExistingMergePointer_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g31-upsert")
+
+	// Seed target merchant B.
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Merchant B G31', 'Merchant B G31', NOW())
+	`, merchantB)
+	require.NoError(t, err, "seed target merchant B")
+
+	// Seed an existing merge-only override: A→B (display_name NULL).
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed A→B merge-only override")
+
+	// Now call Upsert with a display_name but no merged_into_merchant_id (pure rename).
+	overrideRepo := NewMerchantOverrideRepository(tx)
+	displayName := "My Merchant A"
+	result, err := overrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+		UserID:               userID.String(),
+		MerchantID:           merchantA.String(),
+		DisplayName:          &displayName,
+		MergedIntoMerchantID: nil, // pure rename — no merge pointer
+	})
+	require.NoError(t, err, "Upsert must succeed")
+
+	// G31 assertion: the merge pointer must still be B, not wiped to NULL.
+	require.NotNil(t, result.DisplayName, "display_name must be set")
+	assert.Equal(t, displayName, *result.DisplayName, "display_name must be the new override")
+	require.NotNil(t, result.MergedIntoMerchantID, "merged_into_merchant_id must be preserved — was wiped to NULL before G31 fix")
+	assert.Equal(t, merchantB.String(), *result.MergedIntoMerchantID, "G31: pure-rename Upsert must COALESCE-preserve the existing merge pointer")
+}
+
+// TestBulkUpsert_PureRename_PreservesExistingMergePointer_Integration mirrors the above
+// for BulkUpsert, which has an identical ON CONFLICT clause.
+func TestBulkUpsert_PureRename_PreservesExistingMergePointer_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g31-bulk")
+
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'Merchant B BulkG31', 'Merchant B BulkG31', NOW())
+	`, merchantB)
+	require.NoError(t, err, "seed target merchant B")
+
+	// Seed A→B merge-only override.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed A→B merge-only override")
+
+	// BulkUpsert with a display_name only (no merged_into_merchant_id).
+	overrideRepo := NewMerchantOverrideRepository(tx)
+	displayName := "My Merchant A (bulk)"
+	results, err := overrideRepo.BulkUpsert(ctx, []domain.MerchantNameOverride{{
+		UserID:               userID.String(),
+		MerchantID:           merchantA.String(),
+		DisplayName:          &displayName,
+		MergedIntoMerchantID: nil,
+	}})
+	require.NoError(t, err, "BulkUpsert must succeed")
+	require.Len(t, results, 1)
+
+	require.NotNil(t, results[0].DisplayName, "display_name must be set")
+	assert.Equal(t, displayName, *results[0].DisplayName)
+	require.NotNil(t, results[0].MergedIntoMerchantID, "merged_into_merchant_id must be preserved — was wiped before G31 fix")
+	assert.Equal(t, merchantB.String(), *results[0].MergedIntoMerchantID, "G31: BulkUpsert must COALESCE-preserve the existing merge pointer")
+}
+
+// TestUpsert_PureRenameAfterMerge_StillResolvesToCanonical_Integration is the end-to-end AC5
+// regression: after merging A→B, a pure rename of A must preserve the merge pointer so
+// ResolveEffectiveMerchantNames still follows the chain correctly.
+func TestUpsert_PureRenameAfterMerge_StillResolvesToCanonical_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	enc := newTestFieldEncryptor(t)
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g31-e2e")
+
+	bName := "Canonical B G31 E2E"
+	merchantB := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`, merchantB, bName, bName)
+	require.NoError(t, err, "seed target merchant B")
+
+	// Rename B so it has a display override.
+	bDisplay := "Starbucks (G31)"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantB, bDisplay)
+	require.NoError(t, err, "seed target display override")
+
+	// Merge A→B.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed A→B merge")
+
+	// Now pure-rename A (display_name only, mergedInto=nil).
+	overrideRepo := NewMerchantOverrideRepository(tx)
+	aLabel := "My A Label"
+	upserted, err := overrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+		UserID:               userID.String(),
+		MerchantID:           merchantA.String(),
+		DisplayName:          &aLabel,
+		MergedIntoMerchantID: nil,
+	})
+	require.NoError(t, err, "pure-rename A must not fail")
+
+	// G31 AC5: merge pointer must still be intact.
+	require.NotNil(t, upserted.MergedIntoMerchantID,
+		"G31 AC5: merge pointer must be preserved after pure-rename Upsert")
+	assert.Equal(t, merchantB.String(), *upserted.MergedIntoMerchantID,
+		"G31 AC5: merge pointer must still point to B")
+
+	// ResolveEffectiveMerchantNames: A's own display_name (aLabel) wins COALESCE first.
+	txRepo := NewTransactionRepository(tx, enc)
+	effective, err := txRepo.ResolveEffectiveMerchantNames(ctx, userID.String(), []string{merchantA.String()})
+	require.NoError(t, err)
+	assert.Equal(t, aLabel, effective[merchantA.String()],
+		"G31: A's own display_name wins COALESCE (merge pointer preserved confirms AC5 is still intact)")
+}
+
+// ── G32: ListMerchants must include target's display override in effective name ──────────────
+//
+// Issue #957 Round 10: ListMerchants only joins the source override (o.merchant_id=t.merchant_id)
+// but has no mno_t join for the target. When source A is merged into target B and B has a
+// display_name override but no own transactions, ListMerchants shows B.normalized_name instead
+// of B's override.
+
+// TestListMerchants_MergedTargetOverride_Integration verifies that when a merchant is merged
+// into a target with a display_name override, the Merchants tab shows the target's override.
+func TestListMerchants_MergedTargetOverride_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed source merchant A with a transaction (so it appears in ListMerchants).
+	userID, merchantA := seedMerchantFixture(ctx, t, tx, "g32-list")
+
+	// Seed target merchant B with NO transactions of its own.
+	merchantB := uuid.New()
+	bNorm := "B Normalized G32"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchants (id, name, normalized_name, created_at)
+		VALUES ($1, 'B Raw G32', $2, NOW())
+	`, merchantB, bNorm)
+	require.NoError(t, err, "seed target merchant B (no transactions)")
+
+	// Rename target B with a display override.
+	bDisplay := "Starbucks Coffee (G32)"
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, display_name, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantB, bDisplay)
+	require.NoError(t, err, "seed B display override")
+
+	// Merge source A → target B.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO merchant_name_overrides (id, user_id, merchant_id, merged_into_merchant_id, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, NOW(), NOW())
+	`, userID, merchantA, merchantB)
+	require.NoError(t, err, "seed A→B merge override")
+
+	txRepo := NewMerchantRepository(tx)
+	summaries, err := txRepo.ListMerchants(ctx, userID.String())
+	require.NoError(t, err)
+
+	// The collapsed group is keyed by B's effective_merchant_id.
+	var found bool
+	for _, s := range summaries {
+		if s.MerchantID == merchantB.String() {
+			found = true
+			assert.Equal(t, bDisplay, s.EffectiveDisplayName,
+				"G32: target's display override must appear as effective_display_name in ListMerchants; got %q (normalized=%q)", s.EffectiveDisplayName, bNorm)
+			break
+		}
+	}
+	assert.True(t, found, "G32: target merchant B must appear as the collapsed group in ListMerchants")
 }
 
 func TestGetDuplicateSuggestions_ExcludesMergedMerchants_Integration(t *testing.T) {

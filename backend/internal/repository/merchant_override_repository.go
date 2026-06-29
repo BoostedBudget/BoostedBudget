@@ -22,6 +22,9 @@ func NewMerchantOverrideRepository(db DB) *MerchantOverrideRepository {
 // Upsert inserts or updates a merchant name override for a user.
 // The unique constraint (user_id, merchant_id) governs conflict resolution.
 // At least one of DisplayName or MergedIntoMerchantID must be non-nil (DB CHECK).
+//
+// ON CONFLICT COALESCE invariant: merged_into_merchant_id is preserved when incoming is NULL
+// (pure-rename path). This prevents nil Upsert from wiping a merge pointer set by MergeAndFlatten (G31, #957).
 func (r *MerchantOverrideRepository) Upsert(ctx context.Context, override domain.MerchantNameOverride) (*domain.MerchantNameOverride, error) {
 	const q = `
         INSERT INTO merchant_name_overrides
@@ -30,7 +33,7 @@ func (r *MerchantOverrideRepository) Upsert(ctx context.Context, override domain
             (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
         ON CONFLICT (user_id, merchant_id) DO UPDATE
             SET display_name            = EXCLUDED.display_name,
-                merged_into_merchant_id = EXCLUDED.merged_into_merchant_id,
+                merged_into_merchant_id = COALESCE(EXCLUDED.merged_into_merchant_id, merchant_name_overrides.merged_into_merchant_id),
                 updated_at              = NOW()
         RETURNING id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at`
 
@@ -56,8 +59,9 @@ func (r *MerchantOverrideRepository) Upsert(ctx context.Context, override domain
 	return &out, nil
 }
 
-// BulkUpsert inserts or updates multiple merchant name overrides in a single query
-// using UNNEST to pass parallel arrays. Empty input returns an empty slice immediately.
+// BulkUpsert inserts or updates multiple merchant name overrides using UNNEST.
+// Empty input returns an empty slice immediately.
+// Applies the same ON CONFLICT COALESCE invariant as Upsert (G31, #957).
 func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
 	if len(overrides) == 0 {
 		return []domain.MerchantNameOverride{}, nil
@@ -89,7 +93,7 @@ func (r *MerchantOverrideRepository) BulkUpsert(ctx context.Context, overrides [
                AS u(user_id, merchant_id, display_name, merged_into_merchant_id)
         ON CONFLICT (user_id, merchant_id) DO UPDATE
             SET display_name            = EXCLUDED.display_name,
-                merged_into_merchant_id = EXCLUDED.merged_into_merchant_id,
+                merged_into_merchant_id = COALESCE(EXCLUDED.merged_into_merchant_id, merchant_name_overrides.merged_into_merchant_id),
                 updated_at              = NOW()
         RETURNING id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at`
 
