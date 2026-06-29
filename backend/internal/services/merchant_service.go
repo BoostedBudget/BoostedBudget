@@ -141,6 +141,7 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 	}
 
 	// Validate all entries before writing anything.
+	seenMerchantIDs := make(map[string]struct{}, len(reqs))
 	for _, req := range reqs {
 		if req.DisplayName == nil && req.MergedIntoMerchantID == nil {
 			return nil, fmt.Errorf("override for merchant_id %q: at least one of display_name or merged_into_merchant_id must be set", req.MerchantID)
@@ -148,6 +149,10 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		if req.DisplayName != nil && strings.TrimSpace(*req.DisplayName) == "" {
 			return nil, fmt.Errorf("override for merchant_id %q: display_name must not be blank", req.MerchantID)
 		}
+		if _, dup := seenMerchantIDs[req.MerchantID]; dup {
+			return nil, fmt.Errorf("override for merchant_id %q: duplicate entry — each merchant may appear at most once per bulk request", req.MerchantID)
+		}
+		seenMerchantIDs[req.MerchantID] = struct{}{}
 	}
 
 	var displayOnlyItems []domain.MerchantNameOverride // included in response

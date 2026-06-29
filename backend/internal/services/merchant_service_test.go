@@ -1097,6 +1097,82 @@ func TestBulkSetOverrides_BulkApplyError_Propagates(t *testing.T) {
 	mor.AssertExpectations(t)
 }
 
+// G43: BulkSetOverrides must reject a request that references the same merchant_id more than once.
+// A self-contradictory bulk request (rename m-A AND merge m-A in the same call, or two display
+// entries for the same merchant) previously slipped through validation and produced a duplicate
+// response row. The correct policy is to reject before any partition/read/write.
+
+func TestBulkSetOverrides_DuplicateMerchantID_DisplayOnlyTwice_Rejected(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+
+	dn1 := "Name One"
+	dn2 := "Name Two"
+
+	// Same merchant_id appears twice (both display-only — conflicting names).
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", DisplayName: &dn1},
+		{MerchantID: "m-A", DisplayName: &dn2},
+	}
+
+	result, err := svc.BulkSetOverrides(context.Background(), "user-1", reqs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "m-A")
+	assert.Nil(t, result)
+	// No write must occur.
+	mor.AssertNotCalled(t, "BulkApply")
+	mor.AssertNotCalled(t, "GetMergeTarget")
+}
+
+func TestBulkSetOverrides_DuplicateMerchantID_DisplayAndMerge_Rejected(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+
+	dn := "Renamed"
+	target := "m-B"
+
+	// Same merchant_id m-A appears once as display-only AND once as merge-bearing —
+	// a self-contradictory request that previously caused a duplicate response row.
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", DisplayName: &dn},
+		{MerchantID: "m-A", MergedIntoMerchantID: &target},
+	}
+
+	result, err := svc.BulkSetOverrides(context.Background(), "user-1", reqs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "m-A")
+	assert.Nil(t, result)
+	// No write must occur — the guard fires in Phase-1 validation, before any DB call.
+	mor.AssertNotCalled(t, "BulkApply")
+	mor.AssertNotCalled(t, "GetMergeTarget")
+}
+
+func TestBulkSetOverrides_DuplicateMerchantID_MergeTwice_Rejected(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	target1 := "m-B"
+	target2 := "m-C"
+
+	// Same source merchant_id m-A appears twice as merge-bearing (different targets).
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", MergedIntoMerchantID: &target1},
+		{MerchantID: "m-A", MergedIntoMerchantID: &target2},
+	}
+
+	result, err := svc.BulkSetOverrides(context.Background(), "user-1", reqs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "m-A")
+	assert.Nil(t, result)
+	mor.AssertNotCalled(t, "BulkApply")
+	mor.AssertNotCalled(t, "GetMergeTarget")
+}
+
 // NormalizeFunc wired in constructor test
 
 func TestMerchantService_NormalizeFuncIsWired(t *testing.T) {
