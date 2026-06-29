@@ -370,7 +370,7 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	}
 
 	// Issue #1203: scope to specific custom categories. With RollUpChildren a parent
-	// custom id also matches its children (parent_id). user_id is $1 in spending queries.
+	// custom id also matches its children (parent_id). user_id cast to $1::uuid in subquery.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := buildPlaceholders(len(filters.CustomCategoryIDs), argIndex)
 		for _, id := range filters.CustomCategoryIDs {
@@ -381,7 +381,7 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 		if filters.RollUpChildren {
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s)))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))",
 				idList, idList,
 			)
 		} else {

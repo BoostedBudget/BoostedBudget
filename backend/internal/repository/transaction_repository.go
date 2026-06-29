@@ -954,7 +954,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		idList := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
 			"(t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
 			idList, idList,
 		))
 	}
@@ -2678,7 +2678,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		idList := strings.Join(phs, ", ")
 		bankingExtraFilter += fmt.Sprintf(
 			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
 			idList, idList,
 		)
 		investBankingOnlyFilter = " AND FALSE"
@@ -2882,7 +2882,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			it.fees
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
-		WHERE it.user_id = $1
+		WHERE it.user_id = $1::uuid
 		  -- Chain-expansion active-account filter: include pre-relink rows whose
 		  -- account_id is replaced, as long as an active account shares the same
 		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
@@ -2890,7 +2890,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- accounts share a user_account_id (Issue #1304).
 		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
 		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on it.user_id = $1.  Parity with the banking
+		  -- query is already gated on it.user_id = $1::uuid. Parity with the banking
 		  -- branch is intentional; diverging here would reintroduce asymmetry.
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
