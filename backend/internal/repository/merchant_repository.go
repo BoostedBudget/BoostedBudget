@@ -45,6 +45,15 @@ type MerchantOverrideRepo interface {
 	// needed. This allows the caller to thread a rename atomically through the same
 	// transaction as the merge, eliminating the pre-Upsert non-atomicity (G27).
 	MergeAndFlatten(ctx context.Context, userID string, sources []string, canonical string, toFlatten []string, displayNames []*string) ([]domain.MerchantNameOverride, error)
+	// BulkApply atomically applies all display-only overrides and all pre-resolved merge
+	// groups inside a single transaction. A failure at any point rolls back every write,
+	// including display-only upserts that preceded a failing merge group. This eliminates
+	// the partial-persist race where BulkUpsert + per-group MergeAndFlatten used separate
+	// transactions (promoted out of #1348, Issue #957 G — BulkSetOverrides atomicity).
+	//
+	// Callers must pre-resolve canonicals and toFlatten slices and exclude self-merges from
+	// BulkMergeGroup.Sources (self-merge renames go into displayOnly instead).
+	BulkApply(ctx context.Context, userID string, displayOnly []domain.MerchantNameOverride, groups []BulkMergeGroup) ([]domain.MerchantNameOverride, error)
 }
 
 // MerchantRepository handles data access for merchants.

@@ -147,7 +147,7 @@ test.describe('Merchants tab', () => {
     await expect(page.getByTestId('rename-input')).toBeVisible()
   })
 
-  // G19: assert actual mutation request bodies (not just "modal opened").
+  // G19: assert mutation request bodies
   test('save rename fires PUT with display_name in request body', async ({ page }) => {
     // Intercept the PUT before the general merchants catch-all.
     let capturedBody: Record<string, unknown> | null = null
@@ -199,5 +199,92 @@ test.describe('Merchants tab', () => {
     await expect(async () => {
       expect(deleteWasCalled).toBe(true)
     }).toPass({ timeout: 5000 })
+  })
+
+  // G41: merge flow — duplicate-suggestions Card visible; clicking Merge fires POST /merchants/merge
+  // with correct merchant_ids + target_merchant_id in the request body.
+  test('merge flow fires POST /merchants/merge with correct body (Issue #957 G41)', async ({ page }) => {
+    const mockDuplicate = {
+      merchant_id: 'merch-3',
+      effective_display_name: 'WF Market',
+      normalized_name: 'WF Market',
+      raw_variants: ['WHOLE FOODS MARKET'],
+      total_spend: 120.0,
+      transaction_count: 3,
+      dominant_category: 'FOOD_AND_DRINK',
+      has_override: false,
+      is_merged: false,
+    }
+
+    let capturedMergeBody: Record<string, unknown> | null = null
+    // Catch-all mocks first (reverse registration order in Playwright means last-in, first-matched)
+    await mockMerchantsAPIs(page)
+    await page.route('**/api/v1/merchants/duplicate-suggestions*', (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([[mockMerchant, mockDuplicate]]),
+      })
+    })
+    await page.route('**/api/v1/merchants/merge', (route) => {
+      if (route.request().method() === 'POST') {
+        capturedMergeBody = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+      } else {
+        route.fallback()
+      }
+    })
+    await page.goto('/auto-categorization')
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.getByTestId('tab-merchants').click()
+
+    await expect(page.getByTestId('duplicate-suggestions')).toBeVisible()
+    await page.getByTestId('merge-group-0').click()
+    await expect(async () => {
+      expect(capturedMergeBody).not.toBeNull()
+      const body = capturedMergeBody as Record<string, unknown>
+      const ids = body.merchant_ids as string[]
+      expect(ids).toContain('merch-1')
+      expect(ids).toContain('merch-3')
+      expect(body.target_merchant_id).toBe('merch-1')
+    }).toPass({ timeout: 5000 })
+  })
+
+  // G41: error state when GET /merchants returns non-200
+  test('error state shown when merchants API returns error (Issue #957 G41)', async ({ page }) => {
+    await mockAuthDependencies(page)
+
+    await page.route('**/api/v1/auto-categorization*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.route('**/api/v1/categories/**', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.route('**/api/v1/categories*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.route('**/api/v1/tags*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    await page.route('**/api/v1/accounts*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ accounts: [] }) })
+    })
+    await page.route('**/api/v1/merchants/duplicate-suggestions*', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+    })
+    // Simulate server error on merchants endpoint
+    await page.route('**/api/v1/merchants*', (route) => {
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Internal Server Error' }) })
+    })
+
+    await page.goto('/auto-categorization')
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.getByTestId('tab-merchants').click()
+
+    await expect(page.getByTestId('merchants-error')).toBeVisible()
+    await expect(page.getByRole('button', { name: /try again/i })).toBeVisible()
+    await expect(page.getByTestId('data-table')).not.toBeVisible()
   })
 })
