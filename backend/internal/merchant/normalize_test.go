@@ -41,14 +41,23 @@ func TestNormalize(t *testing.T) {
 		{name: "empty_string", input: "", want: ""},
 		{name: "whitespace_only_spaces", input: "   ", want: ""},
 		{name: "whitespace_only_tab", input: "\t", want: ""},
-		// Edge: bare prefix (nothing after the asterisk) — falls back to trimmed raw;
-		// blank display is worse than showing the original garbled name.
+		// Edge: bare prefix (nothing after the asterisk) — falls back to trimmed raw
 		{name: "just_sq_star", input: "SQ *", want: "SQ *"},
 		{name: "just_tst_star", input: "TST *", want: "TST *"},
 		// Edge: no transformation needed
 		{name: "clean_name", input: "Whole Foods Market", want: "Whole Foods Market"},
 		// Edge: multiple trailing codes
 		{name: "multiple_trailing", input: "COSTCO STORE 0042 #99", want: "Costco"},
+		// G42: legitimate trailing-number brand names (2 digits) must NOT be stripped
+		{name: "brand_forever_21", input: "FOREVER 21", want: "Forever 21"},
+		{name: "brand_studio_54", input: "STUDIO 54", want: "Studio 54"},
+		{name: "brand_formula_1", input: "FORMULA 1", want: "Formula 1"},
+		// 3+ digit bare codes still stripped (regression guard)
+		{name: "strip_three_digit_bare", input: "SUPERMARKET 123", want: "Supermarket"},
+		// 2-digit store-location suffixes are ALSO preserved (known trade-off of the \d{3,} rule):
+		// "STARBUCKS 42" keeps the "42" because we can't distinguish it from a brand suffix.
+		// Users can rename via AC4; raw name is preserved for rules via AC3.
+		{name: "two_digit_store_code_preserved", input: "STARBUCKS 42", want: "Starbucks 42"},
 	}
 
 	for _, tc := range tests {

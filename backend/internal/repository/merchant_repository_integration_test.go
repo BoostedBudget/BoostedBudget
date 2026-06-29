@@ -26,8 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedMerchantFixture creates a minimal user + linked_item + account + merchant + transaction.
-// All writes target db (typically a pgx.Tx) so they roll back with it.
+// seedMerchantFixture creates a user + linked_item + account + merchant + transaction.
+// All writes target db (typically pgx.Tx) so they roll back with it.
 func seedMerchantFixture(ctx context.Context, t *testing.T, db DB, prefix string) (userID, merchantID uuid.UUID) {
 	t.Helper()
 	userID = uuid.New()
@@ -851,4 +851,150 @@ func TestGetDuplicateSuggestions_ExcludesMergedMerchants_Integration(t *testing.
 				"G23: already-merged merchant A must not appear in duplicate suggestions")
 		}
 	}
+}
+
+// ============================================================================
+// BulkApply atomicity integration tests (Issue #957 R13, promoted from #1348)
+// ============================================================================
+
+// seedTwoMerchants creates a user + two merchants + one transaction per merchant,
+// all scoped to db (typically pgx.Tx) so they roll back with it.
+func seedTwoMerchants(ctx context.Context, t *testing.T, db DB, prefix string) (
+	userID, merchantA, merchantB uuid.UUID,
+) {
+	t.Helper()
+	userID = uuid.New()
+	linkedItemID := uuid.New()
+	accountID := uuid.New()
+	merchantA = uuid.New()
+	merchantB = uuid.New()
+
+	_, err := db.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+prefix+"-"+userID.String(), prefix+"-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	_, err = db.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-test-token')
+	`, linkedItemID, userID, "item-"+linkedItemID.String())
+	require.NoError(t, err, "seed linked_item")
+
+	_, err = db.Exec(ctx, `
+		INSERT INTO accounts (id, user_id, linked_item_id, plaid_account_id, name, type, subtype)
+		VALUES ($1, $2, $3, $4, 'Checking', 'depository', 'checking')
+	`, accountID, userID, linkedItemID, "plaid-acct-"+accountID.String())
+	require.NoError(t, err, "seed account")
+
+	for i, mID := range []uuid.UUID{merchantA, merchantB} {
+		name := prefix + "-merchant-" + string(rune('A'+i))
+		_, err = db.Exec(ctx, `
+			INSERT INTO merchants (id, name, normalized_name, created_at)
+			VALUES ($1, $2, $3, NOW())
+		`, mID, name, name)
+		require.NoError(t, err, "seed merchant")
+
+		txID := uuid.New()
+		_, err = db.Exec(ctx, `
+			INSERT INTO transactions (id, user_id, account_id, merchant_id, plaid_transaction_id,
+				merchant_name, amount, date, pending)
+			VALUES ($1, $2, $3, $4, $5, $6, -10.00, CURRENT_DATE, false)
+		`, txID, userID, accountID, mID, "plaid-tx-"+txID.String(), name)
+		require.NoError(t, err, "seed transaction")
+	}
+	return userID, merchantA, merchantB
+}
+
+// TestBulkApply_HappyPath_CommitsAllRows verifies that BulkApply commits display-only
+// and merge overrides inside one transaction.
+func TestBulkApply_HappyPath_CommitsAllRows(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA, merchantB := seedTwoMerchants(ctx, t, tx, "ba-happy")
+
+	displayName := "My Coffee"
+	displayOnly := []domain.MerchantNameOverride{
+		{UserID: userID.String(), MerchantID: merchantA.String(), DisplayName: &displayName},
+	}
+
+	// Merge merchantB → merchantA (canonical)
+	groups := []BulkMergeGroup{
+		{
+			Sources:      []string{merchantB.String()},
+			Canonical:    merchantA.String(),
+			ToFlatten:    []string{merchantB.String()},
+			DisplayNames: nil,
+		},
+	}
+
+	overrideRepo := NewMerchantOverrideRepository(tx)
+	results, err := overrideRepo.BulkApply(ctx, userID.String(), displayOnly, groups)
+	require.NoError(t, err)
+	require.Len(t, results, 2, "should return display-only + merge override")
+
+	foundDisplay := false
+	for _, r := range results {
+		if r.MerchantID == merchantA.String() && r.DisplayName != nil && *r.DisplayName == displayName {
+			foundDisplay = true
+		}
+	}
+	assert.True(t, foundDisplay, "display-only override must appear in results")
+
+	foundMerge := false
+	for _, r := range results {
+		if r.MerchantID == merchantB.String() && r.MergedIntoMerchantID != nil && *r.MergedIntoMerchantID == merchantA.String() {
+			foundMerge = true
+		}
+	}
+	assert.True(t, foundMerge, "merge override must appear in results")
+}
+
+// TestBulkApply_PartialFailure_RollsBackAll verifies that a failed merge group causes
+// the entire batch to roll back, including display-only overrides processed first.
+func TestBulkApply_PartialFailure_RollsBackAll(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	// Outer rollback tx so the test leaves no permanent state.
+	outerTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer outerTx.Rollback(ctx) //nolint:errcheck
+
+	userID, merchantA, _ := seedTwoMerchants(ctx, t, outerTx, "ba-partial")
+
+	nonExistentCanonical := uuid.New().String() // not in DB
+
+	displayName := "Should Roll Back"
+	displayOnly := []domain.MerchantNameOverride{
+		{UserID: userID.String(), MerchantID: merchantA.String(), DisplayName: &displayName},
+	}
+
+	// Group references non-existent canonical → constraint error
+	groups := []BulkMergeGroup{
+		{
+			Sources:      []string{merchantA.String()},
+			Canonical:    nonExistentCanonical,
+			ToFlatten:    []string{merchantA.String()},
+			DisplayNames: nil,
+		},
+	}
+
+	overrideRepo := NewMerchantOverrideRepository(outerTx)
+	_, err = overrideRepo.BulkApply(ctx, userID.String(), displayOnly, groups)
+	require.Error(t, err, "BulkApply must error when merge group has invalid canonical")
+
+	// After failed BulkApply, the display-only override must NOT exist (internal tx rolled back)
+	var count int
+	row := outerTx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM merchant_name_overrides
+		WHERE user_id = $1 AND merchant_id = $2
+	`, userID, merchantA)
+	require.NoError(t, row.Scan(&count))
+	assert.Equal(t, 0, count, "display-only override must be rolled back with failed merge group")
 }

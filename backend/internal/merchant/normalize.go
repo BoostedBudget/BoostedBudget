@@ -14,7 +14,14 @@ var (
 
 	// Trailing store/location codes, e.g. "#1234", "STORE 042", "99821".
 	// Applied repeatedly until no more matches.
-	reSuffix = regexp.MustCompile(`(?i)(\s+(#\d+|STORE\s+\d+|\d+))+\s*$`)
+	//
+	// The bare digit alternative uses \d{3,} (3 or more digits) so that 2-digit
+	// trailing numbers are preserved — they are likely brand names (Forever 21,
+	// Studio 54, Formula 1) not store codes. Markered forms (#\d+ and STORE \d+)
+	// still strip any digit count since the marker makes intent unambiguous.
+	// Residual limitation: 3+-digit brand suffixes (e.g. "Levi's 501") still
+	// strip; these are rare and user-overridable per AC4 (raw name preserved AC3).
+	reSuffix = regexp.MustCompile(`(?i)(\s+(#\d+|STORE\s+\d+|\d{3,}))+\s*$`)
 
 	// Collapse runs of whitespace (tabs, multiple spaces) to a single space.
 	reWhitespace = regexp.MustCompile(`\s+`)

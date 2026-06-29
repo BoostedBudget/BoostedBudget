@@ -199,6 +199,37 @@ describe('excluded operations', () => {
     expect(entry?.confirmationRequired).toBe(false)
   })
 
+  // G40: explicit classification assertions for all 7 merchant ops (Issue #957)
+  it('classifies merchant read ops as read, not excluded, no confirmation (Issue #957 G40)', () => {
+    for (const opId of ['getMerchants', 'getMerchantDuplicateSuggestions']) {
+      const entry = getCapability(opId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe('read')
+      expect(entry?.excluded).toBe(false)
+      expect(entry?.confirmationRequired).toBeFalsy()
+    }
+  })
+
+  it('classifies merchant write ops as confirmation-gated writes (Issue #957 G40)', () => {
+    for (const opId of ['setMerchantOverride', 'bulkSetMerchantOverrides', 'mergeMerchants']) {
+      const entry = getCapability(opId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe('write')
+      expect(entry?.confirmationRequired).toBe(true)
+      expect(entry?.excluded).toBe(false)
+      expect(entry?.destructive).toBe(false)
+    }
+  })
+
+  it('classifies clearMerchantOverride as a destructive confirmation-gated write (Issue #957 G40)', () => {
+    const entry = getCapability('clearMerchantOverride')
+    expect(entry).toBeDefined()
+    expect(entry?.class).toBe('write')
+    expect(entry?.confirmationRequired).toBe(true)
+    expect(entry?.excluded).toBe(false)
+    expect(entry?.destructive).toBe(true)
+  })
+
   it('excludes subscription writes (subscription management stays in-app)', () => {
     expect(isExcluded('cancel-paddle-subscription')).toBe(true)
     expect(isExcluded('create-paddle-checkout')).toBe(true)
