@@ -8324,13 +8324,13 @@ paths:
           schema:
             description: End of date range (YYYY-MM-DD)
             type: string
-        - description: Merchant name to filter by
+        - description: Merchant UUID to filter by
           explode: false
           in: query
-          name: merchant_name
+          name: merchant_id
           required: true
           schema:
-            description: Merchant name to filter by
+            description: Merchant UUID to filter by
             type: string
         - description: Comma-separated account types to filter
           explode: false

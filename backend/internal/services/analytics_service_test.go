@@ -23,7 +23,7 @@ type mockAnalyticsRepository struct {
 	getSavingsRateForPeriodFn           func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error)
 	getMonthOverMonthSpendingFn         func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 	getLargestTransactionsForPeriodFn   func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
-	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 	getIncomeSourceBreakdownFn          func(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.IncomeSourceRow, error)
 	getUnusualSpendFn                   func(ctx context.Context, userID string, baselineStart, startDate, endDate time.Time, sigmaThreshold float64) ([]domain.UnusualSpendRow, error)
 	getBudgetVsActualFn                 func(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error)
@@ -113,9 +113,9 @@ func (m *mockAnalyticsRepository) GetLargestTransactionsForPeriod(ctx context.Co
 	return []domain.LargestTransactionRow{}, nil
 }
 
-func (m *mockAnalyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+func (m *mockAnalyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 	if m.getCategoryBreakdownForMerchantFn != nil {
-		return m.getCategoryBreakdownForMerchantFn(ctx, userID, merchantName, filters)
+		return m.getCategoryBreakdownForMerchantFn(ctx, userID, merchantID, filters)
 	}
 	return nil, nil
 }
@@ -1417,6 +1417,7 @@ func TestAnalyticsService_GetLargestTransactionsForPeriod(t *testing.T) {
 func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 	ctx := context.Background()
 	loc := time.UTC
+	merchantID := "550e8400-e29b-41d4-a716-446655440000"
 
 	filters := domain.SpendingFilters{
 		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, loc),
@@ -1425,7 +1426,7 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 
 	t.Run("happy path: percentages computed correctly", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, merchant string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 				return []domain.CategoryBreakdownForMerchantRow{
 					{Category: "SHOPPING", Total: 400.0, Count: 5},
 					{Category: "GENERAL_MERCHANDISE", Total: 100.0, Count: 2},
@@ -1434,7 +1435,7 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", "Amazon", filters)
+		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1451,20 +1452,20 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 		if result.Categories[0].PFCPrimaryDisplay == "" {
 			t.Error("expected non-empty PFCPrimaryDisplay for SHOPPING")
 		}
-		if result.MerchantName != "Amazon" {
-			t.Errorf("expected merchant_name Amazon, got %s", result.MerchantName)
+		if result.MerchantName != merchantID {
+			t.Errorf("expected merchant_name %s, got %s", merchantID, result.MerchantName)
 		}
 	})
 
 	t.Run("empty result returns non-nil response with empty categories", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, merchant string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 				return nil, nil
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", "UnknownMerchant", filters)
+		result, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1475,13 +1476,13 @@ func TestAnalyticsService_GetCategoryBreakdownForMerchant(t *testing.T) {
 
 	t.Run("repository error is propagated", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, merchant string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+			getCategoryBreakdownForMerchantFn: func(ctx context.Context, userID string, mID string, f domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 				return nil, errors.New("db error")
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		_, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", "Amazon", filters)
+		_, err := service.GetCategoryBreakdownForMerchant(ctx, "user-123", merchantID, filters)
 		if err == nil {
 			t.Error("expected error from repository")
 		}

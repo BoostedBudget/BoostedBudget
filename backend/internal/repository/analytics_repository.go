@@ -61,8 +61,9 @@ type AnalyticsRepository interface {
 	GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 
 	// GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+	// Filters by merchant_id (effective canonical) to include merged source transactions (#1348 G2b).
 	// Single DB round-trip (Issue #1215 PR2).
-	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 
 	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
 	// Single DB round-trip (Issue #1215 PR2).
@@ -889,28 +890,30 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 }
 
 // GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+// Filters by merchant_id (effective canonical via merge chain) so merged source transactions are included (#1348 G2b).
 // Single DB round-trip (Issue #1215 PR2).
-func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
-	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantName}
+	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantID}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
 		SELECT (%s), SUM(t.amount), COUNT(*)
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
+		%s
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
-		  AND COALESCE(t.merchant_name, '') = $4
+		  AND %s = $4::uuid
 		  %s
 		GROUP BY (%s)
 		ORDER BY SUM(t.amount) DESC
-	`, catExpr, filterClause, catExpr)
+	`, catExpr, merchantSortJoins, effectiveMerchantIdExpr, filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
