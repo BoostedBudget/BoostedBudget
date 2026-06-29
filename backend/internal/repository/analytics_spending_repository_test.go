@@ -833,13 +833,13 @@ func TestGetLargestTransactionsForPeriod(t *testing.T) {
 func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
-	merchantName := "Amazon"
+	merchantID := "550e8400-e29b-41d4-a716-446655440000"
 	filters := domain.SpendingFilters{
 		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		EndDate:   time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC),
 	}
 
-	t.Run("returns category breakdown rows for merchant", func(t *testing.T) {
+	t.Run("returns category breakdown rows for merchant by UUID", func(t *testing.T) {
 		mock, repo := setupAnalyticsMockDB(t)
 		defer mock.Close()
 
@@ -848,10 +848,10 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 			AddRow("GENERAL_MERCHANDISE", 200.0, 3)
 
 		mock.ExpectQuery(`SELECT`).
-			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
 
-		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		require.NoError(t, err)
 		assert.Len(t, result, 2)
 		assert.Equal(t, "SHOPPING", result[0].Category)
@@ -865,10 +865,10 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 
 		rows := pgxmock.NewRows([]string{"category", "total", "count"})
 		mock.ExpectQuery(`SELECT`).
-			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
 
-		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		result, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		require.NoError(t, err)
 		assert.Empty(t, result)
 	})
@@ -878,11 +878,25 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 		defer mock.Close()
 
 		mock.ExpectQuery(`SELECT`).
-			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnError(pgx.ErrNoRows)
 
-		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		assert.Error(t, err)
+	})
+
+	t.Run("query uses merchant_id UUID cast and 4-join override chain", func(t *testing.T) {
+		mock, repo := setupAnalyticsMockDB(t)
+		defer mock.Close()
+
+		rows := pgxmock.NewRows([]string{"category", "total", "count"})
+		mock.ExpectQuery(`(?i)COALESCE\(mno\.merged_into_merchant_id.*::uuid`).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
+			WillReturnRows(rows)
+
+		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("uses LEFT JOIN accounts for account-type filtering", func(t *testing.T) {
@@ -891,10 +905,10 @@ func TestGetCategoryBreakdownForMerchant(t *testing.T) {
 
 		rows := pgxmock.NewRows([]string{"category", "total", "count"})
 		mock.ExpectQuery(`(?i)LEFT JOIN accounts`).
-			WithArgs(userID, filters.StartDate, filters.EndDate, merchantName).
+			WithArgs(userID, filters.StartDate, filters.EndDate, merchantID).
 			WillReturnRows(rows)
 
-		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+		_, err := repo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 		require.NoError(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
