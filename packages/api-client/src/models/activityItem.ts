@@ -44,6 +44,7 @@ export interface ActivityItem {
   data_source?: string;
   date: string;
   effective_category_name?: string;
+  effective_merchant_name?: string;
   effective_pfc_detailed?: string;
   effective_pfc_primary?: string;
   external_transaction_id?: string;

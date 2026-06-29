@@ -91,8 +91,9 @@ type Transaction struct {
 	Date           time.Time  `json:"date" db:"date"`
 	AuthorizedDate *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
 	Name           string     `json:"name" db:"name"`
-	MerchantName   *string    `json:"merchant_name,omitempty" db:"merchant_name"`
-	MerchantID     *string    `json:"merchant_id,omitempty" db:"merchant_id"`
+	MerchantName          *string `json:"merchant_name,omitempty" db:"merchant_name"`
+	MerchantID            *string `json:"merchant_id,omitempty" db:"merchant_id"`
+	EffectiveMerchantName *string `json:"effective_merchant_name,omitempty" db:"-"`
 
 	// PFCv2 source columns (from Plaid)
 	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`

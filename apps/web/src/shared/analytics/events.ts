@@ -183,6 +183,12 @@ export const ANALYTICS_EVENTS = {
   ANALYTICS_INCOME_SOURCES_VIEWED: 'analytics_income_sources_viewed',
   ANALYTICS_LARGEST_TRANSACTIONS_VIEWED: 'analytics_largest_transactions_viewed',
   ANALYTICS_AVERAGE_MONTHLY_SPEND_VIEWED: 'analytics_average_monthly_spend_viewed',
+
+  // Merchants (#957)
+  MERCHANTS_TAB_VIEWED: 'merchants_tab_viewed',
+  MERCHANT_OVERRIDE_SET: 'merchant_override_set',
+  MERCHANT_OVERRIDE_CLEARED: 'merchant_override_cleared',
+  MERCHANTS_MERGED: 'merchants_merged',
 } as const
 
 export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
