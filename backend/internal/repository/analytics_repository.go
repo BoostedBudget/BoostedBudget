@@ -89,10 +89,6 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 	return &analyticsRepository{db: db}
 }
 
-// Date bucketing convention: all analytics queries bucket transactions by the t.date column
-// without timezone conversion. t.date is stored as a PostgreSQL DATE (UTC calendar day).
-// Callers pass UTC-normalized time.Time values from dateutil.ParseDateRange.
-// Tests pin time.UTC throughout for consistency.
 
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
 // Income: amount < 0 (inflow/credit)
@@ -102,11 +98,9 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
-	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
 
-	// Base query - joins with accounts to filter by account type
 	query := `
 		SELECT
 			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
@@ -131,8 +125,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Exclude transfers using effective PFC primary (respects category overrides).
-	// A user who overrides TRANSFER_IN → FOOD_AND_DRINK expresses intent that it is spending.
 	if !filters.IncludeTransfers {
 		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
@@ -157,7 +149,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
-	// Determine the DATE_TRUNC interval based on grouping
 	var truncInterval string
 	switch filters.Grouping {
 	case "daily":
@@ -170,11 +161,9 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		truncInterval = "day"
 	}
 
-	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
 
-	// Base query with period grouping
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_TRUNC('%s', t.date)::date as period_start,
@@ -189,7 +178,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		  AND t.pending = false
 	`, truncInterval)
 
-	// Optional filter: account types
 	if len(filters.AccountTypes) > 0 {
 		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
 		for _, at := range filters.AccountTypes {
@@ -203,7 +191,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
-	// Group and order
 	query += fmt.Sprintf(`
 		GROUP BY DATE_TRUNC('%s', t.date)
 		ORDER BY period_start ASC
@@ -246,14 +233,12 @@ func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate ti
 		return generateEmptyPeriods(startDate, endDate, grouping)
 	}
 
-	// Create a map of existing periods
 	periodMap := make(map[string]domain.CashFlowGroupedData)
 	for _, d := range data {
 		key := d.PeriodStart.Format("2006-01-02")
 		periodMap[key] = d
 	}
 
-	// Generate all expected periods
 	var result []domain.CashFlowGroupedData
 	current := truncateDate(startDate, grouping)
 	end := endDate
@@ -413,7 +398,6 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 // GetSpendingByCategory returns expense totals grouped by effective primary category.
 // When filters.Category is non-empty, returns the detailed subcategory breakdown.
 func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
-	// Canary counter: the JOIN uses a.status = 'active', filtering replaced accounts (Issue #1109).
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 	isDrillDown := filters.Category != ""
 	catExpr := effectiveCategoryExpr(isDrillDown)
@@ -485,14 +469,14 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 
 	query := `
 		SELECT
-			COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name, NULLIF(t.merchant_name, ''), 'Unknown') AS merchant_name,
-			COALESCE(mno.merged_into_merchant_id, t.merchant_id)                                                          AS merchant_id,
-			COALESCE(SUM(ABS(t.amount)), 0)                                                                               AS total,
-			COUNT(*)                                                                                                       AS transaction_count
+			MAX(COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name, NULLIF(t.merchant_name, ''), 'Unknown')) AS merchant_name,
+			MAX(COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text)                                                    AS merchant_id,
+			COALESCE(SUM(ABS(t.amount)), 0)                                                                                    AS total,
+			COUNT(*)                                                                                                            AS transaction_count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		` + merchantSortJoins + `
-		WHERE t.user_id = $1
+		WHERE t.user_id = $1::uuid
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
@@ -904,7 +888,7 @@ func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Contex
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
 		%s
-		WHERE t.user_id = $1
+		WHERE t.user_id = $1::uuid
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0

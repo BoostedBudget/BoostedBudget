@@ -43,19 +43,18 @@ func TestGetSpendingByMerchant_Integration(t *testing.T) {
 
 	linkedItemID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO linked_items (id, user_id, access_token, source, institution_name,
-			institution_id, cursor_position, sync_status, sync_error, item_status,
-			created_at, updated_at)
-		VALUES ($1, $2, '', 'plaid', 'Test Bank', 'ins_test', '', 'synced', NULL, 'active', NOW(), NOW())
-	`, linkedItemID, userID)
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted,
+			institution_name, institution_id, provider, created_at, updated_at)
+		VALUES ($1, $2, $3, 'enc_test', 'Test Bank', 'ins_test', 'plaid', NOW(), NOW())
+	`, linkedItemID, userID, "item-"+linkedItemID.String())
 	require.NoError(t, err, "seed linked_item")
 
 	accountID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO accounts (id, user_id, linked_item_id, external_account_id, source,
-			account_name, type, subtype, balance_current, balance_available, iso_currency_code,
+		INSERT INTO accounts (id, user_id, linked_item_id, plaid_account_id,
+			name, type, subtype, current_balance, available_balance, currency_code,
 			status, created_at, updated_at)
-		VALUES ($1, $2, $3, 'ext_test', 'plaid', 'Test Account', 'depository', 'checking',
+		VALUES ($1, $2, $3, 'ext_test', 'Test Account', 'depository', 'checking',
 			1000.00, 900.00, 'USD', 'active', NOW(), NOW())
 	`, accountID, userID, linkedItemID)
 	require.NoError(t, err, "seed account")
@@ -74,10 +73,10 @@ func TestGetSpendingByMerchant_Integration(t *testing.T) {
 		{merchantRenamed, "STARBUX"},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
-			VALUES ($1, $2, $2, NOW(), NOW())
+			INSERT INTO merchants (id, name, normalized_name, created_at)
+			VALUES ($1, $2, $3, NOW())
 			ON CONFLICT (id) DO NOTHING
-		`, mid.id, mid.name)
+		`, mid.id, mid.name, mid.name)
 		require.NoError(t, err, "insert merchant %s", mid.name)
 	}
 
@@ -111,18 +110,19 @@ func TestGetSpendingByMerchant_Integration(t *testing.T) {
 		if merchantID != nil {
 			mid = *merchantID
 		}
+		extID := txID.String()
 		_, err := tx.Exec(ctx, `
 			INSERT INTO transactions (id, user_id, account_id, linked_item_id,
 				source, external_transaction_id, external_transaction_id_blind_idx,
 				amount, date, name, merchant_name, merchant_id,
-				pending, effective_pfc_primary, pfc_primary, category_source,
+				pending, pfc_primary, category_source,
 				created_at, updated_at)
 			VALUES ($1, $2, $3, $4,
-				'plaid', $1, $1,
-				$5, $6, $7, $8, $9,
-				false, 'FOOD_AND_DRINK', 'FOOD_AND_DRINK', 'plaid',
+				'plaid', $5, $6,
+				$7, $8, $9, $10, $11,
+				false, 'FOOD_AND_DRINK', 'plaid',
 				NOW(), NOW())
-		`, txID, userID, accountID, linkedItemID, amount, baseDate, name, merchantName, mid)
+		`, txID, userID, accountID, linkedItemID, extID, extID, amount, baseDate, name, merchantName, mid)
 		require.NoError(t, err, "insert transaction %s", txID)
 	}
 
@@ -151,7 +151,7 @@ func TestGetSpendingByMerchant_Integration(t *testing.T) {
 		IncludeTransfers: true, // skip transfer filter so we can control the data
 	}
 
-	t.Run("merge collapses source+canonical into one row with canonical display name", func(t *testing.T) {
+	t.Run("merge collapses source and canonical into one row with canonical display name", func(t *testing.T) {
 		results, err := txRepo.GetSpendingByMerchant(ctx, userStr, filters, 20)
 		require.NoError(t, err)
 
@@ -251,19 +251,18 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 
 	linkedItemID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO linked_items (id, user_id, access_token, source, institution_name,
-			institution_id, cursor_position, sync_status, sync_error, item_status,
-			created_at, updated_at)
-		VALUES ($1, $2, '', 'plaid', 'Test Bank', 'ins_test', '', 'synced', NULL, 'active', NOW(), NOW())
-	`, linkedItemID, userID)
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted,
+			institution_name, institution_id, provider, created_at, updated_at)
+		VALUES ($1, $2, $3, 'enc_test', 'Test Bank', 'ins_test', 'plaid', NOW(), NOW())
+	`, linkedItemID, userID, "item-"+linkedItemID.String())
 	require.NoError(t, err, "seed linked_item")
 
 	accountID := uuid.New()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO accounts (id, user_id, linked_item_id, external_account_id, source,
-			account_name, type, subtype, balance_current, balance_available, iso_currency_code,
+		INSERT INTO accounts (id, user_id, linked_item_id, plaid_account_id,
+			name, type, subtype, current_balance, available_balance, currency_code,
 			status, created_at, updated_at)
-		VALUES ($1, $2, $3, 'ext_test', 'plaid', 'Test Account', 'depository', 'checking',
+		VALUES ($1, $2, $3, 'ext_test', 'Test Account', 'depository', 'checking',
 			1000.00, 900.00, 'USD', 'active', NOW(), NOW())
 	`, accountID, userID, linkedItemID)
 	require.NoError(t, err, "seed account")
@@ -282,10 +281,10 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		{merchantOther, "Other Merchant"},
 	} {
 		_, err = tx.Exec(ctx, `
-			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
-			VALUES ($1, $2, $2, NOW(), NOW())
+			INSERT INTO merchants (id, name, normalized_name, created_at)
+			VALUES ($1, $2, $3, NOW())
 			ON CONFLICT (id) DO NOTHING
-		`, mid.id, mid.name)
+		`, mid.id, mid.name, mid.name)
 		require.NoError(t, err, "insert merchant %s", mid.name)
 	}
 
@@ -312,25 +311,26 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		if merchantID != nil {
 			mid = *merchantID
 		}
+		extID := txID.String()
 		_, err := tx.Exec(ctx, `
 			INSERT INTO transactions (id, user_id, account_id, linked_item_id,
 				source, external_transaction_id, external_transaction_id_blind_idx,
 				amount, date, name, merchant_name, merchant_id,
-				pending, effective_pfc_primary, pfc_primary, category_source,
+				pending, pfc_primary, category_source,
 				created_at, updated_at)
 			VALUES ($1, $2, $3, $4,
-				'plaid', $1, $1,
-				$5, $6, $7, $8, $9,
-				false, $10, $10, 'plaid',
+				'plaid', $5, $6,
+				$7, $8, $9, $10, $11,
+				false, $12, 'plaid',
 				NOW(), NOW())
-		`, txID, userID, accountID, linkedItemID, amount, baseDate, name, merchantName, mid, category)
+		`, txID, userID, accountID, linkedItemID, extID, extID, amount, baseDate, name, merchantName, mid, category)
 		require.NoError(t, err, "insert transaction %s", txID)
 	}
 
 	// Scenario A: two transactions on merchantSource with different categories
 	wfRaw := "WHOLEFDSMRKT #123"
 	insertTx(uuid.New(), "Whole Foods Groceries", &merchantSource, &wfRaw, 50.00, "FOOD_AND_DRINK")
-	insertTx(uuid.New(), "Whole Foods Flowers", &merchantSource, &wfRaw, 30.00, "GIFTS_AND_DONATIONS")
+	insertTx(uuid.New(), "Whole Foods Flowers", &merchantSource, &wfRaw, 30.00, "GENERAL_MERCHANDISE")
 
 	// Scenario B: one transaction on merchantCanonical directly with different category
 	insertTx(uuid.New(), "Whole Foods Prepared", &merchantCanonical, nil, 20.00, "FOOD_AND_DRINK")
@@ -364,11 +364,11 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		assert.InDelta(t, 70.00, foodRow.Total, 0.01, "FOOD_AND_DRINK should include both source and canonical transactions")
 		assert.Equal(t, 2, foodRow.Count, "FOOD_AND_DRINK should have 2 transactions")
 
-		// GIFTS_AND_DONATIONS: 30 (from source) = 30
-		giftsRow, ok := byCategory["GIFTS_AND_DONATIONS"]
-		require.True(t, ok, "expected GIFTS_AND_DONATIONS category in results")
-		assert.InDelta(t, 30.00, giftsRow.Total, 0.01, "GIFTS_AND_DONATIONS should include source transaction")
-		assert.Equal(t, 1, giftsRow.Count, "GIFTS_AND_DONATIONS should have 1 transaction")
+		// GENERAL_MERCHANDISE: 30 (from source) = 30
+		giftsRow, ok := byCategory["GENERAL_MERCHANDISE"]
+		require.True(t, ok, "expected GENERAL_MERCHANDISE category in results")
+		assert.InDelta(t, 30.00, giftsRow.Total, 0.01, "GENERAL_MERCHANDISE should include source transaction")
+		assert.Equal(t, 1, giftsRow.Count, "GENERAL_MERCHANDISE should have 1 transaction")
 	})
 
 	t.Run("UUID filter excludes unrelated merchant transactions", func(t *testing.T) {
@@ -390,8 +390,8 @@ func TestGetCategoryBreakdownForMerchant_Integration(t *testing.T) {
 		// Create a new merchant with no merge involved
 		directMerchant := uuid.New()
 		_, err := tx.Exec(ctx, `
-			INSERT INTO merchants (id, name, normalized_name, created_at, updated_at)
-			VALUES ($1, 'Direct Merchant', 'Direct Merchant', NOW(), NOW())
+			INSERT INTO merchants (id, name, normalized_name, created_at)
+			VALUES ($1, 'Direct Merchant', 'Direct Merchant', NOW())
 		`, directMerchant)
 		require.NoError(t, err, "insert direct merchant")
 
