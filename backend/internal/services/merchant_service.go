@@ -257,8 +257,48 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 		})
 	}
 
-	// Phase 3: Single atomic write — display-only upserts + all merge groups in one tx.
+	// Phase 3 preflight: Reject cycles within the request edges (G44).
+	// E.g. [{A→B},{B→A}] would violate depth-1 if persisted.
+	if err := detectRequestMergeCycle(groups); err != nil {
+		return nil, err
+	}
+
+	// Phase 4: Single atomic write — display-only upserts + all merge groups in one tx.
 	return s.merchantOverrideRepo.BulkApply(ctx, userID, displayOnlyItems, groups)
+}
+
+// detectRequestMergeCycle reports an error if the request edges form a cycle.
+// It builds a source→canonical map from all groups, then walks from each source;
+// a revisit signals a cycle. Since resolveCanonical precedes this, the canonical
+// values already incorporate pre-existing DB merges, making this the complete
+// condition to reject cycles within the request-edge set.
+func detectRequestMergeCycle(groups []repository.BulkMergeGroup) error {
+	// Map source IDs to their target canonicals.
+	sourceCanon := make(map[string]string, len(groups))
+	for _, g := range groups {
+		for _, src := range g.Sources {
+			sourceCanon[src] = g.Canonical
+		}
+	}
+	// Walk the chain from each source; revisit = cycle.
+	for _, g := range groups {
+		for _, src := range g.Sources {
+			visited := make(map[string]struct{})
+			cur := src
+			for {
+				if _, seen := visited[cur]; seen {
+					return fmt.Errorf("bulk overrides form a merge cycle: %q", cur)
+				}
+				visited[cur] = struct{}{}
+				next, ok := sourceCanon[cur]
+				if !ok {
+					break // cur is not a source — terminus reached
+				}
+				cur = next
+			}
+		}
+	}
+	return nil
 }
 
 // GetMerchantOverrides returns all per-user merchant name overrides for a user,

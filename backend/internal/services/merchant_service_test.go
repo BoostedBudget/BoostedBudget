@@ -1173,6 +1173,147 @@ func TestBulkSetOverrides_DuplicateMerchantID_MergeTwice_Rejected(t *testing.T) 
 	mor.AssertNotCalled(t, "GetMergeTarget")
 }
 
+// TestBulkSetOverrides_MergeCycle_TwoNode_Rejected verifies that a 2-node cycle
+// [{A→B},{B→A}] is rejected before any write (G44).
+func TestBulkSetOverrides_MergeCycle_TwoNode_Rejected(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	targetA := "m-A"
+	targetB := "m-B"
+
+	// Neither target has an existing merge pointer; each resolves to itself.
+	mor.On("GetMergeTarget", ctx, userID, targetA).Return("", nil)
+	mor.On("GetMergeTarget", ctx, userID, targetB).Return("", nil)
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", MergedIntoMerchantID: &targetB},
+		{MerchantID: "m-B", MergedIntoMerchantID: &targetA},
+	}
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cycle")
+	assert.Nil(t, result)
+	mor.AssertNotCalled(t, "BulkApply")
+}
+
+// TestBulkSetOverrides_MergeCycle_ThreeNode_Rejected verifies that a 3-node cycle
+// [{A→B},{B→C},{C→A}] is rejected before any write (G44).
+func TestBulkSetOverrides_MergeCycle_ThreeNode_Rejected(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	targetA := "m-A"
+	targetB := "m-B"
+	targetC := "m-C"
+
+	// None of the targets has an existing merge pointer; each resolves to itself.
+	mor.On("GetMergeTarget", ctx, userID, targetA).Return("", nil)
+	mor.On("GetMergeTarget", ctx, userID, targetB).Return("", nil)
+	mor.On("GetMergeTarget", ctx, userID, targetC).Return("", nil)
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", MergedIntoMerchantID: &targetB},
+		{MerchantID: "m-B", MergedIntoMerchantID: &targetC},
+		{MerchantID: "m-C", MergedIntoMerchantID: &targetA},
+	}
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cycle")
+	assert.Nil(t, result)
+	mor.AssertNotCalled(t, "BulkApply")
+}
+
+// TestBulkSetOverrides_MergeFanIn_NonCyclic_Succeeds verifies that a non-cyclic
+// fan-in request [{A→C},{B→C}] is not rejected (G44 is not over-broad).
+func TestBulkSetOverrides_MergeFanIn_NonCyclic_Succeeds(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	targetC := "m-C"
+
+	mor.On("GetMergeTarget", ctx, userID, targetC).Return("", nil)
+
+	mergeResult := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: userID, MerchantID: "m-A", MergedIntoMerchantID: &targetC},
+		{ID: "ov-2", UserID: userID, MerchantID: "m-B", MergedIntoMerchantID: &targetC},
+	}
+	mor.On("BulkApply", ctx, userID,
+		mock.MatchedBy(func(displayOnly []domain.MerchantNameOverride) bool {
+			return len(displayOnly) == 0
+		}),
+		mock.MatchedBy(func(groups []repository.BulkMergeGroup) bool {
+			return len(groups) == 1 && groups[0].Canonical == targetC && len(groups[0].Sources) == 2
+		}),
+	).Return(mergeResult, nil)
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", MergedIntoMerchantID: &targetC},
+		{MerchantID: "m-B", MergedIntoMerchantID: &targetC},
+	}
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	mor.AssertExpectations(t)
+}
+
+// TestBulkSetOverrides_MergeChain_AcyclicThreeNode_Succeeds verifies that a linear chain
+// [{A→B},{B→C}] is NOT rejected by the cycle guard. B appears as both a target (group 1) and
+// a source (group 2), which tests that the per-walk visited set is scoped per-source and does
+// not false-positive across separate walks.
+func TestBulkSetOverrides_MergeChain_AcyclicThreeNode_Succeeds(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	targetB := "m-B"
+	targetC := "m-C"
+
+	// Neither target has an existing merge pointer — each resolves to itself.
+	mor.On("GetMergeTarget", ctx, userID, targetB).Return("", nil)
+	mor.On("GetMergeTarget", ctx, userID, targetC).Return("", nil)
+
+	canonicalB, canonicalC := "m-B", "m-C"
+	mergeResult := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: userID, MerchantID: "m-A", MergedIntoMerchantID: &canonicalB},
+		{ID: "ov-2", UserID: userID, MerchantID: "m-B", MergedIntoMerchantID: &canonicalC},
+	}
+	mor.On("BulkApply", ctx, userID,
+		mock.MatchedBy(func(displayOnly []domain.MerchantNameOverride) bool {
+			return len(displayOnly) == 0
+		}),
+		mock.MatchedBy(func(groups []repository.BulkMergeGroup) bool {
+			return len(groups) == 2 &&
+				groups[0].Canonical == canonicalB && len(groups[0].Sources) == 1 && groups[0].Sources[0] == "m-A" &&
+				groups[1].Canonical == canonicalC && len(groups[1].Sources) == 1 && groups[1].Sources[0] == "m-B"
+		}),
+	).Return(mergeResult, nil)
+
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m-A", MergedIntoMerchantID: &targetB},
+		{MerchantID: "m-B", MergedIntoMerchantID: &targetC},
+	}
+
+	result, err := svc.BulkSetOverrides(ctx, userID, reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	mor.AssertExpectations(t)
+}
+
 // NormalizeFunc wired in constructor test
 
 func TestMerchantService_NormalizeFuncIsWired(t *testing.T) {
