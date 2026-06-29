@@ -119,9 +119,10 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 	defer db.Exec(ctx, "SET enable_sort = ON") //nolint:errcheck
 
 	type tc struct {
-		sortExpr    string // must match sortColumnMap exactly
-		indexSuffix string // e.g. "date"
-		orderDir    string // ASC or DESC
+		sortExpr          string // ORDER BY expression
+		indexSuffix       string // e.g. "date"
+		orderDir          string // ASC or DESC
+		skipIndexNameAssert bool  // true for merchant: EFF JOIN expression won't use old keyset index
 	}
 
 	cases := []tc{
@@ -136,14 +137,19 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 			orderDir:    "ASC",
 		},
 		{
-			sortExpr:    "COALESCE(merchant_name, name)",
-			indexSuffix: "merchant",
-			orderDir:    "DESC",
+			// Merchant sort now uses the effective merchant name JOIN expression.
+			// The old idx_tx_keyset_merchant index (COALESCE(merchant_name, name))
+			// is no longer used; we only verify the plan uses some index scan.
+			sortExpr:            effectiveMerchantNameExpr,
+			indexSuffix:         "merchant",
+			orderDir:            "DESC",
+			skipIndexNameAssert: true,
 		},
 		{
-			sortExpr:    "COALESCE(merchant_name, name)",
-			indexSuffix: "merchant",
-			orderDir:    "ASC",
+			sortExpr:            effectiveMerchantNameExpr,
+			indexSuffix:         "merchant",
+			orderDir:            "ASC",
+			skipIndexNameAssert: true,
 		},
 		{
 			sortExpr:    "amount",
@@ -177,7 +183,6 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 				tc.sortExpr, tc.orderDir,
 			)
 			plan := runExplain(ctx, t, db, firstPageSQL, "00000000-0000-0000-0000-000000000000")
-			expectedIdx := "idx_tx_keyset_" + tc.indexSuffix
 			assert.True(t,
 				strings.Contains(plan, "Index Scan") ||
 					strings.Contains(plan, "Bitmap Index Scan") ||
@@ -185,8 +190,11 @@ func TestTransactionKeyset_EXPLAIN(t *testing.T) {
 				"Expected index scan for sort=%s dir=%s; plan:\n%s",
 				tc.indexSuffix, tc.orderDir, plan,
 			)
-			assert.Contains(t, plan, expectedIdx,
-				"Plan should reference %s; plan:\n%s", expectedIdx, plan)
+			if !tc.skipIndexNameAssert {
+				expectedIdx := "idx_tx_keyset_" + tc.indexSuffix
+				assert.Contains(t, plan, expectedIdx,
+					"Plan should reference %s; plan:\n%s", expectedIdx, plan)
+			}
 		})
 	}
 }
