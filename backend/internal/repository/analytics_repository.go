@@ -469,8 +469,10 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	return results, nil
 }
 
-// GetSpendingByMerchant returns expense totals grouped by merchant name, ordered by total descending.
-// Null merchant names are coalesced to "Unknown".
+// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total descending.
+// Merchants renamed or merged by the user are grouped under their canonical (target) display name.
+// Groups by a synthetic key: 'merchant:<id>', 'raw:<name>', or 'unknown' — so renamed/merged variants
+// collapse into one row. merchant_id is NULL for unlinked/unknown groups (preserves "not clickable" frontend behavior).
 func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
@@ -480,25 +482,31 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 	args = append(args, limit)
 	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
-			COALESCE(t.merchant_name, 'Unknown') AS merchant_name,
-			MAX(m.id)                             AS merchant_id,
-			COALESCE(SUM(ABS(t.amount)), 0)       AS total,
-			COUNT(*)                              AS transaction_count
+			COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name, NULLIF(t.merchant_name, ''), 'Unknown') AS merchant_name,
+			COALESCE(mno.merged_into_merchant_id, t.merchant_id)                                                          AS merchant_id,
+			COALESCE(SUM(ABS(t.amount)), 0)                                                                               AS total,
+			COUNT(*)                                                                                                       AS transaction_count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
-		LEFT JOIN merchants m ON t.merchant_id = m.id
+		` + merchantSortJoins + `
 		WHERE t.user_id = $1
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
-		%s
-		GROUP BY COALESCE(t.merchant_name, 'Unknown')
+		` + extraClause + `
+		GROUP BY
+		  CASE
+		    WHEN t.merchant_id IS NOT NULL
+		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
+		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
+		      THEN 'raw:' || t.merchant_name
+		    ELSE 'unknown'
+		  END
 		ORDER BY total DESC
-		LIMIT %s
-	`, extraClause, limitPlaceholder)
+		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
