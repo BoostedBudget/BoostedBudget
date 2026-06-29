@@ -3036,6 +3036,52 @@ func TestProcessAddedTransactions_NoMerchantName_SkipsMerchantUpsert(t *testing.
 	mockTransactionRepo.AssertExpectations(t)
 }
 
+// TestProcessAddedTransactions_WhitespaceOnlyMerchantName_SkipsMerchantUpsert verifies that
+// a transaction whose MerchantName is whitespace-only is treated the same as empty —
+// GetOrCreateMerchantsWithNormalize must NOT be called (G33, issue #957 Round 10).
+// Covers spaces, tabs, and newlines since strings.TrimSpace handles all three.
+func TestProcessAddedTransactions_WhitespaceOnlyMerchantName_SkipsMerchantUpsert(t *testing.T) {
+	for _, wsName := range []string{"   ", "\t", "\n"} {
+		wsName := wsName
+		t.Run(wsName, func(t *testing.T) {
+			mockTransactionRepo := new(MockTransactionRepository)
+			mockMerchantRepo := new(MockMerchantRepo)
+
+			service := NewTransactionSyncService(
+				nil, nil,
+				mockTransactionRepo,
+				nil, nil, nil, nil, nil, nil, nil, nil,
+				mockMerchantRepo,
+				nil,
+			).(*transactionSyncService)
+
+			ctx := context.Background()
+			linkedItem := &domain.LinkedItem{ID: "linked-item-g33", UserID: "user-g33"}
+			accountMap := map[string]string{"plaid-acc-g33": "account-uuid-g33"}
+
+			added := []plaid.Transaction{
+				{
+					TransactionId: "txn-g33",
+					AccountId:     "plaid-acc-g33",
+					Amount:        9.99,
+					Date:          "2024-06-28",
+					Name:          "Whitespace Merchant",
+					MerchantName:  *plaid.NewNullableString(&wsName),
+					Pending:       false,
+				},
+			}
+
+			mockTransactionRepo.On("CreateBatch", ctx, mock.Anything).Return(nil, nil)
+
+			err := service.processAddedTransactions(ctx, added, linkedItem, accountMap, nil)
+
+			require.NoError(t, err)
+			mockMerchantRepo.AssertNotCalled(t, "GetOrCreateMerchantsWithNormalize")
+			mockTransactionRepo.AssertExpectations(t)
+		})
+	}
+}
+
 // TestProcessModifiedTransactions_StampsMerchantID verifies that when modified
 // transactions have a MerchantName, GetOrCreateMerchants is called once (per batch)
 // and MerchantID is stamped on each transaction before Update is invoked.

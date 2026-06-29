@@ -122,15 +122,23 @@ func (r *MerchantRepository) GetOrCreateMerchantsWithNormalize(ctx context.Conte
 
 // ListMerchants returns aggregated merchant summaries for a user.
 // Merged merchants collapse into a single row (the merge target).
-// Display name follows the override chain:
+// Display name follows the per-user override chain (G6b + G32):
 //
-//	COALESCE(override.display_name, canonical_merchant.normalized_name, merchant.name)
+//	COALESCE(
+//	  source_override.display_name,    -- user renamed the source merchant directly
+//	  target_override.display_name,    -- user renamed the canonical (merged-into) merchant
+//	  NULLIF(canonical.normalized_name, ''),
+//	  canonical.name
+//	)
+//
+// The target-override join (mno_t) mirrors ResolveEffectiveMerchantNames so the Merchants
+// tab and the transaction list always resolve display names consistently (G32, issue #957).
 func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) ([]domain.MerchantSummary, error) {
 	const q = `
         SELECT
             COALESCE(o.merged_into_merchant_id, t.merchant_id)::text        AS effective_merchant_id,
             COALESCE(NULLIF(m2.normalized_name, ''), m2.name)               AS normalized_name,
-            MAX(COALESCE(o.display_name, NULLIF(m2.normalized_name, ''), m2.name)) AS effective_display_name,
+            MAX(COALESCE(o.display_name, mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name)) AS effective_display_name,
             array_agg(DISTINCT m.name)                                       AS raw_variants,
             COUNT(*)                                                         AS transaction_count,
             COALESCE(SUM(ABS(t.amount)), 0)                                 AS total_spend,
@@ -144,6 +152,8 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
                ON o.merchant_id = t.merchant_id AND o.user_id = $1
         LEFT   JOIN merchants m2
                ON m2.id = COALESCE(o.merged_into_merchant_id, t.merchant_id)
+        LEFT   JOIN merchant_name_overrides mno_t
+               ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1
         WHERE  t.user_id = $1
           AND  t.merchant_id IS NOT NULL
           AND  t.pending = false

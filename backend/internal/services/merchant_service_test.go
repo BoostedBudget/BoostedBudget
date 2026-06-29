@@ -1017,6 +1017,37 @@ func TestBulkSetOverrides_SelfMergeWithRename_StillPersistsDisplayName(t *testin
 	mor.AssertExpectations(t)
 }
 
+// TestSetOverride_PureRename_DoesNotClobberMergePointer_ServiceLayer verifies that the service's
+// pure-rename branch calls Upsert with MergedIntoMerchantID=nil — the SQL COALESCE in the repo
+// is what preserves the existing merge pointer. This test confirms the service routing is correct;
+// the real pointer-preservation is validated by the integration tests (G31).
+func TestSetOverride_PureRename_DoesNotClobberMergePointer_ServiceLayer(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+	userID := "user-1"
+	merchantID := "m-A"
+	displayName := "New Label"
+
+	// The service calls Upsert with nil merge pointer — the SQL COALESCE preserves the existing one.
+	returned := &domain.MerchantNameOverride{
+		ID: "ov-1", UserID: userID, MerchantID: merchantID, DisplayName: &displayName,
+	}
+	mor.On("Upsert", ctx, mock.MatchedBy(func(o domain.MerchantNameOverride) bool {
+		return o.UserID == userID && o.MerchantID == merchantID &&
+			o.DisplayName != nil && *o.DisplayName == displayName &&
+			o.MergedIntoMerchantID == nil
+	})).Return(returned, nil)
+
+	result, err := svc.SetOverride(ctx, userID, merchantID, &displayName, nil)
+	require.NoError(t, err)
+	assert.Equal(t, returned, result)
+	// Must NOT have called MergeAndFlatten for a pure rename.
+	mor.AssertNotCalled(t, "MergeAndFlatten")
+	mor.AssertExpectations(t)
+}
+
 // ============================================================================
 // NormalizeFunc wired in constructor
 // ============================================================================

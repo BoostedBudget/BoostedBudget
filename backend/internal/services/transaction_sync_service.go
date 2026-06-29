@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -508,10 +509,10 @@ func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactio
 		return nil
 	}
 
-	// Deduplicate merchant names
+	// Deduplicate merchant names, skipping whitespace-only names (G33, issue #957).
 	nameSet := make(map[string]struct{})
 	for _, txn := range transactions {
-		if txn.MerchantName != nil && *txn.MerchantName != "" {
+		if txn.MerchantName != nil && strings.TrimSpace(*txn.MerchantName) != "" {
 			nameSet[*txn.MerchantName] = struct{}{}
 		}
 	}
