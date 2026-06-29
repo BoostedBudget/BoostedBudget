@@ -55,6 +55,12 @@ const (
 	EventTransactionRecategorized      = "transaction_recategorized"
 	EventTransactionReviewStateChanged = "transaction_review_state_changed"
 
+	// Issue #1348: Merchant analytics events
+	EventMerchantOverrideSet     = "merchant_override_set"
+	EventMerchantOverrideCleared = "merchant_override_cleared"
+	EventMerchantsMerged         = "merchants_merged"
+	EventMerchantsBulkOverridden = "merchants_bulk_overridden"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1325,4 +1326,248 @@ func TestMerchantService_NormalizeFuncIsWired(t *testing.T) {
 	// Verify it's actually the merchant.Normalize function by behaviour
 	result := svc.normalize("SQ * STARBUCKS #123")
 	assert.Equal(t, "Starbucks", result)
+}
+
+// Mock analytics for testing
+
+type mockAnalytics struct {
+	mock.Mock
+}
+
+func (m *mockAnalytics) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockAnalytics) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockAnalytics) Close() {
+	m.Called()
+}
+
+// SetAnalytics tests
+
+func TestMerchantService_SetAnalytics_NilSafe_SetOverride(t *testing.T) {
+	// Test that SetOverride without SetAnalytics doesn't panic
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	displayName := "Starbucks"
+	expected := &domain.MerchantNameOverride{
+		ID:          "ov-1",
+		UserID:      "user-1",
+		MerchantID:  "m1",
+		DisplayName: &displayName,
+	}
+	mor.On("Upsert", ctx, mock.Anything).Return(expected, nil)
+
+	// SetOverride without SetAnalytics — should not panic
+	result, err := svc.SetOverride(ctx, "user-1", "m1", &displayName, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestMerchantService_SetOverride_FiresAnalyticsEvent(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	analytics := new(mockAnalytics)
+	svc.SetAnalytics(analytics)
+	ctx := context.Background()
+
+	displayName := "Starbucks"
+	expected := &domain.MerchantNameOverride{
+		ID:          "ov-1",
+		UserID:      "user-1",
+		MerchantID:  "m1",
+		DisplayName: &displayName,
+	}
+	mor.On("Upsert", ctx, mock.Anything).Return(expected, nil)
+
+	analytics.On("Capture", "user-1", phclient.EventMerchantOverrideSet, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["merchant_id"] == "m1" && props["has_display_name"] == true && props["is_merge"] == false
+	})).Return()
+
+	result, err := svc.SetOverride(ctx, "user-1", "m1", &displayName, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+	analytics.AssertExpectations(t)
+}
+
+func TestMerchantService_SetOverride_WithMerge_FiresAnalyticsWithMergeFlag(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	analytics := new(mockAnalytics)
+	svc.SetAnalytics(analytics)
+	ctx := context.Background()
+
+	targetID := "m2"
+	expected := domain.MerchantNameOverride{
+		ID:                   "ov-2",
+		UserID:               "user-1",
+		MerchantID:           "m1",
+		MergedIntoMerchantID: &targetID,
+	}
+	mor.On("GetMergeTarget", ctx, "user-1", targetID).Return("", nil)
+	mor.On("MergeAndFlatten", ctx, "user-1",
+		[]string{"m1"}, targetID, []string{"m1"}, ([]*string)(nil),
+	).Return([]domain.MerchantNameOverride{expected}, nil)
+
+	analytics.On("Capture", "user-1", phclient.EventMerchantOverrideSet, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["merchant_id"] == "m1" && props["has_display_name"] == false && props["is_merge"] == true
+	})).Return()
+
+	_, err := svc.SetOverride(ctx, "user-1", "m1", nil, &targetID)
+
+	require.NoError(t, err)
+	analytics.AssertExpectations(t)
+}
+
+func TestMerchantService_ClearOverride_FiresAnalyticsEvent(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	analytics := new(mockAnalytics)
+	svc.SetAnalytics(analytics)
+	ctx := context.Background()
+
+	mor.On("Delete", ctx, "user-1", "m1").Return(nil)
+	analytics.On("Capture", "user-1", phclient.EventMerchantOverrideCleared, map[string]interface{}{
+		"merchant_id": "m1",
+	}).Return()
+
+	err := svc.ClearOverride(ctx, "user-1", "m1")
+
+	require.NoError(t, err)
+	analytics.AssertExpectations(t)
+}
+
+func TestMerchantService_ClearOverride_NilSafe(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	mor.On("Delete", ctx, "user-1", "m1").Return(nil)
+
+	err := svc.ClearOverride(ctx, "user-1", "m1")
+
+	require.NoError(t, err)
+}
+
+func TestMerchantService_MergeMerchants_FiresAnalyticsEvent(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	analytics := new(mockAnalytics)
+	svc.SetAnalytics(analytics)
+	ctx := context.Background()
+
+	targetID := "m-target"
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: "user-1", MerchantID: "m1", MergedIntoMerchantID: &targetID},
+		{ID: "ov-2", UserID: "user-1", MerchantID: "m2", MergedIntoMerchantID: &targetID},
+	}
+
+	mor.On("GetMergeTarget", ctx, "user-1", targetID).Return("", nil)
+	mor.On("MergeAndFlatten", ctx, "user-1",
+		[]string{"m1", "m2"}, targetID, []string{"m1", "m2"}, ([]*string)(nil),
+	).Return(expected, nil)
+
+	analytics.On("Capture", "user-1", phclient.EventMerchantsMerged, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["source_merchant_id"] == "m1" && props["target_merchant_id"] == targetID
+	})).Return()
+	analytics.On("Capture", "user-1", phclient.EventMerchantsMerged, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return props["source_merchant_id"] == "m2" && props["target_merchant_id"] == targetID
+	})).Return()
+
+	result, err := svc.MergeMerchants(ctx, "user-1", []string{"m1", "m2"}, targetID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	analytics.AssertExpectations(t)
+}
+
+func TestMerchantService_MergeMerchants_NilSafe(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	targetID := "m-target"
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: "user-1", MerchantID: "m1", MergedIntoMerchantID: &targetID},
+	}
+
+	mor.On("GetMergeTarget", ctx, "user-1", targetID).Return("", nil)
+	mor.On("MergeAndFlatten", ctx, "user-1",
+		[]string{"m1"}, targetID, []string{"m1"}, ([]*string)(nil),
+	).Return(expected, nil)
+
+	result, err := svc.MergeMerchants(ctx, "user-1", []string{"m1"}, targetID)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+}
+
+func TestMerchantService_BulkSetOverrides_FiresAnalyticsEvent(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	analytics := new(mockAnalytics)
+	svc.SetAnalytics(analytics)
+	ctx := context.Background()
+
+	dn1 := "Starbucks"
+	dn2 := "Amazon Prime"
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m1", DisplayName: &dn1},
+		{MerchantID: "m2", DisplayName: &dn2},
+	}
+
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: "user-1", MerchantID: "m1", DisplayName: &dn1},
+		{ID: "ov-2", UserID: "user-1", MerchantID: "m2", DisplayName: &dn2},
+	}
+
+	mor.On("BulkApply", ctx, "user-1", mock.Anything, mock.Anything).Return(expected, nil)
+
+	analytics.On("Capture", "user-1", phclient.EventMerchantsBulkOverridden, map[string]interface{}{
+		"count": 2,
+	}).Return()
+
+	result, err := svc.BulkSetOverrides(ctx, "user-1", reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	analytics.AssertExpectations(t)
+}
+
+func TestMerchantService_BulkSetOverrides_NilSafe(t *testing.T) {
+	mr := new(mockMerchantRepo)
+	mor := new(mockMerchantOverrideRepo)
+	svc := newMerchantService(mr, mor)
+	ctx := context.Background()
+
+	dn1 := "Starbucks"
+	reqs := []SetOverrideRequest{
+		{MerchantID: "m1", DisplayName: &dn1},
+	}
+
+	expected := []domain.MerchantNameOverride{
+		{ID: "ov-1", UserID: "user-1", MerchantID: "m1", DisplayName: &dn1},
+	}
+
+	mor.On("BulkApply", ctx, "user-1", mock.Anything, mock.Anything).Return(expected, nil)
+
+	result, err := svc.BulkSetOverrides(ctx, "user-1", reqs)
+
+	require.NoError(t, err)
+	require.Len(t, result, 1)
 }
