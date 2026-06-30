@@ -97,7 +97,7 @@ func (r *MerchantOverrideRepository) GetByUserID(ctx context.Context, userID str
 	const q = `
         SELECT id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at
         FROM   merchant_name_overrides
-        WHERE  user_id = $1
+        WHERE  user_id = $1::uuid
         ORDER  BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, q, userID)
@@ -134,7 +134,7 @@ func (r *MerchantOverrideRepository) GetByUserID(ctx context.Context, userID str
 // Delete removes a merchant name override for a specific user+merchant pair.
 // Returns nil if no row matched (DELETE is idempotent).
 func (r *MerchantOverrideRepository) Delete(ctx context.Context, userID, merchantID string) error {
-	const q = `DELETE FROM merchant_name_overrides WHERE user_id = $1 AND merchant_id = $2`
+	const q = `DELETE FROM merchant_name_overrides WHERE user_id = $1::uuid AND merchant_id = $2::uuid`
 	_, err := r.db.Exec(ctx, q, userID, merchantID)
 	return err
 }
@@ -145,7 +145,7 @@ func (r *MerchantOverrideRepository) GetMergeTarget(ctx context.Context, userID,
 	const q = `
 		SELECT COALESCE(merged_into_merchant_id::text, '')
 		FROM   merchant_name_overrides
-		WHERE  user_id = $1 AND merchant_id = $2::uuid`
+		WHERE  user_id = $1::uuid AND merchant_id = $2::uuid`
 	var target string
 	err := r.db.QueryRow(ctx, q, userID, merchantID).Scan(&target)
 	if err != nil {
@@ -245,6 +245,8 @@ var _ MerchantOverrideRepo = (*MerchantOverrideRepository)(nil)
 
 // bulkUpsertTx executes the UNNEST bulk-upsert SQL on q (DB or tx).
 // Applies ON CONFLICT COALESCE (G31): nil merged_into_merchant_id preserves existing merge pointer.
+// UNNEST column types ($2::uuid[], $4::uuid[]) declare merchantIDs and mergedIntoIDs as uuid;
+// pgx v5 transparently converts string→uuid when scanning.
 func bulkUpsertTx(ctx context.Context, q querier, overrides []domain.MerchantNameOverride) ([]domain.MerchantNameOverride, error) {
 	userIDs := make([]string, len(overrides))
 	merchantIDs := make([]string, len(overrides))
@@ -263,12 +265,12 @@ func bulkUpsertTx(ctx context.Context, q querier, overrides []domain.MerchantNam
             (id, user_id, merchant_id, display_name, merged_into_merchant_id, created_at, updated_at)
         SELECT gen_random_uuid(),
                u.user_id,
-               u.merchant_id::uuid,
+               u.merchant_id,
                u.display_name,
-               u.merged_into_merchant_id::uuid,
+               u.merged_into_merchant_id,
                NOW(),
                NOW()
-        FROM   unnest($1::text[], $2::text[], $3::text[], $4::text[])
+        FROM   unnest($1::uuid[], $2::uuid[], $3::text[], $4::uuid[])
                AS u(user_id, merchant_id, display_name, merged_into_merchant_id)
         ON CONFLICT (user_id, merchant_id) DO UPDATE
             SET display_name            = EXCLUDED.display_name,

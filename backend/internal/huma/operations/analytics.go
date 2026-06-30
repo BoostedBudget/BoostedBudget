@@ -498,7 +498,7 @@ type GetCategoryBreakdownForMerchantInput struct {
 	inputs.AuthenticatedInput
 	StartDate        string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
-	MerchantName     string `query:"merchant_name" required:"true" doc:"Merchant name to filter by"`
+	MerchantID       string `query:"merchant_id" required:"true" doc:"Merchant UUID to filter by" format:"uuid"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 }
@@ -515,7 +515,7 @@ func (h *AnalyticsHandler) GetCategoryBreakdownForMerchant(ctx context.Context, 
 		return nil, err
 	}
 
-	response, err := h.service.GetCategoryBreakdownForMerchant(ctx, input.UserID, input.MerchantName, *filters)
+	response, err := h.service.GetCategoryBreakdownForMerchant(ctx, input.UserID, input.MerchantID, *filters)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
