@@ -158,11 +158,11 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
         FROM   transactions t
         JOIN   merchants m  ON m.id = t.merchant_id
         LEFT   JOIN merchant_name_overrides o
-               ON o.merchant_id = t.merchant_id AND o.user_id = $1::text
+               ON o.merchant_id = t.merchant_id AND o.user_id = $1::uuid
         LEFT   JOIN merchants m2
                ON m2.id = COALESCE(o.merged_into_merchant_id, t.merchant_id)
         LEFT   JOIN merchant_name_overrides mno_t
-               ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1::text
+               ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1::uuid
         WHERE  t.user_id = $1::uuid
           AND  t.merchant_id IS NOT NULL
           AND  t.pending = false
@@ -217,7 +217,7 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
               AND  m.normalized_name IS NOT NULL
               AND  NOT EXISTS (
                        SELECT 1 FROM merchant_name_overrides o
-                       WHERE  o.user_id = $1::text
+                       WHERE  o.user_id = $1::uuid
                          AND  o.merchant_id = t.merchant_id
                          AND  o.merged_into_merchant_id IS NOT NULL
                    )
@@ -236,16 +236,19 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
             SELECT DISTINCT unnest(ARRAY[id_a, id_b]) AS merchant_id,
                    LEAST(id_a, id_b)                  AS group_key
             FROM   pairs
+        ),
+        override_stats AS (
+            SELECT merchant_id,
+                   COALESCE(display_name, '') AS display_name,
+                   merged_into_merchant_id::text,
+                   (merged_into_merchant_id IS NOT NULL) AS is_merged
+            FROM   merchant_name_overrides
+            WHERE  user_id = $1::uuid
         )
         SELECT g.group_key::text,
                g.merchant_id::text,
                COALESCE(m.normalized_name, m.name) AS normalized_name,
-               COALESCE(
-                   (SELECT display_name FROM merchant_name_overrides
-                    WHERE user_id = $1::text AND merchant_id = g.merchant_id AND display_name IS NOT NULL),
-                   m.normalized_name,
-                   m.name
-               )                                     AS effective_display_name,
+               COALESCE(NULLIF(os.display_name, ''), m.normalized_name, m.name) AS effective_display_name,
                (SELECT COUNT(*) FROM transactions t2
                 WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending) AS transaction_count,
                COALESCE(
@@ -253,15 +256,12 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
                     WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending),
                    0
                )                                     AS total_spend,
-               EXISTS (SELECT 1 FROM merchant_name_overrides o
-                       WHERE o.user_id = $1::text AND o.merchant_id = g.merchant_id) AS has_override,
-               EXISTS (SELECT 1 FROM merchant_name_overrides o
-                       WHERE o.user_id = $1::text AND o.merchant_id = g.merchant_id
-                         AND o.merged_into_merchant_id IS NOT NULL)            AS is_merged,
-               (SELECT merged_into_merchant_id::text FROM merchant_name_overrides
-                WHERE user_id = $1::text AND merchant_id = g.merchant_id)     AS merged_into_merchant_id
+               os.merchant_id IS NOT NULL          AS has_override,
+               os.is_merged                        AS is_merged,
+               os.merged_into_merchant_id          AS merged_into_merchant_id
         FROM   grouped g
         JOIN   merchants m ON m.id = g.merchant_id
+        LEFT   JOIN override_stats os ON os.merchant_id = g.merchant_id
         ORDER  BY g.group_key, g.merchant_id`
 
 	rows, err := r.db.Query(ctx, q, userID, threshold)
