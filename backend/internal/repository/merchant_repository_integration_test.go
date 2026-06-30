@@ -249,6 +249,9 @@ func TestGetDuplicateSuggestions_Integration(t *testing.T) {
 			ids := make(map[string]bool)
 			for _, s := range g {
 				ids[s.MerchantID] = true
+				// P5-1: Both merchants lack overrides, so is_merged and has_override must be false.
+				assert.False(t, s.IsMerged, "merchant with no override must not be is_merged; got true for %s", s.MerchantID)
+				assert.False(t, s.HasOverride, "merchant with no override row must have has_override=false; got true for %s", s.MerchantID)
 			}
 			// At least one group should contain both our seeded merchants.
 			// (There may be other merchants in the DB from prior tests.)
