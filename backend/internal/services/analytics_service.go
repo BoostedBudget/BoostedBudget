@@ -67,8 +67,9 @@ type AnalyticsService interface {
 	GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.LargestTransactionsResponse, error)
 
 	// GetCategoryBreakdownForMerchant returns spending by category for a specific merchant.
+	// Accepts merchant_id (UUID) to filter by effective canonical merchant (#1348 G2b).
 	// AI-tool-callable (Issue #1215 PR2).
-	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error)
+	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error)
 
 	// GetIncomeSourceBreakdown returns income (inflow) totals grouped by category.
 	// AI-tool-callable (Issue #1215 PR2).
@@ -653,8 +654,10 @@ func (s *analyticsService) GetLargestTransactionsForPeriod(ctx context.Context, 
 }
 
 // GetCategoryBreakdownForMerchant returns spending by category for a specific merchant.
-func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error) {
-	rows, err := s.analyticsRepo.GetCategoryBreakdownForMerchant(ctx, userID, merchantName, filters)
+// merchantID is the canonical merchant UUID; merged source transactions are included via the
+// effective merchant id expression in the repository layer (#1348 G2b).
+func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) (*domain.CategoryBreakdownForMerchantResponse, error) {
+	rows, err := s.analyticsRepo.GetCategoryBreakdownForMerchant(ctx, userID, merchantID, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get category breakdown for merchant: %w", err)
 	}
@@ -677,7 +680,7 @@ func (s *analyticsService) GetCategoryBreakdownForMerchant(ctx context.Context, 
 	}
 
 	return &domain.CategoryBreakdownForMerchantResponse{
-		MerchantName: merchantName,
+		MerchantName: merchantID,
 		Categories:   categories,
 		TotalSpend:   totalSpend,
 		StartDate:    filters.StartDate.Format("2006-01-02"),

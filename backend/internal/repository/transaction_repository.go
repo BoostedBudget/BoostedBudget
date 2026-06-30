@@ -42,6 +42,16 @@ var transactionSelectColumns = []string{
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
 
+// transactionSelectExprT is transactionSelectColumns with "t." prefix on each column.
+// Used in queries that alias FROM transactions as t.
+var transactionSelectExprT = func() string {
+	cols := make([]string, len(transactionSelectColumns))
+	for i, c := range transactionSelectColumns {
+		cols[i] = "t." + c
+	}
+	return strings.Join(cols, ", ")
+}()
+
 // TransactionRepository defines the interface for transaction data access.
 // Supports transactions from all providers (Plaid, manual, Teller, etc.)
 type TransactionRepository interface {
@@ -658,17 +668,34 @@ func (r *transactionRepository) GetByUserIDWithFilters(ctx context.Context, user
 	// Build dynamic WHERE clause based on filters
 	whereClause, args := buildWhereClause(userID, filters)
 
+	// Determine if merchant JOINs are needed (merchant sort or search active).
+	sortKey := filters.SortBy
+	if sortKey == "" {
+		sortKey = "date"
+	}
+	sortDesc, ok := sortDescriptors[sortKey]
+	if !ok {
+		sortDesc = sortDescriptors["date"]
+	}
+	needsJoins := sortDesc.needsMerchantJoin || filters.Search != nil
+
+	joinClause := ""
+	if needsJoins {
+		joinClause = merchantSortJoins
+	}
+
 	// Add limit and offset to args
 	args = append(args, limit, offset)
 
 	// Build complete query with dynamic WHERE clause
 	query := fmt.Sprintf(`
 		SELECT %s
-		FROM transactions
+		FROM transactions t
+		%s
 		%s
 		%s
 		LIMIT $%d OFFSET $%d
-	`, transactionSelectExpr, whereClause, buildOrderBy(filters), len(args)-1, len(args))
+	`, transactionSelectExprT, joinClause, whereClause, buildOrderBy(filters), len(args)-1, len(args))
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -691,12 +718,19 @@ func (r *transactionRepository) CountByUserID(ctx context.Context, userID string
 	// Build dynamic WHERE clause (same logic as GetByUserIDWithFilters)
 	whereClause, args := buildWhereClause(userID, filters)
 
+	// Add merchant JOINs when search is active (effectiveMerchantNameExpr in WHERE requires the aliases).
+	joinClause := ""
+	if filters.Search != nil {
+		joinClause = merchantSortJoins
+	}
+
 	// Build COUNT query
 	query := fmt.Sprintf(`
 		SELECT COUNT(*)
-		FROM transactions
+		FROM transactions t
 		%s
-	`, whereClause)
+		%s
+	`, joinClause, whereClause)
 
 	var count int
 	err := r.db.QueryRow(ctx, query, args...).Scan(&count)
@@ -800,12 +834,18 @@ func (r *transactionRepository) GetByExternalID(ctx context.Context, source doma
 
 // buildWhereClause constructs a dynamic WHERE clause based on filters
 // Returns the WHERE clause string and the corresponding query arguments
-// sortColumnMap maps sort_by parameter values to their SQL column expressions.
-var sortColumnMap = map[string]string{
-	"date":     "COALESCE(authorized_date, date)",
-	"merchant": "COALESCE(merchant_name, name)",
-	"amount":   "amount",
-	"category": "COALESCE(effective_category_name, effective_pfc_primary, pfc_primary)",
+
+type sortDescriptor struct {
+	expr              string
+	needsMerchantJoin bool
+	nullable          bool
+}
+
+var sortDescriptors = map[string]sortDescriptor{
+	"date":     {expr: "COALESCE(t.authorized_date, t.date)", needsMerchantJoin: false, nullable: false},
+	"merchant": {expr: effectiveMerchantNameExpr, needsMerchantJoin: true, nullable: false},
+	"amount":   {expr: "t.amount", needsMerchantJoin: false, nullable: false},
+	"category": {expr: "COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary)", needsMerchantJoin: false, nullable: true},
 }
 
 // buildOrderBy constructs a safe ORDER BY clause from TransactionFilters.SortBy and SortDir.
@@ -815,11 +855,11 @@ func buildOrderBy(filters domain.TransactionFilters) string {
 	if strings.EqualFold(filters.SortDir, "asc") {
 		dir = "ASC"
 	}
-	col, ok := sortColumnMap[filters.SortBy]
+	desc, ok := sortDescriptors[filters.SortBy]
 	if !ok {
-		col = sortColumnMap["date"] // safe default
+		desc = sortDescriptors["date"]
 	}
-	return fmt.Sprintf("ORDER BY %s %s, id ASC", col, dir)
+	return fmt.Sprintf("ORDER BY %s %s, t.id ASC", desc.expr, dir)
 }
 
 func buildWhereClause(userID string, filters domain.TransactionFilters) (string, []interface{}) {
@@ -827,17 +867,15 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 	var args []interface{}
 	argIndex := 1
 
-	// Always filter by user_id
-	conditions = append(conditions, fmt.Sprintf("user_id = $%d", argIndex))
+	// ::uuid cast allows paired mno.user_id = $N::text joins without type-inference conflict
+	conditions = append(conditions, fmt.Sprintf("t.user_id = $%d::uuid", argIndex))
 	args = append(args, userID)
 	argIndex++
 
-	// Optional filter: account_id (single).
-	// Issue #1109: Chain-expand via user_account_id to include pre-relink transactions
 	if filters.AccountID != nil {
 		subq := fmt.Sprintf(
-			"(user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL)"+
-				" OR (account_id = $%d AND user_account_id IS NULL))",
+			"(t.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%d AND user_account_id IS NOT NULL)"+
+				" OR (t.account_id = $%d AND t.user_account_id IS NULL))",
 			argIndex, argIndex+1,
 		)
 		conditions = append(conditions, subq)
@@ -845,8 +883,6 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		argIndex += 2
 	}
 
-	// Optional filter: account_ids (multi-value, Issue #529).
-	// Issue #1109: Chain-expand via user_account_id subquery to include pre-relink transactions
 	if len(filters.AccountIDs) > 0 {
 		placeholders := make([]string, len(filters.AccountIDs))
 		for i, id := range filters.AccountIDs {
@@ -864,23 +900,21 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		}
 		fallbackInList := strings.Join(fallbackPlaceholders, ", ")
 		subq := fmt.Sprintf(
-			"(user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
-				" OR (account_id IN (%s) AND user_account_id IS NULL))",
+			"(t.user_account_id IN (SELECT user_account_id FROM accounts WHERE id IN (%s) AND user_account_id IS NOT NULL)"+
+				" OR (t.account_id IN (%s) AND t.user_account_id IS NULL))",
 			inList, fallbackInList,
 		)
 		conditions = append(conditions, subq)
 	}
 
-	// Optional filter: start_date
 	if filters.StartDate != nil {
-		conditions = append(conditions, fmt.Sprintf("date >= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.date >= $%d", argIndex))
 		args = append(args, *filters.StartDate)
 		argIndex++
 	}
 
-	// Optional filter: end_date
 	if filters.EndDate != nil {
-		conditions = append(conditions, fmt.Sprintf("date <= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.date <= $%d", argIndex))
 		args = append(args, *filters.EndDate)
 		argIndex++
 	}
@@ -896,7 +930,7 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 				args = append(args, p)
 				argIndex++
 			}
-			orParts = append(orParts, "effective_pfc_primary IN ("+strings.Join(placeholders, ", ")+")")
+			orParts = append(orParts, "t.effective_pfc_primary IN ("+strings.Join(placeholders, ", ")+")")
 		}
 		if len(filters.PFCDetaileds) > 0 {
 			placeholders := make([]string, len(filters.PFCDetaileds))
@@ -905,15 +939,11 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 				args = append(args, d)
 				argIndex++
 			}
-			orParts = append(orParts, "effective_pfc_detailed IN ("+strings.Join(placeholders, ", ")+")")
+			orParts = append(orParts, "t.effective_pfc_detailed IN ("+strings.Join(placeholders, ", ")+")")
 		}
 		conditions = append(conditions, "("+strings.Join(orParts, " OR ")+")")
 	}
 
-	// Optional filter: custom_category_ids (multi-value) — matches the effective custom
-	// category. Issue #1203: rolls up children — selecting a parent custom category also
-	// matches transactions assigned to its children (parent_id). Leaf categories match
-	// only themselves, so this is a no-op for non-parent selections.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := make([]string, len(filters.CustomCategoryIDs))
 		for i, id := range filters.CustomCategoryIDs {
@@ -923,36 +953,34 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 		}
 		idList := strings.Join(placeholders, ", ")
 		conditions = append(conditions, fmt.Sprintf(
-			"(category_override_kind = 'custom' AND custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+			"(t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
 			idList, idList,
 		))
 	}
 
-	// Optional filter: search (name OR merchant_name)
 	if filters.Search != nil {
-		searchCondition := fmt.Sprintf("(name ILIKE $%d OR merchant_name ILIKE $%d)", argIndex, argIndex+1)
+		searchCondition := fmt.Sprintf(
+			"(t.name ILIKE $%d OR t.merchant_name ILIKE $%d OR "+effectiveMerchantNameExpr+" ILIKE $%d)",
+			argIndex, argIndex, argIndex)
 		conditions = append(conditions, searchCondition)
 		searchPattern := "%" + *filters.Search + "%"
-		args = append(args, searchPattern, searchPattern) // Add pattern twice for both ILIKE conditions
-		argIndex += 2
+		args = append(args, searchPattern)
+		argIndex++
 	}
 
-	// Optional filter: pending status
 	if filters.Pending != nil {
-		conditions = append(conditions, fmt.Sprintf("pending = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.pending = $%d", argIndex))
 		args = append(args, *filters.Pending)
 		argIndex++
 	}
 
-	// Optional filter: review state (Issue #1203)
 	if filters.Reviewed != nil {
-		conditions = append(conditions, fmt.Sprintf("reviewed = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.reviewed = $%d", argIndex))
 		args = append(args, *filters.Reviewed)
 		argIndex++
 	}
 
-	// Optional filter: category_source (Issue #1210) — OR logic within the enum set
 	if len(filters.CategorySources) > 0 {
 		placeholders := make([]string, len(filters.CategorySources))
 		for i, s := range filters.CategorySources {
@@ -960,48 +988,39 @@ func buildWhereClause(userID string, filters domain.TransactionFilters) (string,
 			args = append(args, s)
 			argIndex++
 		}
-		conditions = append(conditions, "category_source IN ("+strings.Join(placeholders, ", ")+")")
+		conditions = append(conditions, "t.category_source IN ("+strings.Join(placeholders, ", ")+")")
 	}
 
-	// Optional filter: min_amount (Issue #529)
-	// Filters by absolute amount (users see positive amounts in UI)
 	if filters.MinAmount != nil {
-		conditions = append(conditions, fmt.Sprintf("ABS(amount) >= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ABS(t.amount) >= $%d", argIndex))
 		args = append(args, *filters.MinAmount)
 		argIndex++
 	}
 
-	// Optional filter: max_amount (Issue #529)
 	if filters.MaxAmount != nil {
-		conditions = append(conditions, fmt.Sprintf("ABS(amount) <= $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("ABS(t.amount) <= $%d", argIndex))
 		args = append(args, *filters.MaxAmount)
 		argIndex++
 	}
 
-	// Optional filter: amount_type (Issue #529)
-	// PFCv2 sign convention: income = inflow (negative amount), expense = outflow (positive amount)
 	if filters.AmountType != nil {
 		switch *filters.AmountType {
 		case "income":
-			conditions = append(conditions, "amount < 0")
+			conditions = append(conditions, "t.amount < 0")
 		case "expense":
-			conditions = append(conditions, "amount > 0")
+			conditions = append(conditions, "t.amount > 0")
 			// "all" means no filter - handled in handler by not setting AmountType
 		}
 	}
 
-	// Optional filter: user_account_id (Issue #1109)
-	// Filters by stable logical account identity across re-links
 	if filters.UserAccountID != nil {
-		conditions = append(conditions, fmt.Sprintf("user_account_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.user_account_id = $%d", argIndex))
 		args = append(args, *filters.UserAccountID)
 		argIndex++
 	}
 
-	// Optional filter: merchant_id (Issue #1163)
-	// Filters by exact merchant UUID match
 	if filters.MerchantID != nil {
-		conditions = append(conditions, fmt.Sprintf("merchant_id = $%d", argIndex))
+		conditions = append(conditions, fmt.Sprintf("t.merchant_id = $%d", argIndex))
 		args = append(args, *filters.MerchantID)
 		argIndex++
 	}
@@ -1189,6 +1208,90 @@ func (r *transactionRepository) scanTransactions(rows pgx.Rows) ([]domain.Transa
 	}
 
 	return transactions, nil
+}
+
+// transactionScanState holds the intermediate scan state for a single transaction row.
+// It is used by scanTransactionDestSliceWithState + postScanTransactionState to decouple
+// scan-destination construction from post-scan processing (needed when an extra column is
+// appended to the scan destination, e.g. effective_merchant_sort_name in keyset queries).
+type transactionScanState struct {
+	source         string
+	metaStr        *string
+	tagsJSON       []byte
+	tagsSourceJSON []byte
+	categorySource sql.NullString
+}
+
+// scanTransactionDestSliceWithState returns both the scan destination slice and the intermediate
+// scan state for a single transaction row. Call postScanTransactionState after Scan.
+func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Transaction) ([]any, *transactionScanState) {
+	s := &transactionScanState{}
+	dest := []any{
+		&tx.ID,
+		&tx.UserID,
+		&tx.AccountID,
+		&tx.LinkedItemID,
+		&s.source,
+		&tx.ExternalTransactionID,
+		&s.metaStr,
+		&tx.Amount,
+		&tx.Date,
+		&tx.AuthorizedDate,
+		&tx.Name,
+		&tx.MerchantName,
+		&tx.MerchantID,
+		&tx.PFCPrimary,
+		&tx.PFCDetailed,
+		&tx.PFCConfidenceLevel,
+		&tx.PFCCategoryIconURL,
+		&tx.PaymentChannel,
+		&tx.Pending,
+		&tx.UserNotes,
+		&tx.CreatedAt,
+		&tx.UpdatedAt,
+		&s.tagsJSON,
+		&s.tagsSourceJSON,
+		&tx.CategoryOverrideKind,
+		&tx.PFCPrimaryOverride,
+		&tx.PFCDetailedOverride,
+		&tx.CustomCategoryOverrideID,
+		&s.categorySource,
+		&tx.CategoryOverrideDate,
+		&tx.EffectivePFCPrimary,
+		&tx.EffectivePFCDetailed,
+		&tx.EffectiveCategoryName,
+		&tx.Reviewed,
+		&tx.ReviewedAt,
+	}
+	return dest, s
+}
+
+// postScanTransactionState applies post-scan conversions (source, metadata, decryption, JSON, category source).
+func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction, s *transactionScanState) error {
+	tx.Source = domain.TransactionSource(s.source)
+	tx.ExternalMetadata = s.metaStr
+
+	if err := r.decryptTransactionPIIFields(tx); err != nil {
+		return fmt.Errorf("failed to decrypt transaction: %w", err)
+	}
+
+	if s.tagsJSON != nil {
+		if err := json.Unmarshal(s.tagsJSON, &tx.Tags); err != nil {
+			return fmt.Errorf("failed to unmarshal tags: %w", err)
+		}
+	}
+
+	if s.tagsSourceJSON != nil {
+		if err := json.Unmarshal(s.tagsSourceJSON, &tx.TagsSource); err != nil {
+			return fmt.Errorf("failed to unmarshal tags_source: %w", err)
+		}
+	}
+
+	if s.categorySource.Valid {
+		tx.CategorySourceField = domain.CategorySource(s.categorySource.String)
+	}
+
+	return nil
 }
 
 // GetByID retrieves a transaction by its internal ID
@@ -2057,11 +2160,13 @@ func (r *transactionRepository) GetByUserIDKeyset(
 		sortDir = "desc"
 	}
 
-	col, ok := sortColumnMap[sortKey]
+	sortDesc, ok := sortDescriptors[sortKey]
 	if !ok {
-		col = sortColumnMap["date"]
+		sortDesc = sortDescriptors["date"]
 		sortKey = "date"
 	}
+	col := sortDesc.expr
+	needsJoins := sortDesc.needsMerchantJoin || filters.Search != nil
 
 	if cursor != nil {
 		argBase := len(args) + 1
@@ -2069,10 +2174,10 @@ func (r *transactionRepository) GetByUserIDKeyset(
 			args = append(args, cursor.ID.String())
 			if sortDir == "desc" {
 				// DESC NULLS FIRST: cursor in NULL region; include remaining NULLs + all non-NULLs
-				whereClause += fmt.Sprintf(" AND ((%s IS NULL AND id > $%d) OR %s IS NOT NULL)", col, argBase, col)
+				whereClause += fmt.Sprintf(" AND ((%s IS NULL AND t.id > $%d) OR %s IS NOT NULL)", col, argBase, col)
 			} else {
 				// ASC NULLS LAST: cursor in NULL region at end; only remaining NULLs
-				whereClause += fmt.Sprintf(" AND (%s IS NULL AND id > $%d)", col, argBase)
+				whereClause += fmt.Sprintf(" AND (%s IS NULL AND t.id > $%d)", col, argBase)
 			}
 		} else {
 			cmpOp := "<"
@@ -2083,23 +2188,29 @@ func (r *transactionRepository) GetByUserIDKeyset(
 
 			if sortKey == "date" {
 				whereClause += fmt.Sprintf(
-					" AND ((%s::date %s $%d::date) OR (%s::date = $%d::date AND id > $%d))",
+					" AND ((%s::date %s $%d::date) OR (%s::date = $%d::date AND t.id > $%d))",
 					col, cmpOp, argBase, col, argBase, argBase+1,
 				)
 			} else if sortKey == "amount" {
 				whereClause += fmt.Sprintf(
-					" AND ((%s %s $%d::numeric) OR (%s = $%d::numeric AND id > $%d))",
+					" AND ((%s %s $%d::numeric) OR (%s = $%d::numeric AND t.id > $%d))",
 					col, cmpOp, argBase, col, argBase, argBase+1,
 				)
 			} else if sortKey == "category" && sortDir == "asc" {
 				// category can be NULL; ASC NULLS LAST — include NULL rows that come after non-NULLs
 				whereClause += fmt.Sprintf(
-					" AND ((%s %s $%d) OR (%s = $%d AND id > $%d) OR %s IS NULL)",
+					" AND ((%s %s $%d) OR (%s = $%d AND t.id > $%d) OR %s IS NULL)",
 					col, cmpOp, argBase, col, argBase, argBase+1, col,
+				)
+			} else if sortKey == "merchant" {
+				// effectiveMerchantNameExpr is never NULL; no NULL branch needed.
+				whereClause += fmt.Sprintf(
+					" AND ((%s %s $%d) OR (%s = $%d AND t.id > $%d))",
+					col, cmpOp, argBase, col, argBase, argBase+1,
 				)
 			} else {
 				whereClause += fmt.Sprintf(
-					" AND ((%s %s $%d) OR (%s = $%d AND id > $%d))",
+					" AND ((%s %s $%d) OR (%s = $%d AND t.id > $%d))",
 					col, cmpOp, argBase, col, argBase, argBase+1,
 				)
 			}
@@ -2110,18 +2221,31 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	if sortDir == "asc" {
 		dir = "ASC"
 	}
-	orderBy := fmt.Sprintf("ORDER BY %s %s, id ASC", col, dir)
+	orderBy := fmt.Sprintf("ORDER BY %s %s, t.id ASC", col, dir)
+
+	joinClause := ""
+	if needsJoins {
+		joinClause = merchantSortJoins
+	}
+
+	// For merchant sort, select an extra column to capture the EFF value for cursor building.
+	selectExpr := transactionSelectExprT
+	effMerchantExtra := ""
+	if sortKey == "merchant" {
+		effMerchantExtra = ", " + effectiveMerchantNameExpr + " AS effective_merchant_sort_name"
+	}
 
 	args = append(args, limit+1)
 	limitPlaceholder := len(args)
 
 	query := fmt.Sprintf(`
-		SELECT %s
-		FROM transactions
+		SELECT %s%s
+		FROM transactions t
+		%s
 		%s
 		%s
 		LIMIT $%d
-	`, transactionSelectExpr, whereClause, orderBy, limitPlaceholder)
+	`, selectExpr, effMerchantExtra, joinClause, whereClause, orderBy, limitPlaceholder)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -2129,17 +2253,45 @@ func (r *transactionRepository) GetByUserIDKeyset(
 	}
 	defer rows.Close()
 
-	txs, err := r.scanTransactions(rows)
-	if err != nil {
-		return nil, nil, err
+	// Scan rows; for merchant sort we also capture the EFF sort value.
+	var txs []domain.Transaction
+	var effMerchantNames []*string
+	if sortKey == "merchant" {
+		for rows.Next() {
+			var tx domain.Transaction
+			var effMerchantName *string
+			dest, state := r.scanTransactionDestSliceWithState(&tx)
+			dest = append(dest, &effMerchantName)
+			if err := rows.Scan(dest...); err != nil {
+				return nil, nil, fmt.Errorf("failed to scan transaction: %w", err)
+			}
+			if err := r.postScanTransactionState(&tx, state); err != nil {
+				return nil, nil, err
+			}
+			txs = append(txs, tx)
+			effMerchantNames = append(effMerchantNames, effMerchantName)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, nil, fmt.Errorf("error iterating transactions (keyset): %w", err)
+		}
+	} else {
+		txs, err = r.scanTransactions(rows)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
+
 	if err := r.enrichEffectiveMerchantNames(ctx, userID, txs); err != nil {
 		return nil, nil, err
 	}
 
 	if len(txs) == limit+1 {
 		last := txs[limit-1]
-		nextCursor, buildErr := buildKeysetCursor(last, sortKey, sortDir)
+		var effMN *string
+		if sortKey == "merchant" && len(effMerchantNames) > limit-1 {
+			effMN = effMerchantNames[limit-1]
+		}
+		nextCursor, buildErr := buildKeysetCursor(last, sortKey, sortDir, effMN)
 		if buildErr != nil {
 			return nil, nil, fmt.Errorf("failed to build next cursor: %w", buildErr)
 		}
@@ -2150,7 +2302,8 @@ func (r *transactionRepository) GetByUserIDKeyset(
 }
 
 // buildKeysetCursor constructs a TransactionCursor from a transaction row.
-func buildKeysetCursor(tx domain.Transaction, sortKey, sortDir string) (*domain.TransactionCursor, error) {
+// effMerchantName is the scanned effective merchant sort name (only used for sortKey=="merchant").
+func buildKeysetCursor(tx domain.Transaction, sortKey, sortDir string, effMerchantName *string) (*domain.TransactionCursor, error) {
 	txID, err := uuid.Parse(tx.ID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid transaction id %q: %w", tx.ID, err)
@@ -2174,11 +2327,12 @@ func buildKeysetCursor(tx domain.Transaction, sortKey, sortDir string) (*domain.
 		utcDate := effDate.UTC()
 		cursor.SVT = &utcDate
 	case "merchant":
-		sv := tx.MerchantName
-		if sv == nil || *sv == "" {
-			cursor.SV = &tx.Name
+		// Use the scanned EFF value when available; fall back to tx.Name.
+		if effMerchantName != nil {
+			cursor.SV = effMerchantName
 		} else {
-			cursor.SV = sv
+			sv := tx.Name
+			cursor.SV = &sv
 		}
 	case "amount":
 		sv := fmt.Sprintf("%g", tx.Amount)
@@ -2369,14 +2523,17 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	}
 
 	// Search — same pattern $N for both branches.
-	// Banking: name OR merchant_name; Investment: name OR ticker_symbol OR security_name.
+	// Banking: name OR merchant_name OR effective merchant name (via merchant JOINs);
+	// Investment: name OR ticker_symbol OR security_name.
 	bankingSearchFilter := ""
 	investSearchFilter := ""
+	bankingMerchantJoins := "" // conditionally populated when search active
 	if filters.Search != nil {
 		pattern := "%" + *filters.Search + "%"
+		bankingMerchantJoins = merchantSortJoins
 		bankingSearchFilter = fmt.Sprintf(
-			" AND (t.name ILIKE $%d OR t.merchant_name ILIKE $%d)",
-			argIdx, argIdx)
+			" AND (t.name ILIKE $%d OR t.merchant_name ILIKE $%d OR "+effectiveMerchantNameExpr+" ILIKE $%d)",
+			argIdx, argIdx, argIdx)
 		investSearchFilter = fmt.Sprintf(
 			" AND (it.name ILIKE $%d OR sec.ticker_symbol ILIKE $%d OR sec.name ILIKE $%d)",
 			argIdx, argIdx, argIdx)
@@ -2521,7 +2678,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		idList := strings.Join(phs, ", ")
 		bankingExtraFilter += fmt.Sprintf(
 			" AND (t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-				"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s))))",
+				"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s))))",
 			idList, idList,
 		)
 		investBankingOnlyFilter = " AND FALSE"
@@ -2656,7 +2813,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::float8,
 			NULL::float8
 		FROM transactions t
-		WHERE t.user_id = $1
+		%s
+		WHERE t.user_id = $1::uuid
 		  -- Chain-expansion active-account filter: include pre-relink rows whose
 		  -- account_id is replaced, as long as an active account shares the same
 		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
@@ -2664,7 +2822,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- accounts share a user_account_id (Issue #1304).
 		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
 		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on t.user_id = $1.  Parity with the investment
+		  -- query is already gated on t.user_id = $1::uuid.  Parity with the investment
 		  -- branch is intentional; diverging here would reintroduce asymmetry.
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = t.account_id AND status = 'active') -- NULL account_id always false here; falls through to chain leg below
@@ -2724,7 +2882,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			it.fees
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
-		WHERE it.user_id = $1
+		WHERE it.user_id = $1::uuid
 		  -- Chain-expansion active-account filter: include pre-relink rows whose
 		  -- account_id is replaced, as long as an active account shares the same
 		  -- user_account_id (the stable chain key set at insert time — Issue #1109).
@@ -2732,7 +2890,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		  -- accounts share a user_account_id (Issue #1304).
 		  -- Note: chain_a.user_id is intentionally omitted — user-ownership is
 		  -- transitive via the user_accounts FK (migration 000033), and the outer
-		  -- query is already gated on it.user_id = $1.  Parity with the banking
+		  -- query is already gated on it.user_id = $1::uuid. Parity with the banking
 		  -- branch is intentional; diverging here would reintroduce asymmetry.
 		  AND (
 		      EXISTS (SELECT 1 FROM accounts WHERE id = it.account_id AND status = 'active')
@@ -2750,6 +2908,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 		ORDER BY sort_date DESC, source_disc ASC, id ASC
 		LIMIT $%d
 	`,
+		bankingMerchantJoins,
 		bankingAcctFilter, bankingDateFilter, bankingSearchFilter, bankingExtraFilter, bankingCursorFilter, bankingActivityFilter,
 		investAcctFilter, investDateFilter, investSearchFilter, investActivityFilter, investCursorFilter, investBankingOnlyFilter,
 		limitPH,

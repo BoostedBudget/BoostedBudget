@@ -111,6 +111,8 @@ func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context
 	return m.categoryBreakdownForMerchantResponse, m.categoryBreakdownForMerchantErr
 }
 
+// Note: signature accepts merchantID (UUID) instead of merchantName per #1348 G2b
+
 func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
 	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
 }
@@ -1009,9 +1011,10 @@ func TestGetLargestTransactionsForPeriod_ServiceError(t *testing.T) {
 
 // TestGetCategoryBreakdownForMerchant_Success tests successful merchant category breakdown.
 func TestGetCategoryBreakdownForMerchant_Success(t *testing.T) {
+	merchantID := "550e8400-e29b-41d4-a716-446655440000"
 	mockService := &mockAnalyticsService{
 		categoryBreakdownForMerchantResponse: &domain.CategoryBreakdownForMerchantResponse{
-			MerchantName: "Amazon",
+			MerchantName: merchantID,
 			Categories: []domain.CategoryBreakdownItem{
 				{Category: "SHOPPING", PFCPrimaryDisplay: "Shopping", Total: 400.0, Percentage: 80.0, TransactionCount: 5},
 			},
@@ -1026,14 +1029,14 @@ func TestGetCategoryBreakdownForMerchant_Success(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "2024-01-01",
 		EndDate:            "2024-03-31",
-		MerchantName:       "Amazon",
+		MerchantID:         merchantID,
 	}
 
 	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
-	assert.Equal(t, "Amazon", output.Body.MerchantName)
+	assert.Equal(t, merchantID, output.Body.MerchantName)
 	assert.Len(t, output.Body.Categories, 1)
 }
 
@@ -1045,7 +1048,7 @@ func TestGetCategoryBreakdownForMerchant_EndBeforeStart(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "2024-03-31",
 		EndDate:            "2024-01-01",
-		MerchantName:       "Amazon",
+		MerchantID:         "550e8400-e29b-41d4-a716-446655440000",
 	}
 
 	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
@@ -1063,7 +1066,7 @@ func TestGetCategoryBreakdownForMerchant_ServiceError(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "2024-01-01",
 		EndDate:            "2024-03-31",
-		MerchantName:       "Amazon",
+		MerchantID:         "550e8400-e29b-41d4-a716-446655440000",
 	}
 
 	output, err := handler.GetCategoryBreakdownForMerchant(context.Background(), input)
