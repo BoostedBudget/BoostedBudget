@@ -256,9 +256,9 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
                     WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending),
                    0
                )                                     AS total_spend,
-               os.merchant_id IS NOT NULL          AS has_override,
-               os.is_merged                        AS is_merged,
-               os.merged_into_merchant_id          AS merged_into_merchant_id
+               os.merchant_id IS NOT NULL            AS has_override,
+               COALESCE(os.is_merged, false)         AS is_merged,
+               os.merged_into_merchant_id            AS merged_into_merchant_id
         FROM   grouped g
         JOIN   merchants m ON m.id = g.merchant_id
         LEFT   JOIN override_stats os ON os.merchant_id = g.merchant_id
