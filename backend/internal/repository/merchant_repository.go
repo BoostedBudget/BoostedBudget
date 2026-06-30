@@ -158,12 +158,12 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
         FROM   transactions t
         JOIN   merchants m  ON m.id = t.merchant_id
         LEFT   JOIN merchant_name_overrides o
-               ON o.merchant_id = t.merchant_id AND o.user_id = $1
+               ON o.merchant_id = t.merchant_id AND o.user_id = $1::text
         LEFT   JOIN merchants m2
                ON m2.id = COALESCE(o.merged_into_merchant_id, t.merchant_id)
         LEFT   JOIN merchant_name_overrides mno_t
-               ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1
-        WHERE  t.user_id = $1
+               ON mno_t.merchant_id = COALESCE(o.merged_into_merchant_id, t.merchant_id) AND mno_t.user_id = $1::text
+        WHERE  t.user_id = $1::uuid
           AND  t.merchant_id IS NOT NULL
           AND  t.pending = false
         GROUP  BY COALESCE(o.merged_into_merchant_id, t.merchant_id), m2.id
@@ -211,13 +211,13 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
             SELECT DISTINCT t.merchant_id, m.normalized_name, m.name
             FROM   transactions t
             JOIN   merchants m ON m.id = t.merchant_id
-            WHERE  t.user_id = $1
+            WHERE  t.user_id = $1::uuid
               AND  t.merchant_id IS NOT NULL
               AND  t.pending = false
               AND  m.normalized_name IS NOT NULL
               AND  NOT EXISTS (
                        SELECT 1 FROM merchant_name_overrides o
-                       WHERE  o.user_id = $1
+                       WHERE  o.user_id = $1::text
                          AND  o.merchant_id = t.merchant_id
                          AND  o.merged_into_merchant_id IS NOT NULL
                    )
@@ -242,24 +242,24 @@ func (r *MerchantRepository) GetDuplicateSuggestions(ctx context.Context, userID
                COALESCE(m.normalized_name, m.name) AS normalized_name,
                COALESCE(
                    (SELECT display_name FROM merchant_name_overrides
-                    WHERE user_id = $1 AND merchant_id = g.merchant_id AND display_name IS NOT NULL),
+                    WHERE user_id = $1::text AND merchant_id = g.merchant_id AND display_name IS NOT NULL),
                    m.normalized_name,
                    m.name
                )                                     AS effective_display_name,
                (SELECT COUNT(*) FROM transactions t2
-                WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1 AND NOT t2.pending) AS transaction_count,
+                WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending) AS transaction_count,
                COALESCE(
                    (SELECT SUM(ABS(t2.amount)) FROM transactions t2
-                    WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1 AND NOT t2.pending),
+                    WHERE t2.merchant_id = g.merchant_id AND t2.user_id = $1::uuid AND NOT t2.pending),
                    0
                )                                     AS total_spend,
                EXISTS (SELECT 1 FROM merchant_name_overrides o
-                       WHERE o.user_id = $1 AND o.merchant_id = g.merchant_id) AS has_override,
+                       WHERE o.user_id = $1::text AND o.merchant_id = g.merchant_id) AS has_override,
                EXISTS (SELECT 1 FROM merchant_name_overrides o
-                       WHERE o.user_id = $1 AND o.merchant_id = g.merchant_id
+                       WHERE o.user_id = $1::text AND o.merchant_id = g.merchant_id
                          AND o.merged_into_merchant_id IS NOT NULL)            AS is_merged,
                (SELECT merged_into_merchant_id::text FROM merchant_name_overrides
-                WHERE user_id = $1 AND merchant_id = g.merchant_id)           AS merged_into_merchant_id
+                WHERE user_id = $1::text AND merchant_id = g.merchant_id)     AS merged_into_merchant_id
         FROM   grouped g
         JOIN   merchants m ON m.id = g.merchant_id
         ORDER  BY g.group_key, g.merchant_id`

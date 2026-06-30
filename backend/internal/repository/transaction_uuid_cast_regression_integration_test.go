@@ -162,7 +162,7 @@ func TestUuidCastRegression_Transactions_SearchWithCustomCategory(t *testing.T) 
 // TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow verifies
 // GetByUserIDKeysetUnified with Search+investment rows succeeds despite
 // banking branch having mno.user_id=$1::text and investment branch having
-// it.user_id=$1 (bare UUID) (transaction_repository.go:2885).
+// investment_transactions.user_id=$1::uuid (transaction_repository.go:2885).
 func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -215,7 +215,7 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 		Search:                    ptrStr("test"), // activates merchantSortJoins on banking branch
 		SortBy:                    "date",         // required by GetByUserIDKeysetUnified
 	}
-	// Banking branch has mno.user_id=$1::text; investment branch has it.user_id=$1 (bare UUID).
+	// Banking branch has mno.user_id=$1::text; investment branch has it.user_id=$1::uuid.
 	_, _, err = repo.GetByUserIDKeysetUnified(ctx, userStr, filters, nil, 10)
 	require.NoError(t, err)
 }
@@ -223,7 +223,7 @@ func TestUuidCastRegression_UnifiedFeed_SearchWithInvestmentRow(t *testing.T) {
 // TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory verifies
 // GetByUserIDKeysetUnified with Search+CustomCategoryIDs succeeds despite
 // banking branch having both merchantSortJoins ($1::text) and custom_categories
-// subquery ($1 bare UUID) (transaction_repository.go:2681).
+// subquery ($1::uuid) (transaction_repository.go:2681).
 func TestUuidCastRegression_UnifiedFeed_SearchWithCustomCategory(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()

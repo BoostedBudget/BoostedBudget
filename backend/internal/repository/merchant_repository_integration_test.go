@@ -61,12 +61,15 @@ func seedMerchantFixture(ctx context.Context, t *testing.T, db DB, prefix string
 	require.NoError(t, err, "seed merchant")
 
 	txID := uuid.New()
+	extID := "plaid-tx-" + txID.String()
 	_, err = db.Exec(ctx, `
 		INSERT INTO transactions (
-			id, user_id, account_id, merchant_id, plaid_transaction_id,
-			merchant_name, amount, date, pending
-		) VALUES ($1, $2, $3, $4, $5, $6, -5.50, CURRENT_DATE, false)
-	`, txID, userID, accountID, merchantID, "plaid-tx-"+txID.String(), "SQ*Coffee Shop")
+			id, user_id, account_id, linked_item_id, merchant_id,
+			source, external_transaction_id, external_transaction_id_blind_idx,
+			merchant_name, name, amount, date, pending,
+			pfc_primary, category_source, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'plaid', $6, $7, $8, $8, -5.50, CURRENT_DATE, false, 'FOOD_AND_DRINK', 'plaid', NOW(), NOW())
+	`, txID, userID, accountID, linkedItemID, merchantID, extID, extID, "SQ*Coffee Shop")
 	require.NoError(t, err, "seed transaction")
 
 	return userID, merchantID
@@ -223,11 +226,15 @@ func TestGetDuplicateSuggestions_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	dupTxID := uuid.New()
+	dupExtID := "plaid-tx-" + dupTxID.String()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO transactions (id, user_id, account_id, merchant_id, plaid_transaction_id,
-			merchant_name, amount, date, pending)
-		VALUES ($1, $2, $3, $4, $5, 'Coffee Shoppe', -4.75, CURRENT_DATE, false)
-	`, dupTxID, userID, accountID, dupMerchantID, "plaid-tx2-"+dupTxID.String())
+		INSERT INTO transactions (
+			id, user_id, account_id, linked_item_id, merchant_id,
+			source, external_transaction_id, external_transaction_id_blind_idx,
+			merchant_name, name, amount, date, pending,
+			pfc_primary, category_source, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'plaid', $6, $7, 'Coffee Shoppe', 'Coffee Shoppe', -4.75, CURRENT_DATE, false, 'FOOD_AND_DRINK', 'plaid', NOW(), NOW())
+	`, dupTxID, userID, accountID, linkedItemID, dupMerchantID, dupExtID, dupExtID)
 	require.NoError(t, err)
 
 	// Use tx-scoped repo.
@@ -809,11 +816,15 @@ func TestGetDuplicateSuggestions_ExcludesMergedMerchants_Integration(t *testing.
 	require.NoError(t, err)
 
 	txID := uuid.New()
+	extIDG23b := "plaid-tx-g23b-" + txID.String()
 	_, err = tx.Exec(ctx, `
-		INSERT INTO transactions (id, user_id, account_id, merchant_id, plaid_transaction_id,
-			merchant_name, amount, date, pending)
-		VALUES ($1, $2, $3, $4, $5, 'Coffee Shope', -3.50, CURRENT_DATE, false)
-	`, txID, userID, accountID, merchantB, "plaid-tx-g23b-"+txID.String())
+		INSERT INTO transactions (
+			id, user_id, account_id, linked_item_id, merchant_id,
+			source, external_transaction_id, external_transaction_id_blind_idx,
+			merchant_name, name, amount, date, pending,
+			pfc_primary, category_source, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'plaid', $6, $7, 'Coffee Shope', 'Coffee Shope', -3.50, CURRENT_DATE, false, 'FOOD_AND_DRINK', 'plaid', NOW(), NOW())
+	`, txID, userID, accountID, linkedItemID, merchantB, extIDG23b, extIDG23b)
 	require.NoError(t, err)
 
 	txRepo := NewMerchantRepository(tx)
@@ -896,11 +907,15 @@ func seedTwoMerchants(ctx context.Context, t *testing.T, db DB, prefix string) (
 		require.NoError(t, err, "seed merchant")
 
 		txID := uuid.New()
+		extID := "plaid-tx-" + txID.String()
 		_, err = db.Exec(ctx, `
-			INSERT INTO transactions (id, user_id, account_id, merchant_id, plaid_transaction_id,
-				merchant_name, amount, date, pending)
-			VALUES ($1, $2, $3, $4, $5, $6, -10.00, CURRENT_DATE, false)
-		`, txID, userID, accountID, mID, "plaid-tx-"+txID.String(), name)
+			INSERT INTO transactions (
+				id, user_id, account_id, linked_item_id, merchant_id,
+				source, external_transaction_id, external_transaction_id_blind_idx,
+				merchant_name, name, amount, date, pending,
+				pfc_primary, category_source, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, 'plaid', $6, $7, $8, $8, -10.00, CURRENT_DATE, false, 'FOOD_AND_DRINK', 'plaid', NOW(), NOW())
+		`, txID, userID, accountID, linkedItemID, mID, extID, extID, name)
 		require.NoError(t, err, "seed transaction")
 	}
 	return userID, merchantA, merchantB
