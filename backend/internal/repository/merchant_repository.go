@@ -154,7 +154,7 @@ func (r *MerchantRepository) ListMerchants(ctx context.Context, userID string) (
             MODE() WITHIN GROUP (ORDER BY t.pfc_primary)                    AS dominant_category,
             bool_or(o.id IS NOT NULL)                                       AS has_override,
             bool_or(o.merged_into_merchant_id IS NOT NULL)                  AS is_merged,
-            MAX(o.merged_into_merchant_id)::text                            AS merged_into_merchant_id
+            MAX(o.merged_into_merchant_id::text)                            AS merged_into_merchant_id
         FROM   transactions t
         JOIN   merchants m  ON m.id = t.merchant_id
         LEFT   JOIN merchant_name_overrides o
