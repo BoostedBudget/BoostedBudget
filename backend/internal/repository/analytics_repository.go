@@ -61,8 +61,9 @@ type AnalyticsRepository interface {
 	GetLargestTransactionsForPeriod(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 
 	// GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+	// Filters by merchant_id (effective canonical) to include merged source transactions (#1348 G2b).
 	// Single DB round-trip (Issue #1215 PR2).
-	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
+	GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
 
 	// GetIncomeSourceBreakdown returns income (amount < 0) totals grouped by category.
 	// Single DB round-trip (Issue #1215 PR2).
@@ -88,10 +89,6 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 	return &analyticsRepository{db: db}
 }
 
-// Date bucketing convention: all analytics queries bucket transactions by the t.date column
-// without timezone conversion. t.date is stored as a PostgreSQL DATE (UTC calendar day).
-// Callers pass UTC-normalized time.Time values from dateutil.ParseDateRange.
-// Tests pin time.UTC throughout for consistency.
 
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
 // Income: amount < 0 (inflow/credit)
@@ -101,11 +98,9 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
-	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
 
-	// Base query - joins with accounts to filter by account type
 	query := `
 		SELECT
 			COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0) as income,
@@ -130,8 +125,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 		query += fmt.Sprintf(" AND a.type IN (%s)", strings.Join(placeholders, ", "))
 	}
 
-	// Exclude transfers using effective PFC primary (respects category overrides).
-	// A user who overrides TRANSFER_IN → FOOD_AND_DRINK expresses intent that it is spending.
 	if !filters.IncludeTransfers {
 		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
@@ -156,7 +149,6 @@ func (r *analyticsRepository) GetCashFlowAggregation(ctx context.Context, userID
 func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID string, filters domain.CashFlowFilters) ([]domain.CashFlowGroupedData, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
-	// Determine the DATE_TRUNC interval based on grouping
 	var truncInterval string
 	switch filters.Grouping {
 	case "daily":
@@ -169,11 +161,9 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		truncInterval = "day"
 	}
 
-	// Build dynamic query based on filters
 	args := []interface{}{userID, filters.StartDate, filters.EndDate}
 	argIndex := 4
 
-	// Base query with period grouping
 	query := fmt.Sprintf(`
 		SELECT
 			DATE_TRUNC('%s', t.date)::date as period_start,
@@ -188,7 +178,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		  AND t.pending = false
 	`, truncInterval)
 
-	// Optional filter: account types
 	if len(filters.AccountTypes) > 0 {
 		placeholders := buildPlaceholders(len(filters.AccountTypes), argIndex)
 		for _, at := range filters.AccountTypes {
@@ -202,7 +191,6 @@ func (r *analyticsRepository) GetCashFlowGrouped(ctx context.Context, userID str
 		query += ` AND ` + effectiveTransferExpr() + ` NOT LIKE 'TRANSFER%'`
 	}
 
-	// Group and order
 	query += fmt.Sprintf(`
 		GROUP BY DATE_TRUNC('%s', t.date)
 		ORDER BY period_start ASC
@@ -245,14 +233,12 @@ func fillMissingPeriods(data []domain.CashFlowGroupedData, startDate, endDate ti
 		return generateEmptyPeriods(startDate, endDate, grouping)
 	}
 
-	// Create a map of existing periods
 	periodMap := make(map[string]domain.CashFlowGroupedData)
 	for _, d := range data {
 		key := d.PeriodStart.Format("2006-01-02")
 		periodMap[key] = d
 	}
 
-	// Generate all expected periods
 	var result []domain.CashFlowGroupedData
 	current := truncateDate(startDate, grouping)
 	end := endDate
@@ -384,7 +370,7 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 	}
 
 	// Issue #1203: scope to specific custom categories. With RollUpChildren a parent
-	// custom id also matches its children (parent_id). user_id is $1 in spending queries.
+	// custom id also matches its children (parent_id). user_id cast to $1::uuid in subquery.
 	if len(filters.CustomCategoryIDs) > 0 {
 		placeholders := buildPlaceholders(len(filters.CustomCategoryIDs), argIndex)
 		for _, id := range filters.CustomCategoryIDs {
@@ -395,7 +381,7 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 		if filters.RollUpChildren {
 			clause += fmt.Sprintf(
 				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
-					"SELECT id FROM custom_categories WHERE user_id = $1 AND (id::text IN (%s) OR parent_id::text IN (%s)))",
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND (id::text IN (%s) OR parent_id::text IN (%s)))",
 				idList, idList,
 			)
 		} else {
@@ -412,7 +398,6 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 // GetSpendingByCategory returns expense totals grouped by effective primary category.
 // When filters.Category is non-empty, returns the detailed subcategory breakdown.
 func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) ([]domain.SpendingByCategory, error) {
-	// Canary counter: the JOIN uses a.status = 'active', filtering replaced accounts (Issue #1109).
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 	isDrillDown := filters.Category != ""
 	catExpr := effectiveCategoryExpr(isDrillDown)
@@ -469,8 +454,10 @@ func (r *analyticsRepository) GetSpendingByCategory(ctx context.Context, userID 
 	return results, nil
 }
 
-// GetSpendingByMerchant returns expense totals grouped by merchant name, ordered by total descending.
-// Null merchant names are coalesced to "Unknown".
+// GetSpendingByMerchant returns expense totals grouped by effective merchant, ordered by total descending.
+// Merchants renamed or merged by the user are grouped under their canonical (target) display name.
+// Groups by a synthetic key: 'merchant:<id>', 'raw:<name>', or 'unknown' — so renamed/merged variants
+// collapse into one row. merchant_id is NULL for unlinked/unknown groups (preserves "not clickable" frontend behavior).
 func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.SpendingByMerchant, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
@@ -480,25 +467,31 @@ func (r *analyticsRepository) GetSpendingByMerchant(ctx context.Context, userID 
 	args = append(args, limit)
 	limitPlaceholder := fmt.Sprintf("$%d", argIndex)
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT
-			COALESCE(t.merchant_name, 'Unknown') AS merchant_name,
-			MAX(m.id)                             AS merchant_id,
-			COALESCE(SUM(ABS(t.amount)), 0)       AS total,
-			COUNT(*)                              AS transaction_count
+			MAX(COALESCE(mno_t.display_name, NULLIF(m2.normalized_name, ''), m2.name, NULLIF(t.merchant_name, ''), 'Unknown')) AS merchant_name,
+			MAX(COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text)                                                    AS merchant_id,
+			COALESCE(SUM(ABS(t.amount)), 0)                                                                                    AS total,
+			COUNT(*)                                                                                                            AS transaction_count
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
-		LEFT JOIN merchants m ON t.merchant_id = m.id
-		WHERE t.user_id = $1
+		` + merchantSortJoins + `
+		WHERE t.user_id = $1::uuid
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
-		%s
-		GROUP BY COALESCE(t.merchant_name, 'Unknown')
+		` + extraClause + `
+		GROUP BY
+		  CASE
+		    WHEN t.merchant_id IS NOT NULL
+		      THEN 'merchant:' || COALESCE(mno.merged_into_merchant_id, t.merchant_id)::text
+		    WHEN NULLIF(t.merchant_name, '') IS NOT NULL
+		      THEN 'raw:' || t.merchant_name
+		    ELSE 'unknown'
+		  END
 		ORDER BY total DESC
-		LIMIT %s
-	`, extraClause, limitPlaceholder)
+		LIMIT ` + limitPlaceholder
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -881,28 +874,30 @@ func (r *analyticsRepository) GetLargestTransactionsForPeriod(ctx context.Contex
 }
 
 // GetCategoryBreakdownForMerchant returns expense totals grouped by category for a specific merchant.
+// Filters by merchant_id (effective canonical via merge chain) so merged source transactions are included (#1348 G2b).
 // Single DB round-trip (Issue #1215 PR2).
-func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantName string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
+func (r *analyticsRepository) GetCategoryBreakdownForMerchant(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("analytics").Inc()
 
 	catExpr := effectiveCategoryExpr(false)
-	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantName}
+	args := []interface{}{userID, filters.StartDate, filters.EndDate, merchantID}
 	filterClause, args, _ := buildSpendingFilter(filters, args)
 
 	query := fmt.Sprintf(`
 		SELECT (%s), SUM(t.amount), COUNT(*)
 		FROM transactions t
 		LEFT JOIN accounts a ON t.account_id = a.id
-		WHERE t.user_id = $1
+		%s
+		WHERE t.user_id = $1::uuid
 		  AND t.date >= $2
 		  AND t.date <= $3
 		  AND t.amount > 0
 		  AND t.pending = false
-		  AND COALESCE(t.merchant_name, '') = $4
+		  AND %s = $4::uuid
 		  %s
 		GROUP BY (%s)
 		ORDER BY SUM(t.amount) DESC
-	`, catExpr, filterClause, catExpr)
+	`, catExpr, merchantSortJoins, effectiveMerchantIdExpr, filterClause, catExpr)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {

@@ -1417,6 +1417,9 @@ func main() {
 		// Register Huma merchant routes (Issue #957: Merchant name handling)
 		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
 		merchantService := services.NewMerchantService(merchantRepo, merchantOverrideRepo)
+		if phClient != nil {
+			merchantService.SetAnalytics(phClient)
+		}
 		humaMerchantHandler := operations.NewMerchantHandler(merchantService)
 		operations.RegisterMerchantRoutes(humaAPI, humaMerchantHandler)
 		appLogger.Info("Huma merchant routes registered")

@@ -463,8 +463,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			false, nil,
 		)
 
-	// Expect SELECT query with only user_id filter
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+	// Expect SELECT query with only user_id filter (FROM transactions t with t. prefix)
+	mock.ExpectQuery("SELECT (.+) FROM transactions t WHERE t.user_id").
 		WithArgs(userID, limit, offset).
 		WillReturnRows(rows)
 
@@ -514,8 +514,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			false, nil,
 		)
 
-	// Expect SELECT query with date range filter
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id(.+)AND date >= (.+)AND date <= ").
+	// Expect SELECT query with date range filter (FROM transactions t, t.-qualified columns)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND t.date >= (.+)AND t.date <= `).
 		WithArgs(userID, startDate, endDate, limit, offset).
 		WillReturnRows(rows)
 
@@ -563,8 +563,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			false, nil,
 		)
 
-	// Chain-expanded WHERE clause (account_id appears twice for subquery)
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id`).
+	// Chain-expanded WHERE clause (account_id appears twice for subquery; t. prefix on cols)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.user_account_id`).
 		WithArgs(userID, accountID, accountID, limit, offset).
 		WillReturnRows(rows)
 
@@ -613,8 +613,8 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			false, nil,
 		)
 
-	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback)
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id = \(SELECT user_account_id FROM accounts WHERE id = \$\d+`).
+	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback; t. prefix)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.user_account_id = \(SELECT user_account_id FROM accounts WHERE id = \$\d+`).
 		WithArgs(userID, activeAccountID, activeAccountID, limit, offset).
 		WillReturnRows(rows)
 
@@ -662,8 +662,8 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			false, nil,
 		)
 
-	// Chain-expanded WHERE with IN subquery (args appear twice)
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id IN \(SELECT user_account_id FROM accounts WHERE id IN`).
+	// Chain-expanded WHERE with IN subquery (args appear twice; t. prefix)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.user_account_id IN \(SELECT user_account_id FROM accounts WHERE id IN`).
 		WithArgs(userID, activeAccountID1, activeAccountID2, activeAccountID1, activeAccountID2, limit, offset).
 		WillReturnRows(rows)
 
@@ -711,10 +711,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			false, nil,
 		)
 
-	// Expect SELECT query with ILIKE search (case-insensitive)
-	// Note: Search pattern added twice for both name and merchant_name ILIKE conditions
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id(.+)AND \\(name ILIKE (.+)OR merchant_name ILIKE").
-		WithArgs(userID, "%"+searchQuery+"%", "%"+searchQuery+"%", limit, offset).
+	// Expect SELECT query with ILIKE search (3 ILIKE conditions, single pattern arg via JOINs)
+	// Search now includes effectiveMerchantNameExpr, requiring merchantSortJoins and one $N arg.
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t.+LEFT JOIN merchant_name_overrides.+WHERE t.user_id(.+)AND \(t.name ILIKE`).
+		WithArgs(userID, "%"+searchQuery+"%", limit, offset).
 		WillReturnRows(rows)
 
 	transactions, err := repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
@@ -759,7 +759,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			false, nil,
 		)
 
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.effective_pfc_primary IN`).
 		WithArgs(userID, pgxmock.AnyArg(), limit, offset).
 		WillReturnRows(rows)
 
@@ -806,8 +806,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			false, nil,
 		)
 
-	// Expect SELECT query with pending filter
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id(.+)AND pending").
+	// Expect SELECT query with pending filter (t. prefix)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND t.pending`).
 		WithArgs(userID, pendingOnly, limit, offset).
 		WillReturnRows(rows)
 
@@ -860,8 +860,8 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			false, nil,
 		)
 
-	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice.
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND \(user_account_id(.+)AND date >=(.+)AND pending`).
+	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice. (t. prefix)
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.user_account_id(.+)AND t.date >=(.+)AND t.pending`).
 		WithArgs(userID, accountID, accountID, startDate, pendingOnly, limit, offset).
 		WillReturnRows(rows)
 
@@ -891,7 +891,7 @@ func TestTransactionRepository_CountByUserID_NoFilters(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"count"}).AddRow(42)
 
 	// Expect COUNT query
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM transactions WHERE user_id").
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM transactions t WHERE t\.user_id`).
 		WithArgs(userID).
 		WillReturnRows(rows)
 
@@ -924,7 +924,7 @@ func TestTransactionRepository_CountByUserID_WithFilters(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"count"}).AddRow(5)
 
 	// Issue #1109: chain-expanded account_id filter; accountID appears twice.
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM transactions WHERE user_id(.+)AND \(user_account_id(.+)AND pending`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM transactions t WHERE t\.user_id(.+)AND \(t\.user_account_id(.+)AND t\.pending`).
 		WithArgs(userID, accountID, accountID, pendingOnly).
 		WillReturnRows(rows)
 
@@ -1045,7 +1045,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			false, nil,
 		)
 
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
 		WithArgs(userID, limit, offset).
 		WillReturnRows(rows)
 
@@ -1097,7 +1097,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			false, nil,
 		)
 
-	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
 		WithArgs(userID, limit, offset).
 		WillReturnRows(rows)
 
@@ -2966,7 +2966,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 	// The WHERE clause must contain user_account_id filter.
 	// Both rows have different account_ids but the same user_account_id,
 	// simulating transactions from two chain members of the same logical account.
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND user_account_id`).
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id(.+)AND t\.user_account_id`).
 		WithArgs(userID, userAccountID, limit, offset).
 		WillReturnRows(rows)
 
@@ -2991,52 +2991,52 @@ func TestBuildOrderBy(t *testing.T) {
 		{
 			name:     "default (empty SortBy/SortDir) -> date DESC",
 			filters:  domain.TransactionFilters{},
-			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC",
 		},
 		{
 			name:     "date asc",
 			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
-			wantExpr: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.authorized_date, t.date) ASC, t.id ASC",
 		},
 		{
 			name:     "date desc",
 			filters:  domain.TransactionFilters{SortBy: "date", SortDir: "desc"},
-			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC",
 		},
 		{
 			name:     "merchant asc",
 			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "asc"},
-			wantExpr: "ORDER BY COALESCE(merchant_name, name) ASC, id ASC",
+			wantExpr: "ORDER BY " + effectiveMerchantNameExpr + " ASC, t.id ASC",
 		},
 		{
 			name:     "merchant desc",
 			filters:  domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
-			wantExpr: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
+			wantExpr: "ORDER BY " + effectiveMerchantNameExpr + " DESC, t.id ASC",
 		},
 		{
 			name:     "amount asc",
 			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
-			wantExpr: "ORDER BY amount ASC, id ASC",
+			wantExpr: "ORDER BY t.amount ASC, t.id ASC",
 		},
 		{
 			name:     "amount desc",
 			filters:  domain.TransactionFilters{SortBy: "amount", SortDir: "desc"},
-			wantExpr: "ORDER BY amount DESC, id ASC",
+			wantExpr: "ORDER BY t.amount DESC, t.id ASC",
 		},
 		{
 			name:     "category asc",
 			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "asc"},
-			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) ASC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary) ASC, t.id ASC",
 		},
 		{
 			name:     "category desc",
 			filters:  domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
-			wantExpr: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary) DESC, t.id ASC",
 		},
 		{
 			name:     "unknown SortBy falls back to date DESC",
 			filters:  domain.TransactionFilters{SortBy: "hax", SortDir: "desc"},
-			wantExpr: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+			wantExpr: "ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC",
 		},
 	}
 
@@ -3059,27 +3059,27 @@ func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
 		{
 			name:        "default -> date DESC",
 			filters:     domain.TransactionFilters{},
-			orderByFrag: "ORDER BY COALESCE(authorized_date, date) DESC, id ASC",
+			orderByFrag: "ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC",
 		},
 		{
 			name:        "date asc",
 			filters:     domain.TransactionFilters{SortBy: "date", SortDir: "asc"},
-			orderByFrag: "ORDER BY COALESCE(authorized_date, date) ASC, id ASC",
+			orderByFrag: "ORDER BY COALESCE(t.authorized_date, t.date) ASC, t.id ASC",
 		},
 		{
 			name:        "merchant desc",
 			filters:     domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"},
-			orderByFrag: "ORDER BY COALESCE(merchant_name, name) DESC, id ASC",
+			orderByFrag: "ORDER BY " + effectiveMerchantNameExpr + " DESC, t.id ASC",
 		},
 		{
 			name:        "amount asc",
 			filters:     domain.TransactionFilters{SortBy: "amount", SortDir: "asc"},
-			orderByFrag: "ORDER BY amount ASC, id ASC",
+			orderByFrag: "ORDER BY t.amount ASC, t.id ASC",
 		},
 		{
 			name:        "category desc",
 			filters:     domain.TransactionFilters{SortBy: "category", SortDir: "desc"},
-			orderByFrag: "ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) DESC, id ASC",
+			orderByFrag: "ORDER BY COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary) DESC, t.id ASC",
 		},
 	}
 
@@ -3100,9 +3100,10 @@ func TestTransactionRepository_GetByUserIDWithFilters_SortBy(t *testing.T) {
 
 			// pgxmock matches queries as regexps; escape the ORDER BY fragment so
 			// special chars like '(' and ')' are treated literally.
-			pattern := "SELECT .+ FROM transactions WHERE user_id .+" + regexp.QuoteMeta(tc.orderByFrag)
+			// For merchant sort the query also has LEFT JOINs, so we use a looser pattern.
+			pattern := "SELECT .+ FROM transactions t.+" + regexp.QuoteMeta(tc.orderByFrag)
 			mock.ExpectQuery(pattern).
-				WithArgs(userID, limit, offset).
+				WithArgs(pgxmock.AnyArg(), limit, offset).
 				WillReturnRows(rows)
 
 			_, err = repo.GetByUserIDWithFilters(ctx, userID, tc.filters, limit, offset)
@@ -3154,8 +3155,8 @@ func TestGetByUserIDKeyset_Date_Desc_FirstPage(t *testing.T) {
 		AddRow(makeKeysetRow(txID2, userID, -20.00, now, nil)...)
 
 	// First page: no keyset predicate, ORDER BY date DESC, LIMIT = limit+1 = 3.
-	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
@@ -3204,9 +3205,9 @@ func TestGetByUserIDKeyset_Date_Desc_SecondPage(t *testing.T) {
 		AddRow(makeKeysetRow(txID3, userID, -30.00, now, nil)...)
 
 	// Second page: keyset predicate must appear, ORDER BY date DESC, LIMIT = limit+1.
-	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("COALESCE(authorized_date, date)::date") +
-		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
+		regexp.QuoteMeta("COALESCE(t.authorized_date, t.date)::date") +
+		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, cursorDate, cursorID.String(), limit+1).
@@ -3224,6 +3225,7 @@ func TestGetByUserIDKeyset_Date_Desc_SecondPage(t *testing.T) {
 }
 
 // TestGetByUserIDKeyset_Merchant_Asc_FirstPage verifies merchant/asc first page.
+// Merchant sort uses effectiveMerchantNameExpr + LEFT JOINs and scans an extra column.
 func TestGetByUserIDKeyset_Merchant_Asc_FirstPage(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -3240,12 +3242,14 @@ func TestGetByUserIDKeyset_Merchant_Asc_FirstPage(t *testing.T) {
 	merchant := "Acme Corp"
 	txID1 := "00000000-0000-0000-0000-000000000021"
 
-	// Return fewer than limit rows — no next page.
-	rows := pgxmock.NewRows(transactionSelectColumns).
-		AddRow(makeKeysetRow(txID1, userID, -15.00, now, &merchant)...)
+	// Merchant sort selects an extra column (effective_merchant_sort_name).
+	merchantCols := append(transactionSelectColumns, "effective_merchant_sort_name")
+	rows := pgxmock.NewRows(merchantCols).
+		AddRow(append(makeKeysetRow(txID1, userID, -15.00, now, &merchant), &merchant)...)
 
-	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("ORDER BY COALESCE(merchant_name, name) ASC, id ASC") +
+	// Merchant sort includes LEFT JOINs and effectiveMerchantNameExpr in ORDER BY.
+	pattern := `SELECT .+ FROM transactions t.+LEFT JOIN merchant_name_overrides.+` +
+		regexp.QuoteMeta("ORDER BY "+effectiveMerchantNameExpr+" ASC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
@@ -3293,9 +3297,9 @@ func TestGetByUserIDKeyset_Amount_Desc_SecondPage(t *testing.T) {
 		AddRow(makeKeysetRow(txID3, userID, -80.00, now, nil)...).
 		AddRow(makeKeysetRow(txID4, userID, -90.00, now, nil)...)
 
-	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("amount") +
-		`.+` + regexp.QuoteMeta("ORDER BY amount DESC, id ASC") +
+	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
+		regexp.QuoteMeta("t.amount") +
+		`.+` + regexp.QuoteMeta("ORDER BY t.amount DESC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, cursorSV, cursorID.String(), limit+1).
@@ -3332,8 +3336,8 @@ func TestGetByUserIDKeyset_Category_Asc_FirstPage(t *testing.T) {
 		AddRow(makeKeysetRow(txID1, userID, -5.00, now, nil)...).
 		AddRow(makeKeysetRow(txID2, userID, -10.00, now, nil)...)
 
-	pattern := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("ORDER BY COALESCE(effective_category_name, effective_pfc_primary, pfc_primary) ASC, id ASC") +
+	pattern := "SELECT .+ FROM transactions t WHERE t\\.user_id .+" +
+		regexp.QuoteMeta("ORDER BY COALESCE(t.effective_category_name, t.effective_pfc_primary, t.pfc_primary) ASC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(pattern).
 		WithArgs(userID, limit+1).
@@ -3378,8 +3382,8 @@ func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
 		AddRow(makeKeysetRow(txIDC, userID, -5.00, dateB, nil)...) // sentinel row (limit+1)
 
 	// First page: no keyset predicate.
-	patternPage1 := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+	patternPage1 := `SELECT .+ FROM transactions t WHERE t\.user_id .+` +
+		regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(patternPage1).
 		WithArgs(userID, limit+1).
@@ -3405,9 +3409,9 @@ func TestGetByUserIDKeyset_MidSessionInsertExcluded(t *testing.T) {
 		AddRow(makeKeysetRow(txIDD, userID, -30.00, dateB, nil)...)
 
 	// Second page: keyset predicate must be present with cursor values.
-	patternPage2 := "SELECT .+ FROM transactions WHERE user_id .+" +
-		regexp.QuoteMeta("COALESCE(authorized_date, date)::date") +
-		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(authorized_date, date) DESC, id ASC") +
+	patternPage2 := `SELECT .+ FROM transactions t WHERE t\.user_id .+` +
+		regexp.QuoteMeta("COALESCE(t.authorized_date, t.date)::date") +
+		`.+` + regexp.QuoteMeta("ORDER BY COALESCE(t.authorized_date, t.date) DESC, t.id ASC") +
 		`.+LIMIT`
 	mock.ExpectQuery(patternPage2).
 		WithArgs(userID, cursorDate, cursorUUID.String(), limit+1).
@@ -3485,7 +3489,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
 		)
 
 	// WHERE clause must include merchant_id filter.
-	mock.ExpectQuery(`SELECT (.+) FROM transactions WHERE user_id(.+)AND merchant_id`).
+	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id(.+)AND t\.merchant_id`).
 		WithArgs(userID, merchantID, limit, offset).
 		WillReturnRows(rows)
 
@@ -3718,4 +3722,208 @@ func TestBulkUpdateCategory_PartialOwnership(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "should reflect only the owned rows that were updated")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// =============================================================================
+// Issue #1348: Effective merchant name in sort/search (Task 1 — TDD: failing first)
+// =============================================================================
+
+// TestBuildOrderBy_MerchantSort verifies merchant sort uses effectiveMerchantNameExpr.
+func TestBuildOrderBy_MerchantSort(t *testing.T) {
+	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"}
+	got := buildOrderBy(filters)
+	assert.Contains(t, got, effectiveMerchantNameExpr)
+	assert.Contains(t, got, "DESC")
+	assert.Contains(t, got, "t.id ASC")
+}
+
+// TestBuildKeysetCursor_Merchant_UsesEFF verifies cursor SV = scanned EFF, not MerchantName.
+func TestBuildKeysetCursor_Merchant_UsesEFF(t *testing.T) {
+	rawName := "Raw Merchant"
+	effName := "Override Merchant"
+	tx := domain.Transaction{
+		ID:           "00000000-0000-0000-0000-000000000001",
+		Name:         "Fallback Name",
+		MerchantName: &rawName,
+	}
+	cursor, err := buildKeysetCursor(tx, "merchant", "desc", &effName)
+	require.NoError(t, err)
+	require.NotNil(t, cursor.SV)
+	assert.Equal(t, "Override Merchant", *cursor.SV)
+}
+
+// TestBuildKeysetCursor_Merchant_FallsBackToName verifies cursor SV falls back to tx.Name when effMN nil.
+func TestBuildKeysetCursor_Merchant_FallsBackToName(t *testing.T) {
+	tx := domain.Transaction{
+		ID:   "00000000-0000-0000-0000-000000000001",
+		Name: "Fallback Name",
+	}
+	cursor, err := buildKeysetCursor(tx, "merchant", "desc", nil)
+	require.NoError(t, err)
+	require.NotNil(t, cursor.SV)
+	assert.Equal(t, "Fallback Name", *cursor.SV)
+}
+
+// TestGetByUserIDWithFilters_MerchantSort_HasJoins verifies merchant joins added for merchant sort.
+func TestGetByUserIDWithFilters_MerchantSort_HasJoins(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-merchant-sort-joins"
+	limit := 10
+	offset := 0
+
+	rows := pgxmock.NewRows(transactionSelectColumns)
+
+	// Pattern must contain "merchant_name_overrides" (from merchantSortJoins)
+	pattern := `SELECT .+ FROM transactions t.+LEFT JOIN merchant_name_overrides.+`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, limit, offset).
+		WillReturnRows(rows)
+
+	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"}
+	_, err = repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDWithFilters_DateSort_NoSearch_NoJoins verifies no merchant joins for plain date sort.
+func TestGetByUserIDWithFilters_DateSort_NoSearch_NoJoins(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-date-sort-no-joins"
+	limit := 10
+	offset := 0
+
+	rows := pgxmock.NewRows(transactionSelectColumns)
+
+	// Pattern: FROM transactions t WHERE t.user_id (no joins between FROM and WHERE)
+	mock.ExpectQuery(`SELECT .+ FROM transactions t WHERE t\.user_id`).
+		WithArgs(userID, limit, offset).
+		WillReturnRows(rows)
+
+	filters := domain.TransactionFilters{SortBy: "date", SortDir: "desc"}
+	_, err = repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDWithFilters_Search_HasJoins verifies merchant joins added when search active.
+func TestGetByUserIDWithFilters_Search_HasJoins(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-search-joins"
+	limit := 10
+	offset := 0
+	search := "coffee"
+
+	rows := pgxmock.NewRows(transactionSelectColumns)
+
+	pattern := `SELECT .+ FROM transactions t.+LEFT JOIN merchant_name_overrides.+`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, "%"+search+"%", limit, offset).
+		WillReturnRows(rows)
+
+	filters := domain.TransactionFilters{SortBy: "date", Search: &search}
+	_, err = repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDWithFilters_Search_ThreeILIKE verifies search uses 3 ILIKE terms:
+// t.name, t.merchant_name, and effectiveMerchantNameExpr.
+func TestGetByUserIDWithFilters_Search_ThreeILIKE(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-search-three-ilike"
+	limit := 10
+	offset := 0
+	search := "acme"
+
+	rows := pgxmock.NewRows(transactionSelectColumns)
+
+	// All three ILIKE conditions must appear in the query.
+	pattern := `SELECT .+ FROM transactions t.+` +
+		regexp.QuoteMeta("t.name ILIKE") + `.+` +
+		regexp.QuoteMeta("t.merchant_name ILIKE") + `.+` +
+		regexp.QuoteMeta(effectiveMerchantNameExpr+" ILIKE")
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, "%"+search+"%", limit, offset).
+		WillReturnRows(rows)
+
+	filters := domain.TransactionFilters{SortBy: "date", Search: &search}
+	_, err = repo.GetByUserIDWithFilters(ctx, userID, filters, limit, offset)
+	assert.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetByUserIDKeyset_Merchant_Desc_Predicate verifies keyset predicate for merchant/desc:
+// uses effectiveMerchantNameExpr with no IS NULL branch.
+func TestGetByUserIDKeyset_Merchant_Desc_Predicate(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-keyset-merchant-desc"
+	limit := 2
+	filters := domain.TransactionFilters{SortBy: "merchant", SortDir: "desc"}
+
+	now := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	txID1 := "00000000-0000-0000-0000-000000000051"
+	txID2 := "00000000-0000-0000-0000-000000000052"
+	txID3 := "00000000-0000-0000-0000-000000000053"
+
+	merchant := "Zebra Inc"
+	cursorSV := "Zebra Inc"
+	cursorID, _ := uuid.Parse("00000000-0000-0000-0000-000000000050")
+	cursor := &domain.TransactionCursor{
+		V: 1, K: "merchant", D: "desc",
+		SV: &cursorSV,
+		ID: cursorID,
+	}
+
+	merchantCols := append(transactionSelectColumns, "effective_merchant_sort_name")
+	rows := pgxmock.NewRows(merchantCols).
+		AddRow(append(makeKeysetRow(txID1, userID, -10.00, now, &merchant), &merchant)...).
+		AddRow(append(makeKeysetRow(txID2, userID, -20.00, now, &merchant), &merchant)...).
+		AddRow(append(makeKeysetRow(txID3, userID, -30.00, now, &merchant), &merchant)...)
+
+	// Predicate must use EFF < $N (no IS NULL branch).
+	// Pattern checks the keyset predicate shape; exact $N placeholders vary.
+	effExpr := effectiveMerchantNameExpr
+	pattern := "SELECT .+ FROM transactions t.+LEFT JOIN merchant_name_overrides.+" +
+		regexp.QuoteMeta("(("+effExpr+" < $") + `\d+\) OR \(` + regexp.QuoteMeta(effExpr+" = $") + `\d+ AND t\.id > \$\d+\)\)`
+	mock.ExpectQuery(pattern).
+		WithArgs(userID, cursorSV, cursorID.String(), limit+1).
+		WillReturnRows(rows)
+
+	txs, nextCursor, err := repo.GetByUserIDKeyset(ctx, userID, filters, cursor, limit)
+	require.NoError(t, err)
+	assert.Len(t, txs, limit)
+	require.NotNil(t, nextCursor)
+	assert.Equal(t, "merchant", nextCursor.K)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
