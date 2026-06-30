@@ -891,10 +891,10 @@
           "type": "string"
         },
         {
-          "name": "merchant_name",
+          "name": "merchant_id",
           "in": "query",
           "required": true,
-          "description": "Merchant name to filter by",
+          "description": "Merchant UUID to filter by",
           "type": "string"
         },
         {

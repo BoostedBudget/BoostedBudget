@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -36,6 +37,7 @@ type MerchantService struct {
 	merchantRepo         repository.MerchantRepo
 	merchantOverrideRepo repository.MerchantOverrideRepo
 	normalize            func(string) string
+	analytics            phclient.Analytics
 }
 
 // NewMerchantService constructs a MerchantService with the production normalize func.
@@ -45,6 +47,12 @@ func NewMerchantService(merchantRepo repository.MerchantRepo, overrideRepo repos
 		merchantOverrideRepo: overrideRepo,
 		normalize:            merchant.Normalize,
 	}
+}
+
+// SetAnalytics sets the PostHog analytics client for event capture (Issue #1348).
+// Nil-safe: if analytics is nil, all Capture calls are skipped.
+func (s *MerchantService) SetAnalytics(analytics phclient.Analytics) {
+	s.analytics = analytics
 }
 
 // ListMerchants returns all merchants visible to the user, including effective
@@ -86,11 +94,19 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 
 	// Pure rename (no merge pointer): fast path via Upsert.
 	if mergedIntoMerchantID == nil {
-		return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+		result, err := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
 			UserID:      userID,
 			MerchantID:  merchantID,
 			DisplayName: displayName,
 		})
+		if err == nil && s.analytics != nil {
+			s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+				"merchant_id":      merchantID,
+				"has_display_name": displayName != nil,
+				"is_merge":         false,
+			})
+		}
+		return result, err
 	}
 
 	// Merge (with optional rename): thread displayName into applyMergeFlatten so both the
@@ -109,18 +125,40 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 		// G27 self-merge fallback: persist display_name if provided (the merge write was
 		// skipped entirely, so we must write the rename separately).
 		if displayName != nil {
-			return s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
+			result, upsertErr := s.merchantOverrideRepo.Upsert(ctx, domain.MerchantNameOverride{
 				UserID:      userID,
 				MerchantID:  merchantID,
 				DisplayName: displayName,
 			})
+			if upsertErr == nil && s.analytics != nil {
+				s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+					"merchant_id":      merchantID,
+					"has_display_name": true,
+					"is_merge":         true,
+				})
+			}
+			return result, upsertErr
 		}
 		// G28: return the resolved canonical ID, not the raw request value.
+		if s.analytics != nil {
+			s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+				"merchant_id":      merchantID,
+				"has_display_name": false,
+				"is_merge":         true,
+			})
+		}
 		return &domain.MerchantNameOverride{
 			UserID:               userID,
 			MerchantID:           merchantID,
 			MergedIntoMerchantID: &canonicalID,
 		}, nil
+	}
+	if s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventMerchantOverrideSet, map[string]interface{}{
+			"merchant_id":      merchantID,
+			"has_display_name": displayName != nil,
+			"is_merge":         true,
+		})
 	}
 	return &results[0], nil
 }
@@ -128,7 +166,13 @@ func (s *MerchantService) SetOverride(ctx context.Context, userID, merchantID st
 // ClearOverride removes the per-user override for a merchant, reverting to the
 // normalized name for display.
 func (s *MerchantService) ClearOverride(ctx context.Context, userID, merchantID string) error {
-	return s.merchantOverrideRepo.Delete(ctx, userID, merchantID)
+	err := s.merchantOverrideRepo.Delete(ctx, userID, merchantID)
+	if err == nil && s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventMerchantOverrideCleared, map[string]interface{}{
+			"merchant_id": merchantID,
+		})
+	}
+	return err
 }
 
 // BulkSetOverrides validates and applies multiple overrides atomically.
@@ -263,7 +307,13 @@ func (s *MerchantService) BulkSetOverrides(ctx context.Context, userID string, r
 	}
 
 	// Phase 4: Single atomic write — display-only upserts + all merge groups in one tx.
-	return s.merchantOverrideRepo.BulkApply(ctx, userID, displayOnlyItems, groups)
+	result, err := s.merchantOverrideRepo.BulkApply(ctx, userID, displayOnlyItems, groups)
+	if err == nil && s.analytics != nil {
+		s.analytics.Capture(userID, phclient.EventMerchantsBulkOverridden, map[string]interface{}{
+			"count": len(reqs),
+		})
+	}
+	return result, err
 }
 
 // detectRequestMergeChain reports an error if any group's Canonical is itself a Source
@@ -356,6 +406,14 @@ func (s *MerchantService) MergeMerchants(ctx context.Context, userID string, mer
 	}
 	// Pass nil displayNames — MergeMerchants never carries a display_name.
 	_, results, err := s.applyMergeFlatten(ctx, userID, merchantIDs, targetMerchantID, nil)
+	if err == nil && s.analytics != nil {
+		for _, result := range results {
+			s.analytics.Capture(userID, phclient.EventMerchantsMerged, map[string]interface{}{
+				"source_merchant_id": result.MerchantID,
+				"target_merchant_id": targetMerchantID,
+			})
+		}
+	}
 	return results, err
 }
 

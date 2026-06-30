@@ -41,9 +41,9 @@ start_date: string;
  */
 end_date: string;
 /**
- * Merchant name to filter by
+ * Merchant UUID to filter by
  */
-merchant_name: string;
+merchant_id: string;
 /**
  * Comma-separated account types to filter
  */
