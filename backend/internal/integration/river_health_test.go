@@ -89,6 +89,7 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to insert test job: %v", err)
 	}
+	t.Cleanup(func() { db.Exec(ctx, `DELETE FROM river_job WHERE kind = $1`, testJobKind) }) //nolint:errcheck
 
 	// Verify job was inserted
 	var count int
@@ -101,9 +102,6 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	}
 
 	assert.GreaterOrEqual(t, count, 1, "Test job should be in river_job table")
-
-	// Cleanup
-	_, _ = db.Exec(ctx, `DELETE FROM river_job WHERE kind = $1`, testJobKind)
 }
 
 // TestRiver_JobStates documents River job lifecycle states.

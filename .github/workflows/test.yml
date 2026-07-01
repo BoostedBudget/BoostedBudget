@@ -594,6 +594,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: [self-hosted, macOS, mac-mini]
+    timeout-minutes: 15
     env:
       UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
       # Container name is unique per run AND per rerun attempt, so a killed
@@ -717,7 +718,16 @@ jobs:
           # Go build tags are additive, so untagged tests in the same packages also
           # run — this is intentional (parallel job, no critical-path cost) and
           # guarantees a future integration test in any package is never missed.
-          go test ./... -tags integration -v
+          #
+          # -p 1: serialize package execution. The internal/database backfill tests
+          #   (backfill_user_account, backfill_prefix) commit rows then run table-wide
+          #   mutations over ALL users/accounts. Concurrent package execution against
+          #   the same DB would corrupt rows seeded by other packages, causing flakes.
+          #   Every other package is tx-isolated or unique-id-scoped, but -p is global.
+          #
+          # -timeout 10m: bound a hung DB connection (job timeout-minutes:15 is the
+          #   outer envelope; this inner flag triggers a Go-level panic+trace first).
+          go test ./... -tags integration -p 1 -timeout 10m -v
 
       - name: Cleanup PostgreSQL container
         if: always()
