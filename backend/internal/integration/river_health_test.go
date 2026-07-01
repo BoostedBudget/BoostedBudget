@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRiver_TablesExist verifies that all required River tables are present.
@@ -134,10 +135,9 @@ func TestRiver_QueueConfiguration(t *testing.T) {
 	var queueCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_queue WHERE name = 'default'`).Scan(&queueCount)
 
-	if err != nil {
-		t.Log("Note: river_queue may be empty until River client starts")
-		return
-	}
+	// COUNT(*) always returns exactly one row — a non-nil err means the table is missing
+	// or the connection is dead, both of which are genuine failures (not "empty queue").
+	require.NoError(t, err, "river_queue table should be queryable after migrations")
 
 	t.Logf("Default queue entries: %d", queueCount)
 }
