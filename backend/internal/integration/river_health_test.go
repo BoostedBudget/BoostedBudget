@@ -119,7 +119,9 @@ func TestRiver_JobStates(t *testing.T) {
 	}
 }
 
-// TestRiver_QueueConfiguration verifies the default queue exists.
+// TestRiver_QueueConfiguration verifies the river_queue table is queryable after
+// migrations. The default queue row only appears when the River client starts, so
+// no count assertion is made — table queryability is the achievable CI-level check.
 func TestRiver_QueueConfiguration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
