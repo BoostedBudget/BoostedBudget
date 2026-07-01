@@ -59,7 +59,9 @@ func TestAutoSyncAfterLinking_E2E_Flow(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping E2E test")
 	}
-	defer db.Close()
+	// t.Cleanup (not defer) so Close runs AFTER other t.Cleanup callbacks (LIFO).
+	// A defer would close the pool before DELETE cleanups below, making them no-ops.
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -133,12 +135,35 @@ func TestSetupTestDBIfAvailable_ConnectsWhenURLSet(t *testing.T) {
 	}
 	db := setupTestDBIfAvailable(t)
 	require.NotNil(t, db, "setupTestDBIfAvailable should return non-nil when DATABASE_URL is set")
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
-	// Verify the returned pool is actually usable.
 	var result int
 	err := db.QueryRow(context.Background(), "SELECT 1").Scan(&result)
 	require.NoError(t, err, "should be able to query the DB returned by the helper")
 	assert.Equal(t, 1, result)
+}
+
+// TestPoolAliveInCleanup_Regression guards against the defer-vs-t.Cleanup
+// ordering bug: defer runs at function exit (BEFORE t.Cleanup), closing the
+// pool before subsequent t.Cleanup callbacks execute. The fix: use
+// t.Cleanup(db.Close) which runs LIFO (last-registered closes last).
+func TestPoolAliveInCleanup_Regression(t *testing.T) {
+	db := setupTestDBIfAvailable(t)
+	if db == nil {
+		t.Skip("DATABASE_URL not set")
+	}
+
+	// Register Close first → runs LAST (LIFO).
+	t.Cleanup(func() { db.Close() })
+
+	// Register DB assertion second → runs FIRST (before Close, via LIFO).
+	// If Close were in defer, it would run before this Cleanup, causing SELECT to fail.
+	t.Cleanup(func() {
+		ctx := context.Background()
+		var n int
+		if err := db.QueryRow(ctx, "SELECT 1").Scan(&n); err != nil {
+			t.Errorf("pool closed before t.Cleanup fired: %v — use t.Cleanup(db.Close), not defer", err)
+		}
+	})
 }
 
