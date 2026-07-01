@@ -8,15 +8,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// ============================================================================
-// Integration Tests for River Queue Health
-// Issue #666: Ensure River queue is properly configured and operational
-// ============================================================================
-
 // TestRiver_TablesExist verifies that all required River tables are present.
-// These tables are created by River migrations and are essential for job processing.
 func TestRiver_TablesExist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -26,11 +21,9 @@ func TestRiver_TablesExist(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
-	// River requires these tables to function
 	requiredTables := []string{
 		"river_job",
 		"river_client",
@@ -73,7 +66,8 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	// t.Cleanup (not defer) so Close runs AFTER the DELETE t.Cleanup below (LIFO).
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
 
@@ -89,6 +83,7 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to insert test job: %v", err)
 	}
+	t.Cleanup(func() { db.Exec(ctx, `DELETE FROM river_job WHERE kind = $1`, testJobKind) }) //nolint:errcheck
 
 	// Verify job was inserted
 	var count int
@@ -101,9 +96,6 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	}
 
 	assert.GreaterOrEqual(t, count, 1, "Test job should be in river_job table")
-
-	// Cleanup
-	_, _ = db.Exec(ctx, `DELETE FROM river_job WHERE kind = $1`, testJobKind)
 }
 
 // TestRiver_JobStates documents River job lifecycle states.
@@ -127,7 +119,9 @@ func TestRiver_JobStates(t *testing.T) {
 	}
 }
 
-// TestRiver_QueueConfiguration verifies the default queue exists.
+// TestRiver_QueueConfiguration verifies the river_queue table is queryable after
+// migrations. The default queue row only appears when the River client starts, so
+// no count assertion is made — table queryability is the achievable CI-level check.
 func TestRiver_QueueConfiguration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -137,24 +131,22 @@ func TestRiver_QueueConfiguration(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
 	var queueCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_queue WHERE name = 'default'`).Scan(&queueCount)
 
-	if err != nil {
-		t.Log("Note: river_queue may be empty until River client starts")
-		return
-	}
+	// COUNT(*) always returns exactly one row — a non-nil err means the table is missing
+	// or the connection is dead, both of which are genuine failures (not "empty queue").
+	require.NoError(t, err, "river_queue table should be queryable after migrations")
 
 	t.Logf("Default queue entries: %d", queueCount)
 }
 
-// TestRiver_ClientRegistration verifies that River client registers itself
-// when the application starts. An empty river_client table indicates
-// River is not running.
+// TestRiver_ClientRegistration verifies the river_client table is queryable after
+// migrations. Full client-registration behavior (count > 0) requires a running backend
+// server and is covered by E2E tests, not this schema-level integration check.
 func TestRiver_ClientRegistration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -164,27 +156,18 @@ func TestRiver_ClientRegistration(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
-	// Check river_client table
 	var clientCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_client`).Scan(&clientCount)
 
-	if err != nil {
-		t.Fatalf("Failed to query river_client: %v", err)
-	}
+	// COUNT(*) always returns exactly one row — a non-nil err means the table is missing
+	// or the connection is dead, both of which are genuine failures (not "no clients yet").
+	require.NoError(t, err, "river_client table should be queryable after migrations")
 
-	// Log the result - in integration tests this may be 0 if no server is running
+	// clientCount is 0 in CI (no backend server running); registration is E2E-scoped.
 	t.Logf("River clients registered: %d", clientCount)
-
-	// In a full E2E test with running server, we'd assert clientCount > 0
-	// For now, just document the expectation
-	if clientCount == 0 {
-		t.Log("Note: No River clients registered. This is expected if the backend server is not running.")
-		t.Log("When the backend starts, it should register with river_client table.")
-	}
 }
 
 // TestRiver_PlaidSyncJobSchema documents the expected job args schema.
