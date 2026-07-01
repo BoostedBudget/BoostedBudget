@@ -618,6 +618,12 @@ jobs:
         # Note: go clean -cache is intentionally omitted — it is destructive on
         # a shared self-hosted runner when backend-test runs concurrently.
 
+      - name: Configure job-local Go build cache
+        # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
+        # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable.
+        # This isolates this job's build cache from backend-test's concurrent go clean -cache.
+        run: echo "GOCACHE=$RUNNER_TEMP/gocache-integ" >> "$GITHUB_ENV"
+
       - name: Restore Go modules cache
         id: cache-go-modules
         uses: actions/cache/restore@v5
@@ -633,7 +639,13 @@ jobs:
 
       - name: Start PostgreSQL container (dynamic port)
         run: |
-          # Reap any orphan from a previously-killed run (same name).
+          # Reap orphans from ANY prior attempt of this run (different run_attempt suffix).
+          # The container name is unique per run_id+run_attempt, so a hard-killed prior
+          # attempt leaves its container behind with a different suffix. Filter by run_id
+          # prefix so we never touch a concurrent other-PR container.
+          docker ps -aq --filter "name=test-postgres-integ-${{ github.run_id }}-" \
+            | xargs -r docker rm -f 2>/dev/null || true
+          # Also reap the exact name in case a prior step already set the container.
           docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
 
           echo "Pulling PostgreSQL image..."
@@ -715,17 +727,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Find packages with //go:build integration tests; prevents running
-          # env-sensitive unit packages (e.g. internal/config that requires
-          # DATABASE_URL absent) in this DATABASE_URL-populated environment.
-          # -p 1 serializes execution to prevent backfill tests from corrupting
-          # shared DB state. -timeout 10m bounds hung connections.
-          # || true prevents set -e from aborting when grep finds no matches (exit 1);
-          # the guard below handles the empty case explicitly.
-          PKGS=$(grep -rl '^//go:build integration' --include='*_test.go' . \
-            | xargs -n1 dirname | sort -u || true)
+          # Find packages with //go:build integration tags (prevents running
+          # env-sensitive unit packages in DATABASE_URL-populated environment).
+          # -p 1 serializes to prevent DB state corruption. -timeout 10m bounds hung connections.
+          FILES=$(grep -rl '^//go:build integration' --include='*_test.go' . || true)
+          if [ -z "$FILES" ]; then
+            echo "::error::No integration-tagged test files found"
+            exit 1
+          fi
+          PKGS=$(printf '%s\n' "$FILES" | xargs -n1 dirname | sort -u)
           if [ -z "$PKGS" ]; then
-            echo "::error::No integration-tagged packages found"
+            echo "::error::No integration packages resolved from found files"
             exit 1
           fi
           echo "Integration packages: $PKGS"

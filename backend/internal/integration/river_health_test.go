@@ -10,13 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// ============================================================================
-// Integration Tests for River Queue Health
-// Issue #666: Ensure River queue is properly configured and operational
-// ============================================================================
-
 // TestRiver_TablesExist verifies that all required River tables are present.
-// These tables are created by River migrations and are essential for job processing.
 func TestRiver_TablesExist(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -26,11 +20,9 @@ func TestRiver_TablesExist(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
-	// River requires these tables to function
 	requiredTables := []string{
 		"river_job",
 		"river_client",
@@ -73,7 +65,8 @@ func TestRiver_JobLifecycle(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	// t.Cleanup (not defer) so Close runs AFTER the DELETE t.Cleanup below (LIFO).
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
 
@@ -135,10 +128,9 @@ func TestRiver_QueueConfiguration(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
 	var queueCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_queue WHERE name = 'default'`).Scan(&queueCount)
 
@@ -162,11 +154,9 @@ func TestRiver_ClientRegistration(t *testing.T) {
 	if db == nil {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	ctx := context.Background()
-
-	// Check river_client table
 	var clientCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_client`).Scan(&clientCount)
 
