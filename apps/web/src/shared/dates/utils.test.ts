@@ -21,8 +21,6 @@ describe('formatDateForAPI', () => {
 })
 
 describe('inferPreset', () => {
-  const today = formatDateForAPI(new Date())
-
   test('no dates returns all', () => {
     expect(inferPreset(undefined, undefined)).toBe('all')
     expect(inferPreset('', '')).toBe('all')
@@ -48,8 +46,17 @@ describe('inferPreset', () => {
   })
 
   test('ytd: Jan 1 of current year to today', () => {
-    const start = `${new Date().getFullYear()}-01-01`
-    expect(inferPreset(start, today)).toBe('ytd')
+    // Frozen to Mar 15 where YTD (Jan 1 → Mar 15) differs from last_6_months
+    // (Sep 15 → Mar 15), preventing the later preset from shadowing YTD.
+    // try/finally ensures clock is always restored even if the assertion throws.
+    setSystemTime(new Date('2026-03-15T12:00:00.000Z'))
+    try {
+      const start = `${new Date().getFullYear()}-01-01`
+      const frozenToday = formatDateForAPI(new Date())
+      expect(inferPreset(start, frozenToday)).toBe('ytd')
+    } finally {
+      setSystemTime() // restore real clock
+    }
   })
 
   test('unrecognized range returns custom', () => {
