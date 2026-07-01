@@ -584,6 +584,150 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
+  # Backend Integration Tests (real PostgreSQL, //go:build integration)
+  # Runs in parallel with backend-test — only needs detect-changes.
+  # Spins up its own ephemeral Postgres 17 with a dynamically-assigned host
+  # port so it never clashes with the migration-tests job on the shared runner.
+  # =============================================================================
+  backend-integration-test:
+    name: Backend Integration Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
+      # Container name is unique per run AND per rerun attempt, so a killed
+      # prior attempt can never collide with this one.
+      PG_CONTAINER: test-postgres-integ-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Clean workspace (fix permission issues)
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+        # Note: go clean -cache is intentionally omitted — it is destructive on
+        # a shared self-hosted runner when backend-test runs concurrently.
+
+      - name: Restore Go modules cache
+        id: cache-go-modules
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-modules-${{ runner.os }}-
+
+      - name: Download Go dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        run: go mod download
+
+      - name: Start PostgreSQL container (dynamic port)
+        run: |
+          # Reap any orphan from a previously-killed run (same name).
+          docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
+
+          echo "Pulling PostgreSQL image..."
+          for i in 1 2 3; do
+            docker pull postgres:17 && break || {
+              echo "Pull attempt $i/3 failed"
+              [ $i -lt 3 ] && sleep 10
+            }
+          done
+
+          # -p 5432 (no host side) lets Docker pick any free port — prevents
+          # clashes with the migration-tests job running on the same runner.
+          docker run -d \
+            --name ${{ env.PG_CONTAINER }} \
+            -e POSTGRES_USER=test \
+            -e POSTGRES_PASSWORD=test \
+            -e POSTGRES_DB=test \
+            -p 5432 \
+            --memory=512m \
+            --shm-size=256m \
+            --health-cmd pg_isready \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            postgres:17
+
+          # Discover the OS-assigned host port.
+          sleep 2
+          POSTGRES_PORT=$(docker port ${{ env.PG_CONTAINER }} 5432 | cut -d: -f2)
+          echo "PostgreSQL running on dynamically assigned port: $POSTGRES_PORT"
+
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgres://test:test@localhost:$POSTGRES_PORT/test?sslmode=disable" >> $GITHUB_ENV
+
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if docker exec ${{ env.PG_CONTAINER }} pg_isready -U test > /dev/null 2>&1; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "::error::Timeout waiting for PostgreSQL to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Guard — DATABASE_URL must be set
+        run: |
+          # Integration tests call t.Skip() when DATABASE_URL is unset, which
+          # makes them appear green while testing nothing. Fail loudly instead.
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL is unset — integration tests would silently skip"
+            exit 1
+          fi
+          echo "DATABASE_URL is set (port $POSTGRES_PORT)"
+
+      - name: Install golang-migrate (job-local)
+        run: |
+          # Install into a job-local dir under RUNNER_TEMP to avoid write-racing
+          # the migration-tests job which also installs migrate into $HOME/bin.
+          mkdir -p "$RUNNER_TEMP/bin-integ"
+          curl -sSfL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.darwin-arm64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/bin-integ" migrate
+          echo "$RUNNER_TEMP/bin-integ" >> $GITHUB_PATH
+          "$RUNNER_TEMP/bin-integ/migrate" --version
+
+      - name: Apply migrations
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          migrate -database "$DATABASE_URL" -path backend/migrations up
+
+      - name: Run integration tests
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          # ./... covers all 4 packages that contain integration tests:
+          #   internal/repository, internal/database, internal/integration, internal/services
+          # Go build tags are additive, so untagged tests in the same packages also
+          # run — this is intentional (parallel job, no critical-path cost) and
+          # guarantees a future integration test in any package is never missed.
+          go test ./... -tags integration -v
+
+      - name: Cleanup PostgreSQL container
+        if: always()
+        run: docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
+
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+
+  # =============================================================================
   # Frontend Tests (Single job - no sharding)
   # =============================================================================
   frontend-test:
