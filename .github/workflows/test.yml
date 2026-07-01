@@ -713,21 +713,24 @@ jobs:
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          # ./... covers all 4 packages that contain integration tests:
-          #   internal/repository, internal/database, internal/integration, internal/services
-          # Go build tags are additive, so untagged tests in the same packages also
-          # run — this is intentional (parallel job, no critical-path cost) and
-          # guarantees a future integration test in any package is never missed.
-          #
-          # -p 1: serialize package execution. The internal/database backfill tests
-          #   (backfill_user_account, backfill_prefix) commit rows then run table-wide
-          #   mutations over ALL users/accounts. Concurrent package execution against
-          #   the same DB would corrupt rows seeded by other packages, causing flakes.
-          #   Every other package is tx-isolated or unique-id-scoped, but -p is global.
-          #
-          # -timeout 10m: bound a hung DB connection (job timeout-minutes:15 is the
-          #   outer envelope; this inner flag triggers a Go-level panic+trace first).
-          go test ./... -tags integration -p 1 -timeout 10m -v
+          set -euo pipefail
+
+          # Find packages with //go:build integration tests; prevents running
+          # env-sensitive unit packages (e.g. internal/config that requires
+          # DATABASE_URL absent) in this DATABASE_URL-populated environment.
+          # -p 1 serializes execution to prevent backfill tests from corrupting
+          # shared DB state. -timeout 10m bounds hung connections.
+          # || true prevents set -e from aborting when grep finds no matches (exit 1);
+          # the guard below handles the empty case explicitly.
+          PKGS=$(grep -rl '^//go:build integration' --include='*_test.go' . \
+            | xargs -n1 dirname | sort -u || true)
+          if [ -z "$PKGS" ]; then
+            echo "::error::No integration-tagged packages found"
+            exit 1
+          fi
+          echo "Integration packages: $PKGS"
+          # shellcheck disable=SC2086
+          go test $PKGS -tags integration -p 1 -timeout 10m -v
 
       - name: Cleanup PostgreSQL container
         if: always()
