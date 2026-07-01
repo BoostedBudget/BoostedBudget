@@ -142,9 +142,9 @@ func TestRiver_QueueConfiguration(t *testing.T) {
 	t.Logf("Default queue entries: %d", queueCount)
 }
 
-// TestRiver_ClientRegistration verifies that River client registers itself
-// when the application starts. An empty river_client table indicates
-// River is not running.
+// TestRiver_ClientRegistration verifies the river_client table is queryable after
+// migrations. Full client-registration behavior (count > 0) requires a running backend
+// server and is covered by E2E tests, not this schema-level integration check.
 func TestRiver_ClientRegistration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -160,19 +160,12 @@ func TestRiver_ClientRegistration(t *testing.T) {
 	var clientCount int
 	err := db.QueryRow(ctx, `SELECT COUNT(*) FROM river_client`).Scan(&clientCount)
 
-	if err != nil {
-		t.Fatalf("Failed to query river_client: %v", err)
-	}
+	// COUNT(*) always returns exactly one row — a non-nil err means the table is missing
+	// or the connection is dead, both of which are genuine failures (not "no clients yet").
+	require.NoError(t, err, "river_client table should be queryable after migrations")
 
-	// Log the result - in integration tests this may be 0 if no server is running
+	// clientCount is 0 in CI (no backend server running); registration is E2E-scoped.
 	t.Logf("River clients registered: %d", clientCount)
-
-	// In a full E2E test with running server, we'd assert clientCount > 0
-	// For now, just document the expectation
-	if clientCount == 0 {
-		t.Log("Note: No River clients registered. This is expected if the backend server is not running.")
-		t.Log("When the backend starts, it should register with river_client table.")
-	}
 }
 
 // TestRiver_PlaidSyncJobSchema documents the expected job args schema.

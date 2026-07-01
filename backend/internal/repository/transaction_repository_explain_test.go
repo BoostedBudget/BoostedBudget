@@ -5,7 +5,9 @@ package repository
 // Transaction repository EXPLAIN smoke tests.
 // Verifies that the 4 expression+composite indexes created by migration
 // 000074_add_transactions_keyset_indexes are used by the keyset pagination
-// query for all sort key × direction combinations.
+// query. Amount/date/name sort keys assert an index scan is chosen.
+// Merchant-sort cases assert only SQL validity (plan builds without error)
+// because no index covers the effective-merchant JOIN chain.
 //
 // Run with:
 //   DATABASE_URL=postgres://... go test ./internal/repository/... -run TestTransactionKeyset_EXPLAIN -tags integration -v
