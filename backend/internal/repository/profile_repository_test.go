@@ -617,6 +617,40 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus verifies that UpdateSubscriptionFromPaddle
+// normalizes invalid statuses ("paused", "canceled") to "cancelled" at the repo layer.
+// #933: repo-layer normalization defends all callers, not just the webhook worker.
+func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
+	cases := []struct {
+		name        string
+		inputStatus string
+		wantStatus  string
+	}{
+		{"paused maps to cancelled", "paused", "cancelled"},
+		{"canceled single-l maps to cancelled", "canceled", "cancelled"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, repo := setupMockDB(t)
+			defer mock.Close()
+
+			ctx := context.Background()
+			userID := uuid.New().String()
+
+			// Verify normalized status appears in SQL
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5 WHERE id = $6 AND is_deleted = FALSE`)).
+				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
+				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+			err := repo.UpdateSubscriptionFromPaddle(ctx, userID, "premium", tc.inputStatus, nil, nil, nil)
+
+			assert.NoError(t, err)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 // userSelectQueryForTest is the expected SELECT query used in tests for profile lookups
 const userSelectQueryForTest = `SELECT id, clerk_user_id, email, email_verified, subscription_tier, subscription_status, subscription_started_at, subscription_ends_at, trial_started_at, trial_ends_at, had_trial, paddle_customer_id, paddle_subscription_id, primary_region, is_active, is_deleted, deletion_requested_at, deletion_scheduled_at, created_at, updated_at, last_login_at, manual_tier_override, manual_tier_ends_at, retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at, timezone, timezone_source FROM users`
 

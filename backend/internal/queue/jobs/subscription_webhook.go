@@ -431,17 +431,20 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
-	// #930: Clear retention clock — subscription created, user is no longer pending deletion
-	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
-		w.logger.Warn("failed to clear retention dates on subscription created", "user_id", userID, "error", retErr)
-	}
-
-	if w.analytics != nil {
-		w.analytics.Capture(userID, phclient.EventSubscriptionCreated, map[string]interface{}{
-			"tier":            string(tier),
-			"status":          status,
-			"subscription_id": subscriptionID,
-		})
+	// #930/#933: Only fire active-path side effects for non-read-only statuses.
+	// A paused payload normalized to "cancelled" is terminal — skip retention-clear
+	// and analytics (firing subscription_created with status=cancelled corrupts funnels).
+	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
+			w.logger.Warn("failed to clear retention dates on subscription created", "user_id", userID, "error", retErr)
+		}
+		if w.analytics != nil {
+			w.analytics.Capture(userID, phclient.EventSubscriptionCreated, map[string]interface{}{
+				"tier":            string(tier),
+				"status":          status,
+				"subscription_id": subscriptionID,
+			})
+		}
 	}
 
 	return nil
@@ -477,19 +480,20 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	w.createNotification(ctx, notificationParams{
-		userID:             userID,
-		notificationType:   "subscription_activated",
-		title:              "Subscription Activated",
-		message:            "Your BoostedBudget subscription is now active. Welcome aboard!",
-		interactionPattern: "informational",
-	})
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
-
-	// #930: Clear retention clock — user resubscribed, data is no longer pending deletion
-	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
-		w.logger.Warn("failed to clear retention dates on activation", "user_id", userID, "error", retErr)
+	// #930/#933: Only fire active-path side effects for non-read-only statuses.
+	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+		w.createNotification(ctx, notificationParams{
+			userID:             userID,
+			notificationType:   "subscription_activated",
+			title:              "Subscription Activated",
+			message:            "Your BoostedBudget subscription is now active. Welcome aboard!",
+			interactionPattern: "informational",
+		})
+		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
+			w.logger.Warn("failed to clear retention dates on activation", "user_id", userID, "error", retErr)
+		}
 	}
+	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
 	return nil
 }

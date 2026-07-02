@@ -1220,7 +1220,8 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucce
 // TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled verifies that a
 // subscription.created event carrying status:"paused" is normalized to "cancelled" before
 // the DB write, preventing a CHECK violation and River retry loop.
-// #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
+// #933: paused→cancelled is terminal; active-path side effects (ClearRetentionDates,
+// analytics Capture) must NOT fire when the normalized status is read-only.
 func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
@@ -1242,7 +1243,7 @@ func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testin
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
-	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	// ClearRetentionDates and analytics Capture must NOT fire — paused→cancelled is read-only.
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1250,11 +1251,14 @@ func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testin
 	require.NoError(t, err)
 	mockProfileRepo.AssertExpectations(t)
 	mockWebhookRepo.AssertExpectations(t)
+	// Paused→cancelled is read-only; retention clock must not be wiped
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
 }
 
 // TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled verifies that a
 // subscription.activated event carrying status:"paused" is normalized to "cancelled".
-// #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
+// #933: paused→cancelled is terminal; active-path side effects (welcome notification +
+// ClearRetentionDates) must NOT fire when the normalized status is read-only.
 func TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()
@@ -1273,10 +1277,10 @@ func TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled(t *test
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	// Critical: status must be "cancelled", not the raw "paused"
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
-	mockNotifRepo.On("Create", ctx, mock.Anything).Return(nil)
+	// "Welcome aboard!" notification must NOT fire — paused→cancelled is not an activation.
+	// ClearRetentionDates must NOT fire — retention clock must not be wiped for a cancelled sub.
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
-	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1284,6 +1288,9 @@ func TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled(t *test
 	require.NoError(t, err)
 	mockProfileRepo.AssertExpectations(t)
 	mockWebhookRepo.AssertExpectations(t)
+	mockNotifRepo.AssertNotCalled(t, "Create")
+	// Paused→cancelled is read-only; notification and retention clear must not fire
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
 }
 
 // TestWorker_SubscriptionUpdated_PausedStatus_NormalizedToCancelled verifies that a
