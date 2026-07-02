@@ -23,16 +23,16 @@
   },
   "dependencies": {
     "@boostedbudget/api-client": "workspace:*",
-    "@cloudflare/workers-oauth-provider": "^0.7.2",
+    "@cloudflare/workers-oauth-provider": "^0.8.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "agents": "^0.14.1",
+    "agents": "^0.17.3",
     "jose": "^6.2.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@apidevtools/json-schema-ref-parser": "^15.3.5",
-    "@cloudflare/vitest-pool-workers": "^0.16.13",
-    "@cloudflare/workers-types": "^4.20260604.1",
+    "@cloudflare/vitest-pool-workers": "^0.17.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@eslint/js": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.61.1",
     "@typescript-eslint/parser": "^8.61.1",
