@@ -1,14 +1,20 @@
 import { Button } from '@/components/ui/button'
 
-interface ResumeButtonProps {
+interface BillingPortalButtonProps {
   billingPortalUrl: string | undefined
   isLoadingPortal: boolean
+  /** CTA label: "Resubscribe" for cancelled, "Update Payment Method" for past_due. */
+  label: string
 }
 
-export function ResumeButton({ billingPortalUrl, isLoadingPortal }: ResumeButtonProps) {
+export function BillingPortalButton({
+  billingPortalUrl,
+  isLoadingPortal,
+  label,
+}: BillingPortalButtonProps) {
   const isDisabled = !billingPortalUrl || isLoadingPortal
 
-  const handleResume = () => {
+  const openBillingPortal = () => {
     if (billingPortalUrl) {
       window.open(billingPortalUrl, '_blank', 'noopener,noreferrer')
     }
@@ -16,12 +22,12 @@ export function ResumeButton({ billingPortalUrl, isLoadingPortal }: ResumeButton
 
   return (
     <Button
-      onClick={handleResume}
+      onClick={openBillingPortal}
       disabled={isDisabled}
       variant="outline"
       className="w-full mt-2"
     >
-      {isLoadingPortal ? 'Loading...' : 'Resume'}
+      {isLoadingPortal ? 'Loading...' : label}
     </Button>
   )
 }

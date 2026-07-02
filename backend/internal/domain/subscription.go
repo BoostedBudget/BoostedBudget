@@ -33,6 +33,18 @@ const (
 	SubscriptionStatusPastDue SubscriptionStatus = "past_due"
 )
 
+// NormalizeSubscriptionStatus maps external Paddle status to domain spelling.
+// Maps "paused" and "canceled" (single-l) to "cancelled" (double-l, #933).
+// All other values pass through unchanged.
+func NormalizeSubscriptionStatus(status string) string {
+	switch status {
+	case "paused", "canceled":
+		return string(SubscriptionStatusCancelled)
+	default:
+		return status
+	}
+}
+
 // IsActiveSubscription returns true if the status allows access to the app
 func (s SubscriptionStatus) IsActiveSubscription() bool {
 	return s == SubscriptionStatusActive || s == SubscriptionStatusTrial || s == SubscriptionStatusTrialing

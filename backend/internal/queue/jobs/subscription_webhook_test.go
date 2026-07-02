@@ -877,8 +877,14 @@ func TestWorker_SubscriptionPastDue_Success(t *testing.T) {
 	mockClerk.AssertExpectations(t)
 }
 
-// TestWorker_SubscriptionResumed_Success tests subscription.resumed event.
-func TestWorker_SubscriptionResumed_Success(t *testing.T) {
+// TestWorker_SubscriptionResumed_IsIgnored verifies that subscription.resumed is handled as a
+// defensive no-op: the webhook is acknowledged (MarkProcessed) but NO subscription state is
+// modified — no UpdateSubscriptionFromPaddle, no notification, no ClearRetentionDates, no
+// Clerk sync.
+// #933: pause/resume is not a supported product feature; paused→cancelled is terminal.
+// Reactivating on a Paddle-side resume would leave a half-restored state (active status,
+// Plaid still disconnected). Instead, the user simply resubscribes via the normal flow.
+func TestWorker_SubscriptionResumed_IsIgnored(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
@@ -890,27 +896,19 @@ func TestWorker_SubscriptionResumed_Success(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
-	user := &domain.User{
-		ID:          "user_2abc123def456",
-		ClerkUserID: "clerk_user_123",
-	}
-
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
-	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "active", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
-	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
-		return n.Type == "subscription_resumed" && n.UserID == "user_2abc123def456"
-	})).Return(nil)
-	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	// #930: Retention clock cleared on resume (resubscribe)
-	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	// Webhook must be acknowledged so it isn't retried.
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
 	mockWebhookRepo.AssertExpectations(t)
-	mockNotifRepo.AssertExpectations(t)
+	// No subscription state mutations allowed for a resumed event.
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	mockNotifRepo.AssertNotCalled(t, "Create")
+	mockClerk.AssertNotCalled(t, "UpdateUserMetadata")
 }
 
 // TestWorker_SubscriptionTrialing_Success tests subscription.trialing event.
@@ -1217,4 +1215,106 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucce
 	mockProfileRepo.AssertExpectations(t)
 	mockNotifRepo.AssertNotCalled(t, "Create")
 	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled verifies that a
+// subscription.created event carrying status:"paused" is normalized to "cancelled" before
+// the DB write, preventing a CHECK violation and River retry loop.
+// #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
+func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	rawPayload := `{"event_id":"evt_created_paused","event_type":"subscription.created","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"paused","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
+	webhook := &domain.PaddleWebhookEvent{
+		ID: "test-webhook-id-123", EventID: "evt_created_paused",
+		EventType: "subscription.created", Payload: json.RawMessage(rawPayload), SignatureValid: true,
+	}
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: "evt_created_paused", EventType: "subscription.created"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456"}
+	expectedSubID := "sub_01h1234567890abcdef"
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdatePaddleCustomerID", ctx, "user_2abc123def456", "ctm_01h1234567890abcdef").Return(nil)
+	// Critical: status must be "cancelled", not the raw "paused" from the payload
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled verifies that a
+// subscription.activated event carrying status:"paused" is normalized to "cancelled".
+// #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
+func TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	rawPayload := `{"event_id":"evt_activated_paused","event_type":"subscription.activated","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"paused","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
+	webhook := &domain.PaddleWebhookEvent{
+		ID: "test-webhook-id-123", EventID: "evt_activated_paused",
+		EventType: "subscription.activated", Payload: json.RawMessage(rawPayload), SignatureValid: true,
+	}
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: "evt_activated_paused", EventType: "subscription.activated"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456"}
+	expectedSubID := "sub_01h1234567890abcdef"
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// Critical: status must be "cancelled", not the raw "paused"
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionUpdated_PausedStatus_NormalizedToCancelled verifies that a
+// subscription.updated event carrying status:"paused" is normalized to "cancelled".
+// #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
+func TestWorker_SubscriptionUpdated_PausedStatus_NormalizedToCancelled(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	rawPayload := `{"event_id":"evt_updated_paused","event_type":"subscription.updated","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"paused","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
+	webhook := &domain.PaddleWebhookEvent{
+		ID: "test-webhook-id-123", EventID: "evt_updated_paused",
+		EventType: "subscription.updated", Payload: json.RawMessage(rawPayload), SignatureValid: true,
+	}
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: "evt_updated_paused", EventType: "subscription.updated"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// Critical: status must be "cancelled", not the raw "paused".
+	// Note: after normalization status="cancelled" (read-only), so ClearRetentionDates is NOT called.
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
 }
