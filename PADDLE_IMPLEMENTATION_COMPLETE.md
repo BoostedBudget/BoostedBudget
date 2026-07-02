@@ -38,6 +38,8 @@
 5. **Async Processing**
    - ✅ River job worker handles 8 Paddle event types
    - ✅ subscription.created, activated, updated, canceled, paused, past_due
+     (Note: `subscription.paused` → treated as cancellation; `subscription.resumed` → logged no-op.
+      Pause/resume is not a supported product feature — #933.)
    - ✅ transaction.completed, payment_failed
    - ✅ Idempotency and retry logic
 
@@ -208,7 +210,6 @@ These are **optional** enhancements, not required for MVP:
 - [ ] Full production testing
 
 ### Low Priority (nice to have)
-- [ ] Subscription pause/resume UI
 - [ ] Billing history page
 - [ ] Invoice download functionality
 - [ ] Paddle customer portal integration

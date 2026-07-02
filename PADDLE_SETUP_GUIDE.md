@@ -189,7 +189,7 @@ Create a table with all your Price IDs:
      - [x] `subscription.activated`
      - [x] `subscription.updated`
      - [x] `subscription.canceled`
-     - [x] `subscription.paused`
+     - [x] `subscription.paused`  ← defensive: treated as cancellation (#933, pause not a product feature)
      - [x] `subscription.past_due`
      - [x] `transaction.completed`
      - [x] `transaction.payment_failed`
@@ -389,8 +389,12 @@ Check logs for:
 1. In Paddle Dashboard, go to **Subscriptions**
 2. Click on your test subscription
 3. Try these actions:
-   - **Pause subscription** → Should trigger `subscription.paused` webhook
-   - **Resume subscription** → Should trigger `subscription.activated` webhook
+   - **Pause subscription** → Triggers `subscription.paused` webhook; BoostedBudget treats this as
+     cancellation (pause is not a supported product feature — #933). Verify the subscription moves
+     to `cancelled` status in the database.
+   - **Resume subscription** → Triggers `subscription.resumed` webhook; BoostedBudget logs it and
+     acknowledges as a no-op (resume is not a supported product feature — #933). Status remains
+     `cancelled`; user must resubscribe.
    - **Cancel subscription** → Should trigger `subscription.canceled` webhook
 
 4. Check backend logs for each webhook event being processed
