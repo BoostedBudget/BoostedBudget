@@ -657,10 +657,10 @@ describe('PricingPage', () => {
         expect(currentPlanElements.length).toBeGreaterThan(0)
       })
 
-      it('shows Resume button for current tier', () => {
+      it('shows Resubscribe button for current cancelled tier', () => {
         renderWithProviders(<PricingPage />)
-        const resumeButton = screen.getByRole('button', { name: /resume/i })
-        expect(resumeButton).toBeInTheDocument()
+        const resubscribeButton = screen.getByRole('button', { name: /resubscribe/i })
+        expect(resubscribeButton).toBeInTheDocument()
       })
 
       it('shows directional CTAs (Upgrade/Downgrade/Switch) for other tiers', () => {
@@ -721,19 +721,21 @@ describe('PricingPage', () => {
         expect(screen.getByText(/your subscription has expired/i)).toBeInTheDocument()
       })
 
-      it('shows Resume button for current tier', () => {
+      it('shows Update Payment Method button for current past_due tier', () => {
         mockUseGetBillingPortalUrl.mockReturnValue({
           data: { portal_url: 'https://portal.paddle.com/past-due' },
           isLoading: false,
           error: null,
         })
         renderWithProviders(<PricingPage />)
-        expect(screen.getByRole('button', { name: /resume/i })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /update payment method/i })).toBeInTheDocument()
       })
 
       it('shows disabled Update Payment buttons for non-current tiers', () => {
         renderWithProviders(<PricingPage />)
-        const updatePaymentButtons = screen.getAllByRole('button', { name: /update payment/i })
+        // TierActionButton for past_due non-current tiers shows "Update Payment" (exact).
+        // BillingPortalButton for the current tier shows "Update Payment Method" — excluded here.
+        const updatePaymentButtons = screen.getAllByRole('button', { name: /^Update Payment$/i })
         expect(updatePaymentButtons.length).toBe(4) // 4 non-current tiers
         updatePaymentButtons.forEach(btn => expect(btn).toBeDisabled())
       })

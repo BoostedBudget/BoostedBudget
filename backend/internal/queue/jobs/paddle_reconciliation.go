@@ -74,18 +74,9 @@ func NewPaddleReconciliationWorker(deps PaddleReconciliationWorkerDeps) *PaddleR
 	}
 }
 
-// normalizePaddleStatus maps Paddle statuses to domain statuses.
-// Maps "canceled" (single-l) and "paused" to the domain's "cancelled" (double-l).
-// #930: paused is not a valid business status — treat it as cancelled.
+// normalizePaddleStatus delegates to domain.NormalizeSubscriptionStatus (#933: single source of truth).
 func normalizePaddleStatus(paddleStatus paddle.SubscriptionStatus) string {
-	switch paddleStatus {
-	case paddle.SubscriptionStatusCanceled:
-		return string(domain.SubscriptionStatusCancelled)
-	case paddle.SubscriptionStatusPaused:
-		return string(domain.SubscriptionStatusCancelled)
-	default:
-		return string(paddleStatus)
-	}
+	return domain.NormalizeSubscriptionStatus(string(paddleStatus))
 }
 
 // resolveTierFromSubscription returns the tier name corresponding to the first

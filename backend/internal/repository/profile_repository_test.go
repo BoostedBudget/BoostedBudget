@@ -589,7 +589,10 @@ func TestUpdateSubscriptionFromPaddle_WithSubscriptionID(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID tests updating with null subscription ID
+// TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID verifies that when subscriptionID is nil
+// the paddle_subscription_id and paddle_subscription_id_blind_idx columns are OMITTED from the SET
+// clause (preserving existing values) rather than being overwritten with NULL.
+// #933: nil = preserve semantics; fixes the cancel-path ID-clearing bug.
 func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	mock, repo := setupMockDB(t)
 	defer mock.Close()
@@ -600,8 +603,10 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	status := "active"
 	now := time.Now()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7 WHERE id = $8 AND is_deleted = FALSE`)).
-		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), (*string)(nil), (*string)(nil), pgxmock.AnyArg(), userID).
+	// When subscriptionID is nil, the query OMITS the paddle_subscription_id columns entirely
+	// (6 params, not 8 — no paddle_subscription_id or paddle_subscription_id_blind_idx).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5 WHERE id = $6 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
