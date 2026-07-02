@@ -291,3 +291,139 @@ func TestMigration000094Down_DeletesMatchRowsAndRestoresConstraint_Integration(t
 		"SQLSTATE must be 23514 (check_violation), not some other error class")
 	// tx is now in aborted state; defer tx.Rollback(ctx) at the top will clean up.
 }
+
+// TestMigration000104_RemapsResumedAndRejectsInsert_Integration exercises the
+// data-migration path of migration 000104 (#933: subscription pause/resume removed).
+// The up migration does three things in order:
+//  1. UPDATE notifications SET type='subscription_activated' WHERE type='subscription_resumed'
+//  2. DROP CONSTRAINT IF EXISTS notifications_type_check
+//  3. ADD CONSTRAINT notifications_type_check CHECK (type IN (<14 values, no subscription_resumed>))
+//
+// This test verifies:
+//   - A pre-existing subscription_resumed row is remapped to subscription_activated.
+//   - A control row of a different type (subscription_cancelled) is unchanged.
+//   - After the constraint tighten, INSERT type='subscription_activated' still succeeds.
+//   - After the constraint tighten, INSERT type='subscription_resumed' is rejected (23514).
+//
+// The migrated test DB already has the post-104 constraint (14 types, no subscription_resumed),
+// so the test first recreates the pre-104 state (15-type constraint) to allow seeding the row.
+// In Postgres, DDL is transactional: DROP/ADD CONSTRAINT are rolled back with the surrounding
+// tx.Rollback(), so the real schema is left unchanged after the test.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestMigration000104 -tags integration -v
+func TestMigration000104_RemapsResumedAndRejectsInsert_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Seed a user needed by the notifications user_id FK.
+	userID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID.String(), "int-104-mig-"+userID.String()+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	// Recreate the pre-104 constraint (15 types, including subscription_resumed).
+	// The migrated test DB already enforces the post-104 constraint (14 types), so we must
+	// drop and re-add the pre-104 version before seeding a subscription_resumed row.
+	_, err = tx.Exec(ctx, `ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check`)
+	require.NoError(t, err, "drop current constraint to recreate pre-104 state")
+	_, err = tx.Exec(ctx, `
+		ALTER TABLE notifications ADD CONSTRAINT notifications_type_check
+		CHECK (type IN (
+			'item_error', 'login_required', 'pending_expiration', 'permission_revoked',
+			'transaction_sync', 'budget_alert', 'payment_failed', 'subscription_past_due',
+			'subscription_cancelled', 'subscription_resumed', 'subscription_activated',
+			'subscription_trialing', 'transaction_past_due', 'transfer_suggestion',
+			'transfer_suggestion_match'
+		))
+	`)
+	require.NoError(t, err, "recreate pre-104 15-type constraint (includes subscription_resumed)")
+
+	// Seed a subscription_resumed notification (now allowed by the restored pre-104 constraint).
+	resumedNotifID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, created_at, updated_at)
+		VALUES ($1, $2, 'subscription_resumed', 'Subscription Resumed', 'Welcome back!', false, false, 'informational', NOW(), NOW())
+	`, resumedNotifID, userID)
+	require.NoError(t, err, "seed subscription_resumed notification")
+
+	// Seed a control row that must not be remapped.
+	controlNotifID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, created_at, updated_at)
+		VALUES ($1, $2, 'subscription_cancelled', 'Subscription Cancelled', 'Your subscription ended.', false, false, 'informational', NOW() + interval '1s', NOW())
+	`, controlNotifID, userID)
+	require.NoError(t, err, "seed subscription_cancelled control row")
+
+	// Simulate the 000104 up-migration SQL (Step 1: Remap subscription_resumed → subscription_activated).
+	tag, err := tx.Exec(ctx, `UPDATE notifications SET type = 'subscription_activated' WHERE type = 'subscription_resumed'`)
+	require.NoError(t, err, "up-migration UPDATE must succeed")
+	require.Equal(t, int64(1), tag.RowsAffected(),
+		"exactly one subscription_resumed row must be remapped")
+
+	// Tighten the CHECK constraint (Step 2 + 3: 14 types, subscription_resumed omitted).
+	_, err = tx.Exec(ctx, `ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check`)
+	require.NoError(t, err, "drop constraint")
+	_, err = tx.Exec(ctx, `
+		ALTER TABLE notifications ADD CONSTRAINT notifications_type_check
+		CHECK (type IN (
+			'item_error', 'login_required', 'pending_expiration', 'permission_revoked',
+			'transaction_sync', 'budget_alert', 'payment_failed', 'subscription_past_due',
+			'subscription_cancelled', 'subscription_activated', 'subscription_trialing',
+			'transaction_past_due', 'transfer_suggestion', 'transfer_suggestion_match'
+		))
+	`)
+	require.NoError(t, err, "add tightened constraint")
+
+	// Verify the resumed row was remapped to subscription_activated.
+	var gotType string
+	err = tx.QueryRow(ctx, `SELECT type FROM notifications WHERE id = $1`, resumedNotifID).Scan(&gotType)
+	require.NoError(t, err)
+	require.Equal(t, "subscription_activated", gotType,
+		"subscription_resumed row must be remapped to subscription_activated")
+
+	// Verify the control row was unaffected.
+	var controlType string
+	err = tx.QueryRow(ctx, `SELECT type FROM notifications WHERE id = $1`, controlNotifID).Scan(&controlType)
+	require.NoError(t, err)
+	require.Equal(t, "subscription_cancelled", controlType,
+		"control row must not be remapped")
+
+	// Verify the tightened CHECK still accepts subscription_activated (no regression).
+	// IMPORTANT: this must run BEFORE the intentionally-failing insert below, because a
+	// Postgres CHECK violation (23514) aborts the entire transaction — any subsequent
+	// statement would fail with "current transaction is aborted" rather than the constraint error we intend to assert.
+	newActivatedID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, created_at, updated_at)
+		VALUES ($1, $2, 'subscription_activated', 'Subscription Active', 'You are now active.', false, false, 'informational', NOW() + interval '2s', NOW())
+	`, newActivatedID, userID)
+	require.NoError(t, err,
+		"INSERT with type='subscription_activated' must still succeed after constraint tighten")
+
+	// Verify the tightened CHECK rejects subscription_resumed with SQLSTATE 23514.
+	// This intentionally aborts the transaction — no more tx use after this point.
+	newResumedID := uuid.New()
+	_, insertErr := tx.Exec(ctx, `
+		INSERT INTO notifications
+			(id, user_id, type, title, message, read, sent_email, interaction_pattern, created_at, updated_at)
+		VALUES ($1, $2, 'subscription_resumed', 'Subscription Resumed', 'Welcome back!', false, false, 'informational', NOW() + interval '3s', NOW())
+	`, newResumedID, userID)
+	require.Error(t, insertErr,
+		"INSERT with type='subscription_resumed' must fail after constraint tighten")
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, insertErr, &pgErr,
+		"error must be a pgconn.PgError (postgres-level constraint violation)")
+	require.Equal(t, "23514", pgErr.Code,
+		"SQLSTATE must be 23514 (check_violation): subscription_resumed must be rejected")
+}
