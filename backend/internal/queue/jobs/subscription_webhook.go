@@ -62,7 +62,8 @@ type SubscriptionPaddleTransactionRepository interface {
 }
 
 // PlaidItemCleanupForWebhook defines the Plaid cleanup operation needed by subscription webhooks.
-// Issue #896: Used to disconnect items on subscription cancellation/pause.
+// Issue #896: Disconnects all Plaid items on subscription cancellation. Pause is not a supported
+// product feature (#933); subscription.paused is treated as cancellation and uses this same path.
 type PlaidItemCleanupForWebhook interface {
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
@@ -539,7 +540,9 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	return nil
 }
 
-// processSubscriptionCanceled handles subscription.canceled events.
+// processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
+// Pause is not a supported product feature (#933); paused subscriptions are treated as terminal
+// cancellations — access is revoked, Plaid items disconnected, and data-retention starts.
 func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {

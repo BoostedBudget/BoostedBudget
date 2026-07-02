@@ -80,6 +80,62 @@ func TestUpdateSubscriptionFromPaddle_Integration_PreservesIDWhenNil(t *testing.
 	assert.NotNil(t, encryptedIDAfter, "paddle_subscription_id must be preserved (not NULLed) when subscriptionID is nil")
 }
 
+// TestUpdateSubscriptionFromPaddle_Integration_PreservesBlindIdxForPastDue verifies the
+// reconciliation-eligibility invariant (#933): when a past_due webhook calls
+// UpdateSubscriptionFromPaddle with subscriptionID=nil, paddle_subscription_id_blind_idx
+// must remain non-NULL so the user stays eligible for reconciliation
+// (profile_repository.go uses blind_idx IS NOT NULL to find active Paddle subscriptions).
+func TestUpdateSubscriptionFromPaddle_Integration_PreservesBlindIdxForPastDue(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d_pastdue", time.Now().UnixNano())
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_sub_pastdue_" + suffix,
+		Email:              "sub-pastdue-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
+
+	initialSubID := "sub_pastdue_" + uuid.New().String()
+
+	// Set an initial subscription ID so blind_idx is non-NULL.
+	err = repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "active", nil, nil, &initialSubID)
+	require.NoError(t, err)
+
+	var blindIdxBefore *string
+	err = pool.QueryRow(ctx, "SELECT paddle_subscription_id_blind_idx FROM users WHERE id = $1", user.ID).Scan(&blindIdxBefore)
+	require.NoError(t, err)
+	require.NotNil(t, blindIdxBefore, "blind_idx should be non-NULL after setting subscription ID")
+
+	// Simulate the past_due webhook path: nil subscriptionID, status="past_due".
+	err = repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "past_due", nil, nil, nil)
+	require.NoError(t, err, "UpdateSubscriptionFromPaddle with past_due + nil subscriptionID should succeed")
+
+	// Assert: blind_idx stays non-NULL (user must remain reconciliation-eligible).
+	var blindIdxAfter *string
+	err = pool.QueryRow(ctx, "SELECT paddle_subscription_id_blind_idx FROM users WHERE id = $1", user.ID).Scan(&blindIdxAfter)
+	require.NoError(t, err)
+	assert.NotNil(t, blindIdxAfter, "blind_idx must be preserved for past_due users (reconciliation-eligibility guard)")
+	assert.Equal(t, *blindIdxBefore, *blindIdxAfter, "blind_idx value must be unchanged after past_due nil-subscriptionID update")
+
+	// Also verify subscription_status was updated to past_due.
+	var statusAfter string
+	err = pool.QueryRow(ctx, "SELECT subscription_status FROM users WHERE id = $1", user.ID).Scan(&statusAfter)
+	require.NoError(t, err)
+	assert.Equal(t, "past_due", statusAfter, "subscription_status should reflect past_due")
+}
+
 // TestUpdateSubscriptionFromPaddle_Integration_OverwritesIDWhenNonNil verifies that when
 // subscriptionID is non-nil, both paddle_subscription_id and paddle_subscription_id_blind_idx
 // are updated to the new values.
