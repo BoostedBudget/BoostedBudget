@@ -431,10 +431,12 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
-	// #930/#933: Only fire active-path side effects for non-read-only statuses.
-	// A paused payload normalized to "cancelled" is terminal — skip retention-clear
-	// and analytics (firing subscription_created with status=cancelled corrupts funnels).
-	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
+	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
+	// because created/activated also fire funnel analytics and a welcome notification that
+	// require real activation. past_due/cancelled/inactive are all excluded: analytics
+	// fired with those statuses would corrupt conversion funnels (#933).
+	if domain.SubscriptionStatus(status).IsActiveSubscription() {
 		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
 			w.logger.Warn("failed to clear retention dates on subscription created", "user_id", userID, "error", retErr)
 		}
@@ -480,8 +482,12 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	// #930/#933: Only fire active-path side effects for non-read-only statuses.
-	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
+	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
+	// because the "Welcome aboard!" notification and retention-clear require real activation.
+	// past_due/cancelled/inactive are excluded: sending an activation notice to a past_due
+	// user is factually wrong and corrupts UX (#933).
+	if domain.SubscriptionStatus(status).IsActiveSubscription() {
 		w.createNotification(ctx, notificationParams{
 			userID:             userID,
 			notificationType:   "subscription_activated",
