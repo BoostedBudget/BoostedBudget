@@ -27,8 +27,10 @@ type PastDueProfileRepository interface {
 	// GetUserByID retrieves a user by their internal UUID (used for race-condition re-read).
 	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
 
-	// UpdateSubscriptionStatus updates just the subscription status.
-	UpdateSubscriptionStatus(ctx context.Context, userID, status string) error
+	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is
+	// still 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user
+	// has already recovered (payment arrived between Plaid disconnect and this point).
+	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
 
 	// SetRetentionDates starts the 6-month retention clock.
 	SetRetentionDates(ctx context.Context, userID string, started, expires time.Time) error
@@ -175,11 +177,19 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	}
 
 	// Step 3: CAS flip subscription_status → cancelled.
-	// UpdateSubscriptionStatus already uses WHERE id=$1, but we re-checked status in
-	// processPlaidDisconnectWindow. At grace expiry we proceed directly — the Plaid
-	// disconnect above is the retryability guard; if we reach here Plaid succeeded.
-	if err := s.repo.UpdateSubscriptionStatus(ctx, user.ID, "cancelled"); err != nil {
-		return fmt.Errorf("failed to update subscription status for past_due user %s: %w", user.ID, err)
+	// Only flips if the user is still 'past_due' — guards against a concurrent
+	// subscription.activated webhook that may have restored the user to 'active'
+	// between the Plaid disconnect above and this point.
+	flipped, err := s.repo.CancelIfPastDue(ctx, user.ID)
+	if err != nil {
+		return fmt.Errorf("CancelIfPastDue: %w", err)
+	}
+	if !flipped {
+		// User recovered (payment arrived between Plaid disconnect and this point).
+		// Log and return — do NOT continue with retention/notify/clear.
+		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
+			slog.String("user_id", user.ID))
+		return nil
 	}
 
 	// Step 4: Start 6-month retention clock.

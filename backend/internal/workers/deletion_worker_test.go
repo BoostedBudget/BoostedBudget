@@ -157,6 +157,9 @@ func (m *MockProfileRepoForWorker) ClearPastDueStartedAt(ctx context.Context, us
 func (m *MockProfileRepoForWorker) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
+func (m *MockProfileRepoForWorker) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
 
 func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil

@@ -1897,6 +1897,9 @@ func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Contex
 func (m *mockProfileRepoForCursorTests) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
+func (m *mockProfileRepoForCursorTests) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }
 func (m *mockProfileRepoForCursorTests) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	return nil
