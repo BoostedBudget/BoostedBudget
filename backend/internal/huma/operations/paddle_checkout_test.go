@@ -188,6 +188,9 @@ func (m *mockProfileRepo) SetPastDueStartedAt(ctx context.Context, userID string
 func (m *mockProfileRepo) ClearPastDueStartedAt(ctx context.Context, userID string) error {
 	return nil
 }
+func (m *mockProfileRepo) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
+	return []domain.User{}, nil
+}
 
 func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	args := m.Called(ctx, tx, userID, plainEmail)
