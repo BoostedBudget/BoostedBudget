@@ -114,6 +114,11 @@ func NewPastDueService(
 	}
 }
 
+// SetPlaidCleanup wires in the Plaid cleanup service (called after Plaid is configured).
+func (s *PastDueService) SetPlaidCleanup(svc PastDuePlaidCleanup) {
+	s.plaidCleanup = svc
+}
+
 // GetUsersInPastDue returns users whose subscription_status is 'past_due'
 // and whose past_due_started_at is non-nil.
 func (s *PastDueService) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {

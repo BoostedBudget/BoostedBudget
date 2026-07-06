@@ -236,6 +236,9 @@ func main() {
 	// Issue #762: Declare Paddle reconciliation worker
 	var paddleReconciliationWorker *jobs.PaddleReconciliationWorker
 
+	// Issue #898: Declare past_due check worker
+	var pastDueCheckWorker *jobs.PastDueCheckWorker
+
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
@@ -651,8 +654,21 @@ func main() {
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
 		appLogger.Info("Trial service initialized")
 
-		// TODO(#898): wire pastDueConfig into PastDueService once A6 is implemented
-		_ = tierConfig.GetPastDueConfig()
+		// Issue #898: Create PastDueService unconditionally; plaidCleanup wired later if Plaid is configured.
+		pastDueCfg := tierConfig.GetPastDueConfig()
+		pastDueService := services.NewPastDueService(
+			profileRepo,
+			nil, // plaidCleanup — wired via SetPlaidCleanup() if Plaid is configured
+			paddleService,
+			clerkService,
+			notificationRepo,
+			pastDueCfg.GraceDays,
+			pastDueCfg.PlaidDisconnectDays,
+		)
+		appLogger.Info("Past-due service initialized",
+			"grace_days", pastDueCfg.GraceDays,
+			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,
+		)
 
 		// Issue #679: Wire trial service to registration service for auto-grant on signup.
 		// Auto-grant now runs regardless of Plaid config (confirmed intended behavior #1015).
@@ -666,6 +682,14 @@ func main() {
 			Logger:       appLogger,
 		})
 		appLogger.Info("Trial expiration check worker created (River)")
+
+		// Issue #898: Create past-due check worker (depends on pastDueService, created unconditionally above)
+		pastDueCheckWorker = jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{
+			ProfileRepo:    profileRepo,
+			PastDueService: pastDueService,
+			Logger:         appLogger,
+		})
+		appLogger.Info("Past-due check worker created (River)")
 
 		// Issue #762: Create Paddle reconciliation worker (depends only on paddleService, not Plaid)
 		if cfg.PaddleReconciliationEnabled && paddleService != nil {
@@ -782,6 +806,10 @@ func main() {
 				// Issue #1015: Wire Plaid cleanup to trial service (created before Plaid block with nil cleanup)
 				trialService.SetPlaidCleanup(plaidCleanupService)
 				appLogger.Info("Plaid cleanup service wired to trial service")
+
+				// Issue #898: Wire Plaid cleanup to past-due service (created before Plaid block with nil cleanup)
+				pastDueService.SetPlaidCleanup(plaidCleanupService)
+				appLogger.Info("Plaid cleanup service wired to past-due service")
 
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
@@ -1031,6 +1059,22 @@ func main() {
 				appLogger.Info("Trial expiration check periodic job configured (daily)")
 			}
 
+			// Issue #898: Past-due check (daily) — disconnects Plaid at 14d and auto-cancels at 21d
+			if pastDueCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.PastDueCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: true},
+				))
+				appLogger.Info("Past-due check periodic job configured (daily)")
+			}
+
 			// Issue #762: Paddle reconciliation check (daily)
 			if paddleReconciliationWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
@@ -1185,6 +1229,10 @@ func main() {
 			if trialExpirationCheckWorker != nil {
 				river.AddWorker(riverWorkers, trialExpirationCheckWorker)
 				appLogger.Info("Trial expiration check worker registered with River")
+			}
+			if pastDueCheckWorker != nil {
+				river.AddWorker(riverWorkers, pastDueCheckWorker)
+				appLogger.Info("Past-due check worker registered with River")
 			}
 			if paddleReconciliationWorker != nil {
 				river.AddWorker(riverWorkers, paddleReconciliationWorker)
