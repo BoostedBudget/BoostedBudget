@@ -142,18 +142,14 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 	}
 
 	age := now.Sub(*user.PastDueStartedAt)
-	graceDuration := time.Duration(s.graceDays) * 24 * time.Hour
-	plaidDisconnectDuration := time.Duration(s.plaidDisconnectDays) * 24 * time.Hour
 
 	switch {
-	case age >= graceDuration:
+	case age >= time.Duration(s.graceDays)*24*time.Hour:
 		return s.processGraceExpiry(ctx, user, now)
-	case age >= plaidDisconnectDuration:
+	case age >= time.Duration(s.plaidDisconnectDays)*24*time.Hour:
 		return s.processPlaidDisconnectWindow(ctx, user)
-	default:
-		// Too early — no action.
-		return nil
 	}
+	return nil
 }
 
 // processGraceExpiry handles auto-cancellation when grace period has elapsed.
@@ -176,7 +172,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// Step 2: Cancel Paddle subscription.
 	// Tolerate already-cancelled — the subscription may have already been cancelled
 	// via Paddle's own dunning before our job ran.
-	if s.paddleClient != nil && user.PaddleSubscriptionID != nil {
+	if user.PaddleSubscriptionID != nil {
 		if err := s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID); err != nil {
 			if !errors.Is(err, ErrPaddleAlreadyCancelled) {
 				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, err)
@@ -272,9 +268,6 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 // syncClerkMetadata updates the Clerk public metadata for the user's new subscription state.
 // Logs and swallows errors so Clerk failures don't abort the dunning flow.
 func (s *PastDueService) syncClerkMetadata(ctx context.Context, user domain.User, status string) {
-	if s.clerkClient == nil {
-		return
-	}
 	if err := s.clerkClient.UpdateUserMetadata(ctx, user.ClerkUserID, map[string]interface{}{
 		"subscription_tier":   user.SubscriptionTier,
 		"subscription_status": status,
@@ -287,22 +280,22 @@ func (s *PastDueService) syncClerkMetadata(ctx context.Context, user domain.User
 // createCancelledNotification creates an in-app notification for an auto-cancelled subscription.
 // Logs and swallows errors so notification failures don't abort the dunning flow.
 func (s *PastDueService) createCancelledNotification(ctx context.Context, user domain.User) {
-	if s.notificationRepo == nil {
-		return
-	}
-	actionURL := "/billing"
-	actionLabel := "Resubscribe"
 	if err := s.notificationRepo.Create(ctx, &domain.Notification{
 		ID:                 uuid.New().String(),
 		UserID:             user.ID,
 		Type:               "subscription_cancelled",
 		Title:              "Subscription Cancelled",
 		Message:            "Your subscription has been cancelled due to non-payment. Resubscribe to restore access.",
-		ActionURL:          &actionURL,
-		ActionLabel:        &actionLabel,
+		ActionURL:          ptr("/billing"),
+		ActionLabel:        ptr("Resubscribe"),
 		InteractionPattern: "action_required",
 	}); err != nil {
 		s.logger.Error("failed to create subscription_cancelled notification",
 			"user_id", user.ID, "error", err)
 	}
+}
+
+// ptr returns a pointer to v (helper for inline pointer literals).
+func ptr[T any](v T) *T {
+	return &v
 }

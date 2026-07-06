@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 
 const SESSION_KEY_PREFIX = 'bb_sub_banner_dismissed'
 
-const getSessionStorageFlag = (key: string): boolean => {
+const getStorageFlag = (key: string): boolean => {
   try {
     return typeof window !== 'undefined' && sessionStorage.getItem(key) === 'true'
   } catch {
@@ -10,7 +10,7 @@ const getSessionStorageFlag = (key: string): boolean => {
   }
 }
 
-const setSessionStorageFlag = (key: string): void => {
+const setStorageFlag = (key: string): void => {
   try {
     sessionStorage.setItem(key, 'true')
   } catch {
@@ -23,10 +23,10 @@ export function useSessionDismiss(
   status: string
 ): { isDismissed: boolean; dismiss: () => void } {
   const key = `${SESSION_KEY_PREFIX}_${userId}_${status}`
-  const [isDismissed, setIsDismissed] = useState(() => getSessionStorageFlag(key))
+  const [isDismissed, setIsDismissed] = useState(() => getStorageFlag(key))
 
   const dismiss = useCallback(() => {
-    setSessionStorageFlag(key)
+    setStorageFlag(key)
     setIsDismissed(true)
   }, [key])
 

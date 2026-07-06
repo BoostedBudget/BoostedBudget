@@ -63,11 +63,14 @@ export function SubscriptionStatusBanner() {
     dismiss()
   }
 
+  const isPastDue = status === 'past_due'
+  const isCancelled = status === 'cancelled'
+
   const getMessage = () => {
-    if (status === 'past_due') {
+    if (isPastDue) {
       return "Your payment didn't go through. Update your payment method to restore access."
     }
-    if (status === 'cancelled') {
+    if (isCancelled) {
       const date = user.retention_expires_at
         ? ` Access ends ${user.retention_expires_at.slice(0, 10)}.`
         : ''
@@ -77,7 +80,7 @@ export function SubscriptionStatusBanner() {
   }
 
   const renderCta = () => {
-    if (status === 'past_due') {
+    if (isPastDue) {
       const portalUrl = billingPortalQuery.data?.portal_url
       if (portalUrl) {
         return (
@@ -102,7 +105,7 @@ export function SubscriptionStatusBanner() {
       )
     }
 
-    const label = status === 'cancelled' ? 'Resubscribe' : 'Re-subscribe'
+    const label = isCancelled ? 'Resubscribe' : 'Re-subscribe'
     return (
       <a
         href="/pricing"

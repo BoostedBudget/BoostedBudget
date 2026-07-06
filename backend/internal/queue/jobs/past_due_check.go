@@ -55,11 +55,9 @@ func NewPastDueCheckWorker(deps PastDueCheckWorkerDeps) *PastDueCheckWorker {
 }
 
 func (w *PastDueCheckWorker) Work(ctx context.Context, job *river.Job[PastDueCheckArgs]) (err error) {
-	args := job.Args
-
 	w.logger.Info("starting past_due check",
 		"job_id", job.ID,
-		"trigger_source", args.TriggerSource,
+		"trigger_source", job.Args.TriggerSource,
 		"attempt", job.Attempt,
 	)
 
