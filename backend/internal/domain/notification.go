@@ -59,12 +59,12 @@ func (n *Notification) Validate() error {
 		"payment_failed":          true,
 		"subscription_past_due":   true,
 		"subscription_cancelled":  true,
-		"subscription_resumed":    true,
+		// Note: subscription_resumed omitted (#933: pause/resume not supported)
 		"subscription_activated":  true,
 		"subscription_trialing":   true,
 		"transaction_past_due":    true,
 		"transfer_suggestion":       true,
-		"transfer_suggestion_match": true, // #972: fuzzy-match amount-confirm prompt
+		"transfer_suggestion_match": true,
 	}
 	if !validTypes[n.Type] {
 		return errors.New("invalid notification type")
