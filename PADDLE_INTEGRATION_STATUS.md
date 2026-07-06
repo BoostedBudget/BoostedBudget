@@ -39,6 +39,7 @@
 6. **River Job Workers** ✅
    - `backend/internal/queue/jobs/subscription_webhook.go` - SubscriptionWebhookWorker
      * Handles 8 event types: subscription.created, .activated, .updated, .canceled, .paused, .past_due, transaction.completed, transaction.payment_failed
+     * Note: `.paused` → treated as cancellation; `.resumed` → logged no-op. Pause/resume not a supported product feature (#933).
 
 7. **Route Registration** ✅
    - Routes registered in `backend/cmd/server/main.go`
@@ -146,7 +147,6 @@
 
 10. **Enhanced Features**
     - Paddle customer portal integration
-    - Subscription pause/resume functionality
     - Multi-currency support
     - Invoice generation and email
     - Subscription metrics dashboard

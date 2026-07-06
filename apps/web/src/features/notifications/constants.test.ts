@@ -43,4 +43,10 @@ describe('NOTIFICATION_TYPE_CONFIG', () => {
       expect(config.defaultLabel, `${type} must have defaultLabel`).toBeDefined()
     }
   })
+
+  // #933: subscription_resumed removed (pause/resume unsupported).
+  // Remapped to subscription_activated in migration 000104.
+  it('does not include subscription_resumed (#933: pause/resume unsupported)', () => {
+    expect(NOTIFICATION_TYPE_CONFIG['subscription_resumed']).toBeUndefined()
+  })
 })

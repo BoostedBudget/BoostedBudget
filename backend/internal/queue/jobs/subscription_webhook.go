@@ -62,7 +62,8 @@ type SubscriptionPaddleTransactionRepository interface {
 }
 
 // PlaidItemCleanupForWebhook defines the Plaid cleanup operation needed by subscription webhooks.
-// Issue #896: Used to disconnect items on subscription cancellation/pause.
+// Issue #896: Disconnects all Plaid items on subscription cancellation. Pause is not a supported
+// product feature (#933); subscription.paused is treated as cancellation and uses this same path.
 type PlaidItemCleanupForWebhook interface {
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
@@ -323,12 +324,18 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 	case "subscription.canceled":
 		processErr = w.processSubscriptionCanceled(ctx, webhook)
 	case "subscription.paused":
-		// #930: Map paused to cancelled — subscriptions are either active or cancelled
+		// #933: Pause not supported; treat as cancellation to revoke access and start retention.
 		processErr = w.processSubscriptionCanceled(ctx, webhook)
 	case "subscription.past_due":
 		processErr = w.processSubscriptionPastDue(ctx, webhook)
 	case "subscription.resumed":
-		processErr = w.processSubscriptionResumed(ctx, webhook)
+		// #933: Resume not supported (paused→cancelled is terminal). Acknowledge without state change.
+		w.logger.Info("subscription.resumed received but not supported; acknowledging without state change",
+			"webhook_id", args.WebhookID)
+		if err := w.paddleWebhookRepo.MarkProcessed(ctx, args.WebhookID); err != nil {
+			w.logger.Warn("failed to mark resumed webhook as processed", "webhook_id", args.WebhookID, "error", err)
+		}
+		return nil
 	case "subscription.trialing":
 		processErr = w.processSubscriptionTrialing(ctx, webhook)
 	case "transaction.completed":
@@ -412,30 +419,34 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		startedAt, endsAt = extractDateRange(billingCycle)
 	}
 
-	// Extract status from webhook data (e.g., "active", "trialing")
-	status := getStringFromMap(data, "status")
+	// #933: Normalize Paddle status (paused/canceled → cancelled) so invalid values never reach the DB.
+	status := domain.NormalizeSubscriptionStatus(getStringFromMap(data, "status"))
 	if status == "" {
 		status = "active" // fallback for older webhooks
 	}
 
-	// Issue #48: Pass subscription ID to repository for storage
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), status, startedAt, endsAt, &subscriptionID); err != nil {
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
-	// #930: Clear retention clock — subscription created, user is no longer pending deletion
-	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
-		w.logger.Warn("failed to clear retention dates on subscription created", "user_id", userID, "error", retErr)
-	}
-
-	if w.analytics != nil {
-		w.analytics.Capture(userID, phclient.EventSubscriptionCreated, map[string]interface{}{
-			"tier":            string(tier),
-			"status":          status,
-			"subscription_id": subscriptionID,
-		})
+	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
+	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
+	// because created/activated also fire funnel analytics and a welcome notification that
+	// require real activation. past_due/cancelled/inactive are all excluded: analytics
+	// fired with those statuses would corrupt conversion funnels (#933).
+	if domain.SubscriptionStatus(status).IsActiveSubscription() {
+		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
+			w.logger.Warn("failed to clear retention dates on subscription created", "user_id", userID, "error", retErr)
+		}
+		if w.analytics != nil {
+			w.analytics.Capture(userID, phclient.EventSubscriptionCreated, map[string]interface{}{
+				"tier":            string(tier),
+				"status":          status,
+				"subscription_id": subscriptionID,
+			})
+		}
 	}
 
 	return nil
@@ -461,7 +472,8 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 	}
 
 	tier := w.resolveTierFromItems(data)
-	status := getStringFromMap(data, "status")
+	// #933: Normalize Paddle status (paused/canceled → cancelled) before DB write.
+	status := domain.NormalizeSubscriptionStatus(getStringFromMap(data, "status"))
 	if status == "" {
 		status = "active"
 	}
@@ -470,19 +482,24 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	w.createNotification(ctx, notificationParams{
-		userID:             userID,
-		notificationType:   "subscription_activated",
-		title:              "Subscription Activated",
-		message:            "Your BoostedBudget subscription is now active. Welcome aboard!",
-		interactionPattern: "informational",
-	})
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
-
-	// #930: Clear retention clock — user resubscribed, data is no longer pending deletion
-	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
-		w.logger.Warn("failed to clear retention dates on activation", "user_id", userID, "error", retErr)
+	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
+	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
+	// because the "Welcome aboard!" notification and retention-clear require real activation.
+	// past_due/cancelled/inactive are excluded: sending an activation notice to a past_due
+	// user is factually wrong and corrupts UX (#933).
+	if domain.SubscriptionStatus(status).IsActiveSubscription() {
+		w.createNotification(ctx, notificationParams{
+			userID:             userID,
+			notificationType:   "subscription_activated",
+			title:              "Subscription Activated",
+			message:            "Your BoostedBudget subscription is now active. Welcome aboard!",
+			interactionPattern: "informational",
+		})
+		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
+			w.logger.Warn("failed to clear retention dates on activation", "user_id", userID, "error", retErr)
+		}
 	}
+	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
 	return nil
 }
@@ -496,15 +513,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 
 	customData := getMapFromMap(data, "custom_data")
 	userID := getStringFromMap(customData, "user_id")
-	// Issue #48: Extract subscription ID from webhook data
 	subscriptionID := getStringFromMap(data, "id")
 
 	if userID == "" {
 		return errors.New("webhook payload missing user_id")
 	}
 
-	status, _ := data["status"].(string)
-	// Issue #772: Resolve tier from Paddle price_id instead of hardcoding "premium"
+	// #933: Normalize Paddle status (paused/canceled → cancelled) before DB write.
+	status := domain.NormalizeSubscriptionStatus(getStringFromMap(data, "status"))
 	tier := w.resolveTierFromItems(data)
 
 	var endsAt *time.Time
@@ -534,7 +550,9 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	return nil
 }
 
-// processSubscriptionCanceled handles subscription.canceled events.
+// processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
+// Pause is not a supported product feature (#933); paused subscriptions are treated as terminal
+// cancellations — access is revoked, Plaid items disconnected, and data-retention starts.
 func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
@@ -553,7 +571,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Issue #48: Don't update subscription ID on cancel (keep existing ID)
+	// Preserve paddle_subscription_id (needed for resubscribe flow).
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "cancelled", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
@@ -617,50 +635,6 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		interactionPattern: "action_required",
 	})
 	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
-
-	return nil
-}
-
-// processSubscriptionResumed handles subscription.resumed events.
-// Issues #747 #748: New handler — updates status to active, notifies user, syncs Clerk.
-func (w *SubscriptionWebhookWorker) processSubscriptionResumed(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
-	data, err := w.parseWebhookPayload(webhook)
-	if err != nil {
-		return err
-	}
-
-	customData := getMapFromMap(data, "custom_data")
-	userID := getStringFromMap(customData, "user_id")
-	subscriptionID := getStringFromMap(data, "id")
-
-	if userID == "" {
-		return errors.New("webhook payload missing user_id")
-	}
-
-	tier := w.resolveTierFromItems(data)
-
-	var subIDPtr *string
-	if subscriptionID != "" {
-		subIDPtr = &subscriptionID
-	}
-
-	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, string(tier), string(domain.SubscriptionStatusActive), nil, nil, subIDPtr); err != nil {
-		return fmt.Errorf("failed to update subscription status: %w", err)
-	}
-
-	w.createNotification(ctx, notificationParams{
-		userID:             userID,
-		notificationType:   "subscription_resumed",
-		title:              "Subscription Resumed",
-		message:            "Your BoostedBudget subscription has been resumed. Welcome back!",
-		interactionPattern: "informational",
-	})
-	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusActive))
-
-	// #930: Clear retention clock — user resubscribed, data is no longer pending deletion
-	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
-		w.logger.Warn("failed to clear retention dates on resume", "user_id", userID, "error", retErr)
-	}
 
 	return nil
 }

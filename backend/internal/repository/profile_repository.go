@@ -602,52 +602,39 @@ func (r *profileRepository) UpdatePaddleCustomerID(ctx context.Context, userID, 
 	return nil
 }
 
-// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
-// Issue #46: Paddle Webhook Handler Implementation
-// Issue #48: Subscription Management UI (added subscriptionID parameter)
-// Updates tier, status, billing dates, and subscription ID when subscription changes
+// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks.
+// Applies status normalization (#933) as a defense-in-depth backstop before DB write.
+// When subscriptionID is nil, preserves existing values (not included in SET clause).
 func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	ctx context.Context,
 	userID, tier, status string,
 	startedAt, endsAt *time.Time,
 	subscriptionID *string,
 ) error {
+	// #933: Normalize status at repo layer as defense-in-depth backstop.
+	status = domain.NormalizeSubscriptionStatus(status)
+
 	now := time.Now()
 
-	var encryptedSubscriptionID *string
-	var subBlindIdx *string
+	var query string
+	var args []interface{}
+
 	if subscriptionID != nil {
+		// Overwrite both paddle_subscription_id columns.
 		enc, err := r.enc.EncryptString(*subscriptionID)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt paddle_subscription_id: %w", err)
 		}
-		encryptedSubscriptionID = &enc
 		blind := r.enc.BlindIndex(*subscriptionID)
-		subBlindIdx = &blind
+		query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7 WHERE id = $8 AND is_deleted = FALSE`
+		args = []interface{}{tier, status, startedAt, endsAt, enc, blind, now, userID}
+	} else {
+		// Preserve existing paddle_subscription_id values (omit from SET clause).
+		query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5 WHERE id = $6 AND is_deleted = FALSE`
+		args = []interface{}{tier, status, startedAt, endsAt, now, userID}
 	}
 
-	query := `
-		UPDATE users
-		SET subscription_tier = $1,
-		    subscription_status = $2,
-		    subscription_started_at = $3,
-		    subscription_ends_at = $4,
-		    paddle_subscription_id = $5,
-		    paddle_subscription_id_blind_idx = $6,
-		    updated_at = $7
-		WHERE id = $8 AND is_deleted = FALSE
-	`
-
-	ct, err := r.db.Exec(ctx, query,
-		tier,
-		status,
-		startedAt,
-		endsAt,
-		encryptedSubscriptionID,
-		subBlindIdx,
-		now,
-		userID,
-	)
+	ct, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return err
 	}

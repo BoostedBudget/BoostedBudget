@@ -69,12 +69,8 @@ export const NOTIFICATION_TYPE_CONFIG: Record<string, NotificationTypeConfig> = 
     category: 'billing',
     defaultLabel: 'Subscription Active',
   },
-  subscription_resumed: {
-    icon: CheckCircle,
-    urgency: 'info',
-    category: 'billing',
-    defaultLabel: 'Subscription Resumed',
-  },
+  // Note: subscription_resumed omitted (#933: pause/resume not supported).
+  // Historical rows are remapped to subscription_activated by migration 000104.
   subscription_trialing: {
     icon: Star,
     urgency: 'info',
@@ -100,9 +96,7 @@ export const NOTIFICATION_TYPE_CONFIG: Record<string, NotificationTypeConfig> = 
     defaultLabel: 'Transfer Suggestion',
   },
   // Issue #972: fuzzy-match confirmation prompt (GAP R + GAP B3).
-  // Without this entry, the notification falls through to the generic renderer
-  // with no icon/urgency config; the amount-confirm UI relies on this type
-  // being recognized (NotificationItem.tsx:108 checks type === 'transfer_suggestion_match').
+  // Required for amount-confirm UI (NotificationItem.tsx:108).
   transfer_suggestion_match: {
     icon: ArrowRightLeft,
     urgency: 'high',

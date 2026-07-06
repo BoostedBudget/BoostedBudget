@@ -584,3 +584,14 @@ func TestReconciliation_EmptyItems_SkipsTierCheck(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 	mockPaddle.AssertExpectations(t)
 }
+
+// TestNormalizePaddleStatus_SDKConstantGuard guards the assumption that the Paddle SDK
+// constant string values match what domain.NormalizeSubscriptionStatus expects.
+// If the SDK renames these constants, normalization silently no-ops.
+// #933: defensive contract between SDK constants and domain normalization.
+func TestNormalizePaddleStatus_SDKConstantGuard(t *testing.T) {
+	assert.Equal(t, "paused", string(paddle.SubscriptionStatusPaused),
+		"Paddle SDK SubscriptionStatusPaused constant value changed — update NormalizeSubscriptionStatus")
+	assert.Equal(t, "canceled", string(paddle.SubscriptionStatusCanceled),
+		"Paddle SDK SubscriptionStatusCanceled constant value changed — update NormalizeSubscriptionStatus")
+}
