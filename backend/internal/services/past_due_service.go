@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
 
 // ErrPaddleAlreadyCancelled is returned by PastDuePaddleClient.CancelSubscription when
@@ -83,6 +84,7 @@ type PastDueService struct {
 	paddleClient        PastDuePaddleClient
 	clerkClient         PastDueClerkClient
 	notificationRepo    PastDueNotificationRepository
+	analytics           phclient.Analytics
 	graceDays           int
 	plaidDisconnectDays int
 	retentionMonths     int
@@ -117,6 +119,11 @@ func NewPastDueService(
 // SetPlaidCleanup wires in the Plaid cleanup service (called after Plaid is configured).
 func (s *PastDueService) SetPlaidCleanup(svc PastDuePlaidCleanup) {
 	s.plaidCleanup = svc
+}
+
+// SetAnalytics sets the PostHog analytics client (nil-safe no-op when not configured).
+func (s *PastDueService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // GetUsersInPastDue returns users whose subscription_status is 'past_due'
@@ -216,6 +223,10 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// Step 6b: Create in-app notification.
 	s.createCancelledNotification(ctx, user)
 
+	if s.analytics != nil {
+		s.analytics.Capture(user.ID, phclient.EventPastDueAutoCancelled, nil)
+	}
+
 	s.logger.Info("past_due auto-cancel complete",
 		"user_id", user.ID,
 		"tier", user.SubscriptionTier,
@@ -250,6 +261,8 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 			// Idempotent — log but continue; the daily job will retry.
 			s.logger.Warn("failed to disconnect Plaid items in past_due window",
 				"user_id", user.ID, "error", err)
+		} else if s.analytics != nil {
+			s.analytics.Capture(user.ID, phclient.EventPastDuePlaidDisconnected, nil)
 		}
 	}
 
