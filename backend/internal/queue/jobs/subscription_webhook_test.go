@@ -12,6 +12,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -122,6 +123,26 @@ func (m *mockPaddleTransactionRepository) Create(ctx context.Context, txn *domai
 	return args.Error(0)
 }
 
+// mockAnalyticsClient is a testify mock for phclient.Analytics, used to assert that
+// subscription_created funnel analytics fire only on active statuses and are suppressed
+// on non-active statuses (past_due, cancelled). Injected via worker.SetAnalytics().
+// #933: guards against relocating the Capture call outside the IsActiveSubscription() guard.
+type mockAnalyticsClient struct {
+	mock.Mock
+}
+
+func (m *mockAnalyticsClient) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockAnalyticsClient) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockAnalyticsClient) Close() {
+	m.Called()
+}
+
 // loadWebhookFixture loads a webhook fixture from testdata
 func loadWebhookFixture(t *testing.T, filename string) *domain.PaddleWebhookEvent {
 	t.Helper()
@@ -206,6 +227,10 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
+	// #933: inject analytics mock to assert Capture fires on active status.
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
 	webhook := loadWebhookFixture(t, "subscription_created.json")
 
 	args := SubscriptionWebhookArgs{
@@ -232,6 +257,8 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 	})).Return(nil)
 	// #930: Retention clock cleared on subscription creation (resubscribe)
 	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	// #933: funnel analytics must fire — status "active" passes IsActiveSubscription()
+	mockAna.On("Capture", "user_2abc123def456", phclient.EventSubscriptionCreated, mock.Anything).Return()
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -240,6 +267,8 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 	mockWebhookRepo.AssertExpectations(t)
 	mockProfileRepo.AssertExpectations(t)
 	mockClerk.AssertExpectations(t)
+	// #933: Positive assertion — funnel analytics fired on active created.
+	mockAna.AssertExpectations(t)
 }
 
 // TestWorker_SubscriptionCreated_UpdatesClerkMetadata tests Clerk metadata sync
@@ -1226,6 +1255,10 @@ func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testin
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
+	// #933: inject analytics mock to assert Capture is suppressed when paused→cancelled.
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
 	rawPayload := `{"event_id":"evt_created_paused","event_type":"subscription.created","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"paused","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
 	webhook := &domain.PaddleWebhookEvent{
 		ID: "test-webhook-id-123", EventID: "evt_created_paused",
@@ -1251,8 +1284,12 @@ func TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled(t *testin
 	require.NoError(t, err)
 	mockProfileRepo.AssertExpectations(t)
 	mockWebhookRepo.AssertExpectations(t)
-	// Paused→cancelled is read-only; retention clock must not be wiped
+	// Paused→cancelled is read-only; no side effects fire.
 	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	// #933: Negative assertion — funnel analytics suppressed on paused→cancelled.
+	// AssertNumberOfCalls checks mock.Calls post-execution and survives future recovery contexts
+	// (AssertNotCalled is pre-empted by the testify panic before Calls is appended).
+	mockAna.AssertNumberOfCalls(t, "Capture", 0)
 }
 
 // TestWorker_SubscriptionActivated_PausedStatus_NormalizedToCancelled verifies that a
@@ -1302,6 +1339,11 @@ func TestWorker_SubscriptionCreated_PastDueStatus_SkipsActivePathSideEffects(t *
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
+	// #933: inject analytics mock to assert Capture is suppressed on past_due.
+	// Primary guard test: predicate uses IsActiveSubscription(), not !IsReadOnlySubscription().
+	mockAna := new(mockAnalyticsClient)
+	worker.SetAnalytics(mockAna)
+
 	rawPayload := `{"event_id":"evt_created_past_due","event_type":"subscription.created","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"past_due","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
 	webhook := &domain.PaddleWebhookEvent{
 		ID: "test-webhook-id-123", EventID: "evt_created_past_due",
@@ -1329,8 +1371,10 @@ func TestWorker_SubscriptionCreated_PastDueStatus_SkipsActivePathSideEffects(t *
 	mockProfileRepo.AssertExpectations(t)
 	mockWebhookRepo.AssertExpectations(t)
 	mockClerk.AssertExpectations(t)
-	// past_due is not active; these active-path effects must be suppressed.
+	// past_due is not active; active-path effects suppressed.
 	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	// #933: Negative assertion — funnel analytics suppressed on past_due.
+	mockAna.AssertNumberOfCalls(t, "Capture", 0)
 }
 
 // TestWorker_SubscriptionActivated_PastDueStatus_SkipsActivePathSideEffects verifies that a
