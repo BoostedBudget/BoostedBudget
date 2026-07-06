@@ -10,7 +10,6 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useProfile } from '@/features/profile/hooks/useProfile'
 import { ReadOnlyProvider } from './ReadOnlyContext'
-import { ReadOnlyBanner } from './ReadOnlyBanner'
 
 interface PremiumRouteProps {
   children: React.ReactNode
@@ -101,9 +100,10 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
     || user.subscription_status === 'trial'
     || user.subscription_status === 'trialing'
 
-  // Read-only: view data but cannot mutate
+  // Read-only: view data but cannot mutate (past_due included — no premium without payment)
   const isReadOnly = user.subscription_status === 'inactive'
     || user.subscription_status === 'cancelled'
+    || user.subscription_status === 'past_due'
 
   if (isActive) {
     return (
@@ -116,13 +116,12 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
   if (isReadOnly) {
     return (
       <ReadOnlyProvider isReadOnly={true} subscriptionStatus={user.subscription_status}>
-        <ReadOnlyBanner status={user.subscription_status} />
         {children}
       </ReadOnlyProvider>
     )
   }
 
-  // Fallback for past_due, etc. — keep existing redirect behavior
+  // Unknown status — redirect to pricing
   return (
     <Navigate
       to="/pricing"

@@ -1,5 +1,6 @@
 // Issue #930: PremiumRoute three-state routing tests
-// Verifies active users get full access, read-only users see banner, others redirect.
+// Issue #898: past_due added to read-only; banner removed from PremiumRoute (moved to App shell)
+// Verifies active users get full access, read-only users see children read-only, others redirect.
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -91,24 +92,30 @@ describe('PremiumRoute', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('shows banner and children for inactive user', async () => {
+  it('shows children for inactive user (banner rendered by App shell)', async () => {
     setupMock('inactive')
     renderPremiumRoute()
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByTestId('content')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('content')).toBeInTheDocument()
-    expect(screen.getByText(/trial has ended/i)).toBeInTheDocument()
   })
 
-  it('shows banner and children for cancelled user', async () => {
+  it('shows children for cancelled user (banner rendered by App shell)', async () => {
     setupMock('cancelled')
     renderPremiumRoute()
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByTestId('content')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('content')).toBeInTheDocument()
-    expect(screen.getByText(/subscription has been cancelled/i)).toBeInTheDocument()
+  })
+
+  it('shows children for past_due user read-only (banner rendered by App shell)', async () => {
+    setupMock('past_due')
+    renderPremiumRoute(<ReadOnlyConsumer />)
+    await waitFor(() => {
+      expect(screen.getByTestId('readonly-consumer')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-is-readonly', 'true')
+    expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-status', 'past_due')
   })
 
   it('shows error state when profile API fails', () => {
