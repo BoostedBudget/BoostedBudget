@@ -335,7 +335,11 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	// Dedicated handler: no UpdatePaddleCustomerID call (unlike created)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockNotifRepo.On("Create", ctx, mock.Anything).Return(nil)
+	// #933: Assert the typed subscription_activated notification fires on genuine activation.
+	// Uses MatchedBy to verify Type — mock.Anything would only prove *some* notification fires.
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_activated" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
 	mockProfileRepo.On("GetUserByID", ctx, mock.Anything).Return(user, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
 	// #930: Retention clock cleared on activation (resubscribe)
@@ -345,6 +349,10 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
 }
 
 // TestWorker_SubscriptionUpdated_Success tests subscription.updated event
