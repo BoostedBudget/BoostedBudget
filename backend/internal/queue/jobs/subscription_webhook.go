@@ -44,6 +44,9 @@ type SubscriptionProfileRepository interface {
 	// #930: Retention tracking
 	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
 	ClearRetentionDates(ctx context.Context, userID string) error
+	// #898: Dunning — past_due timestamp tracking
+	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
+	ClearPastDueStartedAt(ctx context.Context, userID string) error
 }
 
 // ClerkService defines the methods needed to update Clerk metadata.
@@ -498,6 +501,10 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
 			w.logger.Warn("failed to clear retention dates on activation", "user_id", userID, "error", retErr)
 		}
+		// #898: Clear past_due stamp on recovery (user may have recovered from past_due).
+		if clearErr := w.profileRepo.ClearPastDueStartedAt(ctx, userID); clearErr != nil {
+			w.logger.Warn("failed to clear past_due_started_at on activation", "user_id", userID, "error", clearErr)
+		}
 	}
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
@@ -544,6 +551,10 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() && status != "" {
 		if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
 			w.logger.Warn("failed to clear retention dates on subscription updated", "user_id", userID, "error", retErr)
+		}
+		// #898: Clear past_due stamp on recovery to active/trialing.
+		if clearErr := w.profileRepo.ClearPastDueStartedAt(ctx, userID); clearErr != nil {
+			w.logger.Warn("failed to clear past_due_started_at on subscription updated", "user_id", userID, "error", clearErr)
 		}
 	}
 
@@ -593,6 +604,11 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)
 	}
 
+	// #898: Clear past_due stamp on cancellation (user may have been in past_due before cancelling).
+	if clearErr := w.profileRepo.ClearPastDueStartedAt(ctx, userID); clearErr != nil {
+		w.logger.Warn("failed to clear past_due_started_at on cancellation", "user_id", userID, "error", clearErr)
+	}
+
 	if w.analytics != nil {
 		w.analytics.Capture(userID, phclient.EventSubscriptionCancelled, nil)
 	}
@@ -603,6 +619,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 
 // processSubscriptionPastDue handles subscription.past_due events.
 // Issues #747 #748: Notifies user of overdue payment and syncs Clerk.
+// #898: Only transitions from active/trialing — does not overwrite cancelled/inactive/past_due.
 func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
@@ -621,8 +638,20 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
+	// #898: Only transition into past_due from active or trialing states.
+	// Do not overwrite cancelled, inactive, or an already-existing past_due.
+	prevStatus := domain.SubscriptionStatus(user.SubscriptionStatus)
+	if prevStatus != domain.SubscriptionStatusActive && prevStatus != domain.SubscriptionStatusTrialing {
+		return nil
+	}
+
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue), nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
+	}
+
+	// #898: Stamp the time the user entered past_due (nil-safe: won't reset if already set).
+	if stampErr := w.profileRepo.SetPastDueStartedAt(ctx, userID, time.Now()); stampErr != nil {
+		w.logger.Warn("failed to set past_due_started_at", "user_id", userID, "error", stampErr)
 	}
 
 	w.createNotification(ctx, notificationParams{

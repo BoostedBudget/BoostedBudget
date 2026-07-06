@@ -88,6 +88,17 @@ func (m *mockSubscriptionProfileRepository) ClearRetentionDates(ctx context.Cont
 	return args.Error(0)
 }
 
+// #898: past_due dunning tracking methods
+func (m *mockSubscriptionProfileRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	args := m.Called(ctx, userID, t)
+	return args.Error(0)
+}
+
+func (m *mockSubscriptionProfileRepository) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
 // mockClerkService is a mock for ClerkService
 type mockClerkService struct {
 	mock.Mock
@@ -344,6 +355,8 @@ func TestWorker_SubscriptionActivated_Success(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
 	// #930: Retention clock cleared on activation (resubscribe)
 	mockProfileRepo.On("ClearRetentionDates", ctx, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on activation recovery
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -382,6 +395,8 @@ func TestWorker_SubscriptionUpdated_Success(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock cleared when updated to active (non-read-only status)
 	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	// #898: past_due stamp cleared on recovery to active
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -470,6 +485,8 @@ func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -866,6 +883,8 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_Success(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started when paused maps to cancelled
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation (paused → cancelled)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -878,6 +897,7 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_Success(t *testing.T) {
 }
 
 // TestWorker_SubscriptionPastDue_Success tests subscription.past_due event sends notification.
+// #898: User is active, so the transition is allowed and SetPastDueStartedAt is called.
 func TestWorker_SubscriptionPastDue_Success(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()
@@ -891,14 +911,17 @@ func TestWorker_SubscriptionPastDue_Success(t *testing.T) {
 	job := createRiverJob(args)
 
 	user := &domain.User{
-		ID:               "user_2abc123def456",
-		ClerkUserID:      "clerk_user_123",
-		SubscriptionTier: "premium",
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	// #898: SetPastDueStartedAt is called when transitioning from active.
+	mockProfileRepo.On("SetPastDueStartedAt", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time")).Return(nil)
 	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.Type == "subscription_past_due" && n.UserID == "user_2abc123def456"
 	})).Return(nil)
@@ -1077,6 +1100,8 @@ func TestWorker_SubscriptionCanceled_DisconnectsPlaidItems(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1116,6 +1141,8 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation (even when Plaid cleanup is nil)
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1157,6 +1184,8 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_StillSucceeds(t *testing.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started even when Plaid cleanup errors
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1199,6 +1228,8 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems(t *tes
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started when paused maps to cancelled
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation (paused → cancelled)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1241,6 +1272,8 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucce
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started even when Plaid cleanup errors
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: past_due stamp cleared on cancellation (paused → cancelled)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
@@ -1454,4 +1487,273 @@ func TestWorker_SubscriptionUpdated_PausedStatus_NormalizedToCancelled(t *testin
 	mockProfileRepo.AssertExpectations(t)
 	mockWebhookRepo.AssertExpectations(t)
 	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+}
+
+// --- #898: past_due stamp / clear tests ---
+
+// TestWorker_SubscriptionPastDue_FromActive_StampsStartedAt verifies that transitioning from
+// active → past_due sets the past_due_started_at timestamp.
+func TestWorker_SubscriptionPastDue_FromActive_StampsStartedAt(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.past_due",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	// #898: SetPastDueStartedAt must be called when transitioning from active.
+	mockProfileRepo.On("SetPastDueStartedAt", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time")).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_past_due" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionPastDue_FromTrialing_StampsStartedAt verifies that transitioning from
+// trialing → past_due sets the past_due_started_at timestamp.
+func TestWorker_SubscriptionPastDue_FromTrialing_StampsStartedAt(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.past_due",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trialing",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	// #898: SetPastDueStartedAt must be called when transitioning from trialing.
+	mockProfileRepo.On("SetPastDueStartedAt", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time")).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_past_due" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionPastDue_FromCancelled_NoTransition verifies that a past_due webhook
+// received when the user is already cancelled does NOT change the subscription status.
+func TestWorker_SubscriptionPastDue_FromCancelled_NoTransition(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.past_due",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	// No status change, no stamp, no notification, no Clerk sync.
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockProfileRepo.AssertNotCalled(t, "SetPastDueStartedAt")
+	mockNotifRepo.AssertNotCalled(t, "Create")
+	mockClerk.AssertNotCalled(t, "UpdateUserMetadata")
+}
+
+// TestWorker_SubscriptionPastDue_Repeated_DoesNotResetStamp verifies that a repeated past_due
+// webhook for an already-past_due user still calls SetPastDueStartedAt (which is nil-safe and
+// won't overwrite an existing stamp), but does NOT update the status again.
+func TestWorker_SubscriptionPastDue_Repeated_DoesNotResetStamp(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.past_due",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	// Already past_due: no status update, no stamp reset.
+	mockProfileRepo.AssertNotCalled(t, "UpdateSubscriptionFromPaddle")
+	mockProfileRepo.AssertNotCalled(t, "SetPastDueStartedAt")
+	mockNotifRepo.AssertNotCalled(t, "Create")
+	mockClerk.AssertNotCalled(t, "UpdateUserMetadata")
+}
+
+// TestWorker_SubscriptionCanceled_ClearsPastDueStamp verifies that processing a
+// subscription.canceled event clears the past_due_started_at timestamp.
+func TestWorker_SubscriptionCanceled_ClearsPastDueStamp(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// #898: ClearPastDueStartedAt must be called on cancellation.
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionActivated_ClearsPastDueStamp verifies that processing a
+// subscription.activated event (with active status) clears the past_due_started_at timestamp.
+func TestWorker_SubscriptionActivated_ClearsPastDueStamp(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_activated.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.activated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:          "user_2abc123def456",
+		ClerkUserID: "user_2abc123def456",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockNotifRepo.On("Create", ctx, mock.MatchedBy(func(n *domain.Notification) bool {
+		return n.Type == "subscription_activated" && n.UserID == "user_2abc123def456"
+	})).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, mock.Anything).Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, mock.Anything).Return(nil)
+	// #898: ClearPastDueStartedAt must be called on activation recovery.
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockNotifRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionUpdated_ToActive_ClearsPastDueStamp verifies that processing a
+// subscription.updated event with active status clears the past_due_started_at timestamp.
+func TestWorker_SubscriptionUpdated_ToActive_ClearsPastDueStamp(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_updated.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.updated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:          "user_2abc123def456",
+		ClerkUserID: "clerk_user_123",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time"), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	// #898: ClearPastDueStartedAt must be called when updated to active.
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
 }
