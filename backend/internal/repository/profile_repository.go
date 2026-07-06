@@ -129,6 +129,12 @@ type ProfileRepository interface {
 	// Used by the dunning cron job to find candidates for grace-expiry processing (Issue #898).
 	GetUsersInPastDue(ctx context.Context) ([]domain.User, error)
 
+	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user
+	// is still 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user
+	// has already recovered (payment arrived between Plaid disconnect and this point).
+	// Issue #898: CAS guard against recovery race condition.
+	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
+
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
 	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
@@ -1202,4 +1208,20 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 		return []domain.User{}, nil
 	}
 	return users, nil
+}
+
+// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is still
+// 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user has already
+// recovered (e.g. payment arrived between Plaid disconnect and this call).
+// Issue #898: CAS guard against recovery race condition.
+func (r *profileRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET subscription_status = 'cancelled', updated_at = NOW()
+		WHERE id = $1 AND subscription_status = 'past_due'`,
+		userID)
+	if err != nil {
+		return false, fmt.Errorf("CancelIfPastDue: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
 }

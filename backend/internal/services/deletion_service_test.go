@@ -169,6 +169,9 @@ func (m *MockProfileRepositoryForDeletion) ClearPastDueStartedAt(ctx context.Con
 func (m *MockProfileRepositoryForDeletion) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
+func (m *MockProfileRepositoryForDeletion) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
 
 func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
