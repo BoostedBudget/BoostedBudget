@@ -1100,7 +1100,7 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 // Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
 // Issue #898: dunning job grace-period tracking.
 func (r *profileRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
-	ct, err := r.db.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
 		UPDATE users SET past_due_started_at = $2, updated_at = NOW()
 		WHERE id = $1 AND past_due_started_at IS NULL`,
 		userID, t,
@@ -1108,10 +1108,7 @@ func (r *profileRepository) SetPastDueStartedAt(ctx context.Context, userID stri
 	if err != nil {
 		return err
 	}
-	if ct.RowsAffected() == 0 {
-		// Either not found or already set — both are acceptable (idempotent).
-		return nil
-	}
+	// Either not found or already set — both are acceptable (idempotent).
 	return nil
 }
 
