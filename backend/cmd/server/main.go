@@ -651,6 +651,9 @@ func main() {
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
 		appLogger.Info("Trial service initialized")
 
+		// TODO(#898): wire pastDueConfig into PastDueService once A6 is implemented
+		_ = tierConfig.GetPastDueConfig()
+
 		// Issue #679: Wire trial service to registration service for auto-grant on signup.
 		// Auto-grant now runs regardless of Plaid config (confirmed intended behavior #1015).
 		registrationService.SetTrialGranter(trialService)

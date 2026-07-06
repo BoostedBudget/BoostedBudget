@@ -11,10 +11,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadTierConfig(t *testing.T) {
-	// Reset singleton for testing
+// resetConfigSingleton resets the global tier config singleton for testing
+func resetConfigSingleton() {
 	globalTierConfig = nil
 	configOnce = *new(sync.Once)
+}
+
+// setAndCleanupEnv sets environment variables and returns a cleanup function
+func setAndCleanupEnv(envVars map[string]string) func() {
+	original := make(map[string]string)
+	for key, value := range envVars {
+		original[key] = os.Getenv(key)
+		if value != "" {
+			os.Setenv(key, value)
+		} else {
+			os.Unsetenv(key)
+		}
+	}
+	return func() {
+		for key, originalValue := range original {
+			if originalValue != "" {
+				os.Setenv(key, originalValue)
+			} else {
+				os.Unsetenv(key)
+			}
+		}
+	}
+}
+
+func TestLoadTierConfig(t *testing.T) {
+	// Reset singleton for testing
+	resetConfigSingleton()
 
 	config, err := LoadTierConfig()
 	require.NoError(t, err)
@@ -105,23 +132,22 @@ func TestTierConfig_Validation(t *testing.T) {
 }
 
 func TestLoadTierConfig_InvalidPath(t *testing.T) {
-	// Set invalid config path
-	os.Setenv("SUBSCRIPTION_TIERS_CONFIG", "/nonexistent/path/config.yaml")
-	defer os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
+	defer setAndCleanupEnv(map[string]string{
+		"SUBSCRIPTION_TIERS_CONFIG": "/nonexistent/path/config.yaml",
+	})()
 
-	// Reset singleton
-	globalTierConfig = nil
-	configOnce = *new(sync.Once)
+	resetConfigSingleton()
 
 	_, err := LoadTierConfig()
 	assert.Error(t, err)
 }
 
 func TestTierConfig_Reload(t *testing.T) {
-	// Reset environment and singleton
-	os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
-	globalTierConfig = nil
-	configOnce = *new(sync.Once)
+	defer setAndCleanupEnv(map[string]string{
+		"SUBSCRIPTION_TIERS_CONFIG": "",
+	})()
+
+	resetConfigSingleton()
 
 	config, err := LoadTierConfig()
 	require.NoError(t, err)
@@ -146,58 +172,25 @@ func TestTierConfig_GetTrialConfig(t *testing.T) {
 
 func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
 	tests := []struct {
-		name                     string
-		subscriptionTiersConfig  string
-		paddleEnvironment        string
-		expectedPathSuffix       string
+		name               string
+		subscriptionTiers  string
+		paddleEnv          string
+		expectedPathSuffix string
 	}{
-		{
-			name:                    "explicit config path overrides all",
-			subscriptionTiersConfig: "config/custom.yaml",
-			paddleEnvironment:       "sandbox",
-			expectedPathSuffix:      "config/custom.yaml",
-		},
-		{
-			name:                    "sandbox environment loads sandbox config",
-			subscriptionTiersConfig: "",
-			paddleEnvironment:       "sandbox",
-			expectedPathSuffix:      "config/subscription_tiers.sandbox.yaml",
-		},
-		{
-			name:                    "production environment loads production config",
-			subscriptionTiersConfig: "",
-			paddleEnvironment:       "production",
-			expectedPathSuffix:      "config/subscription_tiers.production.yaml",
-		},
-		{
-			name:                    "no environment falls back to default",
-			subscriptionTiersConfig: "",
-			paddleEnvironment:       "",
-			expectedPathSuffix:      "config/subscription_tiers.yaml",
-		},
+		{"explicit config path overrides all", "config/custom.yaml", "sandbox", "config/custom.yaml"},
+		{"sandbox environment loads sandbox config", "", "sandbox", "config/subscription_tiers.sandbox.yaml"},
+		{"production environment loads production config", "", "production", "config/subscription_tiers.production.yaml"},
+		{"no environment falls back to default", "", "", "config/subscription_tiers.yaml"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variables
-			if tt.subscriptionTiersConfig != "" {
-				os.Setenv("SUBSCRIPTION_TIERS_CONFIG", tt.subscriptionTiersConfig)
-				defer os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
-			} else {
-				os.Unsetenv("SUBSCRIPTION_TIERS_CONFIG")
-			}
+			defer setAndCleanupEnv(map[string]string{
+				"SUBSCRIPTION_TIERS_CONFIG": tt.subscriptionTiers,
+				"PADDLE_ENVIRONMENT":        tt.paddleEnv,
+			})()
 
-			if tt.paddleEnvironment != "" {
-				os.Setenv("PADDLE_ENVIRONMENT", tt.paddleEnvironment)
-				defer os.Unsetenv("PADDLE_ENVIRONMENT")
-			} else {
-				os.Unsetenv("PADDLE_ENVIRONMENT")
-			}
-
-			// Get config path
 			configPath := getConfigPath()
-
-			// Verify path ends with expected suffix
 			assert.Contains(t, configPath, tt.expectedPathSuffix,
 				"Config path %s should contain %s", configPath, tt.expectedPathSuffix)
 		})
@@ -205,41 +198,28 @@ func TestGetConfigPath_EnvironmentSpecific(t *testing.T) {
 }
 
 func TestLoadTierConfig_EnvironmentSpecific(t *testing.T) {
-	t.Run("loads sandbox config when PADDLE_ENVIRONMENT=sandbox", func(t *testing.T) {
-		// Set environment
-		os.Setenv("PADDLE_ENVIRONMENT", "sandbox")
-		defer os.Unsetenv("PADDLE_ENVIRONMENT")
+	tests := []struct {
+		name     string
+		paddleEnv string
+	}{
+		{"loads sandbox config when PADDLE_ENVIRONMENT=sandbox", "sandbox"},
+		{"loads production config when PADDLE_ENVIRONMENT=production", "production"},
+	}
 
-		// Reset singleton
-		globalTierConfig = nil
-		configOnce = *new(sync.Once)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer setAndCleanupEnv(map[string]string{
+				"PADDLE_ENVIRONMENT": tt.paddleEnv,
+			})()
 
-		// Load config
-		config, err := LoadTierConfig()
-		require.NoError(t, err)
-		assert.NotNil(t, config)
+			resetConfigSingleton()
 
-		// Verify it loaded successfully (sandbox config exists and is valid)
-		assert.Len(t, config.Tiers, 5)
-	})
-
-	t.Run("loads production config when PADDLE_ENVIRONMENT=production", func(t *testing.T) {
-		// Set environment
-		os.Setenv("PADDLE_ENVIRONMENT", "production")
-		defer os.Unsetenv("PADDLE_ENVIRONMENT")
-
-		// Reset singleton
-		globalTierConfig = nil
-		configOnce = *new(sync.Once)
-
-		// Load config
-		config, err := LoadTierConfig()
-		require.NoError(t, err)
-		assert.NotNil(t, config)
-
-		// Verify it loaded successfully (production config exists and is valid)
-		assert.Len(t, config.Tiers, 5)
-	})
+			config, err := LoadTierConfig()
+			require.NoError(t, err)
+			assert.NotNil(t, config)
+			assert.Len(t, config.Tiers, 5)
+		})
+	}
 }
 
 // Issue #772: GetTierByPriceID tests (GAP 3)
@@ -247,47 +227,36 @@ func TestTierConfig_GetTierByPriceID(t *testing.T) {
 	config, err := LoadTierConfig()
 	require.NoError(t, err)
 
-	t.Run("finds tier by monthly price ID", func(t *testing.T) {
-		// Get premium tier to extract its monthly price ID
-		premiumTier, err := config.GetTier(domain.TierPremium)
-		require.NoError(t, err)
-
-		// Skip if price ID not configured (default config doesn't have price IDs)
-		if premiumTier.Pricing.PaddlePriceIDMonthly == nil {
+	skipIfNoPriceIDs := func(t *testing.T, priceID *string) {
+		if priceID == nil {
 			t.Skip("Paddle price IDs not configured in default config")
 		}
+	}
 
-		// Lookup by monthly price ID
+	t.Run("finds tier by monthly price ID", func(t *testing.T) {
+		premiumTier, err := config.GetTier(domain.TierPremium)
+		require.NoError(t, err)
+		skipIfNoPriceIDs(t, premiumTier.Pricing.PaddlePriceIDMonthly)
+
 		tier, err := config.GetTierByPriceID(*premiumTier.Pricing.PaddlePriceIDMonthly)
 		require.NoError(t, err)
 		assert.Equal(t, domain.TierPremium, tier)
 	})
 
 	t.Run("finds tier by yearly price ID", func(t *testing.T) {
-		// Get premium tier to extract its yearly price ID
 		premiumTier, err := config.GetTier(domain.TierPremium)
 		require.NoError(t, err)
+		skipIfNoPriceIDs(t, premiumTier.Pricing.PaddlePriceIDYearly)
 
-		// Skip if price ID not configured
-		if premiumTier.Pricing.PaddlePriceIDYearly == nil {
-			t.Skip("Paddle price IDs not configured in default config")
-		}
-
-		// Lookup by yearly price ID
 		tier, err := config.GetTierByPriceID(*premiumTier.Pricing.PaddlePriceIDYearly)
 		require.NoError(t, err)
 		assert.Equal(t, domain.TierPremium, tier)
 	})
 
 	t.Run("finds household tiers by price ID", func(t *testing.T) {
-		// Test household_2 tier
 		household2, err := config.GetTier(domain.TierHousehold2)
 		require.NoError(t, err)
-
-		// Skip if price ID not configured
-		if household2.Pricing.PaddlePriceIDMonthly == nil {
-			t.Skip("Paddle price IDs not configured in default config")
-		}
+		skipIfNoPriceIDs(t, household2.Pricing.PaddlePriceIDMonthly)
 
 		tier, err := config.GetTierByPriceID(*household2.Pricing.PaddlePriceIDMonthly)
 		require.NoError(t, err)
@@ -303,29 +272,22 @@ func TestTierConfig_GetTierByPriceID(t *testing.T) {
 	})
 
 	t.Run("thread-safe concurrent lookups", func(t *testing.T) {
-		// Get a valid price ID
 		premiumTier, err := config.GetTier(domain.TierPremium)
 		require.NoError(t, err)
-
-		// Skip if price ID not configured
-		if premiumTier.Pricing.PaddlePriceIDMonthly == nil {
-			t.Skip("Paddle price IDs not configured in default config")
-		}
+		skipIfNoPriceIDs(t, premiumTier.Pricing.PaddlePriceIDMonthly)
 
 		priceID := *premiumTier.Pricing.PaddlePriceIDMonthly
+		done := make(chan bool, 10)
 
-		// Concurrent lookups
-		done := make(chan bool)
 		for i := 0; i < 10; i++ {
 			go func() {
+				defer func() { done <- true }()
 				tier, err := config.GetTierByPriceID(priceID)
 				assert.NoError(t, err)
 				assert.Equal(t, domain.TierPremium, tier)
-				done <- true
 			}()
 		}
 
-		// Wait for all goroutines
 		for i := 0; i < 10; i++ {
 			<-done
 		}
@@ -347,5 +309,82 @@ func TestSubscriptionTierYAMLHasNoAdsEnabled(t *testing.T) {
 		require.NoError(t, err, "could not read %s", path)
 		assert.NotContains(t, strings.ToLower(string(raw)), "ads_enabled",
 			"%s must not contain ads_enabled (#1288 follow-on)", path)
+	}
+}
+
+// Issue #898: Test GetPastDueConfig returns correct values
+func TestTierConfig_GetPastDueConfig(t *testing.T) {
+	config, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	pastDueConfig := config.GetPastDueConfig()
+
+	assert.Equal(t, 14, pastDueConfig.PlaidDisconnectDays)
+	assert.Equal(t, 21, pastDueConfig.GraceDays)
+}
+
+// Issue #898: Test Reload copies PastDue
+func TestTierConfig_Reload_CopiesPastDue(t *testing.T) {
+	defer setAndCleanupEnv(map[string]string{
+		"SUBSCRIPTION_TIERS_CONFIG": "",
+	})()
+	resetConfigSingleton()
+
+	config, err := LoadTierConfig()
+	require.NoError(t, err)
+
+	// Store original values
+	originalPastDue := config.GetPastDueConfig()
+
+	// Reload
+	err = config.Reload()
+	assert.NoError(t, err)
+
+	// Verify PastDue was copied
+	reloadedPastDue := config.GetPastDueConfig()
+	assert.Equal(t, originalPastDue.PlaidDisconnectDays, reloadedPastDue.PlaidDisconnectDays)
+	assert.Equal(t, originalPastDue.GraceDays, reloadedPastDue.GraceDays)
+}
+
+// Issue #898: Test validation rejects invalid PastDue values
+func TestTierConfig_Validation_InvalidPastDue(t *testing.T) {
+	validTiers := map[domain.TierName]domain.SubscriptionTier{
+		domain.TierPremium:    {Name: domain.TierPremium, DisplayName: "Premium"},
+		domain.TierHousehold2: {Name: domain.TierHousehold2, DisplayName: "Household (2)"},
+		domain.TierHousehold3: {Name: domain.TierHousehold3, DisplayName: "Household (3)"},
+		domain.TierHousehold4: {Name: domain.TierHousehold4, DisplayName: "Household (4)"},
+		domain.TierHousehold5: {Name: domain.TierHousehold5, DisplayName: "Household (5+)"},
+	}
+
+	newConfig := func(plaidDays, graceDays int) *TierConfig {
+		return &TierConfig{
+			Tiers:       validTiers,
+			DefaultTier: domain.TierPremium,
+			Trial:       TrialConfig{DurationDays: 60, Tier: domain.TierPremium},
+			PastDue:     PastDueConfig{PlaidDisconnectDays: plaidDays, GraceDays: graceDays},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		plaidDays   int
+		graceDays   int
+		expectError bool
+	}{
+		{"valid past_due config", 14, 21, false},
+		{"past_due with plaid_disconnect_days = 0 should fail", 0, 21, true},
+		{"past_due with grace_days = 0 should fail", 14, 0, true},
+		{"past_due with grace_days < plaid_disconnect_days should fail", 21, 14, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := newConfig(tt.plaidDays, tt.graceDays).validate()
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
 	}
 }
