@@ -159,6 +159,14 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredRetention(ctx cont
 	return nil, nil
 }
 
+// Dunning methods (#898)
+func (m *MockProfileRepositoryForDeletion) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	return nil
+}
+func (m *MockProfileRepositoryForDeletion) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	return nil
+}
+
 func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
 }

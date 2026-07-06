@@ -116,6 +116,15 @@ type ProfileRepository interface {
 	// DeleteUserCascade performs application-level cascade deletion of all user data
 	DeleteUserCascade(ctx context.Context, userID string) error
 
+	// Dunning: past_due tracking methods (Issue #898)
+
+	// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
+	// Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
+	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
+
+	// ClearPastDueStartedAt clears the past_due_started_at timestamp for a user (called on resubscription).
+	ClearPastDueStartedAt(ctx context.Context, userID string) error
+
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
 	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
@@ -142,7 +151,8 @@ const userSelectQuery = `
 	       created_at, updated_at, last_login_at,
 	       manual_tier_override, manual_tier_ends_at,
 	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at,
-	       timezone, timezone_source
+	       timezone, timezone_source,
+	       past_due_started_at
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -159,6 +169,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.ManualTierOverride, &user.ManualTierEndsAt,
 		&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 		&user.Timezone, &user.TimezoneSource,
+		&user.PastDueStartedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -216,6 +227,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.ManualTierOverride, &user.ManualTierEndsAt,
 			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 			&user.Timezone, &user.TimezoneSource,
+			&user.PastDueStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1082,4 +1094,41 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		return []*domain.User{}, nil
 	}
 	return users, nil
+}
+
+// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
+// Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
+// Issue #898: dunning job grace-period tracking.
+func (r *profileRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users SET past_due_started_at = $2, updated_at = NOW()
+		WHERE id = $1 AND past_due_started_at IS NULL`,
+		userID, t,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		// Either not found or already set — both are acceptable (idempotent).
+		return nil
+	}
+	return nil
+}
+
+// ClearPastDueStartedAt clears the past_due_started_at timestamp for a user.
+// Called on resubscription so the grace period resets cleanly.
+// Issue #898: dunning job grace-period tracking.
+func (r *profileRepository) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users SET past_due_started_at = NULL, updated_at = NOW()
+		WHERE id = $1`,
+		userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
