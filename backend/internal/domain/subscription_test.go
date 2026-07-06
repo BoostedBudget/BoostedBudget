@@ -78,3 +78,49 @@ func TestSubscriptionStatus_IsActiveSubscription(t *testing.T) {
 		})
 	}
 }
+
+func TestSubscriptionStatus_IsReadOnlySubscription(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   SubscriptionStatus
+		expected bool
+	}{
+		{
+			name:     "active status should not be read-only",
+			status:   SubscriptionStatusActive,
+			expected: false,
+		},
+		{
+			name:     "trial status should not be read-only",
+			status:   SubscriptionStatusTrial,
+			expected: false,
+		},
+		{
+			name:     "trialing status should not be read-only",
+			status:   SubscriptionStatusTrialing,
+			expected: false,
+		},
+		{
+			name:     "inactive status should be read-only",
+			status:   SubscriptionStatusInactive,
+			expected: true,
+		},
+		{
+			name:     "cancelled status should be read-only",
+			status:   SubscriptionStatusCancelled,
+			expected: true,
+		},
+		{
+			name:     "past_due status should be read-only",
+			status:   SubscriptionStatusPastDue,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.status.IsReadOnlySubscription()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
