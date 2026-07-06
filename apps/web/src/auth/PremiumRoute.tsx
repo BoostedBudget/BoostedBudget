@@ -95,27 +95,21 @@ export function PremiumRoute({ children }: PremiumRouteProps) {
     return <LoadingSkeleton />
   }
 
-  // Active: full access
-  const isActive = user.subscription_status === 'active'
-    || user.subscription_status === 'trial'
-    || user.subscription_status === 'trialing'
+  const status = user.subscription_status
+  const activeStatuses = ['active', 'trial', 'trialing']
+  const readOnlyStatuses = ['inactive', 'cancelled', 'past_due']
 
-  // Read-only: view data but cannot mutate (past_due included — no premium without payment)
-  const isReadOnly = user.subscription_status === 'inactive'
-    || user.subscription_status === 'cancelled'
-    || user.subscription_status === 'past_due'
-
-  if (isActive) {
+  if (activeStatuses.includes(status)) {
     return (
-      <ReadOnlyProvider isReadOnly={false} subscriptionStatus={user.subscription_status}>
+      <ReadOnlyProvider isReadOnly={false} subscriptionStatus={status}>
         {children}
       </ReadOnlyProvider>
     )
   }
 
-  if (isReadOnly) {
+  if (readOnlyStatuses.includes(status)) {
     return (
-      <ReadOnlyProvider isReadOnly={true} subscriptionStatus={user.subscription_status}>
+      <ReadOnlyProvider isReadOnly={true} subscriptionStatus={status}>
         {children}
       </ReadOnlyProvider>
     )
