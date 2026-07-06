@@ -153,8 +153,17 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 }
 
 // processGraceExpiry handles auto-cancellation when grace period has elapsed.
-// Ordering: Plaid → Paddle → CAS flip → retention → clear stamp → notify.
+// Ordering: re-read → Plaid → Paddle → CAS flip → retention → clear stamp → notify.
 func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.User, now time.Time) error {
+	// Re-read guard: mirrors processPlaidDisconnectWindow (lines 236-249).
+	// A user who paid between GetUsersInPastDue and this call must not lose Plaid or Paddle state.
+	// The CAS at Step 3 is a second net, but this guard prevents unnecessary destructive calls.
+	if stillPastDue, err := s.reReadStillPastDue(ctx, user.ID); err != nil {
+		return fmt.Errorf("failed to re-read user %s before grace expiry: %w", user.ID, err)
+	} else if !stillPastDue {
+		return nil
+	}
+
 	s.logger.Info("past_due grace period expired, auto-cancelling",
 		"user_id", user.ID,
 		"past_due_started_at", user.PastDueStartedAt,
@@ -170,9 +179,18 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	}
 
 	// Step 2: Cancel Paddle subscription.
-	// Tolerate already-cancelled — the subscription may have already been cancelled
-	// via Paddle's own dunning before our job ran.
-	if user.PaddleSubscriptionID != nil {
+	// Nil-guard: paddleClient is nil when PADDLE_API_KEY is unset (mirrors plaidCleanup convention).
+	// When Paddle is unconfigured, log a warning and skip — the subscription will eventually be
+	// reconciled via Paddle's own dunning or a future webhook, but ops should be aware.
+	// Tolerate already-cancelled — the subscription may have been cancelled by Paddle's dunning
+	// before our job ran.
+	if s.paddleClient == nil && user.PaddleSubscriptionID != nil {
+		s.logger.Warn("skipping Paddle cancel in grace expiry: paddleClient not configured",
+			"user_id", user.ID,
+			"subscription_id", *user.PaddleSubscriptionID,
+		)
+	}
+	if s.paddleClient != nil && user.PaddleSubscriptionID != nil {
 		if err := s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID); err != nil {
 			if !errors.Is(err, ErrPaddleAlreadyCancelled) {
 				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, err)
@@ -231,20 +249,32 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	return nil
 }
 
+// reReadStillPastDue re-reads the user's current status and returns true only if the user is
+// still past_due. Returns false (+ logs) if the user recovered. Used by both grace-expiry and
+// Plaid-disconnect-window paths to guard against concurrent recovery webhooks.
+func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) (bool, error) {
+	current, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if current.SubscriptionStatus != string(domain.SubscriptionStatusPastDue) {
+		s.logger.Info("past_due user recovered before dunning action; skipping",
+			"user_id", userID,
+			"current_status", current.SubscriptionStatus,
+		)
+		return false, nil
+	}
+	return true, nil
+}
+
 // processPlaidDisconnectWindow handles the pre-emptive Plaid disconnect before grace expiry.
 // Re-reads the user's current status first to avoid racing a recovery webhook.
 func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user domain.User) error {
-	// Re-read to guard against a concurrent recovery webhook that may have flipped
-	// the user back to active between when GetUsersInPastDue ran and now.
-	current, err := s.repo.GetUserByID(ctx, user.ID)
+	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
 	if err != nil {
 		return fmt.Errorf("failed to re-read user %s for Plaid disconnect check: %w", user.ID, err)
 	}
-	if current.SubscriptionStatus != string(domain.SubscriptionStatusPastDue) {
-		s.logger.Info("user recovered before Plaid disconnect window action; skipping",
-			"user_id", user.ID,
-			"current_status", current.SubscriptionStatus,
-		)
+	if !stillPastDue {
 		return nil
 	}
 

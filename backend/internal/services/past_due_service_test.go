@@ -131,7 +131,8 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
 
-	// All steps should succeed
+	// All steps should succeed; re-read confirms still past_due.
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
@@ -147,6 +148,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
+	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 	paddle.AssertCalled(t, "CancelSubscription", mock.Anything, subID)
 	repo.AssertCalled(t, "CancelIfPastDue", mock.Anything, userID)
@@ -171,11 +173,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *test
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
 
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(errors.New("plaid API error"))
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.Error(t, err, "should propagate Plaid error so the job retries tomorrow")
 
+	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
@@ -199,6 +203,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
 
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	// Paddle returns already-cancelled error — should be tolerated
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(ErrPaddleAlreadyCancelled)
@@ -312,6 +317,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
 
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	// CAS returns false — user paid between Plaid disconnect and this call
@@ -320,11 +326,84 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err, "recovered user should not produce an error")
 
+	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	repo.AssertCalled(t, "CancelIfPastDue", mock.Anything, userID)
 	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+// Test 8 (GAP2): Grace expiry but user recovered between GetUsersInPastDue and processing —
+// re-read guard must prevent destructive Plaid/Paddle/CAS calls.
+// Regression: processGraceExpiry lacked the status re-read that processPlaidDisconnectWindow
+// already had (lines 236-249). A user who paid between the batch-read and this call would lose
+// bank connections and have Paddle cancelled before the CAS returned false.
+func TestPastDueService_ProcessUser_GraceExpiry_RecoveredBeforeProcessing_SkipsDestructive(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-recovered-before-grace"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	// Re-read shows the user paid and recovered to active.
+	recoveredUser := user
+	recoveredUser.SubscriptionStatus = string(domain.SubscriptionStatusActive)
+	repo.On("GetUserByID", mock.Anything, userID).Return(&recoveredUser, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err, "recovered user should not produce an error")
+
+	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+// Test 8b (GAP3): Nil paddleClient — no panic, CAS flip still occurs, Paddle never called.
+// Regression: main.go constructs PastDueService unconditionally with paddleService (nil when
+// PADDLE_API_KEY unset). Before the nil guard, a user carrying a PaddleSubscriptionID would
+// trigger a nil-pointer dereference panic inside processGraceExpiry step 2.
+func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{} // instantiated so AssertNotCalled works
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	// Pass interface nil for paddleClient (not a typed nil) so s.paddleClient == nil.
+	svc := NewPastDueService(repo, plaid, nil, clerk, notif, testGraceDays, testPlaidDisconnectDays)
+	_ = paddle // used only for AssertNotCalled below
+
+	userID := "user-nil-paddle"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted) // has non-nil PaddleSubscriptionID
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	// Must not panic even though user has a PaddleSubscriptionID and paddleClient is nil.
+	assert.NotPanics(t, func() {
+		err := svc.ProcessPastDueUser(context.Background(), user, now)
+		assert.NoError(t, err)
+	})
+	// CAS flip still occurs; Paddle was correctly skipped (nil guard took effect).
+	repo.AssertCalled(t, "CancelIfPastDue", mock.Anything, userID)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 }
 
 // Test 9: GetUsersInPastDue — delegates to repo correctly

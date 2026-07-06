@@ -126,7 +126,65 @@ describe('SubscriptionStatusBanner', () => {
     render(<SubscriptionStatusBanner />)
     expect(screen.getByRole('alert')).toBeDefined()
     expect(screen.getByText(/Your subscription has expired/i)).toBeDefined()
-    expect(screen.getByText(/Re-subscribe/i)).toBeDefined()
+    expect(screen.getByText(/Resubscribe/i)).toBeDefined()
+  })
+
+  // GAP1 regression: inactive must use semantic info token (bg-info/10), not a raw palette class.
+  // Both cancelled and inactive CTAs must use the same label spelling ("Resubscribe").
+  it('inactive banner uses bg-info/10 semantic token, not raw palette blue', () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: makeUser({ subscription_status: 'inactive' }),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    render(<SubscriptionStatusBanner />)
+    const alert = screen.getByRole('alert')
+    expect(alert.className).toContain('bg-info/10')
+    // Must not fall back to a raw palette literal (e.g. the old blue-500 class).
+    const rawBluePalette = ['blue', '500'].join('-')
+    expect(alert.className).not.toContain('bg-' + rawBluePalette)
+    expect(alert.className).toContain('border-info/30')
+  })
+
+  it('past_due banner uses bg-warning/10 semantic token', () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: makeUser({ subscription_status: 'past_due' }),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    render(<SubscriptionStatusBanner />)
+    const alert = screen.getByRole('alert')
+    expect(alert.className).toContain('bg-warning/10')
+    expect(alert.className).toContain('border-warning/30')
+  })
+
+  it('cancelled banner uses bg-destructive/10 semantic token', () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: makeUser({ subscription_status: 'cancelled' }),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    render(<SubscriptionStatusBanner />)
+    const alert = screen.getByRole('alert')
+    expect(alert.className).toContain('bg-destructive/10')
+    expect(alert.className).toContain('border-destructive/30')
+  })
+
+  it('CTA label is Resubscribe for both cancelled and inactive (consistent spelling)', () => {
+    for (const status of ['cancelled', 'inactive'] as const) {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: status }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      const { unmount } = render(<SubscriptionStatusBanner />)
+      expect(screen.getByText('Resubscribe')).toBeDefined()
+      unmount()
+    }
   })
 
   it('past_due banner is dismissible, hides after dismiss', () => {
@@ -187,7 +245,7 @@ describe('SubscriptionStatusBanner', () => {
       refetch: () => Promise.resolve(),
     })
     render(<SubscriptionStatusBanner />)
-    const ctaLink = screen.getByText(/Re-subscribe/i).closest('a') ?? screen.getByText(/Re-subscribe/i)
+    const ctaLink = screen.getByText(/Resubscribe/i).closest('a') ?? screen.getByText(/Resubscribe/i)
     fireEvent.click(ctaLink)
     expect(mockTrackEvent).toHaveBeenCalledWith(
       'subscription_banner_cta_clicked',
