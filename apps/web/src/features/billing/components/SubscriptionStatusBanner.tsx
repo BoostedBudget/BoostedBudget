@@ -1,36 +1,42 @@
 import { useEffect } from 'react'
+import { cva } from 'class-variance-authority'
 import { useProfile } from '@/features/profile/hooks/useProfile'
 import { useGetBillingPortalUrl } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { useSessionDismiss } from '@/shared/hooks/useSessionDismiss'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
+// CVA variant map — mirrors components/ui/alert.tsx pattern with semantic design tokens.
+// No raw color literals (tailwind consolidation policy).
+const bannerVariants = cva(
+  'border-b px-4 py-3 flex items-center justify-between gap-4',
+  {
+    variants: {
+      variant: {
+        warning: 'bg-warning/10 border-warning/30 text-warning-foreground',
+        destructive: 'bg-destructive/10 border-destructive/30 text-destructive-foreground',
+        // text-foreground instead of text-info: bg-info/10 yields ~3.1:1 with text-info (WCAG AA requires 4.5:1)
+        info: 'bg-info/10 border-info/30 text-foreground',
+      },
+    },
+    defaultVariants: {
+      variant: 'info',
+    },
+  }
+)
+
+type BannerVariant = 'warning' | 'destructive' | 'info'
+
 interface BannerConfig {
-  bg: string
-  border: string
-  text: string
+  variant: BannerVariant
   dismissible: boolean
 }
 
+// Single source of truth: status → behavior. Styling is delegated to bannerVariants.
 const SUBSCRIPTION_BANNER_CONFIG: Record<string, BannerConfig> = {
-  past_due: {
-    bg: 'bg-warning/10',
-    border: 'border-warning/30',
-    text: 'text-warning-foreground',
-    dismissible: true,
-  },
-  cancelled: {
-    bg: 'bg-destructive/10',
-    border: 'border-destructive/30',
-    text: 'text-destructive-foreground',
-    dismissible: false,
-  },
-  inactive: {
-    bg: 'bg-blue-500/10',
-    border: 'border-blue-500/30',
-    text: 'text-foreground',
-    dismissible: false,
-  },
+  past_due: { variant: 'warning', dismissible: true },
+  cancelled: { variant: 'destructive', dismissible: false },
+  inactive: { variant: 'info', dismissible: false },
 }
 
 export function SubscriptionStatusBanner() {
@@ -105,14 +111,13 @@ export function SubscriptionStatusBanner() {
       )
     }
 
-    const label = isCancelled ? 'Resubscribe' : 'Re-subscribe'
     return (
       <a
         href="/pricing"
         onClick={handleCtaClick}
         className="shrink-0 px-3 py-1.5 text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors"
       >
-        {label}
+        Resubscribe
       </a>
     )
   }
@@ -120,9 +125,9 @@ export function SubscriptionStatusBanner() {
   return (
     <div
       role="alert"
-      className={`${config.bg} border-b ${config.border} px-4 py-3 flex items-center justify-between gap-4`}
+      className={bannerVariants({ variant: config.variant })}
     >
-      <div className={`flex items-center gap-2 text-sm ${config.text}`}>
+      <div className="flex items-center gap-2 text-sm">
         <span>{getMessage()}</span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
