@@ -665,6 +665,7 @@ func main() {
 			pastDueCfg.GraceDays,
 			pastDueCfg.PlaidDisconnectDays,
 		)
+		pastDueService.SetAnalytics(phClient)
 		appLogger.Info("Past-due service initialized",
 			"grace_days", pastDueCfg.GraceDays,
 			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,
