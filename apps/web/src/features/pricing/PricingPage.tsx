@@ -10,7 +10,7 @@ import {
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { PlanChangeModal } from '../billing/components/PlanChangeModal'
 import { TierActionButton } from './components/TierActionButton'
-import { ResumeButton } from './components/ResumeButton'
+import { BillingPortalButton } from './components/BillingPortalButton'
 import { usePricingContext } from './hooks/usePricingContext'
 import type { PricingState } from './hooks/usePricingContext'
 import { usePostSignInCheckoutIntent } from './hooks/usePostSignInCheckoutIntent'
@@ -116,10 +116,14 @@ function TierCard({
     hasTier(pricingState) &&
     pricingState.tier === tierKey
 
-  const shouldShowResume =
+  const shouldShowBillingPortal =
     (pricingState.status === 'cancelled' || pricingState.status === 'past_due') &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
+
+  // #933: Pause/resume not supported. Label is explicit for each supported status.
+  const billingPortalLabel =
+    pricingState.status === 'cancelled' ? 'Resubscribe' : 'Update Payment Method'
 
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
@@ -211,8 +215,12 @@ function TierCard({
             Cancels on {cancelDateLabel}
           </p>
         )}
-        {shouldShowResume ? (
-          <ResumeButton billingPortalUrl={billingPortalUrl} isLoadingPortal={isLoadingPortal} />
+        {shouldShowBillingPortal ? (
+          <BillingPortalButton
+            billingPortalUrl={billingPortalUrl}
+            isLoadingPortal={isLoadingPortal}
+            label={billingPortalLabel}
+          />
         ) : (
           <TierActionButton
             tierKey={tierKey}
