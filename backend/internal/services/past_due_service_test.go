@@ -233,11 +233,13 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 	// Re-read confirms still past_due
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
+	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
 }

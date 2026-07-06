@@ -109,3 +109,85 @@ func TestPastDueStartedAt_Integration_SetNotFoundIsNoOp(t *testing.T) {
 	err := repo.SetPastDueStartedAt(ctx, nonExistentID, time.Now())
 	assert.NoError(t, err, "SetPastDueStartedAt on non-existent user returns nil (idempotent semantics)")
 }
+
+// TestCancelIfPastDue_Integration verifies the CAS flip: only flips past_due→cancelled once;
+// a second call (simulating a concurrent recovery or re-run) returns (false, nil).
+// pgxmock cannot validate the WHERE predicate or RowsAffected semantics — a real DB is required.
+func TestCancelIfPastDue_Integration_CASSemantics(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	user := &domain.User{
+		ClerkUserID:        "clerk_cas_" + suffix,
+		Email:              "cas-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
+
+	// First call: user is past_due → should flip to cancelled and return true.
+	flipped, err := repo.CancelIfPastDue(ctx, user.ID)
+	require.NoError(t, err)
+	assert.True(t, flipped, "CancelIfPastDue should return true when user is past_due")
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT subscription_status FROM users WHERE id = $1", user.ID).Scan(&status))
+	assert.Equal(t, "cancelled", status, "subscription_status should be cancelled after CAS flip")
+
+	// Second call: user is now cancelled → CAS predicate misses → should return false without error.
+	flipped2, err := repo.CancelIfPastDue(ctx, user.ID)
+	require.NoError(t, err)
+	assert.False(t, flipped2, "CancelIfPastDue should return false when user is already cancelled (idempotent)")
+
+	// Status must still be cancelled — not double-updated.
+	require.NoError(t, pool.QueryRow(ctx, "SELECT subscription_status FROM users WHERE id = $1", user.ID).Scan(&status))
+	assert.Equal(t, "cancelled", status, "subscription_status must remain cancelled after second CAS call")
+}
+
+// TestCancelIfPastDue_Integration_SkipsNonPastDue verifies that active/inactive users are
+// never flipped — only past_due rows match the WHERE predicate.
+func TestCancelIfPastDue_Integration_SkipsNonPastDue(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	for _, status := range []string{"active", "cancelled", "inactive"} {
+		s := status
+		t.Run(s, func(t *testing.T) {
+			u := &domain.User{
+				ClerkUserID:        "clerk_cas_" + s + "_" + suffix,
+				Email:              "cas-" + s + "-" + suffix + "@example.com",
+				SubscriptionTier:   "premium",
+				SubscriptionStatus: s,
+				PrimaryRegion:      "iad",
+				IsActive:           true,
+			}
+			tx, err := pool.Begin(ctx)
+			require.NoError(t, err)
+			require.NoError(t, repo.CreateUserTx(ctx, tx, u))
+			require.NoError(t, tx.Commit(ctx))
+			t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID) }) //nolint:errcheck
+
+			flipped, err := repo.CancelIfPastDue(ctx, u.ID)
+			require.NoError(t, err)
+			assert.False(t, flipped, "CancelIfPastDue must not flip a %s user", s)
+
+			var got string
+			require.NoError(t, pool.QueryRow(ctx, "SELECT subscription_status FROM users WHERE id = $1", u.ID).Scan(&got))
+			assert.Equal(t, s, got, "subscription_status must be unchanged for a %s user", s)
+		})
+	}
+}

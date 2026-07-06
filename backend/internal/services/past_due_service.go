@@ -257,8 +257,11 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 			// Idempotent — log but continue; the daily job will retry.
 			s.logger.Warn("failed to disconnect Plaid items in past_due window",
 				"user_id", user.ID, "error", err)
-		} else if s.analytics != nil {
-			s.analytics.Capture(user.ID, phclient.EventPastDuePlaidDisconnected, nil)
+		} else {
+			if s.analytics != nil {
+				s.analytics.Capture(user.ID, phclient.EventPastDuePlaidDisconnected, nil)
+			}
+			s.createPlaidDisconnectedNotification(ctx, user)
 		}
 	}
 
@@ -273,6 +276,24 @@ func (s *PastDueService) syncClerkMetadata(ctx context.Context, user domain.User
 		"subscription_status": status,
 	}); err != nil {
 		s.logger.Error("failed to sync Clerk metadata on past_due auto-cancel",
+			"user_id", user.ID, "error", err)
+	}
+}
+
+// createPlaidDisconnectedNotification notifies the user that bank sync has been paused
+// because of an outstanding payment issue, prompting them to update their payment method.
+func (s *PastDueService) createPlaidDisconnectedNotification(ctx context.Context, user domain.User) {
+	if err := s.notificationRepo.Create(ctx, &domain.Notification{
+		ID:                 uuid.New().String(),
+		UserID:             user.ID,
+		Type:               "subscription_past_due",
+		Title:              "Bank Sync Paused",
+		Message:            "Your bank accounts have been disconnected pending payment resolution. Update your payment method to restore sync.",
+		ActionURL:          ptr("/billing"),
+		ActionLabel:        ptr("Update payment method"),
+		InteractionPattern: "action_required",
+	}); err != nil {
+		s.logger.Error("failed to create plaid_disconnected notification for past_due user",
 			"user_id", user.ID, "error", err)
 	}
 }

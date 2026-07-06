@@ -1,5 +1,4 @@
 export { ProtectedRoute } from './ProtectedRoute'
 export { PremiumRoute } from './PremiumRoute'
 export { ReadOnlyProvider, useReadOnly } from './ReadOnlyContext'
-export { ReadOnlyBanner } from './ReadOnlyBanner'
 export { ReadOnlyGuard } from './ReadOnlyGuard'
