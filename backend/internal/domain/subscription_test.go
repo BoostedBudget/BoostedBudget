@@ -2,6 +2,7 @@ package domain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -75,6 +76,124 @@ func TestSubscriptionStatus_IsActiveSubscription(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.status.IsActiveSubscription()
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// ─── SubscriptionEntitlement ─────────────────────────────────────────────────
+
+func TestSubscriptionEntitlement_Validate(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	later := now.Add(30 * 24 * time.Hour)
+	hhID := "hh-uuid"
+	payerID := "payer-uuid"
+
+	cases := []struct {
+		name    string
+		e       SubscriptionEntitlement
+		wantErr string
+	}{
+		{
+			name: "valid own_subscription",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid household entitlement",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceHousehold, Tier: string(TierHousehold2),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now,
+				HouseholdID: &hhID, PayerUserID: &payerID,
+			},
+			wantErr: "",
+		},
+		{
+			name: "valid with effective_until",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now, EffectiveUntil: &later,
+			},
+			wantErr: "",
+		},
+		{
+			name:    "missing user_id",
+			e:       SubscriptionEntitlement{Source: EntitlementSourceOwn, Tier: string(TierPremium), Status: string(SubscriptionStatusActive), EffectiveFrom: now},
+			wantErr: "user_id is required",
+		},
+		{
+			name:    "missing tier",
+			e:       SubscriptionEntitlement{UserID: "u-1", Source: EntitlementSourceOwn, Status: string(SubscriptionStatusActive), EffectiveFrom: now},
+			wantErr: "tier is required",
+		},
+		{
+			name:    "missing status",
+			e:       SubscriptionEntitlement{UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium), EffectiveFrom: now},
+			wantErr: "status is required",
+		},
+		{
+			name:    "invalid source",
+			e:       SubscriptionEntitlement{UserID: "u-1", Source: "employer", Tier: string(TierPremium), Status: string(SubscriptionStatusActive), EffectiveFrom: now},
+			wantErr: "source must be one of: own_subscription, household",
+		},
+		{
+			name: "household source without household_id",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceHousehold, Tier: string(TierHousehold2),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now, PayerUserID: &payerID,
+			},
+			wantErr: "household_id and payer_user_id are required when source is household",
+		},
+		{
+			name: "household source without payer_user_id",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceHousehold, Tier: string(TierHousehold2),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now, HouseholdID: &hhID,
+			},
+			wantErr: "household_id and payer_user_id are required when source is household",
+		},
+		{
+			name: "own_subscription source with household_id",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now, HouseholdID: &hhID,
+			},
+			wantErr: "household_id and payer_user_id must be nil when source is own_subscription",
+		},
+		{
+			name:    "invalid status",
+			e:       SubscriptionEntitlement{UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium), Status: "bogus", EffectiveFrom: now},
+			wantErr: "status must be one of: active, inactive, trial, trialing, cancelled, past_due",
+		},
+		{
+			name: "effective_until not after effective_from",
+			e: SubscriptionEntitlement{
+				UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium),
+				Status: string(SubscriptionStatusActive), EffectiveFrom: later, EffectiveUntil: &now,
+			},
+			wantErr: "effective_until must be after effective_from",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.e.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("expected error %q, got nil", tc.wantErr)
+				} else if err.Error() != tc.wantErr {
+					t.Errorf("expected error %q, got %q", tc.wantErr, err.Error())
+				}
+			}
 		})
 	}
 }
