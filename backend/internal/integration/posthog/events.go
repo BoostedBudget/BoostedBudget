@@ -25,6 +25,12 @@ const (
 	// Issue #1006: Paddle cleanup failure during account deletion
 	EventPaddleCleanupFailed    = "paddle_cleanup_failed"
 
+	// Issue #898: Past-due dunning lifecycle events
+	// Fired when the daily job disconnects Plaid for a past_due user (at plaid_disconnect_days threshold).
+	EventPastDuePlaidDisconnected = "past_due_plaid_disconnected"
+	// Fired when the daily job auto-cancels a past_due user (at grace_days threshold).
+	EventPastDueAutoCancelled = "past_due_auto_cancelled"
+
 	// User lifecycle events
 	EventUserRegistered     = "user_registered"
 	EventUserDeleted        = "user_deleted"

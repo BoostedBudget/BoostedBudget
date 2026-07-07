@@ -16,6 +16,7 @@ type TierConfig struct {
 	Tiers       map[domain.TierName]domain.SubscriptionTier `yaml:"tiers"`
 	DefaultTier domain.TierName                              `yaml:"default_tier"`
 	Trial       TrialConfig                                   `yaml:"trial"`
+	PastDue     PastDueConfig                                 `yaml:"past_due"`
 	mu          sync.RWMutex                                 `yaml:"-"` // Protects concurrent access
 }
 
@@ -24,6 +25,12 @@ type TrialConfig struct {
 	Enabled      bool            `yaml:"enabled"`
 	DurationDays int             `yaml:"duration_days"`
 	Tier         domain.TierName `yaml:"tier"`
+}
+
+// PastDueConfig holds past_due subscription configuration (Issue #898)
+type PastDueConfig struct {
+	PlaidDisconnectDays int `yaml:"plaid_disconnect_days"`
+	GraceDays           int `yaml:"grace_days"`
 }
 
 // Global tier config instance (singleton)
@@ -106,31 +113,33 @@ func loadTierConfigFromFile() (*TierConfig, error) {
 		}
 	}
 
-	// Read the YAML file
+	// Read and parse YAML file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read tier config file %s: %w", configPath, err)
 	}
 
-	// Parse YAML structure
-	var rawConfig struct {
+	// Use TierConfig struct directly to avoid duplication
+	config := &TierConfig{Tiers: make(map[domain.TierName]domain.SubscriptionTier)}
+
+	// Temporary struct for parsing tiers with string keys
+	var raw struct {
 		Tiers       map[string]domain.SubscriptionTier `yaml:"tiers"`
 		DefaultTier string                              `yaml:"default_tier"`
 		Trial       TrialConfig                         `yaml:"trial"`
+		PastDue     PastDueConfig                       `yaml:"past_due"`
 	}
 
-	if err := yaml.Unmarshal(data, &rawConfig); err != nil {
+	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse tier config YAML: %w", err)
 	}
 
-	// Convert map keys to TierName type and populate tier names
-	config := &TierConfig{
-		Tiers:       make(map[domain.TierName]domain.SubscriptionTier),
-		DefaultTier: domain.TierName(rawConfig.DefaultTier),
-		Trial:       rawConfig.Trial,
-	}
+	// Convert tier keys to TierName type and populate
+	config.DefaultTier = domain.TierName(raw.DefaultTier)
+	config.Trial = raw.Trial
+	config.PastDue = raw.PastDue
 
-	for name, tier := range rawConfig.Tiers {
+	for name, tier := range raw.Tiers {
 		tier.Name = domain.TierName(name)
 		config.Tiers[domain.TierName(name)] = tier
 	}
@@ -175,6 +184,27 @@ func (tc *TierConfig) validate() error {
 		}
 	}
 
+	// Validate PastDueConfig (Issue #898)
+	if err := tc.validatePastDue(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validatePastDue checks that the past_due configuration is valid
+func (tc *TierConfig) validatePastDue() error {
+	pd := tc.PastDue
+	if pd.PlaidDisconnectDays <= 0 {
+		return fmt.Errorf("past_due.plaid_disconnect_days must be > 0, got %d", pd.PlaidDisconnectDays)
+	}
+	if pd.GraceDays <= 0 {
+		return fmt.Errorf("past_due.grace_days must be > 0, got %d", pd.GraceDays)
+	}
+	if pd.GraceDays <= pd.PlaidDisconnectDays {
+		return fmt.Errorf("past_due.grace_days (%d) must be greater than past_due.plaid_disconnect_days (%d)",
+			pd.GraceDays, pd.PlaidDisconnectDays)
+	}
 	return nil
 }
 
@@ -239,6 +269,7 @@ func (tc *TierConfig) Reload() error {
 	tc.Tiers = newConfig.Tiers
 	tc.DefaultTier = newConfig.DefaultTier
 	tc.Trial = newConfig.Trial
+	tc.PastDue = newConfig.PastDue
 
 	return nil
 }
@@ -251,6 +282,14 @@ func (tc *TierConfig) GetTrialConfig() TrialConfig {
 	return tc.Trial
 }
 
+// GetPastDueConfig returns the past_due configuration
+// Issue #898: Past due subscription dunning lifecycle
+func (tc *TierConfig) GetPastDueConfig() PastDueConfig {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.PastDue
+}
+
 // GetTierByPriceID returns the tier name for a given Paddle price ID
 // Searches both monthly and yearly price IDs across all tiers
 // Thread-safe with read lock
@@ -259,13 +298,12 @@ func (tc *TierConfig) GetTierByPriceID(priceID string) (domain.TierName, error) 
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 
+	priceIDMatches := func(ptr *string) bool {
+		return ptr != nil && *ptr == priceID
+	}
+
 	for name, tier := range tc.Tiers {
-		// Check monthly price ID
-		if tier.Pricing.PaddlePriceIDMonthly != nil && *tier.Pricing.PaddlePriceIDMonthly == priceID {
-			return name, nil
-		}
-		// Check yearly price ID
-		if tier.Pricing.PaddlePriceIDYearly != nil && *tier.Pricing.PaddlePriceIDYearly == priceID {
+		if priceIDMatches(tier.Pricing.PaddlePriceIDMonthly) || priceIDMatches(tier.Pricing.PaddlePriceIDYearly) {
 			return name, nil
 		}
 	}

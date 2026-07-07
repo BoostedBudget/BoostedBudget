@@ -6462,6 +6462,9 @@ components:
           type: string
         paddle_subscription_id:
           type: string
+        past_due_started_at:
+          format: date-time
+          type: string
         primary_region:
           type: string
         retention_expires_at:

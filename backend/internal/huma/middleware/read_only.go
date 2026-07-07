@@ -1,9 +1,10 @@
 package middleware
 
 // #930: Read-only enforcement middleware.
-// Blocks mutating HTTP methods (POST/PUT/PATCH/DELETE) for users with inactive or cancelled subscriptions.
+// Blocks mutating HTTP methods (POST/PUT/PATCH/DELETE) for users with inactive, cancelled, or past_due subscriptions.
 // GET and HEAD are always allowed (read-only access).
-// Certain paths (resubscribe, self-service) are whitelisted to allow full access.
+// Certain paths (resubscribe, self-service) are explicitly whitelisted to allow full access.
+// #898: Narrowed subscription whitelist — only checkout and cancel are allowed while locked.
 
 import (
 	"fmt"
@@ -15,21 +16,33 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 )
 
-// readOnlyWhitelistedPrefixes lists paths that are always allowed regardless of subscription status.
-// These paths cover resubscription flows, self-service account management, and incoming webhooks.
-var readOnlyWhitelistedPrefixes = []string{
+// readOnlyExactAllowedPaths lists paths that are whitelisted by exact match.
+// Used for the subscription recovery/self-service routes where prefix matching would
+// accidentally admit future mutation routes that share the same prefix
+// (e.g. /subscription/checkout-session would wrongly inherit /subscription/checkout).
+var readOnlyExactAllowedPaths = map[string]bool{
+	"/api/v1/subscription/checkout": true, // resubscribe — locked users must be able to restart
+	"/api/v1/subscription/cancel":   true, // intentional cancel — locked users may cancel in arrears
+}
+
+// readOnlyPrefixAllowedPaths lists path prefixes that are always allowed regardless of subscription
+// status. Entries here intentionally use prefix semantics — e.g. /api/v1/user/delete also covers
+// the deletion-cancel token route (/api/v1/user/delete/cancel/{token}), and /api/v1/admin/ covers
+// all admin sub-routes. Subscription routes are NOT listed here to prevent word-boundary bypass;
+// they are in readOnlyExactAllowedPaths above.
+var readOnlyPrefixAllowedPaths = []string{
 	"/api/v1/user/delete",
 	"/api/v1/user/profile",
 	"/api/v1/user/privacy",
-	"/api/v1/subscription/", // checkout, preview-update, update — resubscription flows
 	"/api/v1/paddle/webhook",
 	"/api/v1/plaid/webhook",
 	"/api/v1/admin/",
 }
 
 // NewReadOnlyMiddleware creates a Huma middleware that enforces read-only access for
-// inactive and cancelled subscriptions. It blocks POST, PUT, PATCH, and DELETE for
-// users whose subscription status is inactive or cancelled, while allowing GET and HEAD.
+// inactive, cancelled, and past_due subscriptions. It blocks POST, PUT, PATCH, and DELETE for
+// users whose subscription status is read-only (see domain.IsReadOnlySubscription), while
+// allowing GET and HEAD.
 //
 // Public routes (no Security annotation) are always passed through.
 // Whitelisted paths are always allowed to support resubscription and self-service flows.
@@ -63,9 +76,13 @@ func NewReadOnlyMiddleware() func(ctx huma.Context, next func(huma.Context)) {
 			return
 		}
 
-		// Check if path is whitelisted
+		// Check if path is whitelisted — exact-match first, then prefix.
 		path := ctx.Operation().Path
-		for _, prefix := range readOnlyWhitelistedPrefixes {
+		if readOnlyExactAllowedPaths[path] {
+			next(ctx)
+			return
+		}
+		for _, prefix := range readOnlyPrefixAllowedPaths {
 			if strings.HasPrefix(path, prefix) {
 				next(ctx)
 				return
