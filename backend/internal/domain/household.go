@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ─── Role / status / visibility enums ────────────────────────────────────────
@@ -68,7 +69,7 @@ func (h *Household) Validate() error {
 	if trimmed == "" {
 		return errors.New("name is required")
 	}
-	if len(trimmed) > 255 {
+	if utf8.RuneCountInString(trimmed) > 255 {
 		return errors.New("name must not exceed 255 characters")
 	}
 	return nil
@@ -185,20 +186,21 @@ func (inv *HouseholdInvite) Validate() error {
 
 // HouseholdAccountShare represents a grant that makes one member's account visible
 // in the household aggregate. Keyed to user_accounts (survives Plaid relinks).
-// physical_account_blind_idx is a repo-internal HMAC column for joint-account dedup
-// and is not surfaced in this struct.
+// PhysicalAccountBlindIdx is a repo-internal HMAC column for joint-account dedup;
+// it is excluded from JSON responses but included for safe struct scanning.
 // owner_user_id is not stored here; it is derived from user_accounts.user_id at query time.
 //
 // Issue #1365 — Phase 1.
 type HouseholdAccountShare struct {
-	ID            string          `json:"id" db:"id"`
-	HouseholdID   string          `json:"household_id" db:"household_id"`
-	UserAccountID string          `json:"user_account_id" db:"user_account_id"`
-	Visibility    ShareVisibility `json:"visibility" db:"visibility"`
-	SharedAt      time.Time       `json:"shared_at" db:"shared_at"`
-	RevokedAt     *time.Time      `json:"revoked_at,omitempty" db:"revoked_at"`
-	CreatedAt     time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at" db:"updated_at"`
+	ID                       string          `json:"id" db:"id"`
+	HouseholdID              string          `json:"household_id" db:"household_id"`
+	UserAccountID            string          `json:"user_account_id" db:"user_account_id"`
+	Visibility               ShareVisibility `json:"visibility" db:"visibility"`
+	SharedAt                 time.Time       `json:"shared_at" db:"shared_at"`
+	RevokedAt                *time.Time      `json:"revoked_at,omitempty" db:"revoked_at"`
+	PhysicalAccountBlindIdx  *string         `json:"-" db:"physical_account_blind_idx"`
+	CreatedAt                time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt                time.Time       `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the HouseholdAccountShare has all required fields and valid values.

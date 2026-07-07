@@ -164,6 +164,11 @@ func TestSubscriptionEntitlement_Validate(t *testing.T) {
 			wantErr: "household_id and payer_user_id must be nil when source is own_subscription",
 		},
 		{
+			name:    "invalid status",
+			e:       SubscriptionEntitlement{UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium), Status: "bogus", EffectiveFrom: now},
+			wantErr: "status must be one of: active, inactive, trial, trialing, cancelled, past_due",
+		},
+		{
 			name: "effective_until not after effective_from",
 			e: SubscriptionEntitlement{
 				UserID: "u-1", Source: EntitlementSourceOwn, Tier: string(TierPremium),

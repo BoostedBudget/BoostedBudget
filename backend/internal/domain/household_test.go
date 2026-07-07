@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,14 +52,24 @@ func TestHousehold_Validate(t *testing.T) {
 			wantErr: "name is required",
 		},
 		{
-			name:    "name too long",
-			h:       Household{OwnerUserID: ownerID, Name: string(make([]byte, 256))},
+			name:    "name too long (ASCII)",
+			h:       Household{OwnerUserID: ownerID, Name: strings.Repeat("a", 256)},
 			wantErr: "name must not exceed 255 characters",
 		},
 		{
-			name:    "name exactly 255 chars",
-			h:       Household{OwnerUserID: ownerID, Name: string(make([]byte, 255))},
+			name:    "name exactly 255 chars (ASCII)",
+			h:       Household{OwnerUserID: ownerID, Name: strings.Repeat("a", 255)},
 			wantErr: "",
+		},
+		{
+			name:    "name exactly 255 runes (multibyte) is valid",
+			h:       Household{OwnerUserID: ownerID, Name: strings.Repeat("é", 255)},
+			wantErr: "",
+		},
+		{
+			name:    "name 256 runes (multibyte) is too long",
+			h:       Household{OwnerUserID: ownerID, Name: strings.Repeat("é", 256)},
+			wantErr: "name must not exceed 255 characters",
 		},
 	}
 
