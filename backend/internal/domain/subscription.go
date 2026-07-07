@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"time"
 )
 
@@ -200,6 +201,74 @@ type LimitCheckResult struct {
 	IsUnlimited   bool   `json:"is_unlimited"`
 	ResourceType  string `json:"resource_type"`
 	RemainingUsage int   `json:"remaining_usage"`
+}
+
+// ─── SubscriptionEntitlement ─────────────────────────────────────────────────
+
+// EntitlementSource identifies whether a subscription entitlement originates from
+// the user's own subscription or from being covered under a household owner's plan.
+type EntitlementSource string
+
+const (
+	// EntitlementSourceOwn indicates the user pays for their own subscription.
+	EntitlementSourceOwn EntitlementSource = "own_subscription"
+	// EntitlementSourceHousehold indicates the user is covered under a household owner's plan.
+	EntitlementSourceHousehold EntitlementSource = "household"
+)
+
+// SubscriptionEntitlement decouples a user's effective subscription coverage from
+// the payer's users row, which is overwritten by Paddle webhooks on billing events.
+// One row per entitlement epoch; open-ended rows have EffectiveUntil == nil.
+// Phase 2 will enforce the one-active-entitlement invariant and wire this into
+// GetEffectiveSubscription().
+//
+// Issue #1365 — Phase 1: domain struct only; no service wiring yet.
+type SubscriptionEntitlement struct {
+	ID             string            `json:"id" db:"id"`
+	UserID         string            `json:"user_id" db:"user_id"`
+	Source         EntitlementSource `json:"source" db:"source"`
+	Tier           string            `json:"tier" db:"tier"`
+	Status         string            `json:"status" db:"status"`
+	PayerUserID    *string           `json:"payer_user_id,omitempty" db:"payer_user_id"`
+	HouseholdID    *string           `json:"household_id,omitempty" db:"household_id"`
+	EffectiveFrom  time.Time         `json:"effective_from" db:"effective_from"`
+	EffectiveUntil *time.Time        `json:"effective_until,omitempty" db:"effective_until"`
+	CreatedAt      time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at" db:"updated_at"`
+}
+
+// Validate checks that the SubscriptionEntitlement has all required fields and valid values.
+func (e *SubscriptionEntitlement) Validate() error {
+	if e.UserID == "" {
+		return errors.New("user_id is required")
+	}
+	if e.Tier == "" {
+		return errors.New("tier is required")
+	}
+	if e.Status == "" {
+		return errors.New("status is required")
+	}
+	switch e.Source {
+	case EntitlementSourceOwn, EntitlementSourceHousehold:
+	default:
+		return errors.New("source must be one of: own_subscription, household")
+	}
+	// Shape check mirrors the DB CHECK constraint.
+	if e.Source == EntitlementSourceHousehold {
+		if e.HouseholdID == nil || e.PayerUserID == nil {
+			return errors.New("household_id and payer_user_id are required when source is household")
+		}
+	}
+	if e.Source == EntitlementSourceOwn {
+		if e.HouseholdID != nil || e.PayerUserID != nil {
+			return errors.New("household_id and payer_user_id must be nil when source is own_subscription")
+		}
+	}
+	// Mirrors DB CHECK: effective_until > effective_from.
+	if e.EffectiveUntil != nil && !e.EffectiveUntil.After(e.EffectiveFrom) {
+		return errors.New("effective_until must be after effective_from")
+	}
+	return nil
 }
 
 // NewLimitCheckResult creates a new limit check result
