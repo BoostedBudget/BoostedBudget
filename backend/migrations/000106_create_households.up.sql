@@ -5,7 +5,10 @@
 -- it is always derived from the owner's subscription_entitlements row (Phase 2).
 --
 -- name: user-visible display name for the household (e.g. "The Smith Family").
---       DB CHECK enforces the same 1–255-char rule as domain.Household.Validate().
+--       DB CHECK: char_length(btrim(name)) BETWEEN 1 AND 255 (counts characters, not bytes).
+--       domain.Household.Validate() mirrors this with utf8.RuneCountInString.
+--       Note: Go's strings.TrimSpace strips more whitespace than Postgres btrim (e.g. U+00A0
+--       non-breaking space), so Go validation is strictly more conservative than the DB CHECK.
 
 -- =============================================================================
 -- Step 1: Create households table

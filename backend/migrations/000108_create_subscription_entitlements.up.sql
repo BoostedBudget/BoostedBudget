@@ -79,10 +79,20 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 ALTER TABLE subscription_entitlements VALIDATE CONSTRAINT fk_subscription_entitlements_user_id;
 
--- ON DELETE CASCADE: if the household owner (payer) is GDPR-deleted, the household cascades
--- away first (via fk_subscription_entitlements_household_id), removing entitlement rows before
--- this FK fires. CASCADE here avoids a logical contradiction: the source='household' CHECK
+-- ON DELETE CASCADE: CASCADE avoids a logical contradiction — the source='household' CHECK
 -- requires payer_user_id IS NOT NULL, so SET NULL would violate the constraint on deletion.
+--
+-- Deferral note (Phase 2 MUST enforce):
+-- The intended model is payer_user_id == households.owner_user_id, but the schema does NOT
+-- yet enforce this equality. Phase 2 (which owns the entitlement write path) must enforce it
+-- before any payer != owner row can exist — via a composite FK
+--   (household_id, payer_user_id) -> households(id, owner_user_id)
+-- plus UNIQUE(households.id, owner_user_id) — note: this multi-column unique constraint does NOT
+-- yet exist on households (only UNIQUE(owner_user_id) exists); Phase 2 migration must add it
+-- before the composite FK can be declared — or a constraint trigger, or a service-layer invariant.
+-- Phase 1 writes zero entitlement rows, so there is no live risk now.
+-- Postgres does NOT guarantee CASCADE firing order across FK constraints, so relying on the
+-- household_id FK to remove rows "first" is not safe; the invariant must be enforced structurally.
 DO $$ BEGIN
     ALTER TABLE subscription_entitlements
         ADD CONSTRAINT fk_subscription_entitlements_payer_user_id

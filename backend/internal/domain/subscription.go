@@ -248,6 +248,12 @@ func (e *SubscriptionEntitlement) Validate() error {
 	if e.Status == "" {
 		return errors.New("status is required")
 	}
+	switch SubscriptionStatus(e.Status) {
+	case SubscriptionStatusActive, SubscriptionStatusInactive, SubscriptionStatusTrial,
+		SubscriptionStatusTrialing, SubscriptionStatusCancelled, SubscriptionStatusPastDue:
+	default:
+		return errors.New("status must be one of: active, inactive, trial, trialing, cancelled, past_due")
+	}
 	switch e.Source {
 	case EntitlementSourceOwn, EntitlementSourceHousehold:
 	default:
