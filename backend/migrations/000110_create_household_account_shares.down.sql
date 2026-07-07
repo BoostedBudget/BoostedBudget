@@ -1,0 +1,7 @@
+-- Rollback for 000110_create_household_account_shares
+DROP TRIGGER IF EXISTS update_household_account_shares_updated_at ON household_account_shares;
+DROP INDEX IF EXISTS idx_household_account_shares_active_visible;
+DROP INDEX IF EXISTS idx_household_account_shares_user_account;
+DROP INDEX IF EXISTS idx_household_account_shares_household_visibility;
+DROP INDEX IF EXISTS uq_household_account_shares_active;
+DROP TABLE IF EXISTS household_account_shares CASCADE;
