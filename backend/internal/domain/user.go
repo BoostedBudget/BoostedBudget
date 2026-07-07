@@ -58,6 +58,9 @@ type User struct {
 	RetentionNotice30dSentAt *time.Time `json:"retention_notice_30d_sent_at,omitempty" db:"retention_notice_30d_sent_at"`
 	RetentionNotice7dSentAt  *time.Time `json:"retention_notice_7d_sent_at,omitempty" db:"retention_notice_7d_sent_at"`
 
+	// Dunning: tracks when a user entered past_due state (Issue #898)
+	PastDueStartedAt *time.Time `json:"past_due_started_at,omitempty" db:"past_due_started_at"`
+
 	// Timezone settings (Issue #972)
 	// Timezone stores the user's IANA timezone string (default "UTC").
 	// TimezoneSource tracks how it was set: "default", "auto" (browser-detected), or "user" (explicit choice).

@@ -116,6 +116,25 @@ type ProfileRepository interface {
 	// DeleteUserCascade performs application-level cascade deletion of all user data
 	DeleteUserCascade(ctx context.Context, userID string) error
 
+	// Dunning: past_due tracking methods (Issue #898)
+
+	// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
+	// Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
+	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
+
+	// ClearPastDueStartedAt clears the past_due_started_at timestamp for a user (called on resubscription).
+	ClearPastDueStartedAt(ctx context.Context, userID string) error
+
+	// GetUsersInPastDue returns users with subscription_status='past_due' and non-nil past_due_started_at.
+	// Used by the dunning cron job to find candidates for grace-expiry processing (Issue #898).
+	GetUsersInPastDue(ctx context.Context) ([]domain.User, error)
+
+	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user
+	// is still 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user
+	// has already recovered (payment arrived between Plaid disconnect and this point).
+	// Issue #898: CAS guard against recovery race condition.
+	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
+
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
 	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
@@ -142,7 +161,8 @@ const userSelectQuery = `
 	       created_at, updated_at, last_login_at,
 	       manual_tier_override, manual_tier_ends_at,
 	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at,
-	       timezone, timezone_source
+	       timezone, timezone_source,
+	       past_due_started_at
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -159,6 +179,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.ManualTierOverride, &user.ManualTierEndsAt,
 		&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 		&user.Timezone, &user.TimezoneSource,
+		&user.PastDueStartedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -216,6 +237,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.ManualTierOverride, &user.ManualTierEndsAt,
 			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 			&user.Timezone, &user.TimezoneSource,
+			&user.PastDueStartedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1082,4 +1104,124 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		return []*domain.User{}, nil
 	}
 	return users, nil
+}
+
+// SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
+// Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
+// Issue #898: dunning job grace-period tracking.
+func (r *profileRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE users SET past_due_started_at = $2, updated_at = NOW()
+		WHERE id = $1 AND past_due_started_at IS NULL`,
+		userID, t,
+	)
+	if err != nil {
+		return err
+	}
+	// Either not found or already set — both are acceptable (idempotent).
+	return nil
+}
+
+// ClearPastDueStartedAt clears the past_due_started_at timestamp for a user.
+// Called on resubscription so the grace period resets cleanly.
+// Issue #898: dunning job grace-period tracking.
+func (r *profileRepository) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users SET past_due_started_at = NULL, updated_at = NOW()
+		WHERE id = $1`,
+		userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// GetUsersInPastDue returns users with subscription_status='past_due' and non-nil past_due_started_at.
+// Called by the daily dunning cron job to find candidates for grace-expiry or Plaid-disconnect processing.
+// Issue #898: dunning job grace-period tracking.
+func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
+	query := userSelectQuery + `
+		WHERE subscription_status = 'past_due'
+		  AND past_due_started_at IS NOT NULL
+		  AND is_deleted = FALSE
+		ORDER BY past_due_started_at ASC
+	`
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []domain.User
+	for rows.Next() {
+		var user domain.User
+		if err := rows.Scan(
+			&user.ID, &user.ClerkUserID, &user.Email, &user.EmailVerified,
+			&user.SubscriptionTier, &user.SubscriptionStatus, &user.SubscriptionStartedAt, &user.SubscriptionEndsAt,
+			&user.TrialStartedAt, &user.TrialEndsAt, &user.HadTrial,
+			&user.PaddleCustomerID, &user.PaddleSubscriptionID, &user.PrimaryRegion,
+			&user.IsActive, &user.IsDeleted,
+			&user.DeletionRequestedAt, &user.DeletionScheduledAt,
+			&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
+			&user.ManualTierOverride, &user.ManualTierEndsAt,
+			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
+			&user.Timezone, &user.TimezoneSource,
+			&user.PastDueStartedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		decryptedClerkUserID, err := r.enc.DecryptString(user.ClerkUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		}
+		user.ClerkUserID = decryptedClerkUserID
+
+		decryptedEmail, err := r.enc.DecryptString(user.Email)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt email: %w", err)
+		}
+		user.Email = decryptedEmail
+
+		decryptedPaddleCustomerID, err := r.enc.DecryptNullableString(user.PaddleCustomerID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt paddle_customer_id: %w", err)
+		}
+		user.PaddleCustomerID = decryptedPaddleCustomerID
+
+		decryptedPaddleSubscriptionID, err := r.enc.DecryptNullableString(user.PaddleSubscriptionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt paddle_subscription_id: %w", err)
+		}
+		user.PaddleSubscriptionID = decryptedPaddleSubscriptionID
+
+		users = append(users, user)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []domain.User{}, nil
+	}
+	return users, nil
+}
+
+// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is still
+// 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user has already
+// recovered (e.g. payment arrived between Plaid disconnect and this call).
+// Issue #898: CAS guard against recovery race condition.
+func (r *profileRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET subscription_status = 'cancelled', updated_at = NOW()
+		WHERE id = $1 AND subscription_status = 'past_due'`,
+		userID)
+	if err != nil {
+		return false, fmt.Errorf("CancelIfPastDue: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
 }

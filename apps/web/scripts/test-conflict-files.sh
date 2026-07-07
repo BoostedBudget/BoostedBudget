@@ -102,6 +102,7 @@ GROUP_D_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardLayout.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useGettingStarted.test.ts"
+    "$FRONTEND_DIR/src/shared/hooks/useSessionDismiss.test.ts"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgetFilters.test.ts"
     "$FRONTEND_DIR/src/features/budgets/hooks/useBudgets.test.tsx"
     "$FRONTEND_DIR/src/features/savings/hooks/useSavingsGoals.test.tsx"

@@ -39,6 +39,8 @@ EXCLUDE_PATTERNS=(
     "src/features/transactions/hooks/useInfiniteTransactions.test.tsx"
     "src/features/investments/hooks/useInfiniteInvestmentTransactions.test.tsx"
     "src/features/budgets/hooks/usePreviewCategories.test.tsx"
+    # #898: useSessionDismiss tests the real implementation; session-dismiss.ts preload would shadow it
+    "src/shared/hooks/useSessionDismiss.test.ts"
 )
 
 echo "Running tests with centralized mocks (excluding process-isolated tests)..."
