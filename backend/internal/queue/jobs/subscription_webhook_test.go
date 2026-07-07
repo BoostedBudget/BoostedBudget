@@ -1610,8 +1610,9 @@ func TestWorker_SubscriptionPastDue_FromCancelled_NoTransition(t *testing.T) {
 }
 
 // TestWorker_SubscriptionPastDue_Repeated_DoesNotResetStamp verifies that a repeated past_due
-// webhook for an already-past_due user still calls SetPastDueStartedAt (which is nil-safe and
-// won't overwrite an existing stamp), but does NOT update the status again.
+// webhook for an already-past_due user does NOT call SetPastDueStartedAt (the conditional-transition
+// guard only stamps on first entry to past_due; repeated webhooks skip both the status update and
+// the stamp). Neither UpdateSubscriptionFromPaddle nor SetPastDueStartedAt are called.
 func TestWorker_SubscriptionPastDue_Repeated_DoesNotResetStamp(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()

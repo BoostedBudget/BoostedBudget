@@ -154,6 +154,22 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		}{Body: struct{ Message string `json:"message"` }{Message: "updated"}}, nil
 	})
 
+	// Prefix-bypass test: a hypothetical route that shares a prefix with a whitelisted path.
+	// Must be BLOCKED — exact-match hardening prevents /checkout-malicious from inheriting
+	// the /checkout whitelist entry via strings.HasPrefix.
+	huma.Register(api, huma.Operation{
+		OperationID: "subscription-checkout-malicious",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/subscription/checkout-malicious",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct{ Message string `json:"message"` }
+	}, error) {
+		return &struct {
+			Body struct{ Message string `json:"message"` }
+		}{Body: struct{ Message string `json:"message"` }{Message: "bypassed"}}, nil
+	})
+
 	return server, api
 }
 
@@ -407,4 +423,19 @@ func TestReadOnlyMiddleware_POST_Checkout_Inactive_Allowed(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked proves that a route sharing only a
+// prefix with the /checkout whitelist entry is NOT whitelisted.
+// This is the regression test for the HasPrefix→exact-match hardening (GAP4b).
+// Without exact-match, strings.HasPrefix("/api/v1/subscription/checkout-malicious", "/api/v1/subscription/checkout")
+// = true, so the route would pass through incorrectly.
+func TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout-malicious", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"a route that merely shares a prefix with /checkout must not inherit its whitelist entry")
 }

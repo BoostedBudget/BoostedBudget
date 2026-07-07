@@ -16,18 +16,24 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 )
 
-// readOnlyWhitelistedPrefixes lists paths that are always allowed regardless of subscription status.
-// These paths cover resubscription flows, self-service account management, and incoming webhooks.
-//
-// Subscription routes are listed explicitly (not by prefix) to prevent plan-mutation routes
-// (/subscription/preview-update, /subscription/update) from being accidentally whitelisted.
-// Only recovery/self-service routes are permitted while a subscription is locked.
-var readOnlyWhitelistedPrefixes = []string{
+// readOnlyExactAllowedPaths lists paths that are whitelisted by exact match.
+// Used for the subscription recovery/self-service routes where prefix matching would
+// accidentally admit future mutation routes that share the same prefix
+// (e.g. /subscription/checkout-session would wrongly inherit /subscription/checkout).
+var readOnlyExactAllowedPaths = map[string]bool{
+	"/api/v1/subscription/checkout": true, // resubscribe — locked users must be able to restart
+	"/api/v1/subscription/cancel":   true, // intentional cancel — locked users may cancel in arrears
+}
+
+// readOnlyPrefixAllowedPaths lists path prefixes that are always allowed regardless of subscription
+// status. Entries here intentionally use prefix semantics — e.g. /api/v1/user/delete also covers
+// the deletion-cancel token route (/api/v1/user/delete/cancel/{token}), and /api/v1/admin/ covers
+// all admin sub-routes. Subscription routes are NOT listed here to prevent word-boundary bypass;
+// they are in readOnlyExactAllowedPaths above.
+var readOnlyPrefixAllowedPaths = []string{
 	"/api/v1/user/delete",
 	"/api/v1/user/profile",
 	"/api/v1/user/privacy",
-	"/api/v1/subscription/checkout", // resubscribe — locked users must be able to restart
-	"/api/v1/subscription/cancel",   // intentional cancel — locked users may cancel in arrears
 	"/api/v1/paddle/webhook",
 	"/api/v1/plaid/webhook",
 	"/api/v1/admin/",
@@ -70,9 +76,13 @@ func NewReadOnlyMiddleware() func(ctx huma.Context, next func(huma.Context)) {
 			return
 		}
 
-		// Check if path is whitelisted
+		// Check if path is whitelisted — exact-match first, then prefix.
 		path := ctx.Operation().Path
-		for _, prefix := range readOnlyWhitelistedPrefixes {
+		if readOnlyExactAllowedPaths[path] {
+			next(ctx)
+			return
+		}
+		for _, prefix := range readOnlyPrefixAllowedPaths {
 			if strings.HasPrefix(path, prefix) {
 				next(ctx)
 				return
