@@ -136,18 +136,18 @@ func (m *HouseholdMember) Validate() error {
 //
 // Issue #1365 — Phase 1.
 type HouseholdInvite struct {
-	ID                     string                `json:"id" db:"id"`
-	HouseholdID            string                `json:"household_id" db:"household_id"`
-	InviterUserID          string                `json:"inviter_user_id" db:"inviter_user_id"`
-	InviteeEmail           string                `json:"invitee_email" db:"invitee_email"` // plaintext in memory; ciphertext at rest
-	InviteeEmailBlindIdx   string                `json:"-" db:"invitee_email_blind_idx"`   // repo-internal HMAC; never serialised to JSON
-	TokenHash              string                `json:"-" db:"token_hash"`
-	Status                 HouseholdInviteStatus `json:"status" db:"status"`
-	ExpiresAt              time.Time             `json:"expires_at" db:"expires_at"`
-	AcceptedUserID         *string               `json:"accepted_user_id,omitempty" db:"accepted_user_id"`
-	AcceptedAt             *time.Time            `json:"accepted_at,omitempty" db:"accepted_at"`
-	CreatedAt              time.Time             `json:"created_at" db:"created_at"`
-	UpdatedAt              time.Time             `json:"updated_at" db:"updated_at"`
+	ID                   string                `json:"id" db:"id"`
+	HouseholdID          string                `json:"household_id" db:"household_id"`
+	InviterUserID        string                `json:"inviter_user_id" db:"inviter_user_id"`
+	InviteeEmail         string                `json:"invitee_email" db:"invitee_email"` // plaintext in memory; ciphertext at rest
+	InviteeEmailBlindIdx string                `json:"-" db:"invitee_email_blind_idx"`   // repo-internal HMAC; never serialised to JSON
+	TokenHash            string                `json:"-" db:"token_hash"`
+	Status               HouseholdInviteStatus `json:"status" db:"status"`
+	ExpiresAt            time.Time             `json:"expires_at" db:"expires_at"`
+	AcceptedUserID       *string               `json:"accepted_user_id,omitempty" db:"accepted_user_id"`
+	AcceptedAt           *time.Time            `json:"accepted_at,omitempty" db:"accepted_at"`
+	CreatedAt            time.Time             `json:"created_at" db:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the HouseholdInvite has all required fields and valid values.
@@ -192,15 +192,15 @@ func (inv *HouseholdInvite) Validate() error {
 //
 // Issue #1365 — Phase 1.
 type HouseholdAccountShare struct {
-	ID                       string          `json:"id" db:"id"`
-	HouseholdID              string          `json:"household_id" db:"household_id"`
-	UserAccountID            string          `json:"user_account_id" db:"user_account_id"`
-	Visibility               ShareVisibility `json:"visibility" db:"visibility"`
-	SharedAt                 time.Time       `json:"shared_at" db:"shared_at"`
-	RevokedAt                *time.Time      `json:"revoked_at,omitempty" db:"revoked_at"`
-	PhysicalAccountBlindIdx  *string         `json:"-" db:"physical_account_blind_idx"`
-	CreatedAt                time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt                time.Time       `json:"updated_at" db:"updated_at"`
+	ID                      string          `json:"id" db:"id"`
+	HouseholdID             string          `json:"household_id" db:"household_id"`
+	UserAccountID           string          `json:"user_account_id" db:"user_account_id"`
+	Visibility              ShareVisibility `json:"visibility" db:"visibility"`
+	SharedAt                time.Time       `json:"shared_at" db:"shared_at"`
+	RevokedAt               *time.Time      `json:"revoked_at,omitempty" db:"revoked_at"`
+	PhysicalAccountBlindIdx *string         `json:"-" db:"physical_account_blind_idx"`
+	CreatedAt               time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at" db:"updated_at"`
 }
 
 // Validate checks that the HouseholdAccountShare has all required fields and valid values.

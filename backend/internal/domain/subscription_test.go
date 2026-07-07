@@ -106,7 +106,7 @@ func TestSubscriptionEntitlement_Validate(t *testing.T) {
 			name: "valid household entitlement",
 			e: SubscriptionEntitlement{
 				UserID: "u-1", Source: EntitlementSourceHousehold, Tier: string(TierHousehold2),
-				Status:      string(SubscriptionStatusActive), EffectiveFrom: now,
+				Status: string(SubscriptionStatusActive), EffectiveFrom: now,
 				HouseholdID: &hhID, PayerUserID: &payerID,
 			},
 			wantErr: "",
