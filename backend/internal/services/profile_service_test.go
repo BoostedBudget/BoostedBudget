@@ -173,6 +173,20 @@ func (m *MockProfileRepository) GetUsersWithExpiredRetention(ctx context.Context
 	return nil, nil
 }
 
+// Dunning methods (#898)
+func (m *MockProfileRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	return nil
+}
+func (m *MockProfileRepository) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
+	return []domain.User{}, nil
+}
+func (m *MockProfileRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	// If no expectation registered, return safe default (no pre-encryption user found).
 	// This avoids needing to add GetUserByEmail mocks to all tests that don't care about
