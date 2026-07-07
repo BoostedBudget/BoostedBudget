@@ -52,7 +52,7 @@ func (s SubscriptionStatus) IsActiveSubscription() bool {
 
 // IsReadOnlySubscription returns true if the status grants read-only access (view data, no mutations)
 func (s SubscriptionStatus) IsReadOnlySubscription() bool {
-	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled
+	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled || s == SubscriptionStatusPastDue
 }
 
 // Unlimited represents unlimited resources (stored as -1 in config)

@@ -147,6 +147,20 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiredRetention(ctx context.Cont
 	return nil, nil
 }
 
+// Dunning methods (#898)
+func (m *MockProfileRepoForWorker) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	return nil
+}
+func (m *MockProfileRepoForWorker) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
+	return []domain.User{}, nil
+}
+func (m *MockProfileRepoForWorker) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
 }

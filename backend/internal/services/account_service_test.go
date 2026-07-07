@@ -546,6 +546,31 @@ func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) (
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+// Dunning methods (#898)
+
+func (m *MockUserRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
+	args := m.Called(ctx, userID, t)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) ClearPastDueStartedAt(ctx context.Context, userID string) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockUserRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	args := m.Called(ctx, email)
 	if args.Get(0) == nil {

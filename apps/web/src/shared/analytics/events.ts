@@ -184,6 +184,11 @@ export const ANALYTICS_EVENTS = {
   ANALYTICS_LARGEST_TRANSACTIONS_VIEWED: 'analytics_largest_transactions_viewed',
   ANALYTICS_AVERAGE_MONTHLY_SPEND_VIEWED: 'analytics_average_monthly_spend_viewed',
 
+  // Subscription banner (#898)
+  SUBSCRIPTION_BANNER_VIEWED: 'subscription_banner_viewed',
+  SUBSCRIPTION_BANNER_CTA_CLICKED: 'subscription_banner_cta_clicked',
+  SUBSCRIPTION_BANNER_DISMISSED: 'subscription_banner_dismissed',
+
   // Merchants (#957)
   MERCHANTS_TAB_VIEWED: 'merchants_tab_viewed',
   MERCHANT_OVERRIDE_SET: 'merchant_override_set',

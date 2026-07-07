@@ -2,6 +2,7 @@ package middleware_test
 
 // #930: Read-only enforcement middleware tests
 // Ensures inactive/cancelled subscriptions can only perform GET/HEAD requests.
+// #898: Adds past_due blocked-case tests and narrowed-whitelist regression tests.
 
 import (
 	"context"
@@ -109,6 +110,64 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		return &struct {
 			Body struct{ Message string `json:"message"` }
 		}{Body: struct{ Message string `json:"message"` }{Message: "checkout"}}, nil
+	})
+
+	// Subscription cancel whitelist — intentional cancel must work even for locked users
+	huma.Register(api, huma.Operation{
+		OperationID: "subscription-cancel",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/subscription/cancel",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct{ Message string `json:"message"` }
+	}, error) {
+		return &struct {
+			Body struct{ Message string `json:"message"` }
+		}{Body: struct{ Message string `json:"message"` }{Message: "cancelled"}}, nil
+	})
+
+	// Subscription preview-update — plan mutation, must be BLOCKED for locked users
+	huma.Register(api, huma.Operation{
+		OperationID: "subscription-preview-update",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/subscription/preview-update",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct{ Message string `json:"message"` }
+	}, error) {
+		return &struct {
+			Body struct{ Message string `json:"message"` }
+		}{Body: struct{ Message string `json:"message"` }{Message: "preview-update"}}, nil
+	})
+
+	// Subscription update — plan mutation, must be BLOCKED for locked users
+	huma.Register(api, huma.Operation{
+		OperationID: "subscription-update",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/subscription/update",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct{ Message string `json:"message"` }
+	}, error) {
+		return &struct {
+			Body struct{ Message string `json:"message"` }
+		}{Body: struct{ Message string `json:"message"` }{Message: "updated"}}, nil
+	})
+
+	// Prefix-bypass test: a hypothetical route that shares a prefix with a whitelisted path.
+	// Must be BLOCKED — exact-match hardening prevents /checkout-malicious from inheriting
+	// the /checkout whitelist entry via strings.HasPrefix.
+	huma.Register(api, huma.Operation{
+		OperationID: "subscription-checkout-malicious",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/subscription/checkout-malicious",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct{ Message string `json:"message"` }
+	}, error) {
+		return &struct {
+			Body struct{ Message string `json:"message"` }
+		}{Body: struct{ Message string `json:"message"` }{Message: "bypassed"}}, nil
 	})
 
 	return server, api
@@ -220,4 +279,163 @@ func TestReadOnlyMiddleware_POST_NoSubscriptionStatus_Active_Passthrough(t *test
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// --- #898: past_due tests ---
+
+// TestReadOnlyMiddleware_POST_PastDue_Blocked tests that general POST mutations are blocked
+// for users with past_due subscription status.
+func TestReadOnlyMiddleware_POST_PastDue_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_GET_PastDue_Allowed tests that GET requests are allowed for past_due users.
+func TestReadOnlyMiddleware_GET_PastDue_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodGet, "/api/v1/transactions", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Checkout_PastDue_Allowed tests that resubscription checkout
+// is allowed for past_due users.
+func TestReadOnlyMiddleware_POST_Checkout_PastDue_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Cancel_PastDue_Allowed tests that intentional cancellation
+// is allowed for past_due users (so they can cancel a subscription in arrears).
+func TestReadOnlyMiddleware_POST_Cancel_PastDue_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_PreviewUpdate_PastDue_Blocked tests that plan-change preview
+// is blocked for past_due users (must resolve payment first).
+func TestReadOnlyMiddleware_POST_PreviewUpdate_PastDue_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Update_PastDue_Blocked tests that plan-change mutations
+// are blocked for past_due users (must resolve payment first).
+func TestReadOnlyMiddleware_POST_Update_PastDue_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_PreviewUpdate_Inactive_Blocked tests that plan-change preview
+// is blocked for inactive users (must resubscribe first).
+func TestReadOnlyMiddleware_POST_PreviewUpdate_Inactive_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Update_Inactive_Blocked tests that plan-change mutations
+// are blocked for inactive users (must resubscribe first).
+func TestReadOnlyMiddleware_POST_Update_Inactive_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_PreviewUpdate_Cancelled_Blocked tests that plan-change preview
+// is blocked for cancelled users (must resubscribe first).
+func TestReadOnlyMiddleware_POST_PreviewUpdate_Cancelled_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/preview-update", "cancelled")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Update_Cancelled_Blocked tests that plan-change mutations
+// are blocked for cancelled users (must resubscribe first).
+func TestReadOnlyMiddleware_POST_Update_Cancelled_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/update", "cancelled")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Cancel_Inactive_Allowed tests that cancel is allowed for
+// inactive users (regression: narrowed whitelist must still pass cancel through).
+func TestReadOnlyMiddleware_POST_Cancel_Inactive_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Cancel_Cancelled_Allowed tests that cancel is allowed for
+// cancelled users (regression: narrowed whitelist must still pass cancel through).
+func TestReadOnlyMiddleware_POST_Cancel_Cancelled_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/cancel", "cancelled")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_Checkout_Inactive_Allowed tests that checkout is allowed for
+// inactive users (regression: narrowed whitelist must still pass checkout through).
+func TestReadOnlyMiddleware_POST_Checkout_Inactive_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked proves that a route sharing only a
+// prefix with the /checkout whitelist entry is NOT whitelisted.
+// This is the regression test for the HasPrefix→exact-match hardening (GAP4b).
+// Without exact-match, strings.HasPrefix("/api/v1/subscription/checkout-malicious", "/api/v1/subscription/checkout")
+// = true, so the route would pass through incorrectly.
+func TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/subscription/checkout-malicious", "past_due")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"a route that merely shares a prefix with /checkout must not inherit its whitelist entry")
 }
