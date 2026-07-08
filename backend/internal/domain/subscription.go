@@ -125,6 +125,7 @@ type EffectiveSubscription struct {
 	Features             SubscriptionFeatures `json:"features"`
 	HasOverrides         bool                 `json:"has_overrides"`
 	ActiveOverridesCount int                  `json:"active_overrides_count,omitempty"`
+	UsersIncluded        int                  `json:"users_included"`
 }
 
 // ResourceType represents the types of resources that can have limits
