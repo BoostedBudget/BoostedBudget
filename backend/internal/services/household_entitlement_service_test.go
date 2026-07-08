@@ -140,6 +140,31 @@ func TestResolveEffectiveEntitlement_OwnerPastDue_MemberFallsBackToOwn(t *testin
 	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
 }
 
+// TestResolveEffectiveEntitlement_OwnerCancelled_MemberFallsBackToOwn closes a
+// gap found by requirements-gap-analysis: the issue's TDD checklist names
+// "Owner cancels -> members revert to own subscription_tier" explicitly, but
+// only the past_due branch of IsReadOnlySubscription() was previously tested.
+// cancelled and past_due share the same read-only branch in the resolver, but
+// the checklist names cancelled specifically, so it gets its own test.
+func TestResolveEffectiveEntitlement_OwnerCancelled_MemberFallsBackToOwn(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "cancelled",
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial"}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, "premium", eff.Tier, "member should revert to own tier when owner is cancelled")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
+}
+
 func TestResolveEffectiveEntitlement_OwnerManualOverrideHonored(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
 	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
