@@ -51,7 +51,7 @@ import type {
   Household,
   HouseholdEntitlementSummary,
   HouseholdInvite,
-  HouseholdMember
+  HouseholdMemberView
 } from '../../models';
 
 
@@ -71,7 +71,7 @@ export const getListHouseholdInvitesResponseMock = (): HouseholdInvite[] | null 
 
 export const getCreateHouseholdInviteResponseMock = (overrideResponse: Partial<Extract<CreateInviteResponseBody, object>> = {}): CreateInviteResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), invite: {accepted_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), accepted_user_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', household_id: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), invitee_email: faker.string.alpha({length: {min: 10, max: 20}}), inviter_user_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'}, invite_link: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getListHouseholdMembersResponseMock = (): HouseholdMember[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', household_id: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), joined_at: faker.date.past().toISOString().slice(0, 19) + 'Z', prior_subscription_status: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), prior_subscription_tier: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), removed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), role: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
+export const getListHouseholdMembersResponseMock = (): HouseholdMemberView[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({avatar_url: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), joined_at: faker.date.past().toISOString().slice(0, 19) + 'Z', role: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
 
 
 export const getCreateHouseholdMockHandler = (overrideResponse?: Household | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Household> | Household), options?: RequestHandlerOptions) => {
@@ -200,7 +200,7 @@ export const getRevokeHouseholdInviteMockHandler = (overrideResponse?: void | ((
   }, options)
 }
 
-export const getListHouseholdMembersMockHandler = (overrideResponse?: HouseholdMember[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HouseholdMember[] | null> | HouseholdMember[] | null), options?: RequestHandlerOptions) => {
+export const getListHouseholdMembersMockHandler = (overrideResponse?: HouseholdMemberView[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HouseholdMemberView[] | null> | HouseholdMemberView[] | null), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/households/me/members', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
 

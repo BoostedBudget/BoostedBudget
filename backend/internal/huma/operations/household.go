@@ -137,11 +137,12 @@ type ListMembersInput struct {
 	inputs.AuthenticatedInput
 }
 
-// ListMembersOutput represents the response for listing household members. Deliberately
-// domain.HouseholdMember as-is — it carries no financial data (role/status/joined_at
-// only), matching the issue's "no financial data" requirement.
+// ListMembersOutput represents the response for listing household members.
+// services.HouseholdMemberView carries role/status/joined_at plus a best-effort Clerk
+// display name/avatar (#1367 — Phase 3 Round 2, GT-3) — deliberately no financial data,
+// matching the issue's "no financial data" requirement.
 type ListMembersOutput struct {
-	Body []domain.HouseholdMember
+	Body []services.HouseholdMemberView
 }
 
 // ListMembers handles GET /api/v1/households/me/members.

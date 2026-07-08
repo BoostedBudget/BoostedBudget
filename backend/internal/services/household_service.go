@@ -7,8 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
@@ -37,6 +40,93 @@ type HouseholdCreateInviteResult struct {
 	InviteLink string
 }
 
+// HouseholdMemberView is the GET /households/me/members response shape: membership data
+// plus a best-effort display name + avatar resolved from Clerk. The issue requires
+// "name, avatar, role, joined_at", but that identity data lives in Clerk, not the users
+// table — domain.HouseholdMember deliberately stays bare (role/status/joined_at only);
+// this view composes it with the optional Clerk lookup. DisplayName/AvatarURL are blank
+// (never an error) when no MemberProfileResolver is wired, or when resolving a specific
+// member's profile fails — a single bad Clerk lookup must not break the whole list.
+// #1367 — Phase 3 Round 2 (GT-3).
+type HouseholdMemberView struct {
+	UserID      string                       `json:"user_id"`
+	Role        domain.HouseholdRole         `json:"role"`
+	Status      domain.HouseholdMemberStatus `json:"status"`
+	JoinedAt    time.Time                    `json:"joined_at"`
+	DisplayName string                       `json:"display_name,omitempty"`
+	AvatarURL   string                       `json:"avatar_url,omitempty"`
+}
+
+// MemberProfileResolver resolves a household member's display name + avatar. Optional
+// (nil-safe) — when HouseholdService.SetMemberProfileResolver is never called,
+// ListMembers returns bare membership data with empty DisplayName/AvatarURL rather than
+// erroring. #1367 — Phase 3 Round 2 (GT-3).
+type MemberProfileResolver interface {
+	ResolveProfile(ctx context.Context, userID string) (displayName, avatarURL string, err error)
+}
+
+// householdIdentityLookup narrows repository.UserIdentityRepository to what
+// clerkMemberProfileResolver needs.
+type householdIdentityLookup interface {
+	GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error)
+}
+
+// clerkMemberProfileResolver is the production MemberProfileResolver: maps an internal
+// user_id to its primary Clerk ID via UserIdentityRepository (GetByUserID is documented
+// to order primary-first), then fetches display name + avatar live from Clerk. Households
+// cap at <=5 members (config/subscription_tiers.yaml UsersIncluded), so this bounded
+// per-member fetch is intentional — no batch Clerk API call and no cache (YAGNI); see Gap
+// Analysis Round 2, GT-3.
+type clerkMemberProfileResolver struct {
+	identityRepo householdIdentityLookup
+	clerkGetter  ClerkUserGetter
+}
+
+// NewClerkMemberProfileResolver builds the production MemberProfileResolver. Wired via
+// HouseholdService.SetMemberProfileResolver in cmd/server/main.go.
+func NewClerkMemberProfileResolver(identityRepo householdIdentityLookup, clerkGetter ClerkUserGetter) MemberProfileResolver {
+	return &clerkMemberProfileResolver{identityRepo: identityRepo, clerkGetter: clerkGetter}
+}
+
+func (r *clerkMemberProfileResolver) ResolveProfile(ctx context.Context, userID string) (string, string, error) {
+	identities, err := r.identityRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return "", "", err
+	}
+	if len(identities) == 0 {
+		return "", "", nil // no linked Clerk identity — nothing to show, not an error
+	}
+	clerkUser, err := r.clerkGetter.GetUser(ctx, identities[0].ClerkUserID)
+	if err != nil {
+		return "", "", err
+	}
+	return clerkDisplayName(clerkUser), clerkAvatarURL(clerkUser), nil
+}
+
+// clerkDisplayName picks the best available display name: Username, then "First Last",
+// then blank. Deliberately never falls back to email — that's more sensitive than a
+// missing name and handled separately if ever needed.
+func clerkDisplayName(u *clerk.User) string {
+	if u.Username != nil && *u.Username != "" {
+		return *u.Username
+	}
+	var first, last string
+	if u.FirstName != nil {
+		first = *u.FirstName
+	}
+	if u.LastName != nil {
+		last = *u.LastName
+	}
+	return strings.TrimSpace(strings.TrimSpace(first) + " " + strings.TrimSpace(last))
+}
+
+func clerkAvatarURL(u *clerk.User) string {
+	if u.ImageURL != nil {
+		return *u.ImageURL
+	}
+	return ""
+}
+
 // HouseholdService implements the Phase 3 (#1367) household write paths: CRUD, member
 // management, and the invite lifecycle including the consent-gated accept transaction.
 // Phase 1/2 read paths (GetHouseholdForUser, GetEntitlementSummary) already exist and
@@ -47,7 +137,7 @@ type HouseholdService interface {
 	UpdateHouseholdName(ctx context.Context, userID, name string) (*domain.Household, error)
 	DeleteHousehold(ctx context.Context, userID string) error
 
-	ListMembers(ctx context.Context, userID string) ([]domain.HouseholdMember, error)
+	ListMembers(ctx context.Context, userID string) ([]HouseholdMemberView, error)
 	RemoveMember(ctx context.Context, actorUserID, targetUserID string) error
 
 	CreateInvite(ctx context.Context, ownerUserID, inviteeEmail, frontendURL string) (*HouseholdCreateInviteResult, error)
@@ -63,6 +153,9 @@ type HouseholdService interface {
 	DeclineInvite(ctx context.Context, callerUserID, rawToken string) error
 
 	SetAnalytics(a phclient.Analytics)
+	// SetMemberProfileResolver wires optional (nil-safe) Clerk name/avatar enrichment for
+	// ListMembers. #1367 — Phase 3 Round 2 (GT-3).
+	SetMemberProfileResolver(r MemberProfileResolver)
 }
 
 type householdService struct {
@@ -77,6 +170,7 @@ type householdService struct {
 	emailService    EmailService
 	enc             *appcrypto.FieldEncryptor
 	analytics       phclient.Analytics
+	memberProfiles  MemberProfileResolver
 }
 
 // NewHouseholdService creates a new HouseholdService. db must be the same pool used to
@@ -118,6 +212,12 @@ func (s *householdService) capture(userID, event string) {
 	if s.analytics != nil {
 		s.analytics.Capture(userID, event, nil)
 	}
+}
+
+// SetMemberProfileResolver wires in the optional, nil-safe Clerk name/avatar enrichment
+// for ListMembers. #1367 — Phase 3 Round 2 (GT-3).
+func (s *householdService) SetMemberProfileResolver(r MemberProfileResolver) {
+	s.memberProfiles = r
 }
 
 // ─── Household CRUD ───────────────────────────────────────────────────────────
@@ -248,7 +348,7 @@ func (s *householdService) DeleteHousehold(ctx context.Context, userID string) e
 
 // ─── Member management ────────────────────────────────────────────────────────
 
-func (s *householdService) ListMembers(ctx context.Context, userID string) ([]domain.HouseholdMember, error) {
+func (s *householdService) ListMembers(ctx context.Context, userID string) ([]HouseholdMemberView, error) {
 	household, _, found, err := s.householdRepo.GetHouseholdForUser(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -256,7 +356,33 @@ func (s *householdService) ListMembers(ctx context.Context, userID string) ([]do
 	if !found {
 		return nil, domain.ErrHouseholdNotFound
 	}
-	return s.householdRepo.ListMembers(ctx, household.ID)
+	members, err := s.householdRepo.ListMembers(ctx, household.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]HouseholdMemberView, len(members))
+	for i, m := range members {
+		views[i] = HouseholdMemberView{
+			UserID:   m.UserID,
+			Role:     m.Role,
+			Status:   m.Status,
+			JoinedAt: m.JoinedAt,
+		}
+		if s.memberProfiles == nil {
+			continue
+		}
+		name, avatar, perr := s.memberProfiles.ResolveProfile(ctx, m.UserID)
+		if perr != nil {
+			// Fail-soft per member — one bad Clerk lookup must not break the whole list.
+			slog.Default().Warn("household: failed to resolve member profile; leaving name/avatar blank",
+				"user_id", m.UserID, "error", perr)
+			continue
+		}
+		views[i].DisplayName = name
+		views[i].AvatarURL = avatar
+	}
+	return views, nil
 }
 
 func (s *householdService) RemoveMember(ctx context.Context, actorUserID, targetUserID string) error {

@@ -76,6 +76,15 @@ func (d *defaultClerkUserGetter) GetUser(ctx context.Context, clerkUserID string
 	return clerkUser, nil
 }
 
+// NewDefaultClerkUserGetter returns the production ClerkUserGetter backed by the Clerk
+// SDK. Exposed so other services can reuse the same Clerk user-fetch capability without
+// duplicating the user.Get/error-mapping plumbing — e.g. household member profile
+// enrichment (#1367 — Phase 3 Round 2, GT-3). Relies on clerk.SetKey having already been
+// called (NewAdminService does this at startup, before the server accepts requests).
+func NewDefaultClerkUserGetter() ClerkUserGetter {
+	return &defaultClerkUserGetter{}
+}
+
 // NewAdminService creates a new AdminService instance.
 //
 // Parameters:

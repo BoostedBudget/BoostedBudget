@@ -34,6 +34,20 @@ var readOnlyExactAllowedPaths = map[string]bool{
 	"/api/v1/subscription/cancel":   true, // intentional cancel — locked users may cancel in arrears
 }
 
+// readOnlyMethodExactAllowedPaths lists (method, path) pairs that are whitelisted only for
+// that specific HTTP method — unlike readOnlyExactAllowedPaths (allowed regardless of
+// method), these paths are also used by OTHER, still-gated mutating methods (e.g. PATCH
+// /households/me renames the household and must stay blocked). #1367 — Phase 3 Round 2
+// (GT-1): disbanding a household and leaving/removing a member are de-escalation actions —
+// like /subscription/cancel — so a lapsed owner can disband, and a member under a lapsed
+// owner can self-leave to regain access via their own subscription.
+var readOnlyMethodExactAllowedPaths = map[string]map[string]bool{
+	http.MethodDelete: {
+		"/api/v1/households/me":                  true, // disband
+		"/api/v1/households/me/members/{userId}": true, // self-leave / owner-removes
+	},
+}
+
 // readOnlyPathSuffixAllowed reports whether path is a household invite accept/decline
 // route (#1367 — Phase 3). These have a dynamic {token} segment in the middle
 // (/api/v1/households/invites/{token}/accept|decline), so neither exact-match nor
@@ -103,10 +117,15 @@ func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Conte
 			return
 		}
 
-		// Check if path is whitelisted — exact-match first, then prefix, then the
-		// household invite accept/decline suffix pattern (#1367 — Phase 3).
+		// Check if path is whitelisted — exact-match first, then method-scoped exact
+		// match (GT-1), then prefix, then the household invite accept/decline suffix
+		// pattern (#1367 — Phase 3).
 		path := ctx.Operation().Path
 		if readOnlyExactAllowedPaths[path] {
+			next(ctx)
+			return
+		}
+		if readOnlyMethodExactAllowedPaths[method][path] {
 			next(ctx)
 			return
 		}

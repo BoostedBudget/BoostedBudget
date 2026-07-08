@@ -244,6 +244,62 @@ func TestResolveEffectiveEntitlement_OwnerManualOverrideHonored(t *testing.T) {
 	assert.Equal(t, "household_5", eff.Tier, "owner's active manual override should be honored live")
 }
 
+// TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHouseholdCoverage
+// ratifies the product decision (Gap Analysis Round 2, GT-2): household coverage wins
+// over a covered member's OWN manual_tier_override while the owner is active. This was
+// previously the mechanical result of Phase 2's implementation order, never an explicit
+// decision — see the deferred-from-Phase-2 comment on #1367. A member's own admin-granted
+// comp only re-surfaces via the owner-lapsed fallback (see the sibling test below).
+func TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHouseholdCoverage(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active",
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+
+	member := &domain.User{
+		ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial",
+		ManualTierOverride: strPtr("household_5"), // member's own comp — must NOT win here
+	}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, "household_2", eff.Tier, "owner coverage wins over the member's own manual override while the owner is active")
+	assert.Equal(t, domain.EntitlementSourceHousehold, eff.Source)
+}
+
+// TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses is the
+// counterpart to the test above: once the owner loses active coverage, the member falls
+// back to their OWN effective tier — which honors their own manual_tier_override, since
+// ComputeEffectiveTier() already applies it. No special-casing needed in the resolver;
+// this test locks in that the existing owner-lapsed fallback path composes correctly with
+// a member's own override.
+func TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "cancelled",
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+
+	member := &domain.User{
+		ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial",
+		ManualTierOverride: strPtr("household_5"),
+	}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, "household_5", eff.Tier, "member's own manual override applies once the owner lapses")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
+}
+
 func TestResolveEffectiveEntitlement_RepositoryError_Propagates(t *testing.T) {
 	entRepo := &mockEntitlementRepo{}
 	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, errors.New("db timeout"))

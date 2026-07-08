@@ -44,12 +44,12 @@ func (m *mockHouseholdService) DeleteHousehold(ctx context.Context, userID strin
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
-func (m *mockHouseholdService) ListMembers(ctx context.Context, userID string) ([]domain.HouseholdMember, error) {
+func (m *mockHouseholdService) ListMembers(ctx context.Context, userID string) ([]services.HouseholdMemberView, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]domain.HouseholdMember), args.Error(1)
+	return args.Get(0).([]services.HouseholdMemberView), args.Error(1)
 }
 func (m *mockHouseholdService) RemoveMember(ctx context.Context, actorUserID, targetUserID string) error {
 	args := m.Called(ctx, actorUserID, targetUserID)
@@ -91,7 +91,8 @@ func (m *mockHouseholdService) DeclineInvite(ctx context.Context, callerUserID, 
 	args := m.Called(ctx, callerUserID, rawToken)
 	return args.Error(0)
 }
-func (m *mockHouseholdService) SetAnalytics(a phclient.Analytics) {}
+func (m *mockHouseholdService) SetAnalytics(a phclient.Analytics)                         {}
+func (m *mockHouseholdService) SetMemberProfileResolver(r services.MemberProfileResolver) {}
 
 func TestCreateHousehold_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
@@ -122,7 +123,9 @@ func TestCreateHousehold_MapsError(t *testing.T) {
 func TestGetMyHousehold_Found(t *testing.T) {
 	svc := &mockHouseholdService{}
 	h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}
-	summary := domain.HouseholdEntitlementSummary{Tier: "household_2", UsersIncluded: 2, IsOwner: true}
+	summary := domain.HouseholdEntitlementSummary{
+		Tier: "household_2", UsersIncluded: 2, IsOwner: true, SeatsActive: 1, SeatsPending: 1,
+	}
 	svc.On("GetMyHousehold", mock.Anything, "user-1").Return(h, summary, true, nil)
 
 	handler := NewHouseholdHandler(svc, "https://app.example.com")
@@ -132,6 +135,11 @@ func TestGetMyHousehold_Found(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hh-1", out.Body.Household.ID)
 	assert.True(t, out.Body.Summary.IsOwner)
+	// Gap Analysis Round 2 (GT-5): the handler must pass seat usage through untouched —
+	// GET /households/me is the endpoint the issue names as returning seat usage.
+	assert.Equal(t, 2, out.Body.Summary.UsersIncluded)
+	assert.Equal(t, 1, out.Body.Summary.SeatsActive)
+	assert.Equal(t, 1, out.Body.Summary.SeatsPending)
 }
 
 func TestGetMyHousehold_NotFound(t *testing.T) {
@@ -183,7 +191,9 @@ func TestDeleteHousehold_MapsError(t *testing.T) {
 
 func TestListMembers_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
-	members := []domain.HouseholdMember{{ID: "mem-1", UserID: "user-1", Role: domain.HouseholdRoleOwner}}
+	members := []services.HouseholdMemberView{
+		{UserID: "user-1", Role: domain.HouseholdRoleOwner, DisplayName: "Jane Doe", AvatarURL: "https://img.example/jane.png"},
+	}
 	svc.On("ListMembers", mock.Anything, "user-1").Return(members, nil)
 
 	handler := NewHouseholdHandler(svc, "https://app.example.com")
@@ -192,6 +202,8 @@ func TestListMembers_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, out.Body, 1)
+	assert.Equal(t, "Jane Doe", out.Body[0].DisplayName)
+	assert.Equal(t, "https://img.example/jane.png", out.Body[0].AvatarURL)
 }
 
 func TestRemoveMember_Success(t *testing.T) {
