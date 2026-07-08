@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -93,9 +94,14 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 
 	// If a household entitlement resolver is injected, let it override the tier — but
 	// fail open on any resolver error so an entitlements-table hiccup never breaks
-	// limit/feature resolution for solo users too.
+	// limit/feature resolution for solo users too. The error is logged (not silently
+	// dropped) so a systemic entitlement-resolution outage is visible in production.
 	if s.entitlementResolver != nil {
-		if eff, err := s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user); err == nil {
+		eff, err := s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user)
+		if err != nil {
+			slog.Warn("household entitlement resolution failed; falling back to own tier",
+				"user_id", user.ID, "error", err)
+		} else {
 			tierName = domain.TierName(eff.Tier)
 		}
 	}
