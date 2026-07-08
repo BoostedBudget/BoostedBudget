@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -144,47 +145,71 @@ func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
 	require.NotNil(t, acceptedAt)
 }
 
-// waitForBlockedQueries polls pg_stat_activity until `want` distinct backends are shown
-// actively executing a query matching queryLike, or fails the test after a timeout. Used
-// to PROVE a FOR UPDATE lock actually forces serialization between two concurrent
-// AcceptInvite calls — without this, a naive "just start two goroutines" concurrency test
-// can pass purely because the Go scheduler happened to run them one after another,
-// silently proving nothing about the lock (Codex adversarial review, Gap Analysis Round
-// 2, GT-5).
+// waitForBlockedByGate polls, via a dedicated connection independent of the test's own
+// `pool`, until `want` distinct backends are shown transitively blocked on gatePID, or
+// fails the test after a timeout. Used to PROVE a FOR UPDATE lock actually forces
+// serialization between two concurrent AcceptInvite calls — without this, a naive "just
+// start two goroutines" concurrency test can pass purely because the Go scheduler happened
+// to run them one after another, silently proving nothing about the lock (Codex
+// adversarial review, Gap Analysis Round 2, GT-5).
 //
-// Two non-obvious pitfalls this works around:
-//  1. Deliberately does NOT query pg_locks filtered by relation: when N>1 backends queue
-//     for the SAME row lock, only the FIRST waiter shows a `locktype='tuple'` wait (with
-//     `relation` populated); every SUBSEQUENT queued waiter shows
-//     `wait_event='transactionid'` (waiting on the first waiter's xid to resolve) — a
-//     lock type that never has `relation` populated, so a naive
-//     `pg_locks WHERE relation = X` filter can never count past 1 once real contention
-//     queues up. Matching on the blocked query's own text in pg_stat_activity sidesteps
-//     this: both the first and every subsequent waiter keep re-displaying their original
-//     SQL while blocked, regardless of which specific lock type they're queued on.
-//  2. Deliberately polls via `pool` (a fresh connection per call), NOT the gate's own
-//     open transaction: pg_stat_activity's view of OTHER backends can read as frozen at
-//     the moment the gate's transaction began when queried repeatedly from within that
-//     same long-lived transaction — the two blocked backends never became visible even
-//     though an independent connection saw them immediately. A short-lived connection per
-//     poll avoids this entirely.
-func waitForBlockedQueries(t *testing.T, pool *pgxpool.Pool, queryLike string, want int) {
+// Three non-obvious pitfalls this design works around (earlier iterations hit all three,
+// empirically, against a real Postgres instance):
+//  1. Naively counting `pg_locks WHERE relation = X AND granted = false` undercounts: when
+//     N>1 backends queue for the SAME row lock, only the FIRST waiter shows a
+//     `locktype='tuple'` wait (with `relation` populated); every SUBSEQUENT queued waiter
+//     shows `wait_event='transactionid'` (waiting on the first waiter's xid to resolve) —
+//     a lock type that never has `relation` populated, so that filter can never count past
+//     1 once real contention queues up.
+//  2. Polling pg_stat_activity from WITHIN the gate's own already-open transaction reads
+//     as a stale/frozen snapshot of other backends' activity — the blocked waiters never
+//     became visible even though an independent connection saw them immediately.
+//  3. Matching on the blocked query's own raw SQL text (e.g. via ILIKE) fixes 1 but not 2,
+//     and introduces a NEW risk: when the full suite runs via `go test ./...`, an
+//     unrelated concurrent test in another package (e.g. the repository-level analog in
+//     internal/repository) can be blocked on a similarly-worded `FOR UPDATE` query against
+//     the same shared dev database and get miscounted as this test's own contention.
+//
+// pg_blocking_pids(pid) precisely identifies backends blocked BY THIS GATE specifically
+// (fixes 3, immune to unrelated concurrent tests/packages hitting a similarly-worded
+// query), but — verified empirically — it only reports the IMMEDIATE next link in the
+// queue, not the full chain: in a 2-waiter queue, the second waiter's pg_blocking_pids
+// returns the FIRST waiter's pid, not the original gate's pid. The recursive CTE below
+// walks that chain to compute the full transitive closure, so every queued waiter is
+// counted regardless of queue depth (fixes 1, without pg_locks' relation/locktype
+// blind spot). Using a dedicated pgx.Connect observer (not the shared `pool`, and not the
+// gate's own transaction) fixes 2 and also guarantees this observation can never contend
+// with `pool` for a connection-pool slot, regardless of how the test environment's
+// DATABASE_URL configures pool_max_conns.
+func waitForBlockedByGate(t *testing.T, gatePID int32, want int) {
 	t.Helper()
 	ctx := context.Background()
+	observer, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	require.NoError(t, err)
+	defer observer.Close(ctx)
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var count int
-		err := pool.QueryRow(ctx, `
-			SELECT count(DISTINCT pid) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND state = 'active' AND query ILIKE $1
-		`, queryLike).Scan(&count)
+		err := observer.QueryRow(ctx, `
+			WITH RECURSIVE blocked AS (
+				SELECT pid AS waiter, unnest(pg_blocking_pids(pid)) AS blocker
+				FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			),
+			chain AS (
+				SELECT waiter, blocker FROM blocked
+				UNION
+				SELECT c.waiter, b.blocker FROM chain c JOIN blocked b ON c.blocker = b.waiter
+			)
+			SELECT count(DISTINCT waiter) FROM chain WHERE blocker = $1
+		`, gatePID).Scan(&count)
 		require.NoError(t, err)
 		if count >= want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %d backend(s) to block on a query matching %q — the lock may not be contended", want, queryLike)
+	t.Fatalf("timed out waiting for %d backend(s) to be transitively blocked by gate pid %d — the lock may not be contended", want, gatePID)
 }
 
 // TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowLockEnforced
@@ -230,6 +255,18 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowL
 	// rather than hoping goroutine scheduling happens to overlap them.
 	gateTx, err := pool.Begin(ctx)
 	require.NoError(t, err)
+	gateReleased := false
+	defer func() {
+		// Safety net: if waitForBlockedByGate below fails via t.Fatalf, execution never
+		// reaches the explicit release — without this the gate stays open, wedging the two
+		// blocked goroutines (and, transitively, test cleanup / pool.Close) forever
+		// (Codex adversarial review, Gap Analysis Round 2, GT-5).
+		if !gateReleased {
+			_ = gateTx.Rollback(ctx)
+		}
+	}()
+	var gatePID int32
+	require.NoError(t, gateTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&gatePID))
 	var lockedID string
 	require.NoError(t, gateTx.QueryRow(ctx,
 		`SELECT id::text FROM household_invites WHERE id = $1 FOR UPDATE`, inviteResult.Invite.ID,
@@ -246,8 +283,9 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowL
 		}(i)
 	}
 
-	waitForBlockedQueries(t, pool, "%household_invites WHERE token_hash%FOR UPDATE%", attempts)
+	waitForBlockedByGate(t, gatePID, attempts)
 	require.NoError(t, gateTx.Rollback(ctx)) // release the gate — both goroutines now race for real
+	gateReleased = true
 
 	wg.Wait()
 
@@ -330,6 +368,15 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_Seat
 	// seat re-check, so the gate must target `households`, not `household_invites`.
 	gateTx, err := pool.Begin(ctx)
 	require.NoError(t, err)
+	gateReleased := false
+	defer func() {
+		// Safety net — see the sibling ConcurrentSameToken test for why this matters.
+		if !gateReleased {
+			_ = gateTx.Rollback(ctx)
+		}
+	}()
+	var gatePID int32
+	require.NoError(t, gateTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&gatePID))
 	var lockedID string
 	require.NoError(t, gateTx.QueryRow(ctx,
 		`SELECT id::text FROM households WHERE id = $1 FOR UPDATE`, household.ID,
@@ -347,8 +394,9 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_Seat
 		_, errs[1] = svc.AcceptInvite(ctx, inviteeB.ID, tokenB, true, nil)
 	}()
 
-	waitForBlockedQueries(t, pool, "%FROM households WHERE id%FOR UPDATE%", 2)
+	waitForBlockedByGate(t, gatePID, 2)
 	require.NoError(t, gateTx.Rollback(ctx)) // release the gate — both goroutines now race for real
+	gateReleased = true
 
 	wg.Wait()
 
