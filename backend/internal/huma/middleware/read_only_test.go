@@ -288,6 +288,51 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		}{Message: "renamed"}}, nil
 	})
 
+	// #1367 — Phase 3 Round 2 (GT-1): disband and self-leave/remove are
+	// de-escalation actions (like /subscription/cancel) — a lapsed owner must be able
+	// to disband, and a member under a lapsed owner must be able to self-leave to regain
+	// access via their own subscription. Method-scoped (DELETE only) so PATCH rename above
+	// stays blocked.
+	huma.Register(api, huma.Operation{
+		OperationID: "household-disband",
+		Method:      http.MethodDelete,
+		Path:        "/api/v1/households/me",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "disbanded"}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "household-remove-member",
+		Method:      http.MethodDelete,
+		Path:        "/api/v1/households/me/members/{userId}",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct {
+		UserID string `path:"userId"`
+	}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "removed"}}, nil
+	})
+
 	return server, api
 }
 
@@ -586,6 +631,41 @@ func TestReadOnlyMiddleware_POST_HouseholdRename_Inactive_Blocked(t *testing.T) 
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"only accept/decline are whitelisted — other household mutations stay blocked while locked")
+}
+
+// ─── #1367 — Phase 3 Round 2 (GT-1): disband/self-leave whitelist ───────────
+
+func TestReadOnlyMiddleware_DELETE_HouseholdDisband_Inactive_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodDelete, "/api/v1/households/me", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"a lapsed owner must be able to disband their household")
+}
+
+func TestReadOnlyMiddleware_DELETE_HouseholdLeave_Cancelled_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodDelete, "/api/v1/households/me/members/target-user-1", "cancelled")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"a member under a lapsed owner must be able to self-leave to regain access via their own subscription")
+}
+
+func TestReadOnlyMiddleware_PATCH_HouseholdRename_StillBlocked_AfterLeaveWhitelist(t *testing.T) {
+	// Guard: whitelisting DELETE on /households/me and /households/me/members/{userId}
+	// must not accidentally admit PATCH (rename) on the same paths — the allow rule must
+	// be method-scoped, not path-scoped.
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPatch, "/api/v1/households/me", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"rename must stay blocked even though DELETE on the same path is now whitelisted")
 }
 
 // ─── #1367 — Phase 3: household-aware read-only enforcement ─────────────────

@@ -1629,6 +1629,11 @@ func main() {
 			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
 		)
 		householdService.SetAnalytics(phClient)
+		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
+		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
+		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
+		// (clerk.SetKey is already called there, well before the server accepts requests).
+		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
 		humaHouseholdHandler := operations.NewHouseholdHandler(householdService, cfg.FrontendURL)
 		operations.RegisterHouseholdRoutes(humaAPI, humaHouseholdHandler)
 		appLogger.Info("Huma household routes registered (Phase 3)")

@@ -3469,6 +3469,28 @@ components:
         - created_at
         - updated_at
       type: object
+    HouseholdMemberView:
+      additionalProperties: false
+      properties:
+        avatar_url:
+          type: string
+        display_name:
+          type: string
+        joined_at:
+          format: date-time
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        user_id:
+          type: string
+      required:
+        - user_id
+        - role
+        - status
+        - joined_at
+      type: object
     IncomeByType:
       additionalProperties: false
       properties:
@@ -10944,7 +10966,7 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: "#/components/schemas/HouseholdMember"
+                  $ref: "#/components/schemas/HouseholdMemberView"
                 type:
                   - array
                   - "null"

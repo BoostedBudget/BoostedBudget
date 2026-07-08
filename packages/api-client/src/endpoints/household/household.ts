@@ -61,7 +61,7 @@ import type {
   Household,
   HouseholdEntitlementSummary,
   HouseholdInvite,
-  HouseholdMember,
+  HouseholdMemberView,
   UpdateHouseholdNameRequestBody
 } from '../../models';
 
@@ -917,7 +917,7 @@ export const listHouseholdMembers = (
 ) => {
 
 
-      return customInstance<HouseholdMember[] | null>(
+      return customInstance<HouseholdMemberView[] | null>(
       {url: `/api/v1/households/me/members`, method: 'GET', signal
     },
       options);

@@ -68,6 +68,8 @@ const REASON_DASHBOARD_DEFERRED = 'Dashboard layout writes deferred to follow-up
 const REASON_SUBSCRIPTION_INAPP = 'Subscription management stays in-app'
 const REASON_DELETION_INAPP = 'Account deletion must be a deliberate in-app action'
 const REASON_PRIVACY_INAPP = 'Privacy/consent settings require deliberate in-app action (deferred)'
+const REASON_HOUSEHOLD_INAPP =
+  'Household membership, invites & consent management must be a deliberate in-app action'
 const REASON_INTERNAL = 'Internal infrastructure endpoint'
 const REASON_WEBHOOK = 'Internal webhook endpoint'
 const REASON_QA = 'QA/testing endpoint, not for production MCP use'
@@ -222,6 +224,24 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
 
   // ── Household (Issue #1366: household entitlement resolution, Phase 2) ──
   read('getHouseholdEntitlement'),
+
+  // ── Household (Issue #1367: membership, invites & consent gate, Phase 3) ──
+  // Reads are safe (household state, member list, pending invites, an invite preview);
+  // every write is excluded — membership/invite lifecycle changes and, above all,
+  // acceptHouseholdInvite (the GDPR consent-to-share-financial-data action) must be a
+  // deliberate in-app action, never something an AI agent does on the user's behalf.
+  read('getMyHousehold'),
+  read('listHouseholdMembers'),
+  read('listHouseholdInvites'),
+  read('getHouseholdInvitePreview'),
+  excluded('createHousehold', REASON_HOUSEHOLD_INAPP),
+  excluded('updateHouseholdName', REASON_HOUSEHOLD_INAPP),
+  excluded('deleteHousehold', REASON_HOUSEHOLD_INAPP),
+  excluded('createHouseholdInvite', REASON_HOUSEHOLD_INAPP),
+  excluded('revokeHouseholdInvite', REASON_HOUSEHOLD_INAPP),
+  excluded('removeHouseholdMember', REASON_HOUSEHOLD_INAPP),
+  excluded('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP),
+  excluded('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP),
 
   // ── Notifications ────────────────────────────────────────────────────────
   read('getNotifications'),

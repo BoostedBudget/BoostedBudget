@@ -201,6 +201,7 @@ export * from './household';
 export * from './householdEntitlementSummary';
 export * from './householdInvite';
 export * from './householdMember';
+export * from './householdMemberView';
 export * from './incomeByType';
 export * from './incomeSource';
 export * from './incomeSourceBreakdownResponse';

@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -165,6 +167,191 @@ func TestHouseholdService_ListMembers_NotInHousehold(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrHouseholdNotFound)
 }
 
+// ─── #1367 — Phase 3 Round 2 (GT-3): member name/avatar enrichment ───────────
+
+// mockMemberProfileResolver is a test double for services.MemberProfileResolver.
+type mockMemberProfileResolver struct{ mock.Mock }
+
+func (m *mockMemberProfileResolver) ResolveProfile(ctx context.Context, userID string) (string, string, error) {
+	args := m.Called(ctx, userID)
+	return args.String(0), args.String(1), args.Error(2)
+}
+
+func TestHouseholdService_ListMembers_NoResolverWired_ReturnsBareData(t *testing.T) {
+	t.Parallel()
+	hh := &domain.Household{ID: "hh-1"}
+	hhRepo := &mockHouseholdRepo{}
+	hhRepo.On("GetHouseholdForUser", mock.Anything, "user-1").Return(hh, true, true, nil)
+	hhRepo.On("ListMembers", mock.Anything, "hh-1").Return([]domain.HouseholdMember{
+		{UserID: "user-1", Role: domain.HouseholdRoleOwner, Status: domain.HouseholdMemberStatusActive},
+	}, nil)
+	svc := NewHouseholdService(nil, hhRepo, &mockHouseholdInviteRepo{}, &mockHouseholdShareRepo{},
+		&mockEntitlementRepo{}, nil, &mockUserLoader{}, testTierConfig(t), &MockEmailService{}, nil)
+	// No SetMemberProfileResolver call — must not error, must not panic.
+
+	views, err := svc.ListMembers(context.Background(), "user-1")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	assert.Equal(t, "user-1", views[0].UserID)
+	assert.Equal(t, domain.HouseholdRoleOwner, views[0].Role)
+	assert.Empty(t, views[0].DisplayName, "no resolver wired — name must be blank, not an error")
+	assert.Empty(t, views[0].AvatarURL)
+}
+
+func TestHouseholdService_ListMembers_EnrichesWithClerkProfile(t *testing.T) {
+	t.Parallel()
+	hh := &domain.Household{ID: "hh-1"}
+	hhRepo := &mockHouseholdRepo{}
+	hhRepo.On("GetHouseholdForUser", mock.Anything, "owner-1").Return(hh, true, true, nil)
+	hhRepo.On("ListMembers", mock.Anything, "hh-1").Return([]domain.HouseholdMember{
+		{UserID: "owner-1", Role: domain.HouseholdRoleOwner, Status: domain.HouseholdMemberStatusActive},
+	}, nil)
+	resolver := &mockMemberProfileResolver{}
+	resolver.On("ResolveProfile", mock.Anything, "owner-1").Return("Jane Doe", "https://img.example/jane.png", nil)
+
+	svc := NewHouseholdService(nil, hhRepo, &mockHouseholdInviteRepo{}, &mockHouseholdShareRepo{},
+		&mockEntitlementRepo{}, nil, &mockUserLoader{}, testTierConfig(t), &MockEmailService{}, nil)
+	svc.SetMemberProfileResolver(resolver)
+
+	views, err := svc.ListMembers(context.Background(), "owner-1")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	assert.Equal(t, "Jane Doe", views[0].DisplayName)
+	assert.Equal(t, "https://img.example/jane.png", views[0].AvatarURL)
+}
+
+func TestHouseholdService_ListMembers_ResolverError_FailsSoftPerMember(t *testing.T) {
+	t.Parallel()
+	hh := &domain.Household{ID: "hh-1"}
+	hhRepo := &mockHouseholdRepo{}
+	hhRepo.On("GetHouseholdForUser", mock.Anything, "owner-1").Return(hh, true, true, nil)
+	hhRepo.On("ListMembers", mock.Anything, "hh-1").Return([]domain.HouseholdMember{
+		{UserID: "owner-1", Role: domain.HouseholdRoleOwner, Status: domain.HouseholdMemberStatusActive},
+		{UserID: "member-2", Role: domain.HouseholdRoleMember, Status: domain.HouseholdMemberStatusActive},
+	}, nil)
+	resolver := &mockMemberProfileResolver{}
+	resolver.On("ResolveProfile", mock.Anything, "owner-1").Return("Jane Doe", "https://img.example/jane.png", nil)
+	resolver.On("ResolveProfile", mock.Anything, "member-2").Return("", "", errors.New("clerk API down"))
+
+	svc := NewHouseholdService(nil, hhRepo, &mockHouseholdInviteRepo{}, &mockHouseholdShareRepo{},
+		&mockEntitlementRepo{}, nil, &mockUserLoader{}, testTierConfig(t), &MockEmailService{}, nil)
+	svc.SetMemberProfileResolver(resolver)
+
+	views, err := svc.ListMembers(context.Background(), "owner-1")
+	require.NoError(t, err, "one member's Clerk lookup failing must not fail the whole list")
+	require.Len(t, views, 2)
+	assert.Equal(t, "Jane Doe", views[0].DisplayName)
+	assert.Empty(t, views[1].DisplayName, "failed lookup leaves this member's name blank, not an error")
+	assert.Empty(t, views[1].AvatarURL)
+}
+
+// ─── clerkMemberProfileResolver (production MemberProfileResolver) ──────────
+
+type mockHouseholdIdentityLookup struct{ mock.Mock }
+
+func (m *mockHouseholdIdentityLookup) GetByUserID(ctx context.Context, userID string) ([]*domain.UserIdentity, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.UserIdentity), args.Error(1)
+}
+
+func TestClerkMemberProfileResolver_NoLinkedIdentity_ReturnsBlank(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return([]*domain.UserIdentity{}, nil)
+	clerkGetter := &MockClerkUserGetter{}
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	name, avatar, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Empty(t, name)
+	assert.Empty(t, avatar)
+	clerkGetter.AssertNotCalled(t, "GetUser", mock.Anything, mock.Anything)
+}
+
+func TestClerkMemberProfileResolver_UsesPrimaryIdentity_UsernamePreferred(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return([]*domain.UserIdentity{
+		{ClerkUserID: "clerk_primary", IsPrimary: true},
+		{ClerkUserID: "clerk_secondary", IsPrimary: false},
+	}, nil)
+	clerkGetter := &MockClerkUserGetter{}
+	username := "janedoe"
+	imageURL := "https://img.example/jane.png"
+	clerkGetter.On("GetUser", mock.Anything, "clerk_primary").Return(&clerk.User{
+		Username: &username, ImageURL: &imageURL,
+	}, nil)
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	name, avatar, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "janedoe", name, "Username takes precedence when present")
+	assert.Equal(t, "https://img.example/jane.png", avatar)
+}
+
+func TestClerkMemberProfileResolver_FallsBackToFirstLastName(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return([]*domain.UserIdentity{
+		{ClerkUserID: "clerk_1", IsPrimary: true},
+	}, nil)
+	clerkGetter := &MockClerkUserGetter{}
+	first, last := "Jane", "Doe"
+	clerkGetter.On("GetUser", mock.Anything, "clerk_1").Return(&clerk.User{
+		FirstName: &first, LastName: &last,
+	}, nil)
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	name, avatar, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "Jane Doe", name)
+	assert.Empty(t, avatar)
+}
+
+func TestClerkMemberProfileResolver_NoNameFieldsSet_ReturnsBlankName(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return([]*domain.UserIdentity{
+		{ClerkUserID: "clerk_1", IsPrimary: true},
+	}, nil)
+	clerkGetter := &MockClerkUserGetter{}
+	clerkGetter.On("GetUser", mock.Anything, "clerk_1").Return(&clerk.User{}, nil)
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	name, avatar, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Empty(t, name)
+	assert.Empty(t, avatar)
+}
+
+func TestClerkMemberProfileResolver_IdentityLookupError_Propagates(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return(nil, errors.New("db timeout"))
+	clerkGetter := &MockClerkUserGetter{}
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	_, _, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.Error(t, err)
+}
+
+func TestClerkMemberProfileResolver_ClerkAPIError_Propagates(t *testing.T) {
+	t.Parallel()
+	identityRepo := &mockHouseholdIdentityLookup{}
+	identityRepo.On("GetByUserID", mock.Anything, "user-1").Return([]*domain.UserIdentity{
+		{ClerkUserID: "clerk_1", IsPrimary: true},
+	}, nil)
+	clerkGetter := &MockClerkUserGetter{}
+	clerkGetter.On("GetUser", mock.Anything, "clerk_1").Return(nil, ErrClerkAPIError)
+
+	resolver := NewClerkMemberProfileResolver(identityRepo, clerkGetter)
+	_, _, err := resolver.ResolveProfile(context.Background(), "user-1")
+	require.Error(t, err)
+}
+
 func TestHouseholdService_ListInvites_NotOwner(t *testing.T) {
 	t.Parallel()
 	hhRepo := &mockHouseholdRepo{}
@@ -237,6 +424,34 @@ func TestHouseholdService_CreateHousehold_AlreadyOwnsHousehold_RollsBack(t *test
 
 	_, err := svc.CreateHousehold(context.Background(), "owner-1", "The Smiths")
 	require.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestHouseholdService_CreateHousehold_AlreadyInHousehold_RollsBack closes a Gap
+// Analysis Round 2 (GT-5) test-hardening item (Codex finding 1): the sibling test above
+// only covers the OWNER-uniqueness constraint (households.owner_user_id) firing on the
+// first insert. This covers the second insert — the caller already being an ACTIVE
+// MEMBER of some other household (uq_household_members_active_user) — which must map to
+// ErrAlreadyInHousehold, not ErrAlreadyOwnsHousehold, and must still roll back the
+// already-inserted households row.
+func TestHouseholdService_CreateHousehold_AlreadyInHousehold_RollsBack(t *testing.T) {
+	t.Parallel()
+	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
+	defer pool.Close()
+	now := time.Now()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("INSERT INTO households").
+		WithArgs("member-1", "The Smiths").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow("hh-1", now, now))
+	pool.ExpectQuery("INSERT INTO household_members").
+		WithArgs("hh-1", "member-1", domain.HouseholdRoleOwner, domain.HouseholdMemberStatusActive, (*string)(nil), (*string)(nil)).
+		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
+	pool.ExpectRollback()
+
+	_, err := svc.CreateHousehold(context.Background(), "member-1", "The Smiths")
+	require.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
+	require.NotErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
