@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -241,5 +242,31 @@ func TestSubscriptionStatus_IsReadOnlySubscription(t *testing.T) {
 			result := tt.status.IsReadOnlySubscription()
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+func TestEffectiveEntitlement_ZeroValueIsOwnSource(t *testing.T) {
+	var e EffectiveEntitlement
+	if e.Source != "" {
+		t.Fatalf("expected zero-value Source to be empty, got %q", e.Source)
+	}
+}
+
+func TestHouseholdEntitlementSummary_JSONTags(t *testing.T) {
+	s := HouseholdEntitlementSummary{
+		Tier:          "household_2",
+		UsersIncluded: 2,
+		SeatsActive:   2,
+		SeatsPending:  1,
+		IsOwner:       true,
+		Source:        EntitlementSourceHousehold,
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"tier":"household_2","users_included":2,"seats_active":2,"seats_pending":1,"is_owner":true,"source":"household"}`
+	if string(b) != want {
+		t.Fatalf("got %s, want %s", b, want)
 	}
 }
