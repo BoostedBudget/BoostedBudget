@@ -1,6 +1,6 @@
 # Multi-stage production Dockerfile for Backend
 # Stage 1: Builder
-ARG GO_VERSION=1.26.4
+ARG GO_VERSION=1.26.5
 FROM golang:${GO_VERSION}-alpine AS builder
 
 # Install build dependencies
