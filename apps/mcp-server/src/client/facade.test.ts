@@ -96,10 +96,11 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    // 177 total ops − 50 excluded = 127 allowed; mirrors capability-manifest.test.ts
+    // 178 total ops − 50 excluded = 128 allowed; mirrors capability-manifest.test.ts
     // +7 from #957: getMerchants, getMerchantOverrides, getMerchantDuplicateSuggestions,
     //               setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides,
     //               mergeMerchants
-    expect(count).toBe(127)
+    // +1 from #1366: getHouseholdEntitlement
+    expect(count).toBe(128)
   })
 })

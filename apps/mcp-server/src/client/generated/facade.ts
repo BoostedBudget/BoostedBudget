@@ -284,6 +284,12 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/dashboard/widget-types', method: 'GET', signal })
       },
     } as const,
+    household: {
+      /** GET /api/v1/households/me/entitlement */
+      getHouseholdEntitlement(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/households/me/entitlement', method: 'GET', signal })
+      },
+    } as const,
     investments: {
       /** GET /api/v1/investments/holdings */
       getHoldings(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
