@@ -25,19 +25,22 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 	router := chi.NewRouter()
 	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
 
-	// Simulate Clerk middleware: set subscription_status from test header
+	// Simulate Clerk middleware: set subscription_status (and user_id) from test headers
 	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
-		status := ctx.Header("X-Test-Subscription-Status")
-		if status != "" {
-			newCtx := context.WithValue(ctx.Context(), inputs.SubscriptionStatusKey, status)
-			next(huma.WithContext(ctx, newCtx))
-		} else {
-			next(ctx)
+		newCtx := ctx.Context()
+		if status := ctx.Header("X-Test-Subscription-Status"); status != "" {
+			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, status)
 		}
+		if userID := ctx.Header("X-Test-User-Id"); userID != "" {
+			newCtx = context.WithValue(newCtx, inputs.UserIDKey, userID)
+		}
+		next(huma.WithContext(ctx, newCtx))
 	})
 
-	// Add the read-only middleware
-	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware())
+	// Add the read-only middleware. nil checker preserves pre-#1367 behavior for all
+	// existing tests in this file — see setupReadOnlyTestAPIWithHouseholdChecker for the
+	// household-aware variant.
+	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(nil))
 
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -50,11 +53,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/transactions",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "created"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "created"}}, nil
 	})
 
 	// Protected GET endpoint
@@ -64,11 +73,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/transactions",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "listed"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "listed"}}, nil
 	})
 
 	// Whitelisted POST endpoint (user deletion flow must work even when inactive)
@@ -78,11 +93,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/user/delete",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "deleted"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "deleted"}}, nil
 	})
 
 	// Public (no security) POST endpoint — should not be gated by read-only middleware
@@ -91,11 +112,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/v1/plaid/webhook",
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "webhook received"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "webhook received"}}, nil
 	})
 
 	// Subscription checkout whitelist — resubscription must work even for cancelled/inactive users
@@ -105,11 +132,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/subscription/checkout",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "checkout"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "checkout"}}, nil
 	})
 
 	// Subscription cancel whitelist — intentional cancel must work even for locked users
@@ -119,11 +152,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/subscription/cancel",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "cancelled"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "cancelled"}}, nil
 	})
 
 	// Subscription preview-update — plan mutation, must be BLOCKED for locked users
@@ -133,11 +172,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/subscription/preview-update",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "preview-update"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "preview-update"}}, nil
 	})
 
 	// Subscription update — plan mutation, must be BLOCKED for locked users
@@ -147,11 +192,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/subscription/update",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "updated"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "updated"}}, nil
 	})
 
 	// Prefix-bypass test: a hypothetical route that shares a prefix with a whitelisted path.
@@ -163,11 +214,78 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		Path:        "/api/v1/subscription/checkout-malicious",
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, func(ctx context.Context, input *struct{}) (*struct {
-		Body struct{ Message string `json:"message"` }
+		Body struct {
+			Message string `json:"message"`
+		}
 	}, error) {
 		return &struct {
-			Body struct{ Message string `json:"message"` }
-		}{Body: struct{ Message string `json:"message"` }{Message: "bypassed"}}, nil
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "bypassed"}}, nil
+	})
+
+	// #1367 — Phase 3: accept/decline must work even for a lapsed user rejoining a
+	// household to regain access.
+	huma.Register(api, huma.Operation{
+		OperationID: "household-invite-accept",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/households/invites/tok123/accept",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "accepted"}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "household-invite-decline",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/households/invites/tok123/decline",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "declined"}}, nil
+	})
+
+	// Non-whitelisted household mutation — must still be BLOCKED for locked users
+	// (only accept/decline are whitelisted, not e.g. renaming the household).
+	huma.Register(api, huma.Operation{
+		OperationID: "household-rename",
+		Method:      http.MethodPatch,
+		Path:        "/api/v1/households/me",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "renamed"}}, nil
 	})
 
 	return server, api
@@ -438,4 +556,138 @@ func TestReadOnlyMiddleware_POST_CheckoutPrefixBypass_Blocked(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"a route that merely shares a prefix with /checkout must not inherit its whitelist entry")
+}
+
+// ─── #1367 — Phase 3: household invite accept/decline whitelist ─────────────
+
+func TestReadOnlyMiddleware_POST_HouseholdAccept_Inactive_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/households/invites/tok123/accept", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "a lapsed user must be able to join a household to regain access")
+}
+
+func TestReadOnlyMiddleware_POST_HouseholdDecline_Cancelled_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPost, "/api/v1/households/invites/tok123/decline", "cancelled")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestReadOnlyMiddleware_POST_HouseholdRename_Inactive_Blocked(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequest(t, server, http.MethodPatch, "/api/v1/households/me", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"only accept/decline are whitelisted — other household mutations stay blocked while locked")
+}
+
+// ─── #1367 — Phase 3: household-aware read-only enforcement ─────────────────
+
+// mockHouseholdCoverageChecker is a minimal test double for
+// humamiddleware.HouseholdCoverageChecker.
+type mockHouseholdCoverageChecker struct {
+	covered map[string]bool
+}
+
+func (m *mockHouseholdCoverageChecker) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	return m.covered[userID], nil
+}
+
+// setupReadOnlyTestAPIWithHouseholdChecker mirrors setupReadOnlyTestAPI but wires a
+// real (test-double) HouseholdCoverageChecker so the middleware's household-aware
+// branch can be exercised. Kept separate from setupReadOnlyTestAPI so the 20+
+// pre-#1367 tests above are unaffected.
+func setupReadOnlyTestAPIWithHouseholdChecker(t *testing.T, checker humamiddleware.HouseholdCoverageChecker) (*httptest.Server, huma.API) {
+	router := chi.NewRouter()
+	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
+
+	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+		newCtx := ctx.Context()
+		if status := ctx.Header("X-Test-Subscription-Status"); status != "" {
+			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, status)
+		}
+		if userID := ctx.Header("X-Test-User-Id"); userID != "" {
+			newCtx = context.WithValue(newCtx, inputs.UserIDKey, userID)
+		}
+		next(huma.WithContext(ctx, newCtx))
+	})
+	api.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(checker))
+
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "create-something-covered",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/transactions",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "created"}}, nil
+	})
+
+	return server, api
+}
+
+func doRequestWithUser(t *testing.T, server *httptest.Server, method, path, subscriptionStatus, userID string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, server.URL+path, nil)
+	require.NoError(t, err)
+	if subscriptionStatus != "" {
+		req.Header.Set("X-Test-Subscription-Status", subscriptionStatus)
+	}
+	if userID != "" {
+		req.Header.Set("X-Test-User-Id", userID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func TestReadOnlyMiddleware_POST_ReadOnlyStatus_CoveredByHousehold_Allowed(t *testing.T) {
+	checker := &mockHouseholdCoverageChecker{covered: map[string]bool{"member-1": true}}
+	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, checker)
+
+	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "member-1")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"a covered household member must not be locked out by their own stale read-only status")
+}
+
+func TestReadOnlyMiddleware_POST_ReadOnlyStatus_NotCoveredByHousehold_Blocked(t *testing.T) {
+	checker := &mockHouseholdCoverageChecker{covered: map[string]bool{}}
+	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, checker)
+
+	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "solo-user-1")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestReadOnlyMiddleware_POST_ReadOnlyStatus_NilChecker_Blocked(t *testing.T) {
+	// nil checker (household service unavailable) must fail closed to the pre-#1367
+	// behavior, not panic and not silently allow everyone through.
+	server, _ := setupReadOnlyTestAPIWithHouseholdChecker(t, nil)
+
+	resp := doRequestWithUser(t, server, http.MethodPost, "/api/v1/transactions", "inactive", "member-1")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }

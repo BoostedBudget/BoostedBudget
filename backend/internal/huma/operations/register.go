@@ -87,6 +87,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #1366: Household entitlement summary
 	householdEntitlementHandler := &HouseholdEntitlementHandler{}
 
+	// Issue #1367: Household membership, invites & consent gate (Phase 3)
+	householdHandler := &HouseholdHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -148,4 +151,5 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1366: Household entitlement summary
 	RegisterHouseholdEntitlementRoutes(api, householdEntitlementHandler)
+	RegisterHouseholdRoutes(api, householdHandler)
 }

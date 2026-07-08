@@ -99,6 +99,24 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 	}, nil
 }
 
+// IsCoveredByHousehold reports whether userID is currently covered by an active
+// household plan — i.e. ResolveEffectiveEntitlement would resolve them to
+// source=household. Used by the read-only middleware (#1367 — Phase 3) so a covered
+// member whose own subscription_status is itself read-only (never mutated while
+// covered) isn't locked out of the app. Reuses ResolveEffectiveEntitlement rather than
+// re-deriving the owner-read-only fallback logic.
+func (s *HouseholdEntitlementService) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	user, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	eff, err := s.ResolveEffectiveEntitlement(ctx, user)
+	if err != nil {
+		return false, err
+	}
+	return eff.Source == domain.EntitlementSourceHousehold, nil
+}
+
 // GetEntitlementSummary composes the resolved entitlement with household seat counts for
 // GET /api/v1/households/me/entitlement. Solo users (no active household membership)
 // get a summary with SeatsActive/SeatsPending 0 and IsOwner false — never an error.

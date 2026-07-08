@@ -88,6 +88,43 @@ func TestEmailTemplate_ContainsRequiredFields(t *testing.T) {
 	assert.NotNil(t, service)
 }
 
+// ─── SendHouseholdInvite (#1367 — Phase 3) ───────────────────────────────────
+
+func TestSendHouseholdInvite_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdInvite(ctx, "invitee@example.com", "Alex Owner", "The Smiths",
+		"https://boostedbudget.com/households/invites/rawtoken123", time.Now().Add(48*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdInvite_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdInvite(ctx, "not-an-email", "Alex Owner", "The Smiths",
+		"https://boostedbudget.com/households/invites/rawtoken123", time.Now().Add(48*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestHouseholdInviteEmailTemplates_ContainInviteLink(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	inviteURL := "https://boostedbudget.com/households/invites/rawtoken123"
+
+	html := s.buildHouseholdInviteEmailHTML("Alex Owner", "The Smiths", inviteURL, "March 3, 2026")
+	text := s.buildHouseholdInviteEmailPlainText("Alex Owner", "The Smiths", inviteURL, "March 3, 2026")
+
+	assert.Contains(t, html, inviteURL)
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, html, "Alex Owner")
+	assert.Contains(t, text, inviteURL)
+	assert.Contains(t, text, "The Smiths")
+}
+
 // TestSendNotificationEmail_Success tests successful notification email sending (stub)
 // Issue #257: Item Error Handler - User Notifications
 func TestSendNotificationEmail_Success(t *testing.T) {
