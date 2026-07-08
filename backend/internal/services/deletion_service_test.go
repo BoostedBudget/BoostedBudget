@@ -8,8 +8,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -194,6 +195,13 @@ func (m *MockEmailService) SendDeletionConfirmation(ctx context.Context, email, 
 
 func (m *MockEmailService) SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error {
 	args := m.Called(ctx, toEmail, notification)
+	return args.Error(0)
+}
+
+// SendHouseholdInvite (#1367 — Phase 3) is not exercised by these deletion tests;
+// stubbed to satisfy the expanded EmailService interface.
+func (m *MockEmailService) SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error {
+	args := m.Called(ctx, toEmail, inviterName, householdName, inviteURL, expiresAt)
 	return args.Error(0)
 }
 
@@ -1053,6 +1061,207 @@ func (m *mockAnalyticsForDeletion) Identify(distinctID string, properties map[st
 func (m *mockAnalyticsForDeletion) Close()                                                        {}
 
 var _ phclient.Analytics = (*mockAnalyticsForDeletion)(nil)
+
+// ─── Household owner-deletion guard (#1367 — Phase 3) ────────────────────────
+
+type mockHouseholdReaderForDeletion struct{ mock.Mock }
+
+func (m *mockHouseholdReaderForDeletion) GetHouseholdForUser(ctx context.Context, userID string) (*domain.Household, bool, bool, error) {
+	args := m.Called(ctx, userID)
+	var h *domain.Household
+	if args.Get(0) != nil {
+		h = args.Get(0).(*domain.Household)
+	}
+	return h, args.Bool(1), args.Bool(2), args.Error(3)
+}
+func (m *mockHouseholdReaderForDeletion) CountActiveMembers(ctx context.Context, householdID string) (int, error) {
+	args := m.Called(ctx, householdID)
+	return args.Int(0), args.Error(1)
+}
+
+// LockHouseholdForUpdate is not exercised by the non-transactional-path tests below
+// (only the SetDB-wired transactional path uses a real, tx-scoped HouseholdRepository
+// for locking); stubbed to satisfy the expanded HouseholdReader interface.
+func (m *mockHouseholdReaderForDeletion) LockHouseholdForUpdate(ctx context.Context, householdID string) (string, error) {
+	args := m.Called(ctx, householdID)
+	return args.String(0), args.Error(1)
+}
+
+type mockHouseholdInviteRevokerForDeletion struct{ mock.Mock }
+
+func (m *mockHouseholdInviteRevokerForDeletion) RevokeAllPendingForHousehold(ctx context.Context, householdID string) error {
+	args := m.Called(ctx, householdID)
+	return args.Error(0)
+}
+
+func TestRequestDeletion_OwnerWithActiveMembers_Blocked(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	hhReader := &mockHouseholdReaderForDeletion{}
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(hhReader)
+
+	hhReader.On("GetHouseholdForUser", ctx, "owner-1").Return(&domain.Household{ID: "hh-1"}, true, true, nil)
+	hhReader.On("CountActiveMembers", ctx, "hh-1").Return(2, nil)
+
+	_, _, err := service.RequestDeletion(ctx, "owner-1", "owner@example.com")
+	require.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	mockRepo.AssertNotCalled(t, "MarkForDeletion", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestRequestDeletion_OwnerWithNoOtherMembers_ProceedsAndRevokesInvites(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	hhReader := &mockHouseholdReaderForDeletion{}
+	inviteRevoker := &mockHouseholdInviteRevokerForDeletion{}
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(hhReader)
+	service.SetHouseholdInviteRevoker(inviteRevoker)
+
+	hhReader.On("GetHouseholdForUser", ctx, "owner-1").Return(&domain.Household{ID: "hh-1"}, true, true, nil)
+	hhReader.On("CountActiveMembers", ctx, "hh-1").Return(1, nil) // owner only
+	inviteRevoker.On("RevokeAllPendingForHousehold", ctx, "hh-1").Return(nil)
+	mockRepo.On("MarkForDeletion", ctx, "owner-1", mock.AnythingOfType("time.Time")).Return(nil)
+	mockEmail.On("SendDeletionConfirmation", ctx, "owner@example.com", mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockAudit.On("Log", ctx, "user.deletion_requested", "user", "owner-1").Return(nil)
+
+	_, _, err := service.RequestDeletion(ctx, "owner-1", "owner@example.com")
+	require.NoError(t, err)
+	inviteRevoker.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// ─── Transactional owner-guard (#1367 — Codex review, High finding 4) ────────
+//
+// When SetDB is wired, the household lock/check/revoke-invites/mark-for-deletion
+// sequence runs inside ONE transaction (via fresh tx-scoped repositories, not the
+// pool-bound HouseholdReader/HouseholdInviteRevoker), so an in-flight AcceptInvite
+// cannot commit a new member between this guard's check and MarkForDeletion.
+
+func TestRequestDeletion_Transactional_OwnerWithActiveMembers_RollsBack(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	pool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer pool.Close()
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(&mockHouseholdReaderForDeletion{}) // gating flag only; unused once SetDB is wired
+	service.SetDB(pool)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectRollback()
+
+	_, _, err = service.RequestDeletion(ctx, "owner-1", "owner@example.com")
+	require.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	require.NoError(t, pool.ExpectationsWereMet())
+	mockRepo.AssertNotCalled(t, "MarkForDeletion", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestRequestDeletion_Transactional_OwnerWithNoOtherMembers_LocksRevokesAndMarks(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	pool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer pool.Close()
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(&mockHouseholdReaderForDeletion{})
+	service.SetDB(pool)
+
+	mockEmail.On("SendDeletionConfirmation", ctx, "owner@example.com", mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockAudit.On("Log", ctx, "user.deletion_requested", "user", "owner-1").Return(nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	pool.ExpectExec("UPDATE household_invites SET status = 'revoked'").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE users SET deletion_requested_at").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "owner-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	_, _, err = service.RequestDeletion(ctx, "owner-1", "owner@example.com")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+func TestRequestDeletion_Transactional_NonOwner_JustMarksForDeletion(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	pool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer pool.Close()
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(&mockHouseholdReaderForDeletion{})
+	service.SetDB(pool)
+
+	mockEmail.On("SendDeletionConfirmation", ctx, "member@example.com", mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockAudit.On("Log", ctx, "user.deletion_requested", "user", "member-1").Return(nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("member-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+	pool.ExpectExec("UPDATE users SET deletion_requested_at").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	_, _, err = service.RequestDeletion(ctx, "member-1", "member@example.com")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+func TestRequestDeletion_NonOwner_ProceedsNormally(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	hhReader := &mockHouseholdReaderForDeletion{}
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetHouseholdReader(hhReader)
+
+	hhReader.On("GetHouseholdForUser", ctx, "member-1").Return(&domain.Household{ID: "hh-1"}, false, true, nil)
+	mockRepo.On("MarkForDeletion", ctx, "member-1", mock.AnythingOfType("time.Time")).Return(nil)
+	mockEmail.On("SendDeletionConfirmation", ctx, "member@example.com", mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockAudit.On("Log", ctx, "user.deletion_requested", "user", "member-1").Return(nil)
+
+	_, _, err := service.RequestDeletion(ctx, "member-1", "member@example.com")
+	require.NoError(t, err)
+	hhReader.AssertNotCalled(t, "CountActiveMembers", mock.Anything, mock.Anything)
+}
 
 func TestDeletionService_SetAnalytics_DoesNotPanic(t *testing.T) {
 	repo := new(MockProfileRepositoryForDeletion)

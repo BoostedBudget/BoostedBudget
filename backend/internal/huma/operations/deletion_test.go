@@ -7,9 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +47,12 @@ func (m *mockDeletionService) SetPlaidCleanupService(svc services.PlaidItemClean
 }
 
 func (m *mockDeletionService) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
+// SetHouseholdReader/SetHouseholdInviteRevoker (#1367 — Phase 3) are not exercised by
+// these deletion-operation tests; stubbed to satisfy the expanded interface.
+func (m *mockDeletionService) SetHouseholdReader(r services.HouseholdReader)               {}
+func (m *mockDeletionService) SetHouseholdInviteRevoker(r services.HouseholdInviteRevoker) {}
+func (m *mockDeletionService) SetDB(db repository.DB)                                      {}
 
 func (m *mockDeletionService) SetAnalytics(a phclient.Analytics) {
 	// No-op for mock
@@ -94,7 +103,38 @@ func TestRequestDeletion_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "account deletion")
+	// #1367: handler now routes through LoggingMapError so domain errors (e.g. the
+	// household owner guard) map to their correct status; an unmapped generic error
+	// falls through to the mapper's default 500 message.
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus())
+}
+
+// TestRequestDeletion_HouseholdOwnerWithActiveMembers_Returns409 tests that the
+// #1367 household owner-deletion guard surfaces as 409, not a generic 500 (the
+// handler previously hard-coded Error500InternalServerError for every error).
+func TestRequestDeletion_HouseholdOwnerWithActiveMembers_Returns409(t *testing.T) {
+	mockService := &mockDeletionService{
+		requestErr: domain.ErrHouseholdHasActiveMembers,
+	}
+
+	handler := NewDeletionHandler(mockService)
+
+	input := &RequestDeletionInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+			Email:              "owner@example.com",
+		},
+	}
+
+	output, err := handler.RequestDeletion(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 }
 
 // TestCancelDeletion_Success tests successful deletion cancellation.

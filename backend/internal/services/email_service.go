@@ -31,6 +31,12 @@ type EmailService interface {
 	// Returns error if email sending fails.
 	// Note: Callers should handle errors gracefully (non-blocking).
 	SendNotificationEmail(ctx context.Context, toEmail string, notification *domain.Notification) error
+
+	// SendHouseholdInvite sends a household invitation email containing inviteURL.
+	// Callers should treat delivery as best-effort (#1367 decision #4) — the invite
+	// create response also returns the raw-token link so an owner can share it
+	// manually if transactional email isn't fully configured (see #1026).
+	SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error
 }
 
 // emailService implements EmailService using SendGrid
@@ -147,6 +153,94 @@ func (s *emailService) SendNotificationEmail(ctx context.Context, toEmail string
 	// MVP: Always succeeds (no real sending)
 	// Phase 3+: Will return actual sending errors
 	return nil
+}
+
+// SendHouseholdInvite sends a household invitation email with a link the invitee
+// uses to preview and accept. Best-effort — see interface doc.
+func (s *emailService) SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error {
+	if !isValidEmail(toEmail) {
+		return fmt.Errorf("invalid email address: %s", toEmail)
+	}
+
+	formattedExpiry := expiresAt.Format("January 2, 2006")
+	subject := fmt.Sprintf("%s invited you to join %s on BoostedBudget", inviterName, householdName)
+	htmlContent := s.buildHouseholdInviteEmailHTML(inviterName, householdName, inviteURL, formattedExpiry)
+	plainTextContent := s.buildHouseholdInviteEmailPlainText(inviterName, householdName, inviteURL, formattedExpiry)
+
+	from := mail.NewEmail(s.fromName, s.fromEmail)
+	to := mail.NewEmail("", toEmail)
+	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
+
+	if s.mockMode {
+		return nil
+	}
+
+	response, err := s.client.SendWithContext(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SendGrid: %w", err)
+	}
+	if response.StatusCode >= 400 {
+		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
+	}
+	return nil
+}
+
+// buildHouseholdInviteEmailHTML creates the HTML email template for a household invite.
+func (s *emailService) buildHouseholdInviteEmailHTML(inviterName, householdName, inviteURL, formattedExpiry string) string {
+	return fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Household Invitation</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background-color: #f8f9fa; border-radius: 8px; padding: 30px; border: 1px solid #dee2e6;">
+        <h1 style="color: #2563eb; margin-top: 0;">You're invited to join %s</h1>
+
+        <p><strong>%s</strong> has invited you to join their household, %s, on BoostedBudget.</p>
+
+        <p>Joining a household shares your accounts with the household by default — you'll be able to
+        review exactly what will be shared and choose to keep any account private before you join.</p>
+
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="%s"
+               style="background-color: #2563eb; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+                View Invitation
+            </a>
+        </div>
+
+        <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
+            This invitation expires on %s. If you weren't expecting it, you can safely ignore this email.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #dee2e6; margin: 30px 0;">
+
+        <p style="color: #6c757d; font-size: 12px; text-align: center;">
+            If you're unable to click the button, copy and paste this URL into your browser:<br>
+            <a href="%s" style="color: #007bff;">%s</a>
+        </p>
+    </div>
+</body>
+</html>
+`, householdName, inviterName, householdName, inviteURL, formattedExpiry, inviteURL, inviteURL)
+}
+
+// buildHouseholdInviteEmailPlainText creates the plain text email template for a household invite.
+func (s *emailService) buildHouseholdInviteEmailPlainText(inviterName, householdName, inviteURL, formattedExpiry string) string {
+	return fmt.Sprintf(`
+YOU'RE INVITED TO JOIN %s
+
+%s has invited you to join their household, %s, on BoostedBudget.
+
+Joining a household shares your accounts with the household by default — you'll be able to
+review exactly what will be shared and choose to keep any account private before you join.
+
+View the invitation:
+%s
+
+This invitation expires on %s. If you weren't expecting it, you can safely ignore this email.
+`, householdName, inviterName, householdName, inviteURL, formattedExpiry)
 }
 
 // buildDeletionEmailHTML creates HTML email template for deletion confirmation

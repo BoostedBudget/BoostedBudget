@@ -13,13 +13,26 @@ import (
 // as "fall back to the user's own tier", not as a real error.
 var ErrEntitlementNotFound = errors.New("active entitlement not found")
 
-// EntitlementRepository reads subscription_entitlements rows. Phase 2 is read-only:
-// no rows are written in production until Phase 3 (invite-accept / member-removal).
+// EntitlementRepository reads and writes subscription_entitlements rows. Phase 2
+// (#1366) shipped the read; Phase 3 (#1367) adds the write paths used by invite-accept
+// and member removal.
 type EntitlementRepository interface {
 	// GetActiveEntitlement returns the user's currently open-ended entitlement row
 	// (effective_until IS NULL, effective_from <= now()). Returns ErrEntitlementNotFound
 	// if none exists. The 000112 partial unique index guarantees at most one such row.
 	GetActiveEntitlement(ctx context.Context, userID string) (*domain.SubscriptionEntitlement, error)
+
+	// CreateHouseholdEntitlement inserts an open-ended (effective_until=NULL) entitlement
+	// row for userID, source='household', payer=payerUserID (must equal the household's
+	// owner_user_id — enforced by the 000112 composite FK). Returns
+	// domain.ErrAlreadyInHousehold if the user already has an open entitlement
+	// (uq_subscription_entitlements_active_user) — callers should call
+	// ExpireActiveEntitlement defensively first.
+	CreateHouseholdEntitlement(ctx context.Context, userID, tier, status, payerUserID, householdID string) error
+
+	// ExpireActiveEntitlement sets effective_until=now() on the user's open-ended
+	// entitlement row, if any. Idempotent — a no-op (nil error) when none exists.
+	ExpireActiveEntitlement(ctx context.Context, userID string) error
 }
 
 type entitlementRepository struct {
@@ -50,4 +63,23 @@ func (r *entitlementRepository) GetActiveEntitlement(ctx context.Context, userID
 		return nil, err
 	}
 	return &e, nil
+}
+
+func (r *entitlementRepository) CreateHouseholdEntitlement(ctx context.Context, userID, tier, status, payerUserID, householdID string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, payer_user_id, household_id, effective_from, effective_until)
+		VALUES ($1, 'household', $2, $3, $4, $5, now(), NULL)
+	`, userID, tier, status, payerUserID, householdID)
+	if isUniqueViolation(err, constraintEntitlementsActiveUser) {
+		return domain.ErrAlreadyInHousehold
+	}
+	return err
+}
+
+func (r *entitlementRepository) ExpireActiveEntitlement(ctx context.Context, userID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE subscription_entitlements SET effective_until = now(), updated_at = now()
+		WHERE user_id = $1 AND effective_until IS NULL
+	`, userID)
+	return err
 }

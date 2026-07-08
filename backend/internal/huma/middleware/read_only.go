@@ -7,7 +7,9 @@ package middleware
 // #898: Narrowed subscription whitelist — only checkout and cancel are allowed while locked.
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -16,6 +18,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 )
 
+// HouseholdCoverageChecker reports whether userID currently has active free coverage
+// under a household plan (i.e. would resolve to source=household). Satisfied
+// structurally by *services.HouseholdEntitlementService. #1367 — Phase 3.
+type HouseholdCoverageChecker interface {
+	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
+}
+
 // readOnlyExactAllowedPaths lists paths that are whitelisted by exact match.
 // Used for the subscription recovery/self-service routes where prefix matching would
 // accidentally admit future mutation routes that share the same prefix
@@ -23,6 +32,20 @@ import (
 var readOnlyExactAllowedPaths = map[string]bool{
 	"/api/v1/subscription/checkout": true, // resubscribe — locked users must be able to restart
 	"/api/v1/subscription/cancel":   true, // intentional cancel — locked users may cancel in arrears
+}
+
+// readOnlyPathSuffixAllowed reports whether path is a household invite accept/decline
+// route (#1367 — Phase 3). These have a dynamic {token} segment in the middle
+// (/api/v1/households/invites/{token}/accept|decline), so neither exact-match nor
+// simple prefix-match applies; suffix-match on the fixed tail is exact enough given the
+// fixed "/api/v1/households/invites/" prefix requirement below — a lapsed user must be
+// able to join (or decline) a household to regain access.
+func readOnlyPathSuffixAllowed(path string) bool {
+	const invitesPrefix = "/api/v1/households/invites/"
+	if !strings.HasPrefix(path, invitesPrefix) {
+		return false
+	}
+	return strings.HasSuffix(path, "/accept") || strings.HasSuffix(path, "/decline")
 }
 
 // readOnlyPrefixAllowedPaths lists path prefixes that are always allowed regardless of subscription
@@ -46,7 +69,11 @@ var readOnlyPrefixAllowedPaths = []string{
 //
 // Public routes (no Security annotation) are always passed through.
 // Whitelisted paths are always allowed to support resubscription and self-service flows.
-func NewReadOnlyMiddleware() func(ctx huma.Context, next func(huma.Context)) {
+//
+// checker is optional (nil-safe) — when set, a caller whose raw subscription status is
+// read-only but who is actively covered by a household plan (#1367 — Phase 3) is treated
+// as having access rather than being blocked. nil fails closed to pre-#1367 behavior.
+func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Context, next func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		// Skip middleware for public routes (no Security annotation)
 		if len(ctx.Operation().Security) == 0 {
@@ -76,7 +103,8 @@ func NewReadOnlyMiddleware() func(ctx huma.Context, next func(huma.Context)) {
 			return
 		}
 
-		// Check if path is whitelisted — exact-match first, then prefix.
+		// Check if path is whitelisted — exact-match first, then prefix, then the
+		// household invite accept/decline suffix pattern (#1367 — Phase 3).
 		path := ctx.Operation().Path
 		if readOnlyExactAllowedPaths[path] {
 			next(ctx)
@@ -86,6 +114,27 @@ func NewReadOnlyMiddleware() func(ctx huma.Context, next func(huma.Context)) {
 			if strings.HasPrefix(path, prefix) {
 				next(ctx)
 				return
+			}
+		}
+		if readOnlyPathSuffixAllowed(path) {
+			next(ctx)
+			return
+		}
+
+		// #1367 — Phase 3: a covered household member's own subscription_status is never
+		// mutated while covered, so it can itself be read-only (e.g. they joined while
+		// already lapsed). Consult the effective entitlement before blocking — this is a
+		// single extra lookup only on this already-narrow (read-only-status, mutating
+		// method, non-whitelisted path) branch, not on every request.
+		if checker != nil {
+			if userID, ok := ctx.Context().Value(inputs.UserIDKey).(string); ok && userID != "" {
+				covered, err := checker.IsCoveredByHousehold(ctx.Context(), userID)
+				if err != nil {
+					slog.Default().Warn("read-only middleware: household coverage check failed; failing closed", "user_id", userID, "error", err)
+				} else if covered {
+					next(ctx)
+					return
+				}
 			}
 		}
 

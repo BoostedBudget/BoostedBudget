@@ -346,32 +346,32 @@ func main() {
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)
-		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                // Issue #45, #46: Paddle webhooks
-		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)        // Issues #747 #748: Paddle transaction audit log
-		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                     // Maps Clerk IDs to user UUIDs
-		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                 // Issue #257: Notification storage
-		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                           // Issue #353: Balance tracking
-		userTagRepo := repository.NewUserTagRepository(db)                                           // Issue #345: User tags
-		customCategoryRepo := repository.NewCustomCategoryRepository(db)                             // Issue #345: Custom categories
-		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                     // Issue #346: Categorization rules
-		analyticsRepo := repository.NewAnalyticsRepository(db)                                       // Issue #354: Cash flow analytics
-		budgetRepo := repository.NewBudgetRepository(db)                                             // Issue #28: Budget management
-		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                   // Issue #28: Savings goals
-		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                       // Issue #354: Dashboard preferences
+		paddleWebhookRepo = repository.NewPaddleWebhookRepository(db, fieldEncryptor)                         // Issue #45, #46: Paddle webhooks
+		paddleTransactionRepo = repository.NewPaddleTransactionRepository(db, fieldEncryptor)                 // Issues #747 #748: Paddle transaction audit log
+		identityRepo := repository.NewUserIdentityRepository(db, fieldEncryptor)                              // Maps Clerk IDs to user UUIDs
+		notificationRepo := repository.NewNotificationRepository(db, fieldEncryptor)                          // Issue #257: Notification storage
+		balanceSnapshotRepo := repository.NewBalanceSnapshotRepository(db)                                    // Issue #353: Balance tracking
+		userTagRepo := repository.NewUserTagRepository(db)                                                    // Issue #345: User tags
+		customCategoryRepo := repository.NewCustomCategoryRepository(db)                                      // Issue #345: Custom categories
+		categorizationRuleRepo := repository.NewCategorizationRuleRepository(db)                              // Issue #346: Categorization rules
+		analyticsRepo := repository.NewAnalyticsRepository(db)                                                // Issue #354: Cash flow analytics
+		budgetRepo := repository.NewBudgetRepository(db)                                                      // Issue #28: Budget management
+		savingsGoalRepo := repository.NewSavingsGoalRepository(db)                                            // Issue #28: Savings goals
+		dashboardPrefsRepo := repository.NewDashboardPreferencesRepository(db)                                // Issue #354: Dashboard preferences
 		transferSuggestionRepo := repository.NewTransferSuggestionRepositoryWithEncryptor(db, fieldEncryptor) // Issue #36 / #1267: Transfer suggestions (enc for account-name enrichment)
-		boostRepo := repository.NewBoostsRepository(db)                                              // Issue #37: Boosts
-		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                       // Issue #639: Admin user management
-		systemHealthRepo := repository.NewSystemHealthRepository(db)                                 // Issue #640: System health monitoring
-		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                               // Issue #640: Dead letter queue metrics
-		securityRepo := repository.NewSecurityRepository(db)                                         // Issue #659: Plaid Investments
-		holdingRepo := repository.NewHoldingRepository(db)                                           // Issue #659: Plaid Investments
-		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                       // Issue #659: Plaid Investments
-		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                       // Issue #138: Portfolio snapshots
-		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                   // Issue #138: Investment analytics
-		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                           // Issue #910: Plaid Liabilities
-		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)       // Issue #910: Plaid Liabilities
-		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor) // Issue #910: Plaid Liabilities
-		merchantRepo := repository.NewMerchantRepository(db)                                         // Issue #1163: Merchant batch-upsert
+		boostRepo := repository.NewBoostsRepository(db)                                                       // Issue #37: Boosts
+		adminUserRepo := repository.NewAdminUserRepository(db, fieldEncryptor)                                // Issue #639: Admin user management
+		systemHealthRepo := repository.NewSystemHealthRepository(db)                                          // Issue #640: System health monitoring
+		deadLetterJobRepo := repository.NewDeadLetterJobRepository(db)                                        // Issue #640: Dead letter queue metrics
+		securityRepo := repository.NewSecurityRepository(db)                                                  // Issue #659: Plaid Investments
+		holdingRepo := repository.NewHoldingRepository(db)                                                    // Issue #659: Plaid Investments
+		investmentTxnRepo := repository.NewInvestmentTransactionRepository(db)                                // Issue #659: Plaid Investments
+		portfolioSnapshotRepo := repository.NewPortfolioSnapshotRepository(db)                                // Issue #138: Portfolio snapshots
+		investmentAnalyticsRepo := repository.NewInvestmentAnalyticsRepository(db)                            // Issue #138: Investment analytics
+		creditLiabilityRepo := repository.NewCreditLiabilityRepository(db)                                    // Issue #910: Plaid Liabilities
+		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
+		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
+		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
 
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
@@ -405,6 +405,10 @@ func main() {
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		entitlementRepo := repository.NewEntitlementRepository(db) // Issue #1366: household entitlement resolution
 		householdRepo := repository.NewHouseholdRepository(db)     // Issue #1366: minimal household reads
+		// Issue #1367 — Phase 3: declared here (not near route registration below) so the
+		// deletion-service owner guard, wired a few lines down, can use them too.
+		householdInviteRepo := repository.NewHouseholdInviteRepository(db, fieldEncryptor)
+		householdShareRepo := repository.NewHouseholdShareRepository(db)
 		householdEntitlementService := services.NewHouseholdEntitlementService(entitlementRepo, profileRepo, householdRepo, tierConfig)
 		subscriptionService.SetEntitlementResolver(householdEntitlementService) // nil-safe injection; dormant until Phase 3 seeds rows
 		// Issue #353: Dashboard service for balance tracking
@@ -540,6 +544,16 @@ func main() {
 				cfg.DeletionTokenSecret,
 			)
 			deletionService.SetAnalytics(phClient)
+			// Issue #1367 — Phase 3: block owner deletion while active non-owner members
+			// exist, and revoke pending household invites when deletion proceeds. SetDB
+			// runs the whole guard atomically under one household row lock (closes a race
+			// with an in-flight AcceptInvite — Codex review, High finding 4); it also
+			// takes over the (non-transactional) work SetHouseholdReader/
+			// SetHouseholdInviteRevoker would otherwise do, but they're still wired for
+			// clarity/fallback if db construction ever changes.
+			deletionService.SetHouseholdReader(householdRepo)
+			deletionService.SetHouseholdInviteRevoker(householdInviteRepo)
+			deletionService.SetDB(db)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
@@ -616,6 +630,12 @@ func main() {
 					Config:        cfg,
 					TierConfig:    tierConfig,
 					Logger:        logger,
+					// Issue #1367 — Phase 3: block an EFFECTIVELY covered household
+					// member from starting their own Paddle checkout (decision #9).
+					// Uses the resolver (not the raw entitlement repo) so a member is
+					// freed to self-subscribe once their owner stops actually covering
+					// them, even if the raw entitlement row hasn't been cleaned up yet.
+					EntitlementRepo: householdEntitlementService,
 				})
 				appLogger.Info("Paddle checkout handler created")
 			}
@@ -656,6 +676,8 @@ func main() {
 		// ExpireTrial already nil-guards plaidCleanup before calling it.
 		trialService = services.NewTrialService(tierConfig, profileRepo, nil)
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
+		// #1367 — Phase 3: exempt actively covered household members from trial expiry.
+		trialService.SetHouseholdChecker(householdEntitlementService)
 		appLogger.Info("Trial service initialized")
 
 		// Issue #898: Create PastDueService unconditionally; plaidCleanup wired later if Plaid is configured.
@@ -722,7 +744,7 @@ func main() {
 		// Issue #1015: Create rule evaluation worker (depends only on boostExecutionService, no Plaid dependency)
 		boostEvaluationWorker = jobs.NewBoostEvaluationWorker(jobs.BoostEvaluationWorkerDeps{
 			BoostExecutionService: boostExecutionService,
-			Logger:               appLogger,
+			Logger:                appLogger,
 		})
 		appLogger.Info("Boost evaluation worker created (River)")
 
@@ -730,7 +752,7 @@ func main() {
 		budgetPeriodCloseCheckWorker = jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{
 			BudgetRepo:                budgetRepo,
 			PeriodEventsRepo:          repository.NewBudgetPeriodEventsRepository(db),
-			JobQueue:                  nil, // Set after River client created (circular dependency)
+			JobQueue:                  nil,                    // Set after River client created (circular dependency)
 			TransferSuggestionExpirer: transferSuggestionRepo, // Issue #972 GAP E: expire stale pending suggestions
 			UserTimezones:             budgetRepo,             // Issue #972 Task 2e: per-user timezone for period-boundary detection
 			Logger:                    appLogger,
@@ -865,9 +887,9 @@ func main() {
 				// ordering: DeleteManaged (for removed txns) → RecomputeUser → BackfillManagedCategories
 				// → RecalculateBudgetAmounts (which reads savings "spent" from the ledger)
 				transactionSyncService.SetSavingsProgressServices(
-					savingsContribRepo,      // SyncContributionCleaner: DeleteManagedForTransaction
-					savingsProgressService,  // SyncGoalProgressUpdater: RecomputeUser
-					budgetService,           // SyncManagedCategoryBackfiller: BackfillManagedCategories
+					savingsContribRepo,     // SyncContributionCleaner: DeleteManagedForTransaction
+					savingsProgressService, // SyncGoalProgressUpdater: RecomputeUser
+					budgetService,          // SyncManagedCategoryBackfiller: BackfillManagedCategories
 				)
 				appLogger.Info("Savings progress services wired into transaction sync")
 
@@ -1392,7 +1414,8 @@ func main() {
 		appLogger.Info("Huma Clerk middleware applied")
 
 		// #930: Apply read-only enforcement middleware — blocks mutations for inactive/cancelled subscriptions
-		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware())
+		// #1367 — Phase 3: household-aware — a covered member's own stale read-only status no longer locks them out.
+		humaAPI.UseMiddleware(humamiddleware.NewReadOnlyMiddleware(householdEntitlementService))
 		appLogger.Info("Huma read-only enforcement middleware applied")
 
 		// Load admin email config and create AdminService (Issue #309)
@@ -1501,7 +1524,6 @@ func main() {
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")
 
-
 		// Wire all optional setters for boostExecutionService.
 		// IMPORTANT: ALL SetXxx calls must be listed here. Omitting any setter means
 		// the corresponding feature silently fails in production (nil guard returns error,
@@ -1600,6 +1622,16 @@ func main() {
 		humaHouseholdEntitlementHandler := operations.NewHouseholdEntitlementHandler(householdEntitlementService, profileRepo)
 		operations.RegisterHouseholdEntitlementRoutes(humaAPI, humaHouseholdEntitlementHandler)
 		appLogger.Info("Huma household entitlement routes registered")
+
+		// Register Huma household routes (Issue #1367 — Phase 3: membership, invites & consent gate)
+		householdService := services.NewHouseholdService(
+			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
+			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
+		)
+		householdService.SetAnalytics(phClient)
+		humaHouseholdHandler := operations.NewHouseholdHandler(householdService, cfg.FrontendURL)
+		operations.RegisterHouseholdRoutes(humaAPI, humaHouseholdHandler)
+		appLogger.Info("Huma household routes registered (Phase 3)")
 
 		// Register Huma privacy routes (Issue #559: Huma migration)
 		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
