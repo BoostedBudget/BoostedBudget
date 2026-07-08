@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -241,5 +242,59 @@ func TestSubscriptionStatus_IsReadOnlySubscription(t *testing.T) {
 			result := tt.status.IsReadOnlySubscription()
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+func TestEffectiveEntitlement_ZeroValueIsOwnSource(t *testing.T) {
+	var e EffectiveEntitlement
+	if e.Source != "" {
+		t.Fatalf("expected zero-value Source to be empty, got %q", e.Source)
+	}
+}
+
+func TestHouseholdEntitlementSummary_JSONTags(t *testing.T) {
+	s := HouseholdEntitlementSummary{
+		Tier:          "household_2",
+		UsersIncluded: 2,
+		SeatsActive:   2,
+		SeatsPending:  1,
+		IsOwner:       true,
+		Source:        EntitlementSourceHousehold,
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"tier":"household_2","users_included":2,"seats_active":2,"seats_pending":1,"is_owner":true,"source":"household"}`
+	if string(b) != want {
+		t.Fatalf("got %s, want %s", b, want)
+	}
+}
+
+// TestEffectiveSubscription_UsersIncludedJSONTag closes a gap found by
+// requirements-gap-analysis: UsersIncluded's population is tested at the
+// service layer, but its JSON serialization was never asserted anywhere.
+// Uses a map-decode rather than an exact-string match so this test doesn't
+// become brittle to unrelated changes in the nested Limits/Features structs.
+func TestEffectiveSubscription_UsersIncludedJSONTag(t *testing.T) {
+	s := EffectiveSubscription{
+		UserID:        "user-1",
+		Tier:          TierHousehold2,
+		UsersIncluded: 2,
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, ok := decoded["users_included"]
+	if !ok {
+		t.Fatalf("expected \"users_included\" key in JSON output, got %s", b)
+	}
+	if got != float64(2) {
+		t.Fatalf("expected users_included=2, got %v", got)
 	}
 }

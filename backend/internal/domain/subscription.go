@@ -62,12 +62,12 @@ const Unlimited = -1
 // SubscriptionTier represents the full definition of a subscription tier
 // Loaded from config/subscription_tiers.yaml (centralized config directory)
 type SubscriptionTier struct {
-	Name        TierName                   `yaml:"-" json:"name"`
-	DisplayName string                     `yaml:"display_name" json:"display_name"`
-	Description string                     `yaml:"description" json:"description"`
-	Limits      SubscriptionLimits         `yaml:"limits" json:"limits"`
-	Features    SubscriptionFeatures       `yaml:"features" json:"features"`
-	Pricing     SubscriptionPricing        `yaml:",inline" json:"pricing"`
+	Name        TierName             `yaml:"-" json:"name"`
+	DisplayName string               `yaml:"display_name" json:"display_name"`
+	Description string               `yaml:"description" json:"description"`
+	Limits      SubscriptionLimits   `yaml:"limits" json:"limits"`
+	Features    SubscriptionFeatures `yaml:"features" json:"features"`
+	Pricing     SubscriptionPricing  `yaml:",inline" json:"pricing"`
 }
 
 // SubscriptionLimits defines resource limits for a tier
@@ -78,12 +78,12 @@ type SubscriptionLimits struct {
 
 // SubscriptionFeatures defines feature flags for a tier
 type SubscriptionFeatures struct {
-	AIInsights        bool `yaml:"ai_insights" json:"ai_insights"`
-	APIAccess         bool `yaml:"api_access" json:"api_access"`
-	PrioritySupport   bool `yaml:"priority_support" json:"priority_support"`
-	CustomCategories  bool `yaml:"custom_categories" json:"custom_categories"`
-	CustomTags        bool `yaml:"custom_tags" json:"custom_tags"`              // Issue #345: Tag editing enabled
-	AdvancedReports   bool `yaml:"advanced_reports" json:"advanced_reports"`
+	AIInsights       bool `yaml:"ai_insights" json:"ai_insights"`
+	APIAccess        bool `yaml:"api_access" json:"api_access"`
+	PrioritySupport  bool `yaml:"priority_support" json:"priority_support"`
+	CustomCategories bool `yaml:"custom_categories" json:"custom_categories"`
+	CustomTags       bool `yaml:"custom_tags" json:"custom_tags"` // Issue #345: Tag editing enabled
+	AdvancedReports  bool `yaml:"advanced_reports" json:"advanced_reports"`
 }
 
 // SubscriptionPricing defines pricing information for a tier
@@ -107,9 +107,9 @@ func IsUnlimited(value int) bool {
 type UserSubscriptionOverride struct {
 	ID           int64      `json:"id" db:"id"`
 	UserID       string     `json:"user_id" db:"user_id"`
-	ResourceType string     `json:"resource_type" db:"resource_type"` // see ResourceType constants: "transaction_history_days", "executions_per_day"
-	LimitValue   int        `json:"limit_value" db:"limit_value"`     // -1 for unlimited
-	Reason       *string    `json:"reason,omitempty" db:"reason"`     // "enterprise_deal", "addon_purchase", "promo"
+	ResourceType string     `json:"resource_type" db:"resource_type"`     // see ResourceType constants: "transaction_history_days", "executions_per_day"
+	LimitValue   int        `json:"limit_value" db:"limit_value"`         // -1 for unlimited
+	Reason       *string    `json:"reason,omitempty" db:"reason"`         // "enterprise_deal", "addon_purchase", "promo"
 	ExpiresAt    *time.Time `json:"expires_at,omitempty" db:"expires_at"` // null for permanent
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at" db:"updated_at"`
@@ -118,13 +118,14 @@ type UserSubscriptionOverride struct {
 // EffectiveSubscription represents the effective limits and features for a user
 // Combines base tier + any user-specific overrides
 type EffectiveSubscription struct {
-	UserID              string               `json:"user_id"`
-	Tier                TierName             `json:"tier"`
-	TierDisplayName     string               `json:"tier_display_name"`
-	Limits              SubscriptionLimits   `json:"limits"`
-	Features            SubscriptionFeatures `json:"features"`
-	HasOverrides        bool                 `json:"has_overrides"`
-	ActiveOverridesCount int                 `json:"active_overrides_count,omitempty"`
+	UserID               string               `json:"user_id"`
+	Tier                 TierName             `json:"tier"`
+	TierDisplayName      string               `json:"tier_display_name"`
+	Limits               SubscriptionLimits   `json:"limits"`
+	Features             SubscriptionFeatures `json:"features"`
+	HasOverrides         bool                 `json:"has_overrides"`
+	ActiveOverridesCount int                  `json:"active_overrides_count,omitempty"`
+	UsersIncluded        int                  `json:"users_included"`
 }
 
 // ResourceType represents the types of resources that can have limits
@@ -168,39 +169,39 @@ func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 // AddOn represents an add-on purchase that modifies tier limits
 // Future extensibility for "buy 5 more rules" or "buy faster execution" features
 type AddOn struct {
-	ID               int64      `json:"id" db:"id"`
-	Name             string     `json:"name" db:"name"`
-	Type             string     `json:"type" db:"type"`               // "extra_rules", "faster_execution", "more_accounts"
-	ResourceType     string     `json:"resource_type" db:"resource_type"` // Which resource this affects
-	QuantityModifier int        `json:"quantity_modifier" db:"quantity_modifier"` // How much to add/modify
-	PriceMonthly     float64    `json:"price_monthly" db:"price_monthly"`
-	PaddlePriceID    *string    `json:"paddle_price_id,omitempty" db:"paddle_price_id"`
-	IsActive         bool       `json:"is_active" db:"is_active"`
-	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
+	ID               int64     `json:"id" db:"id"`
+	Name             string    `json:"name" db:"name"`
+	Type             string    `json:"type" db:"type"`                           // "extra_rules", "faster_execution", "more_accounts"
+	ResourceType     string    `json:"resource_type" db:"resource_type"`         // Which resource this affects
+	QuantityModifier int       `json:"quantity_modifier" db:"quantity_modifier"` // How much to add/modify
+	PriceMonthly     float64   `json:"price_monthly" db:"price_monthly"`
+	PaddlePriceID    *string   `json:"paddle_price_id,omitempty" db:"paddle_price_id"`
+	IsActive         bool      `json:"is_active" db:"is_active"`
+	CreatedAt        time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // UserAddOn represents an add-on subscription for a specific user
 // Future extensibility for add-on purchases
 type UserAddOn struct {
-	ID             int64      `json:"id" db:"id"`
-	UserID         string     `json:"user_id" db:"user_id"`
-	AddOnID        int64      `json:"addon_id" db:"addon_id"`
-	Status         string     `json:"status" db:"status"` // "active", "cancelled", "expired"
-	SubscribedAt   time.Time  `json:"subscribed_at" db:"subscribed_at"`
-	CancelledAt    *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
-	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at" db:"updated_at"`
+	ID           int64      `json:"id" db:"id"`
+	UserID       string     `json:"user_id" db:"user_id"`
+	AddOnID      int64      `json:"addon_id" db:"addon_id"`
+	Status       string     `json:"status" db:"status"` // "active", "cancelled", "expired"
+	SubscribedAt time.Time  `json:"subscribed_at" db:"subscribed_at"`
+	CancelledAt  *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
+	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // LimitCheckResult represents the result of checking if a user is within limits
 type LimitCheckResult struct {
-	Allowed       bool   `json:"allowed"`
-	CurrentUsage  int    `json:"current_usage"`
-	Limit         int    `json:"limit"`
-	IsUnlimited   bool   `json:"is_unlimited"`
-	ResourceType  string `json:"resource_type"`
-	RemainingUsage int   `json:"remaining_usage"`
+	Allowed        bool   `json:"allowed"`
+	CurrentUsage   int    `json:"current_usage"`
+	Limit          int    `json:"limit"`
+	IsUnlimited    bool   `json:"is_unlimited"`
+	ResourceType   string `json:"resource_type"`
+	RemainingUsage int    `json:"remaining_usage"`
 }
 
 // ─── SubscriptionEntitlement ─────────────────────────────────────────────────
@@ -275,6 +276,27 @@ func (e *SubscriptionEntitlement) Validate() error {
 		return errors.New("effective_until must be after effective_from")
 	}
 	return nil
+}
+
+// EffectiveEntitlement is the resolved coverage for a user: either their own
+// subscription, or — live, never stored — the household owner's current tier+status.
+// Never persisted; computed fresh on every SubscriptionService.GetEffectiveSubscription call.
+type EffectiveEntitlement struct {
+	Tier        string
+	Status      string
+	Source      EntitlementSource
+	PayerUserID *string
+	HouseholdID *string
+}
+
+// HouseholdEntitlementSummary is the response body for GET /api/v1/households/me/entitlement.
+type HouseholdEntitlementSummary struct {
+	Tier          string            `json:"tier"`
+	UsersIncluded int               `json:"users_included"`
+	SeatsActive   int               `json:"seats_active"`
+	SeatsPending  int               `json:"seats_pending"`
+	IsOwner       bool              `json:"is_owner"`
+	Source        EntitlementSource `json:"source"`
 }
 
 // NewLimitCheckResult creates a new limit check result

@@ -103,6 +103,16 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+        # Note: go clean -cache is intentionally omitted — it is destructive on
+        # a shared self-hosted runner when other jobs build concurrently.
+
+      - name: Configure job-local Go build cache
+        # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
+        # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable.
+        # This isolates this job's build cache from openapi-validate's concurrent
+        # go clean -cache (root cause of intermittent "no such file or directory"
+        # import failures on the default shared ~/Library/Caches/go-build).
+        run: echo "GOCACHE=$RUNNER_TEMP/gocache-e2e" >> "$GITHUB_ENV"
 
       - name: Build backend binary
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -196,6 +206,17 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+        # Note: go clean -cache is intentionally omitted — it is destructive on
+        # a shared self-hosted runner when other jobs build concurrently.
+
+      - name: Configure job-local Go build cache
+        # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
+        # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable. Replaces
+        # the previous "go clean -cache" step: that wiped the SHARED default
+        # ~/Library/Caches/go-build out from under any other job building concurrently on
+        # this runner (root cause of intermittent "no such file or directory" import
+        # failures elsewhere, e.g. e2e-test). A fresh, job-unique GOCACHE needs no cleaning.
+        run: echo "GOCACHE=$RUNNER_TEMP/gocache-openapi" >> "$GITHUB_ENV"
 
       - name: Restore Go modules cache
         id: cache-go-modules
@@ -210,9 +231,6 @@ jobs:
       - name: Download Go dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: go mod download
-
-      - name: Clear Go build cache (prevents stale cross-runner cache corruption)
-        run: go clean -cache
 
       - name: Generate OpenAPI spec
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
@@ -508,13 +526,19 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
+        # Note: go clean -cache is intentionally omitted — it is destructive on
+        # a shared self-hosted runner when other jobs build concurrently.
 
-      # Critical: Clean Go toolchain cache before tests to prevent corruption
-      # on macOS self-hosted runners. Go 1.25 can cache stale toolchain data.
-      # See: https://github.com/golang/go/issues
-      - name: Clean Go toolchain cache
-        if: runner.os == 'macOS'
-        run: go clean -cache
+      - name: Configure job-local Go build cache
+        # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
+        # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable. Replaces
+        # the previous "Clean Go toolchain cache" step: that step's `go clean -cache` wiped
+        # the SHARED default ~/Library/Caches/go-build out from under any other job building
+        # concurrently on this runner — the actual root cause of the intermittent "no such
+        # file or directory" import corruption previously attributed to "stale toolchain
+        # data" (it was cross-job cache races, not a Go 1.25 bug). A fresh, job-unique
+        # GOCACHE needs no cleaning and can't be raced by (or race) sibling jobs.
+        run: echo "GOCACHE=$RUNNER_TEMP/gocache-backend-test" >> "$GITHUB_ENV"
 
       - name: Restore Go modules cache
         id: cache-go-modules
@@ -1041,6 +1065,17 @@ jobs:
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
+
+      - name: Configure job-local Go build cache
+        if: matrix.component == 'backend'
+        # cache-dependency-path above only scopes the actions/cache KEY for module
+        # downloads — GOCACHE itself still defaults to the shared, un-isolated
+        # ~/Library/Caches/go-build on this self-hosted runner. govulncheck compiles
+        # the codebase for analysis, so it's exposed to the same cross-job cache
+        # corruption as any other `go build`/`go test` (see e2e-test/backend-test
+        # fixes). runner context is unavailable in job-level env blocks, so we
+        # export GOCACHE here where $RUNNER_TEMP is a real shell variable.
+        run: echo "GOCACHE=$RUNNER_TEMP/gocache-security-scan" >> "$GITHUB_ENV"
 
       - name: Run govulncheck (Go vulnerabilities)
         if: matrix.component == 'backend'

@@ -2162,6 +2162,18 @@
       "description": "Returns all available widget types with their metadata for the widget catalog. Public endpoint."
     },
     {
+      "operationId": "getHouseholdEntitlement",
+      "method": "GET",
+      "path": "/api/v1/households/me/entitlement",
+      "summary": "Get effective household entitlement",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the authenticated user's effective subscription tier, seat counts, and coverage source, accounting for household membership."
+    },
+    {
       "operationId": "getHoldings",
       "method": "GET",
       "path": "/api/v1/investments/holdings",
