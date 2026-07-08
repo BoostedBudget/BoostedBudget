@@ -190,6 +190,7 @@ export * from './grantTrialResponseBody';
 export * from './healthChecks';
 export * from './healthResponse';
 export * from './holdingView';
+export * from './householdEntitlementSummary';
 export * from './incomeByType';
 export * from './incomeSource';
 export * from './incomeSourceBreakdownResponse';

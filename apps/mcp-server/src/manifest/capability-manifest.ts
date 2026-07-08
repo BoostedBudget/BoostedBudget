@@ -220,6 +220,9 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getHealth', REASON_INTERNAL),
   excluded('getMetrics', REASON_INTERNAL),
 
+  // ── Household (Issue #1366: household entitlement resolution, Phase 2) ──
+  read('getHouseholdEntitlement'),
+
   // ── Notifications ────────────────────────────────────────────────────────
   read('getNotifications'),
   read('getUnreadNotificationCount'),

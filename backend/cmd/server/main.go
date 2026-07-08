@@ -403,6 +403,10 @@ func main() {
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
+		entitlementRepo := repository.NewEntitlementRepository(db) // Issue #1366: household entitlement resolution
+		householdRepo := repository.NewHouseholdRepository(db)     // Issue #1366: minimal household reads
+		householdEntitlementService := services.NewHouseholdEntitlementService(entitlementRepo, profileRepo, householdRepo, tierConfig)
+		subscriptionService.SetEntitlementResolver(householdEntitlementService) // nil-safe injection; dormant until Phase 3 seeds rows
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
 		// Issue #345: Tag and category services
@@ -1591,6 +1595,11 @@ func main() {
 		humaProfileHandler := operations.NewProfileHandler(profileService)
 		operations.RegisterProfileRoutes(humaAPI, humaProfileHandler)
 		appLogger.Info("Huma profile routes registered")
+
+		// Register Huma household entitlement routes (Issue #1366)
+		humaHouseholdEntitlementHandler := operations.NewHouseholdEntitlementHandler(householdEntitlementService, profileRepo)
+		operations.RegisterHouseholdEntitlementRoutes(humaAPI, humaHouseholdEntitlementHandler)
+		appLogger.Info("Huma household entitlement routes registered")
 
 		// Register Huma privacy routes (Issue #559: Huma migration)
 		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
