@@ -86,7 +86,7 @@ describe('createApiClient', () => {
     )
   })
 
-  it('contains exactly 127 allowed operation methods', () => {
+  it('contains exactly 133 allowed operation methods', () => {
     const mutator = mock(() => Promise.resolve({})) as unknown as FetchMutator
     const client = createApiClient(mutator)
 
@@ -96,7 +96,7 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    // 190 total ops − 58 excluded = 132 allowed; mirrors capability-manifest.test.ts
+    // 192 total ops − 59 excluded = 133 allowed; mirrors capability-manifest.test.ts
     // +7 from #957: getMerchants, getMerchantOverrides, getMerchantDuplicateSuggestions,
     //               setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides,
     //               mergeMerchants
@@ -104,6 +104,8 @@ describe('createApiClient', () => {
     // +12 from #1367 Phase 3 (Gap Analysis Round 2, GT-4): +4 allowed (getMyHousehold,
     //                listHouseholdMembers, listHouseholdInvites, getHouseholdInvitePreview),
     //                +8 excluded (household mutations — deliberate in-app action)
-    expect(count).toBe(132)
+    // +1 from #1368 Phase 4: listMyAccountShares allowed (read); setHouseholdShareVisibility
+    //               excluded (privacy/consent decision — deliberate in-app action)
+    expect(count).toBe(133)
   })
 })
