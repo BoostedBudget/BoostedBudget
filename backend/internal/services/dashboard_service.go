@@ -214,14 +214,20 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, time.Now().UTC())
+	// currentCutoff is captured once and reused for both calls below — two independent
+	// time.Now().UTC() calls could straddle a sync landing in between, letting the snapshot
+	// query and the account-map query resolve a joint account's fingerprint winner to
+	// different members' copies (the same class of bug fixed for the previous-period pair
+	// in #1369 gap-closure G1; flagged by Codex adversarial review on the G1 fix itself).
+	currentCutoff := time.Now().UTC()
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	// asOf=time.Now().UTC() here — this loop's previous-period comparison below sums
-	// snapshots directly without any accountMap lookup, so (unlike getNetWorthHousehold)
-	// only one "now"-asOf account map is ever needed (#1369 gap-closure G1).
-	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, time.Now().UTC())
+	// This loop's previous-period comparison below sums snapshots directly without any
+	// accountMap lookup, so (unlike getNetWorthHousehold) only one "now"-asOf account map is
+	// ever needed (#1369 gap-closure G1).
+	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -633,11 +639,15 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
 	}
 
-	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, time.Now().UTC())
+	// currentCutoff is captured once and reused for both calls below — see the identical
+	// comment in getBalanceSummaryHousehold for why two independent time.Now().UTC() calls
+	// would be unsafe here (Codex adversarial review on the G1 fix).
+	currentCutoff := time.Now().UTC()
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	currentAccounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, time.Now().UTC())
+	currentAccounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, currentCutoff)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
