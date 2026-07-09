@@ -110,6 +110,42 @@ func TestHouseholdInviteRepository_GetByTokenHashForUpdate_NotFound(t *testing.T
 	assert.ErrorIs(t, err, domain.ErrInviteNotFound)
 }
 
+// GT-6 (Gap Analysis Round 4B): AcceptInvite needs to know which household to lock
+// BEFORE locking anything, to avoid a lock-order inversion against DeleteHousehold (which
+// locks the household first, then cascade-deletes household_invites rows). This is a
+// deliberately non-locking lookup — the authoritative, race-safe read is still
+// GetByTokenHashForUpdate, called after the household lock is held.
+func TestHouseholdInviteRepository_GetHouseholdIDByTokenHash(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdInviteMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT household_id FROM household_invites WHERE token_hash = $1
+	`)).
+		WithArgs("abc123").
+		WillReturnRows(pgxmock.NewRows([]string{"household_id"}).AddRow("hh-1"))
+
+	householdID, err := repo.GetHouseholdIDByTokenHash(context.Background(), "abc123")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", householdID)
+}
+
+func TestHouseholdInviteRepository_GetHouseholdIDByTokenHash_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdInviteMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT household_id FROM household_invites WHERE token_hash = $1
+	`)).
+		WithArgs("missing").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetHouseholdIDByTokenHash(context.Background(), "missing")
+	assert.ErrorIs(t, err, domain.ErrInviteNotFound)
+}
+
 func TestHouseholdInviteRepository_GetPreviewByTokenHash(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdInviteMockDB(t)

@@ -53,6 +53,10 @@ func (m *mockHouseholdInviteRepo) GetByTokenHashForUpdate(ctx context.Context, t
 	}
 	return args.Get(0).(*domain.HouseholdInvite), args.Error(1)
 }
+func (m *mockHouseholdInviteRepo) GetHouseholdIDByTokenHash(ctx context.Context, tokenHash string) (string, error) {
+	args := m.Called(ctx, tokenHash)
+	return args.String(0), args.Error(1)
+}
 func (m *mockHouseholdInviteRepo) GetPreviewByTokenHash(ctx context.Context, tokenHash string) (*repository.HouseholdInvitePreview, error) {
 	args := m.Called(ctx, tokenHash)
 	if args.Get(0) == nil {
@@ -756,6 +760,19 @@ func expectLockCallerRow(pool pgxmock.PgxPoolIface, callerUserID string) {
 	pool.ExpectExec("SELECT 1 FROM users").WithArgs(callerUserID).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 }
 
+// expectHouseholdIDLookupAndLock appends the pgxmock expectations for the two
+// household-first lock-acquisition steps every AcceptInvite call now takes BEFORE the
+// invite-row lock (#1367 Gap Analysis Round 4B, GT-6): a non-locking household_id lookup
+// by token hash, then the household row's FOR UPDATE lock. Locking the household before
+// the invite avoids a lock-order-inversion deadlock against DeleteHousehold (which locks
+// the household first, then cascade-deletes its invites).
+func expectHouseholdIDLookupAndLock(pool pgxmock.PgxPoolIface, householdID, ownerUserID string) {
+	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"household_id"}).AddRow(householdID))
+	pool.ExpectQuery("FOR UPDATE").WithArgs(householdID).
+		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow(ownerUserID))
+}
+
 func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 	t.Parallel()
 	userRepo := &mockUserLoader{}
@@ -769,11 +786,10 @@ func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 	mask := "mask-blind-1"
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
-	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("INSERT INTO household_members").
@@ -823,6 +839,7 @@ func TestHouseholdService_AcceptInvite_Expired_RollsBack(t *testing.T) {
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(-1*time.Hour)))
 	pool.ExpectRollback()
@@ -838,6 +855,7 @@ func TestHouseholdService_AcceptInvite_NotPending_RollsBack(t *testing.T) {
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("accepted", time.Now().Add(48*time.Hour)))
 	pool.ExpectRollback()
@@ -856,6 +874,7 @@ func TestHouseholdService_AcceptInvite_EmailMismatch_RollsBack(t *testing.T) {
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
@@ -876,6 +895,7 @@ func TestHouseholdService_AcceptInvite_UnverifiedEmail_RollsBack(t *testing.T) {
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
@@ -901,6 +921,7 @@ func TestHouseholdService_AcceptInvite_PayingInvitee_Blocked(t *testing.T) {
 			defer pool.Close()
 
 			pool.ExpectBegin()
+			expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 			pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 				WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 			expectLockCallerRow(pool, "caller-1")
@@ -927,6 +948,7 @@ func TestHouseholdService_AcceptInvite_PayingInvitee_SurfacesEligibilityDate(t *
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
@@ -963,11 +985,10 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 			defer pool.Close()
 
 			pool.ExpectBegin()
+			expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 			pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 				WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 			expectLockCallerRow(pool, "caller-1")
-			pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
-				WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 			pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 				WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2)) // seats full -> short-circuits after the paying-invitee guard passes
 			pool.ExpectRollback()
@@ -991,11 +1012,10 @@ func TestHouseholdService_AcceptInvite_OwnerMarkedForDeletion_RollsBack(t *testi
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
-	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
@@ -1014,11 +1034,10 @@ func TestHouseholdService_AcceptInvite_OwnerReadOnlyStatus_RollsBack(t *testing.
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
-	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
@@ -1037,11 +1056,10 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
-	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("INSERT INTO household_members").

@@ -39,6 +39,16 @@ type HouseholdInviteRepository interface {
 	// Locking this row serializes concurrent accept/decline of the same token.
 	GetByTokenHashForUpdate(ctx context.Context, tokenHash string) (*domain.HouseholdInvite, error)
 
+	// GetHouseholdIDByTokenHash is a deliberately NON-LOCKING lookup used only to learn
+	// which household to lock BEFORE acquiring any row lock (#1367 Gap Analysis Round 4B,
+	// GT-6: AcceptInvite must lock the household before the invite row, matching
+	// DeleteHousehold/CreateInvite's order, to avoid a lock-order-inversion deadlock — see
+	// DeleteHousehold's godoc). The authoritative, race-safe read is still
+	// GetByTokenHashForUpdate, called AFTER the household lock is held; never trust this
+	// method's result for anything beyond "which household to lock first". Returns
+	// domain.ErrInviteNotFound if no such invite exists.
+	GetHouseholdIDByTokenHash(ctx context.Context, tokenHash string) (string, error)
+
 	// GetPreviewByTokenHash returns the unauthenticated preview projection. Returns
 	// domain.ErrInviteNotFound uniformly for unknown, expired, and non-pending
 	// (accepted/declined/revoked) tokens — callers must not distinguish these to avoid
@@ -124,6 +134,17 @@ func (r *householdInviteRepository) GetByTokenHashForUpdate(ctx context.Context,
 		return nil, domain.ErrInviteNotFound
 	}
 	return inv, err
+}
+
+func (r *householdInviteRepository) GetHouseholdIDByTokenHash(ctx context.Context, tokenHash string) (string, error) {
+	var householdID string
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM household_invites WHERE token_hash = $1
+	`, tokenHash).Scan(&householdID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", domain.ErrInviteNotFound
+	}
+	return householdID, err
 }
 
 func (r *householdInviteRepository) GetPreviewByTokenHash(ctx context.Context, tokenHash string) (*HouseholdInvitePreview, error) {
