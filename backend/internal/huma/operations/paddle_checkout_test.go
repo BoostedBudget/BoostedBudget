@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -1329,6 +1330,147 @@ func TestHandleCreateCheckoutSession_TrialUser_Allowed(t *testing.T) {
 
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
+}
+
+// ─── Household covered-member checkout guard (#1367 decision #9) ────────────
+
+type mockCoverageCheckerForCheckout struct{ mock.Mock }
+
+func (m *mockCoverageCheckerForCheckout) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func TestHandleCreateCheckoutSession_CoveredByHousehold_Rejected(t *testing.T) {
+	mockService := new(mockPaddleCheckoutService)
+	mockRepo := new(mockProfileRepo)
+	checker := &mockCoverageCheckerForCheckout{}
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	handler := NewPaddleCheckoutHandler(PaddleCheckoutHandlerDeps{
+		PaddleService:   mockService,
+		ProfileRepo:     mockRepo,
+		Config:          &config.Config{FrontendURL: "https://app.example.com"},
+		TierConfig:      tierConfig,
+		EntitlementRepo: checker,
+	})
+	ctx := contextWithUserID("user_123")
+
+	// A covered member's own subscription_status is whatever it was before joining —
+	// here "inactive" (lapsed) — so only the coverage check can catch the overlap.
+	user := &domain.User{ID: "user_123", Email: "test@example.com", SubscriptionStatus: "inactive"}
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, "user_123").Return(true, nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.Error(t, err)
+	require.Nil(t, output)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
+func TestHandleCreateCheckoutSession_NotCoveredByHousehold_Allowed(t *testing.T) {
+	mockService := new(mockPaddleCheckoutService)
+	mockRepo := new(mockProfileRepo)
+	checker := &mockCoverageCheckerForCheckout{}
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	handler := NewPaddleCheckoutHandler(PaddleCheckoutHandlerDeps{
+		PaddleService:   mockService,
+		ProfileRepo:     mockRepo,
+		Config:          &config.Config{FrontendURL: "https://app.example.com"},
+		TierConfig:      tierConfig,
+		EntitlementRepo: checker,
+	})
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{ID: "user_123", Email: "test@example.com", SubscriptionStatus: "inactive", PaddleCustomerID: &customerID}
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, "user_123").Return(false, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_123", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+}
+
+// TestHandleCreateCheckoutSession_RawEntitlementExistsButOwnerReadOnly_Allowed is the
+// regression test for a real Codex-review finding: checking the RAW subscription_entitlements
+// row (source='household') instead of EFFECTIVE coverage traps a member once their
+// household owner goes read-only (past_due/cancelled) — the raw row still exists (Phase 7
+// owns cleaning it up), so a naive raw check would keep blocking checkout even though the
+// member is no longer actually covered and legitimately needs to self-subscribe.
+func TestHandleCreateCheckoutSession_RawEntitlementExistsButOwnerReadOnly_Allowed(t *testing.T) {
+	mockService := new(mockPaddleCheckoutService)
+	mockRepo := new(mockProfileRepo)
+	checker := &mockCoverageCheckerForCheckout{}
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	handler := NewPaddleCheckoutHandler(PaddleCheckoutHandlerDeps{
+		PaddleService:   mockService,
+		ProfileRepo:     mockRepo,
+		Config:          &config.Config{FrontendURL: "https://app.example.com"},
+		TierConfig:      tierConfig,
+		EntitlementRepo: checker,
+	})
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{ID: "user_123", Email: "test@example.com", SubscriptionStatus: "inactive", PaddleCustomerID: &customerID}
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	// IsCoveredByHousehold already resolves this correctly to false (owner read-only
+	// reverts the member to "own" per ResolveEffectiveEntitlement) even though a raw
+	// source='household' entitlement row still exists in the DB.
+	checker.On("IsCoveredByHousehold", ctx, "user_123").Return(false, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_123", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err, "a member no longer effectively covered must be able to self-subscribe")
+	require.NotNil(t, output)
+}
+
+func TestHandleCreateCheckoutSession_NoEntitlementRepoConfigured_StillWorks(t *testing.T) {
+	// Backward compatibility: handlers constructed without EntitlementRepo (nil) must
+	// keep working — the guard is skipped, not a panic.
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	user := &domain.User{ID: "user_123", Email: "test@example.com", SubscriptionStatus: "inactive", PaddleCustomerID: &customerID}
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_123", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
 }
 
 // TestHandleCreateCheckoutSession_CancelledUser_Allowed tests that cancelled users can re-subscribe

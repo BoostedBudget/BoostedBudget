@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -40,6 +41,13 @@ func (m *MockDeletionServiceForWorker) SetPlaidCleanupService(svc services.Plaid
 }
 
 func (m *MockDeletionServiceForWorker) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
+// SetHouseholdReader/SetHouseholdInviteRevoker (#1367 — Phase 3) are not exercised by
+// these deletion-worker tests; stubbed to satisfy the expanded interface.
+func (m *MockDeletionServiceForWorker) SetHouseholdReader(r services.HouseholdReader) {}
+func (m *MockDeletionServiceForWorker) SetHouseholdInviteRevoker(r services.HouseholdInviteRevoker) {
+}
+func (m *MockDeletionServiceForWorker) SetDB(db repository.DB) {}
 
 func (m *MockDeletionServiceForWorker) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
@@ -82,13 +90,27 @@ func (m *MockProfileRepoForWorker) GetUserByPaddleSubscriptionID(ctx context.Con
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error          { return m.Called(ctx, user).Error(0) }
-func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error { return m.Called(ctx, tx, user).Error(0) }
-func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error               { return m.Called(ctx, user).Error(0) }
-func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error         { return m.Called(ctx, clerkUserID).Error(0) }
-func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error { return m.Called(ctx, userID, scheduledAt).Error(0) }
-func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error               { return m.Called(ctx, userID).Error(0) }
-func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error            { return m.Called(ctx, userID).Error(0) }
+func (m *MockProfileRepoForWorker) CreateUser(ctx context.Context, user *domain.User) error {
+	return m.Called(ctx, user).Error(0)
+}
+func (m *MockProfileRepoForWorker) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
+	return m.Called(ctx, tx, user).Error(0)
+}
+func (m *MockProfileRepoForWorker) UpdateUser(ctx context.Context, user *domain.User) error {
+	return m.Called(ctx, user).Error(0)
+}
+func (m *MockProfileRepoForWorker) UpdateLastLogin(ctx context.Context, clerkUserID string) error {
+	return m.Called(ctx, clerkUserID).Error(0)
+}
+func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID string, scheduledAt time.Time) error {
+	return m.Called(ctx, userID, scheduledAt).Error(0)
+}
+func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error {
+	return m.Called(ctx, userID).Error(0)
+}
+func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error {
+	return m.Called(ctx, userID).Error(0)
+}
 
 // Issue #679, #680: Trial expiration methods
 func (m *MockProfileRepoForWorker) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
@@ -107,12 +129,20 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiringTrials(ctx context.Contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error { return m.Called(ctx, userID, status).Error(0) }
-func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error { return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0) }
+func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
+	return m.Called(ctx, userID, status).Error(0)
+}
+func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
+	return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0)
+}
 
 // Issue #44, #45, #46: Paddle integration support
-func (m *MockProfileRepoForWorker) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error { return m.Called(ctx, userID, paddleCustomerID).Error(0) }
-func (m *MockProfileRepoForWorker) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error { return m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID).Error(0) }
+func (m *MockProfileRepoForWorker) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
+	return m.Called(ctx, userID, paddleCustomerID).Error(0)
+}
+func (m *MockProfileRepoForWorker) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
+	return m.Called(ctx, userID, tier, status, startedAt, endsAt, subscriptionID).Error(0)
+}
 func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {

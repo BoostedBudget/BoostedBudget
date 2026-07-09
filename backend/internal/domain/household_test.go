@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -410,5 +411,75 @@ func TestHouseholdShareConsent_Validate(t *testing.T) {
 			t.Parallel()
 			assertValidateError(t, tc.c.Validate(), tc.wantErr)
 		})
+	}
+}
+
+// ─── Phase 3 sentinel errors (#1367) ─────────────────────────────────────────
+
+func TestHouseholdSentinelErrors_AreDistinctAndNonNil(t *testing.T) {
+	t.Parallel()
+
+	errs := []error{
+		ErrHouseholdNotFound,
+		ErrAlreadyOwnsHousehold,
+		ErrNotHouseholdOwner,
+		ErrHouseholdHasActiveMembers,
+		ErrHouseholdSeatsFull,
+		ErrInviteNotFound,
+		ErrInviteNotPending,
+		ErrInviteExpired,
+		ErrInviteEmailMismatch,
+		ErrInvitePendingExists,
+		ErrCannotInviteSelf,
+		ErrAlreadyInHousehold,
+		ErrInvalidConsent,
+		ErrMemberNotFound,
+		ErrCannotRemoveOwner,
+		ErrOwnerPlanInactive,
+		ErrInviteeHasActivePaidSubscription,
+		ErrAlreadyCoveredByHousehold,
+	}
+
+	seen := make(map[string]int, len(errs))
+	for i, e := range errs {
+		if e == nil {
+			t.Fatalf("sentinel error at index %d is nil", i)
+		}
+		if e.Error() == "" {
+			t.Fatalf("sentinel error at index %d has empty message", i)
+		}
+		if prev, ok := seen[e.Error()]; ok {
+			t.Fatalf("sentinel error message %q reused at indices %d and %d", e.Error(), prev, i)
+		}
+		seen[e.Error()] = i
+	}
+}
+
+func TestHouseholdShareConsentVersion_IsNonEmpty(t *testing.T) {
+	t.Parallel()
+	if strings.TrimSpace(HouseholdShareConsentVersion) == "" {
+		t.Fatal("HouseholdShareConsentVersion must not be empty")
+	}
+}
+
+func TestInviteeHasActivePaidSubscriptionError_MatchesSentinelViaErrorsIs(t *testing.T) {
+	t.Parallel()
+	when := time.Now().Add(48 * time.Hour)
+	err := &InviteeHasActivePaidSubscriptionError{EligibleAfter: &when}
+
+	if !errors.Is(err, ErrInviteeHasActivePaidSubscription) {
+		t.Fatal("errors.Is must match the base sentinel through Unwrap")
+	}
+	if err.EligibleAfter == nil || !err.EligibleAfter.Equal(when) {
+		t.Fatal("EligibleAfter must carry the date it was constructed with")
+	}
+}
+
+func TestInviteeHasActivePaidSubscriptionError_NilDateMatchesSentinel(t *testing.T) {
+	t.Parallel()
+	err := &InviteeHasActivePaidSubscriptionError{EligibleAfter: nil}
+
+	if !errors.Is(err, ErrInviteeHasActivePaidSubscription) {
+		t.Fatal("errors.Is must match even when no date is known (advisory-only per decision #6)")
 	}
 }

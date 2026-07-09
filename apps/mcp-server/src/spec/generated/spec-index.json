@@ -2162,6 +2162,113 @@
       "description": "Returns all available widget types with their metadata for the widget catalog. Public endpoint."
     },
     {
+      "operationId": "createHousehold",
+      "method": "POST",
+      "path": "/api/v1/households",
+      "summary": "Create a household",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Creates a new household with the caller as owner."
+    },
+    {
+      "operationId": "getHouseholdInvitePreview",
+      "method": "GET",
+      "path": "/api/v1/households/invites/{token}",
+      "summary": "Preview a household invite",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Unauthenticated — the token is the credential. Metadata-only; does not list accounts.",
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "Raw invite token from the invite link",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "acceptHouseholdInvite",
+      "method": "POST",
+      "path": "/api/v1/households/invites/{token}/accept",
+      "summary": "Accept a household invite",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "Raw invite token from the invite link",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "declineHouseholdInvite",
+      "method": "POST",
+      "path": "/api/v1/households/invites/{token}/decline",
+      "summary": "Decline a household invite",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "Raw invite token from the invite link",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "getMyHousehold",
+      "method": "GET",
+      "path": "/api/v1/households/me",
+      "summary": "Get the caller's household",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "updateHouseholdName",
+      "method": "PATCH",
+      "path": "/api/v1/households/me",
+      "summary": "Rename the household",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "deleteHousehold",
+      "method": "DELETE",
+      "path": "/api/v1/households/me",
+      "summary": "Disband the household",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability."
+    },
+    {
       "operationId": "getHouseholdEntitlement",
       "method": "GET",
       "path": "/api/v1/households/me/entitlement",
@@ -2172,6 +2279,79 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the authenticated user's effective subscription tier, seat counts, and coverage source, accounting for household membership."
+    },
+    {
+      "operationId": "listHouseholdInvites",
+      "method": "GET",
+      "path": "/api/v1/households/me/invites",
+      "summary": "List pending invites",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "createHouseholdInvite",
+      "method": "POST",
+      "path": "/api/v1/households/me/invites",
+      "summary": "Invite a member by email",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "revokeHouseholdInvite",
+      "method": "DELETE",
+      "path": "/api/v1/households/me/invites/{id}",
+      "summary": "Revoke a pending invite",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Invite ID to revoke",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "listHouseholdMembers",
+      "method": "GET",
+      "path": "/api/v1/households/me/members",
+      "summary": "List active household members",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false
+    },
+    {
+      "operationId": "removeHouseholdMember",
+      "method": "DELETE",
+      "path": "/api/v1/households/me/members/{userId}",
+      "summary": "Remove a member or self-leave",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "parameters": [
+        {
+          "name": "userId",
+          "in": "path",
+          "required": true,
+          "description": "ID of the member to remove",
+          "type": "string"
+        }
+      ]
     },
     {
       "operationId": "getHoldings",

@@ -121,6 +121,13 @@ func (m *mockEmailSvc) SendNotificationEmail(ctx context.Context, toEmail string
 	return args.Error(0)
 }
 
+// SendHouseholdInvite (#1367 — Phase 3) is not exercised by these notification tests;
+// stubbed to satisfy the expanded EmailService interface.
+func (m *mockEmailSvc) SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error {
+	args := m.Called(ctx, toEmail, inviterName, householdName, inviteURL, expiresAt)
+	return args.Error(0)
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================

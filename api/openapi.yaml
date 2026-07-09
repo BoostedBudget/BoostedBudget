@@ -1,5 +1,46 @@
 components:
   schemas:
+    AcceptInviteRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptInviteRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        consent:
+          description: Explicit consent to share accounts with the household
+          type: boolean
+        hidden_account_ids:
+          description: user_account IDs (must be the caller's own) to keep private instead of sharing
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - consent
+      type: object
+    AcceptInviteResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AcceptInviteResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        household_id:
+          type: string
+        member:
+          $ref: "#/components/schemas/HouseholdMember"
+      required:
+        - household_id
+        - member
+      type: object
     AcceptTransferSuggestionInputBody:
       additionalProperties: false
       properties:
@@ -2189,6 +2230,59 @@ components:
       required:
         - name
       type: object
+    CreateHouseholdRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateHouseholdRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        name:
+          description: Household display name
+          maxLength: 255
+          minLength: 1
+          type: string
+      required:
+        - name
+      type: object
+    CreateInviteRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateInviteRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          description: Email address to invite
+          format: email
+          type: string
+      required:
+        - email
+      type: object
+    CreateInviteResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/CreateInviteResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        invite:
+          $ref: "#/components/schemas/HouseholdInvite"
+        invite_link:
+          type: string
+      required:
+        - invite
+        - invite_link
+      type: object
     CreateMCPRecipeRequest:
       additionalProperties: false
       properties:
@@ -2992,6 +3086,45 @@ components:
         - transactions
         - limit
       type: object
+    GetInvitePreviewResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetInvitePreviewResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        expires_at:
+          type: string
+        household_name:
+          type: string
+        invitee_email:
+          type: string
+      required:
+        - household_name
+        - invitee_email
+        - expires_at
+      type: object
+    GetMyHouseholdResponseBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/GetMyHouseholdResponseBody.json
+          format: uri
+          readOnly: true
+          type: string
+        household:
+          $ref: "#/components/schemas/Household"
+        summary:
+          $ref: "#/components/schemas/HouseholdEntitlementSummary"
+      required:
+        - household
+        - summary
+      type: object
     GetPaymentFailuresOutputBody:
       additionalProperties: false
       properties:
@@ -3198,6 +3331,35 @@ components:
         - security_id
         - quantity
       type: object
+    Household:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/Household.json
+          format: uri
+          readOnly: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        owner_user_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - owner_user_id
+        - name
+        - created_at
+        - updated_at
+      type: object
     HouseholdEntitlementSummary:
       additionalProperties: false
       properties:
@@ -3230,6 +3392,104 @@ components:
         - seats_pending
         - is_owner
         - source
+      type: object
+    HouseholdInvite:
+      additionalProperties: false
+      properties:
+        accepted_at:
+          format: date-time
+          type: string
+        accepted_user_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        household_id:
+          type: string
+        id:
+          type: string
+        invitee_email:
+          type: string
+        inviter_user_id:
+          type: string
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - household_id
+        - inviter_user_id
+        - invitee_email
+        - status
+        - expires_at
+        - created_at
+        - updated_at
+      type: object
+    HouseholdMember:
+      additionalProperties: false
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        household_id:
+          type: string
+        id:
+          type: string
+        joined_at:
+          format: date-time
+          type: string
+        prior_subscription_status:
+          type: string
+        prior_subscription_tier:
+          type: string
+        removed_at:
+          format: date-time
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - household_id
+        - user_id
+        - role
+        - status
+        - joined_at
+        - created_at
+        - updated_at
+      type: object
+    HouseholdMemberView:
+      additionalProperties: false
+      properties:
+        avatar_url:
+          type: string
+        display_name:
+          type: string
+        joined_at:
+          format: date-time
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        user_id:
+          type: string
+      required:
+        - user_id
+        - role
+        - status
+        - joined_at
       type: object
     IncomeByType:
       additionalProperties: false
@@ -6163,6 +6423,24 @@ components:
           type: string
         parent_pfc_primary:
           type: string
+      type: object
+    UpdateHouseholdNameRequestBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/UpdateHouseholdNameRequestBody.json
+          format: uri
+          readOnly: true
+          type: string
+        name:
+          description: New household display name
+          maxLength: 255
+          minLength: 1
+          type: string
+      required:
+        - name
       type: object
     UpdateMCPRecipeRequest:
       additionalProperties: false
@@ -10389,6 +10667,198 @@ paths:
       summary: Get available widget types
       tags:
         - Dashboard
+  /api/v1/households:
+    post:
+      description: Creates a new household with the caller as owner.
+      operationId: createHousehold
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHouseholdRequestBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Household"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Create a household
+      tags:
+        - Household
+  /api/v1/households/invites/{token}:
+    get:
+      description: Unauthenticated — the token is the credential. Metadata-only; does not list accounts.
+      operationId: getHouseholdInvitePreview
+      parameters:
+        - description: Raw invite token from the invite link
+          in: path
+          name: token
+          required: true
+          schema:
+            description: Raw invite token from the invite link
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetInvitePreviewResponseBody"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Preview a household invite
+      tags:
+        - Household
+  /api/v1/households/invites/{token}/accept:
+    post:
+      operationId: acceptHouseholdInvite
+      parameters:
+        - description: Raw invite token from the invite link
+          in: path
+          name: token
+          required: true
+          schema:
+            description: Raw invite token from the invite link
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInviteRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptInviteResponseBody"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Accept a household invite
+      tags:
+        - Household
+  /api/v1/households/invites/{token}/decline:
+    post:
+      operationId: declineHouseholdInvite
+      parameters:
+        - description: Raw invite token from the invite link
+          in: path
+          name: token
+          required: true
+          schema:
+            description: Raw invite token from the invite link
+            type: string
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Decline a household invite
+      tags:
+        - Household
+  /api/v1/households/me:
+    delete:
+      description: Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability.
+      operationId: deleteHousehold
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Disband the household
+      tags:
+        - Household
+    get:
+      operationId: getMyHousehold
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetMyHouseholdResponseBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get the caller's household
+      tags:
+        - Household
+    patch:
+      operationId: updateHouseholdName
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHouseholdNameRequestBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Household"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Rename the household
+      tags:
+        - Household
   /api/v1/households/me/entitlement:
     get:
       description: Returns the authenticated user's effective subscription tier, seat counts, and coverage source, accounting for household membership.
@@ -10409,6 +10879,132 @@ paths:
       security:
         - clerk: []
       summary: Get effective household entitlement
+      tags:
+        - Household
+  /api/v1/households/me/invites:
+    get:
+      operationId: listHouseholdInvites
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/HouseholdInvite"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List pending invites
+      tags:
+        - Household
+    post:
+      operationId: createHouseholdInvite
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequestBody"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateInviteResponseBody"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Invite a member by email
+      tags:
+        - Household
+  /api/v1/households/me/invites/{id}:
+    delete:
+      operationId: revokeHouseholdInvite
+      parameters:
+        - description: Invite ID to revoke
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Invite ID to revoke
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Revoke a pending invite
+      tags:
+        - Household
+  /api/v1/households/me/members:
+    get:
+      operationId: listHouseholdMembers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/HouseholdMemberView"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List active household members
+      tags:
+        - Household
+  /api/v1/households/me/members/{userId}:
+    delete:
+      operationId: removeHouseholdMember
+      parameters:
+        - description: ID of the member to remove
+          in: path
+          name: userId
+          required: true
+          schema:
+            description: ID of the member to remove
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Remove a member or self-leave
       tags:
         - Household
   /api/v1/investments/holdings:

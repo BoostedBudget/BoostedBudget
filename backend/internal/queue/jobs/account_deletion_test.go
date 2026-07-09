@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -43,6 +44,12 @@ func (m *MockDeletionService) SetPlaidCleanupService(svc services.PlaidItemClean
 }
 
 func (m *MockDeletionService) SetPaddleCleanupService(svc services.PaddleDeletionCleaner) {}
+
+// SetHouseholdReader/SetHouseholdInviteRevoker (#1367 — Phase 3) are not exercised by
+// these account-deletion job tests; stubbed to satisfy the expanded interface.
+func (m *MockDeletionService) SetHouseholdReader(r services.HouseholdReader)               {}
+func (m *MockDeletionService) SetHouseholdInviteRevoker(r services.HouseholdInviteRevoker) {}
+func (m *MockDeletionService) SetDB(db repository.DB)                                      {}
 
 func (m *MockDeletionService) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)

@@ -61,6 +61,18 @@ func NewHouseholdEntitlementService(
 // has lost active coverage (past_due/cancelled/inactive), in which case the member falls
 // back to their own tier. Real repository/lookup errors propagate; the caller
 // (SubscriptionService) decides the fail-open policy.
+//
+// Precedence (ratified decision — Gap Analysis Round 2, GT-2, #1367): while the owner is
+// active, household coverage ALWAYS wins over a covered member's own
+// users.manual_tier_override — an admin comp does not stack with, nor take priority over,
+// free household coverage. This was previously just the mechanical result of Phase 2's
+// implementation order (never an explicit product decision — see the deferred-from-Phase-2
+// comment on #1367); it is now locked in as intended behavior and covered by
+// TestResolveEffectiveEntitlement_MemberManualOverride_LosesToActiveHouseholdCoverage. The
+// member's own override still applies as soon as the owner lapses (the existing
+// owner-read-only fallback below composes with it for free, since ComputeEffectiveTier()
+// already resolves the override) — see the sibling
+// TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses.
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
 	own := domain.EffectiveEntitlement{
 		Tier:   user.ComputeEffectiveTier(),
@@ -97,6 +109,24 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		PayerUserID: ent.PayerUserID,
 		HouseholdID: ent.HouseholdID,
 	}, nil
+}
+
+// IsCoveredByHousehold reports whether userID is currently covered by an active
+// household plan — i.e. ResolveEffectiveEntitlement would resolve them to
+// source=household. Used by the read-only middleware (#1367 — Phase 3) so a covered
+// member whose own subscription_status is itself read-only (never mutated while
+// covered) isn't locked out of the app. Reuses ResolveEffectiveEntitlement rather than
+// re-deriving the owner-read-only fallback logic.
+func (s *HouseholdEntitlementService) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	user, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	eff, err := s.ResolveEffectiveEntitlement(ctx, user)
+	if err != nil {
+		return false, err
+	}
+	return eff.Source == domain.EntitlementSourceHousehold, nil
 }
 
 // GetEntitlementSummary composes the resolved entitlement with household seat counts for
