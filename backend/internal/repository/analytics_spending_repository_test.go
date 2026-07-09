@@ -99,6 +99,38 @@ func TestGetSpendingByCategory(t *testing.T) {
 	})
 }
 
+// TestGetSpendingByCategoryHousehold_SingleRoundTrip closes gap G2 (issue's explicit ask:
+// "verify via query count in integration test"). pgxmock's ExpectationsWereMet fails if the
+// code under test issues more or fewer queries than expected — exactly one ExpectQuery here
+// proves the household CTE fan-out is a single SQL round trip, not N+1 across household
+// accounts/members.
+func TestGetSpendingByCategoryHousehold_SingleRoundTrip(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	userID := "owner-1"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC),
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   "hh-1",
+			MemberUserIDs: []string{"owner-1", "member-2"},
+		},
+	}
+
+	rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+		AddRow("FOOD_AND_DRINK", "Food and Drink", 150.0, 3)
+	// Args: requestingUserID, householdID, memberUserIDs ($1-$3 via householdScopeArgs),
+	// plus StartDate/EndDate ($4-$5) — see getSpendingByCategoryHousehold.
+	mock.ExpectQuery(`WITH household_accounts`).
+		WithArgs(userID, filters.HouseholdScope.HouseholdID, filters.HouseholdScope.MemberUserIDs, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetSpendingByCategory(context.Background(), userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet(), "household spending-by-category must be exactly one SQL round trip")
+}
+
 func TestGetSpendingByMerchant(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
