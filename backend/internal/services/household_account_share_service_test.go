@@ -49,6 +49,33 @@ func TestHouseholdService_SetAccountShareVisibility_AccountNotOwned_RollsBack(t 
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
+// TestHouseholdService_SetAccountShareVisibility_MalformedID_ReturnsAccountNotOwned documents,
+// as an explicit regression test (#1368 Phase 4 deeper-review finding), that a garbage/malformed
+// account ID can never reach a SQL UUID-typed column: the target ID is only ever compared in Go
+// against the caller's real fingerprints (string equality), so this fails closed to
+// ErrAccountNotOwned/403 exactly like a well-formed-but-foreign ID — never a 500 or a
+// UUID-cast error. Same code path as AccountNotOwned above; kept as its own test purely so the
+// "malformed input is safe" guarantee is documented and can't silently regress.
+func TestHouseholdService_SetAccountShareVisibility_MalformedID_ReturnsAccountNotOwned(t *testing.T) {
+	t.Parallel()
+	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
+	defer pool.Close()
+	now := time.Now()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
+			AddRow("acct-1", "inst-blind", nil))
+	pool.ExpectRollback()
+
+	_, err := svc.SetAccountShareVisibility(context.Background(), "caller-1", "not-a-uuid-at-all", domain.ShareVisibilityHidden)
+	require.ErrorIs(t, err, domain.ErrAccountNotOwned)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
 func TestHouseholdService_SetAccountShareVisibility_Share_Success(t *testing.T) {
 	t.Parallel()
 	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})

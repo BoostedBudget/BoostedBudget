@@ -129,7 +129,10 @@ func TestHouseholdShareRepository_SetShareVisibility_ConcurrentToggle_Integratio
 
 	const contenders = 10
 	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	start := make(chan struct{})
 	errs := make([]error, contenders)
+	ready.Add(contenders)
 	for i := 0; i < contenders; i++ {
 		wg.Add(1)
 		visibility := domain.ShareVisibilityShared
@@ -138,10 +141,14 @@ func TestHouseholdShareRepository_SetShareVisibility_ConcurrentToggle_Integratio
 		}
 		go func(idx int, v domain.ShareVisibility) {
 			defer wg.Done()
+			ready.Done()
+			<-start // block until every goroutine has reached this point, forcing genuine overlap
 			_, err := repo.SetShareVisibility(ctx, hh, ua, nil, v)
 			errs[idx] = err
 		}(i, visibility)
 	}
+	ready.Wait() // all 10 goroutines are now parked on <-start
+	close(start) // release them all at once
 	wg.Wait()
 
 	for i, err := range errs {
