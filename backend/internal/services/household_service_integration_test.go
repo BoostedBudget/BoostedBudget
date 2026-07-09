@@ -814,3 +814,82 @@ func TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember_
 	require.NoError(t, err)
 	require.Equal(t, 0, activeCount, "no active share may survive for a removed member's account, regardless of interleaving")
 }
+
+// TestHouseholdServiceIntegration_SetAccountShareVisibility_CrossMemberIsolation closes a
+// #1368 (Phase 4) test-coverage gap found on a deeper re-review: the ownership guard in
+// SetAccountShareVisibility (household_account_share_service.go) is otherwise only proven via
+// pgxmock with a stubbed fingerprint list, and ListMyAccountShares' housemate-exclusion is only
+// proven with a single user in the household. This is the real-Postgres, two-real-members proof
+// that one household member genuinely cannot see or toggle another member's account sharing —
+// the IDOR-sensitive boundary a mock can't fully validate (see feedback_pgxmock_integration_coverage.md).
+func TestHouseholdServiceIntegration_SetAccountShareVisibility_CrossMemberIsolation(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	member := insertIntegrationTestUser(t, f.profileRepo, "member-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, member.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	_, err = f.pool.Exec(ctx, `
+		INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+	`, household.ID, member.ID)
+	require.NoError(t, err)
+
+	insertAccount := func(userID string) string {
+		var acctID string
+		err := f.pool.QueryRow(ctx, `
+			INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx)
+			VALUES ($1, 'enc_inst', 'blind_inst_'||gen_random_uuid()::text)
+			RETURNING id::text
+		`, userID).Scan(&acctID)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			f.pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, acctID) //nolint:errcheck
+		})
+		return acctID
+	}
+	ownerAcctID := insertAccount(owner.ID)
+	memberAcctID := insertAccount(member.ID)
+
+	// Owner (an active member of the same household) must not be able to toggle the other
+	// member's account — real SQL, not a stubbed fingerprint list.
+	_, err = f.svc.SetAccountShareVisibility(ctx, owner.ID, memberAcctID, domain.ShareVisibilityHidden)
+	require.ErrorIs(t, err, domain.ErrAccountNotOwned)
+
+	// And the reverse direction.
+	_, err = f.svc.SetAccountShareVisibility(ctx, member.ID, ownerAcctID, domain.ShareVisibilityHidden)
+	require.ErrorIs(t, err, domain.ErrAccountNotOwned)
+
+	// Neither call should have created a share row for the account it didn't own.
+	var shareCount int
+	err = f.pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1`, household.ID).Scan(&shareCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, shareCount, "a denied cross-member PATCH must not leave any share row behind")
+
+	// GET must return only the caller's own account, never the housemate's.
+	ownerViews, err := f.svc.ListMyAccountShares(ctx, owner.ID)
+	require.NoError(t, err)
+	ownerIDs := make([]string, len(ownerViews))
+	for i, v := range ownerViews {
+		ownerIDs[i] = v.UserAccountID
+	}
+	require.Contains(t, ownerIDs, ownerAcctID)
+	require.NotContains(t, ownerIDs, memberAcctID, "owner's account list must never leak a housemate's account")
+
+	memberViews, err := f.svc.ListMyAccountShares(ctx, member.ID)
+	require.NoError(t, err)
+	memberIDs := make([]string, len(memberViews))
+	for i, v := range memberViews {
+		memberIDs[i] = v.UserAccountID
+	}
+	require.Contains(t, memberIDs, memberAcctID)
+	require.NotContains(t, memberIDs, ownerAcctID, "member's account list must never leak the owner's account")
+}

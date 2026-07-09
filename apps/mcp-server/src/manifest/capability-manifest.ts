@@ -243,6 +243,13 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP),
   excluded('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP),
 
+  // ── Household (Issue #1368: account sharing grants, Phase 4) ──────────────
+  // Reading the caller's own sharing state is safe; toggling what a household member's
+  // financial account exposes to other members is a privacy/consent decision — same
+  // deliberate-in-app-action policy as the rest of the household membership/consent surface.
+  read('listMyAccountShares'),
+  excluded('setHouseholdShareVisibility', REASON_HOUSEHOLD_INAPP),
+
   // ── Notifications ────────────────────────────────────────────────────────
   read('getNotifications'),
   read('getUnreadNotificationCount'),
