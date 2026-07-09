@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -252,6 +253,98 @@ func TestTrialService_ExpireTrial_DisconnectsPlaidItems(t *testing.T) {
 	require.NoError(t, err)
 	// Verify Plaid cleanup was called
 	plaidCleanup.AssertCalled(t, "DisconnectAllUserItems", ctx, userID)
+}
+
+// ─── #1367 — Phase 3: covered household members are exempt from trial expiry ──
+
+type mockHouseholdCheckerForTrial struct{ mock.Mock }
+
+func (m *mockHouseholdCheckerForTrial) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func TestTrialService_ExpireTrial_CoveredByHousehold_Skipped(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	checker := &mockHouseholdCheckerForTrial{}
+	service.SetHouseholdChecker(checker)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, userID).Return(true, nil)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+}
+
+func TestTrialService_ExpireTrial_NotCoveredByHousehold_Proceeds(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	checker := &mockHouseholdCheckerForTrial{}
+	service.SetHouseholdChecker(checker)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, userID).Return(false, nil)
+	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+}
+
+func TestTrialService_ExpireTrial_NoHouseholdCheckerConfigured_Proceeds(t *testing.T) {
+	// Backward compatibility: no checker wired (nil) must behave exactly as before.
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
+
+	err := service.ExpireTrial(ctx, userID)
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+}
+
+func TestTrialService_ExpireTrial_HouseholdCheckFails_SkipsDefensivelyButPropagatesError(t *testing.T) {
+	// On an uncertain coverage check, fail closed on the destructive action (skip expiry
+	// this run) rather than risk wrongly locking out an actually-covered member — but
+	// DO propagate the error (Codex review, Medium finding 6) so the daily job's
+	// error/retry counting reflects reality instead of silently logging success for a
+	// user whose trial was never actually processed. The job retries, so this self-heals
+	// once the coverage check starts working again.
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	checker := &mockHouseholdCheckerForTrial{}
+	service.SetHouseholdChecker(checker)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, userID).Return(false, errors.New("lookup failed"))
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.Error(t, err, "the failure must be visible to the caller's error/retry accounting, not silently swallowed")
+	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
 func TestTrialService_CanGrantTrial_True(t *testing.T) {

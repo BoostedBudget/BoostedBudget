@@ -1,0 +1,4 @@
+-- Rollback for 000112_household_entitlement_invariants
+DROP INDEX IF EXISTS uq_subscription_entitlements_active_user;
+ALTER TABLE subscription_entitlements DROP CONSTRAINT IF EXISTS fk_subscription_entitlements_payer_is_owner;
+ALTER TABLE households DROP CONSTRAINT IF EXISTS uq_households_id_owner_user_id;

@@ -96,10 +96,14 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    // 177 total ops − 50 excluded = 127 allowed; mirrors capability-manifest.test.ts
+    // 190 total ops − 58 excluded = 132 allowed; mirrors capability-manifest.test.ts
     // +7 from #957: getMerchants, getMerchantOverrides, getMerchantDuplicateSuggestions,
     //               setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides,
     //               mergeMerchants
-    expect(count).toBe(127)
+    // +1 from #1366: getHouseholdEntitlement
+    // +12 from #1367 Phase 3 (Gap Analysis Round 2, GT-4): +4 allowed (getMyHousehold,
+    //                listHouseholdMembers, listHouseholdInvites, getHouseholdInvitePreview),
+    //                +8 excluded (household mutations — deliberate in-app action)
+    expect(count).toBe(132)
   })
 })
