@@ -222,6 +222,67 @@ func (s *HouseholdAccountShare) Validate() error {
 	return nil
 }
 
+// ─── Phase 3 sentinel errors ─────────────────────────────────────────────────
+//
+// Returned by repository/service write paths (#1367) and mapped to HTTP status
+// codes in internal/huma/errors/mapper.go. Repositories translate Postgres 23505
+// constraint violations to these sentinels so the mapper never sees a raw
+// constraint error.
+var (
+	ErrHouseholdNotFound         = errors.New("household not found")
+	ErrAlreadyOwnsHousehold      = errors.New("user already owns a household")
+	ErrNotHouseholdOwner         = errors.New("user is not the household owner")
+	ErrHouseholdHasActiveMembers = errors.New("household has active non-owner members")
+	ErrHouseholdSeatsFull        = errors.New("no seats available on this plan")
+	ErrInviteNotFound            = errors.New("invite not found")
+	ErrInviteNotPending          = errors.New("invite is not pending")
+	ErrInviteExpired             = errors.New("invite has expired")
+	ErrInviteEmailMismatch       = errors.New("invite was sent to a different email address")
+	ErrInvitePendingExists       = errors.New("a pending invite already exists for this email")
+	ErrCannotInviteSelf          = errors.New("cannot invite yourself")
+	ErrAlreadyInHousehold        = errors.New("user already belongs to a household")
+	ErrInvalidConsent            = errors.New("consent is required")
+	ErrMemberNotFound            = errors.New("member not found")
+	ErrCannotRemoveOwner         = errors.New("cannot remove the household owner")
+	ErrOwnerPlanInactive         = errors.New("household owner's plan is not currently active")
+
+	// ErrInviteeHasActivePaidSubscription is returned when an invitee has a live Paddle
+	// billing relationship (active/trialing/past_due). Immediate free household coverage
+	// would create paid-and-covered overlap, whose only fair unwind is a partial refund —
+	// unsupported. Callers should surface the invitee's SubscriptionEndsAt as an advisory
+	// eligibility hint. See #1367 decision #6 and the Phase 7 (#1371) scheduled-join follow-up.
+	ErrInviteeHasActivePaidSubscription = errors.New("invitee has an active paid subscription")
+
+	// ErrAlreadyCoveredByHousehold is returned by the checkout guard when a caller already
+	// has an active source='household' entitlement and attempts to start their own paid
+	// subscription. See #1367 decision #9.
+	ErrAlreadyCoveredByHousehold = errors.New("user is already covered by a household plan")
+)
+
+// InviteeHasActivePaidSubscriptionError wraps ErrInviteeHasActivePaidSubscription with
+// the invitee's advisory eligibility date, so the HTTP layer can tell the client when
+// they'll be able to join (#1367 decision #6, Codex review Medium finding 5).
+// EligibleAfter may be nil — Paddle webhooks don't always keep SubscriptionEndsAt
+// current, so callers must treat this as a hint, never authoritative. errors.Is still
+// matches the base sentinel via Unwrap.
+type InviteeHasActivePaidSubscriptionError struct {
+	EligibleAfter *time.Time
+}
+
+func (e *InviteeHasActivePaidSubscriptionError) Error() string {
+	return ErrInviteeHasActivePaidSubscription.Error()
+}
+
+func (e *InviteeHasActivePaidSubscriptionError) Unwrap() error {
+	return ErrInviteeHasActivePaidSubscription
+}
+
+// HouseholdShareConsentVersion is the consent-copy version recorded on every
+// household_share_consents row written by the accept flow. Bump this constant
+// whenever the consent language changes materially. Finalized wording/versioning
+// scheme is owned by legal issue #1372.
+const HouseholdShareConsentVersion = "household-share-v1"
+
 // ─── HouseholdShareConsent ───────────────────────────────────────────────────
 
 // HouseholdShareConsent is an append-only audit record capturing the moment a user

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -35,6 +35,43 @@ type DeletionService interface {
 
 	// SetAnalytics sets the analytics client for capturing deletion lifecycle events
 	SetAnalytics(a phclient.Analytics)
+
+	// SetHouseholdReader wires the household-read capability used to block owner
+	// deletion while active non-owner members exist (#1367 — Phase 3). Mirrors the
+	// SetPlaidCleanupService/SetPaddleCleanupService pattern. Should always be wired in
+	// production (main.go); nil-safe (skips the guard) only to avoid breaking callers
+	// that construct DeletionService directly in tests unrelated to households.
+	SetHouseholdReader(r HouseholdReader)
+
+	// SetHouseholdInviteRevoker wires the capability to revoke a household's pending
+	// invites when an owner's deletion proceeds, so a grace-period accept cannot join a
+	// doomed household. Nil-safe (skipped if unset).
+	SetHouseholdInviteRevoker(r HouseholdInviteRevoker)
+
+	// SetDB wires transaction capability so the household owner-guard (lock, re-check,
+	// revoke invites, mark-for-deletion) can run atomically under the SAME household row
+	// lock AcceptInvite uses — closing a race where an in-flight accept commits between
+	// this guard's check and MarkForDeletion (Codex review finding). Nil-safe: when unset
+	// (or HouseholdReader/HouseholdInviteRevoker are unset), falls back to the
+	// non-transactional sequence.
+	SetDB(db repository.DB)
+}
+
+// HouseholdReader is the narrow household-read capability DeletionService needs.
+// repository.HouseholdRepository satisfies this structurally.
+type HouseholdReader interface {
+	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
+	CountActiveMembers(ctx context.Context, householdID string) (int, error)
+	// LockHouseholdForUpdate takes a row lock on the household, used to hold the
+	// household lock through the mark-for-deletion write (see SetDB doc).
+	LockHouseholdForUpdate(ctx context.Context, householdID string) (ownerUserID string, err error)
+}
+
+// HouseholdInviteRevoker is the narrow capability DeletionService needs to revoke a
+// household's pending invites. repository.HouseholdInviteRepository satisfies this
+// structurally.
+type HouseholdInviteRevoker interface {
+	RevokeAllPendingForHousehold(ctx context.Context, householdID string) error
 }
 
 // deletionService implements DeletionService
@@ -46,6 +83,9 @@ type deletionService struct {
 	plaidCleanupSvc  PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
 	paddleCleanupSvc PaddleDeletionCleaner   // Issue #1006: nil if Paddle not configured
 	analytics        phclient.Analytics      // Optional PostHog analytics client
+	householdReader  HouseholdReader         // #1367 — Phase 3: nil skips the owner guard
+	inviteRevoker    HouseholdInviteRevoker  // #1367 — Phase 3: nil skips invite revocation
+	db               repository.DB           // #1367 — Phase 3: nil falls back to non-transactional guard
 	gracePeriodDays  int
 	tokenSecret      string
 }
@@ -103,9 +143,45 @@ func (s *deletionService) RequestDeletion(ctx context.Context, userID, email str
 		return "", time.Time{}, fmt.Errorf("failed to generate cancellation token: %w", err)
 	}
 
-	// Mark user for deletion in database
-	if err := s.profileRepo.MarkForDeletion(ctx, userID, scheduledAt); err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to mark user for deletion: %w", err)
+	// #1367 — Phase 3: block owner deletion while active non-owner members exist, and
+	// revoke the household's pending invites when deletion proceeds so a grace-period
+	// accept cannot join a doomed household. When s.db is wired, the whole
+	// lock/check/revoke/mark-for-deletion sequence runs in ONE transaction (Codex review,
+	// High finding 4) — closing a race where an in-flight AcceptInvite commits a new
+	// member between this guard's check and MarkForDeletion. Falls back to the
+	// non-transactional sequence (still correct, just not atomic against a concurrent
+	// accept) when db isn't wired. Full disband-or-transfer UX is Phase 7 (#1371); this
+	// is the deletion-side invariant.
+	if s.db != nil {
+		if err := s.requestDeletionTransactional(ctx, userID, scheduledAt); err != nil {
+			return "", time.Time{}, err
+		}
+	} else {
+		if s.householdReader != nil {
+			household, isOwner, found, err := s.householdReader.GetHouseholdForUser(ctx, userID)
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("failed to check household ownership: %w", err)
+			}
+			if found && isOwner {
+				activeCount, err := s.householdReader.CountActiveMembers(ctx, household.ID)
+				if err != nil {
+					return "", time.Time{}, fmt.Errorf("failed to count household members: %w", err)
+				}
+				if activeCount > 1 {
+					return "", time.Time{}, domain.ErrHouseholdHasActiveMembers
+				}
+				if s.inviteRevoker != nil {
+					if err := s.inviteRevoker.RevokeAllPendingForHousehold(ctx, household.ID); err != nil {
+						return "", time.Time{}, fmt.Errorf("failed to revoke pending household invites: %w", err)
+					}
+				}
+			}
+		}
+
+		// Mark user for deletion in database
+		if err := s.profileRepo.MarkForDeletion(ctx, userID, scheduledAt); err != nil {
+			return "", time.Time{}, fmt.Errorf("failed to mark user for deletion: %w", err)
+		}
 	}
 
 	// Send confirmation email with cancellation link
@@ -212,6 +288,62 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	return nil
 }
 
+// requestDeletionTransactional runs the household owner-guard and MarkForDeletion
+// atomically under one transaction, using FRESH tx-scoped repositories (not
+// s.householdReader/s.inviteRevoker, which are pool-bound) so the household row lock
+// is actually held through the mark-for-deletion write. #1367 — Phase 3, Codex review
+// High finding 4.
+//
+// repository.NewHouseholdInviteRepository and repository.NewProfileRepository normally
+// require a *appcrypto.FieldEncryptor, but RevokeAllPendingForHousehold and
+// MarkForDeletion never touch an encrypted column (both are pure status/timestamp
+// writes) — passing nil for this single, locally-scoped use is safe.
+func (s *deletionService) requestDeletionTransactional(ctx context.Context, userID string, scheduledAt time.Time) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+
+	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, userID)
+	if cerr != nil {
+		cerr = fmt.Errorf("failed to check household ownership: %w", cerr)
+		return cerr
+	}
+	if found && isOwner {
+		if _, cerr = hhRepo.LockHouseholdForUpdate(ctx, household.ID); cerr != nil {
+			cerr = fmt.Errorf("failed to lock household: %w", cerr)
+			return cerr
+		}
+		activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+		if err != nil {
+			cerr = fmt.Errorf("failed to count household members: %w", err)
+			return cerr
+		}
+		if activeCount > 1 {
+			cerr = domain.ErrHouseholdHasActiveMembers
+			return cerr
+		}
+		if cerr = repository.NewHouseholdInviteRepository(tx, nil).RevokeAllPendingForHousehold(ctx, household.ID); cerr != nil {
+			cerr = fmt.Errorf("failed to revoke pending household invites: %w", cerr)
+			return cerr
+		}
+	}
+
+	if cerr = repository.NewProfileRepository(tx, nil).MarkForDeletion(ctx, userID, scheduledAt); cerr != nil {
+		cerr = fmt.Errorf("failed to mark user for deletion: %w", cerr)
+		return cerr
+	}
+
+	return tx.Commit(ctx)
+}
+
 // generateCancellationToken generates a JWT token for cancellation link
 func (s *deletionService) generateCancellationToken(userID, email string, expiresAt time.Time) (string, error) {
 	claims := &tokenClaims{
@@ -251,6 +383,22 @@ func (s *deletionService) SetPaddleCleanupService(svc PaddleDeletionCleaner) {
 // SetAnalytics sets the analytics client for capturing deletion lifecycle events
 func (s *deletionService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetHouseholdReader wires the household owner-deletion guard. #1367 — Phase 3.
+func (s *deletionService) SetHouseholdReader(r HouseholdReader) {
+	s.householdReader = r
+}
+
+// SetHouseholdInviteRevoker wires pending-invite revocation on owner deletion.
+// #1367 — Phase 3.
+func (s *deletionService) SetHouseholdInviteRevoker(r HouseholdInviteRevoker) {
+	s.inviteRevoker = r
+}
+
+// SetDB wires transaction capability for the household owner-guard. #1367 — Phase 3.
+func (s *deletionService) SetDB(db repository.DB) {
+	s.db = db
 }
 
 // cleanupPaddleResources cancels subscriptions and archives customer for GDPR compliance.

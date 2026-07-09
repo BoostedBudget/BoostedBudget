@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	humaerrors "github.com/maxnussbaum/BoostedBudget/internal/huma/errors"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
@@ -60,7 +61,10 @@ type CancelDeletionResponseBody struct {
 func (h *DeletionHandler) RequestDeletion(ctx context.Context, input *RequestDeletionInput) (*RequestDeletionOutput, error) {
 	cancellationToken, scheduledAt, err := h.service.RequestDeletion(ctx, input.UserID, input.Email)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("Failed to request account deletion")
+		// #1367: was a hard-coded 500 for every error, which swallowed the household
+		// owner-deletion guard's 409. Route through the shared mapper so domain errors
+		// surface their correct status.
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	return &RequestDeletionOutput{

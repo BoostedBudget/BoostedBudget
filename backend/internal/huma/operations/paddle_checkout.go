@@ -15,13 +15,25 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
+// checkoutEntitlementReader is the narrow capability the checkout handler needs to
+// detect EFFECTIVE household coverage (#1367 decision #9). Deliberately checks
+// resolved coverage, not the raw subscription_entitlements row: a raw source='household'
+// row can outlive actual coverage (e.g. the owner has gone past_due/cancelled — Phase 7
+// owns cleaning that row up), and blocking checkout on the raw row would trap a
+// no-longer-covered member who legitimately needs to self-subscribe (Codex review
+// finding). Satisfied structurally by *services.HouseholdEntitlementService.
+type checkoutEntitlementReader interface {
+	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
+}
+
 // PaddleCheckoutHandler handles Paddle checkout and subscription management operations.
 type PaddleCheckoutHandler struct {
-	paddleService services.PaddleService
-	profileRepo   repository.ProfileRepository
-	config        *config.Config
-	tierConfig    *config.TierConfig
-	logger        *slog.Logger
+	paddleService   services.PaddleService
+	profileRepo     repository.ProfileRepository
+	config          *config.Config
+	tierConfig      *config.TierConfig
+	logger          *slog.Logger
+	entitlementRepo checkoutEntitlementReader // #1367 — Phase 3: nil skips the covered-member guard
 }
 
 // PaddleCheckoutHandlerDeps contains dependencies for PaddleCheckoutHandler.
@@ -31,6 +43,13 @@ type PaddleCheckoutHandlerDeps struct {
 	Config        *config.Config
 	TierConfig    *config.TierConfig
 	Logger        *slog.Logger
+	// EntitlementRepo is optional (nil-safe) — when set, blocks a caller EFFECTIVELY
+	// covered by a household plan from starting their own Paddle checkout (#1367
+	// decision #9: prevents paid+covered overlap / refund liability). Checks resolved
+	// coverage, not the raw entitlement row, so a member is freed to self-subscribe the
+	// moment their household owner stops actually covering them. Should always be wired
+	// in production; nil only to avoid breaking call sites unrelated to households.
+	EntitlementRepo checkoutEntitlementReader
 }
 
 // NewPaddleCheckoutHandler creates a new PaddleCheckoutHandler instance.
@@ -40,11 +59,12 @@ func NewPaddleCheckoutHandler(deps PaddleCheckoutHandlerDeps) *PaddleCheckoutHan
 		logger = slog.Default()
 	}
 	return &PaddleCheckoutHandler{
-		paddleService: deps.PaddleService,
-		profileRepo:   deps.ProfileRepo,
-		config:        deps.Config,
-		tierConfig:    deps.TierConfig,
-		logger:        logger,
+		paddleService:   deps.PaddleService,
+		profileRepo:     deps.ProfileRepo,
+		config:          deps.Config,
+		tierConfig:      deps.TierConfig,
+		logger:          logger,
+		entitlementRepo: deps.EntitlementRepo,
 	}
 }
 
@@ -198,6 +218,21 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	user, err := h.profileRepo.GetUserByID(ctx, input.UserID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get user %s: %w", input.UserID, err))
+	}
+
+	// #1367 decision #9: block a caller already covered by a household plan from
+	// starting their own Paddle checkout. This is the dominant reverse-overlap path —
+	// a covered member's own subscription_status may itself be read-only/lapsed (it's
+	// never mutated while covered), so this must be checked independently of the
+	// active/trialing checks below.
+	if h.entitlementRepo != nil {
+		covered, err := h.entitlementRepo.IsCoveredByHousehold(ctx, user.ID)
+		if err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to check household coverage for user %s: %w", user.ID, err))
+		}
+		if covered {
+			return nil, humaerrors.LoggingMapError(ctx, domain.ErrAlreadyCoveredByHousehold)
+		}
 	}
 
 	// Prevent duplicate subscriptions

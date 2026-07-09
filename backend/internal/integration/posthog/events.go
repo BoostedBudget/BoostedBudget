@@ -3,10 +3,10 @@ package posthog
 // Backend analytics event name constants.
 const (
 	// Plaid sync events
-	EventAccountSynced    = "account_synced"
-	EventSyncCompleted    = "sync_completed"
-	EventSyncFailed       = "sync_failed"
-	EventWebhookReceived  = "webhook_received"
+	EventAccountSynced   = "account_synced"
+	EventSyncCompleted   = "sync_completed"
+	EventSyncFailed      = "sync_failed"
+	EventWebhookReceived = "webhook_received"
 
 	// Plaid investment sync events (Issue #659)
 	EventInvestmentHoldingsSynced     = "investment_holdings_synced"
@@ -18,12 +18,12 @@ const (
 	EventLiabilitySyncFailed = "liability_sync_failed"
 
 	// Paddle payment events
-	EventSubscriptionCreated    = "subscription_created"
-	EventSubscriptionCancelled  = "subscription_cancelled"
-	EventPaymentSucceeded       = "payment_succeeded"
-	EventPaymentFailed          = "payment_failed"
+	EventSubscriptionCreated   = "subscription_created"
+	EventSubscriptionCancelled = "subscription_cancelled"
+	EventPaymentSucceeded      = "payment_succeeded"
+	EventPaymentFailed         = "payment_failed"
 	// Issue #1006: Paddle cleanup failure during account deletion
-	EventPaddleCleanupFailed    = "paddle_cleanup_failed"
+	EventPaddleCleanupFailed = "paddle_cleanup_failed"
 
 	// Issue #898: Past-due dunning lifecycle events
 	// Fired when the daily job disconnects Plaid for a past_due user (at plaid_disconnect_days threshold).
@@ -32,11 +32,11 @@ const (
 	EventPastDueAutoCancelled = "past_due_auto_cancelled"
 
 	// User lifecycle events
-	EventUserRegistered     = "user_registered"
-	EventUserDeleted        = "user_deleted"
-	EventDeletionRequested  = "deletion_requested"
-	EventDeletionCancelled  = "deletion_cancelled"
-	EventEmailChanged       = "email_changed"
+	EventUserRegistered    = "user_registered"
+	EventUserDeleted       = "user_deleted"
+	EventDeletionRequested = "deletion_requested"
+	EventDeletionCancelled = "deletion_cancelled"
+	EventEmailChanged      = "email_changed"
 
 	// Boost and automation events
 	EventBoostTriggered             = "boost_triggered"
@@ -66,6 +66,14 @@ const (
 	EventMerchantOverrideCleared = "merchant_override_cleared"
 	EventMerchantsMerged         = "merchants_merged"
 	EventMerchantsBulkOverridden = "merchants_bulk_overridden"
+
+	// Household events (Issue #1367 — Phase 3: membership, invites & consent gate)
+	EventHouseholdCreated        = "household_created"
+	EventHouseholdDisbanded      = "household_disbanded"
+	EventHouseholdInviteSent     = "household_invite_sent"
+	EventHouseholdInviteAccepted = "household_invite_accepted"
+	EventHouseholdMemberRemoved  = "household_member_removed"
+	EventHouseholdMemberLeft     = "household_member_left"
 
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
