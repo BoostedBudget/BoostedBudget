@@ -94,6 +94,22 @@ func (m *mockHouseholdService) DeclineInvite(ctx context.Context, callerUserID, 
 func (m *mockHouseholdService) SetAnalytics(a phclient.Analytics)                         {}
 func (m *mockHouseholdService) SetMemberProfileResolver(r services.MemberProfileResolver) {}
 
+func (m *mockHouseholdService) ActiveMemberUserIDs(ctx context.Context, householdID string) ([]string, error) {
+	args := m.Called(ctx, householdID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *mockHouseholdService) ResolveScope(ctx context.Context, requestingUserID, scopeParam string) (*domain.HouseholdScope, error) {
+	args := m.Called(ctx, requestingUserID, scopeParam)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.HouseholdScope), args.Error(1)
+}
+
 func TestCreateHousehold_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
 	h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}

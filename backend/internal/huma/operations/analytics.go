@@ -19,12 +19,16 @@ import (
 // AnalyticsHandler handles analytics-related HTTP requests.
 // Issue #354: Cash Flow Analysis & Income/Expense Visualization
 type AnalyticsHandler struct {
-	service services.AnalyticsService
+	service      services.AnalyticsService
+	householdSvc services.HouseholdService
 }
 
-// NewAnalyticsHandler creates a new AnalyticsHandler instance.
-func NewAnalyticsHandler(service services.AnalyticsService) *AnalyticsHandler {
-	return &AnalyticsHandler{service: service}
+// NewAnalyticsHandler creates a new AnalyticsHandler instance. householdSvc resolves
+// `scope=household` requests into a validated domain.HouseholdScope (Issue #1369 —
+// Phase 5); it must never be nil in production wiring since every scoped endpoint below
+// depends on it.
+func NewAnalyticsHandler(service services.AnalyticsService, householdSvc services.HouseholdService) *AnalyticsHandler {
+	return &AnalyticsHandler{service: service, householdSvc: householdSvc}
 }
 
 // --- Input/Output Types ---
@@ -36,6 +40,7 @@ type GetCashFlowSummaryInput struct {
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetCashFlowSummaryOutput represents the response for getting cash flow summary.
@@ -51,6 +56,7 @@ type GetCashFlowHistoryInput struct {
 	Grouping         string `query:"grouping" doc:"Time grouping: daily, weekly, or monthly (auto-selected if not provided)"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetCashFlowHistoryOutput represents the response for getting cash flow history.
@@ -100,6 +106,7 @@ type GetSpendingByCategoryInput struct {
 	Category          string `query:"category" doc:"Primary category to drill into subcategories"`
 	CustomCategoryIDs string `query:"custom_category_ids" doc:"Comma-separated custom category UUIDs to scope the report (Issue #1203)"`
 	RollUp            string `query:"roll_up" doc:"When true, a parent custom category also includes its children (default true)"`
+	Scope             string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's."`
 }
 
 // GetSpendingByCategoryOutput represents the response for spending-by-category.
@@ -115,6 +122,7 @@ type GetSpendingByMerchantInput struct {
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 	Limit            int    `query:"limit" doc:"Maximum number of merchants to return (default 10)" default:"10"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetSpendingByMerchantOutput represents the response for spending-by-merchant.
@@ -129,6 +137,7 @@ type GetSpendingTrendsInput struct {
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetSpendingTrendsOutput represents the response for spending-trends.
@@ -195,6 +204,9 @@ func (h *AnalyticsHandler) GetCashFlowSummary(ctx context.Context, input *GetCas
 	if err != nil {
 		return nil, err
 	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
 
 	response, err := h.service.GetCashFlowSummary(ctx, input.UserID, *filters)
 	if err != nil {
@@ -209,6 +221,9 @@ func (h *AnalyticsHandler) GetCashFlowSummary(ctx context.Context, input *GetCas
 func (h *AnalyticsHandler) GetCashFlowHistory(ctx context.Context, input *GetCashFlowHistoryInput) (*GetCashFlowHistoryOutput, error) {
 	filters, err := parseCashFlowFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers, input.Grouping)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 
@@ -226,6 +241,9 @@ func (h *AnalyticsHandler) GetCashFlowHistory(ctx context.Context, input *GetCas
 func (h *AnalyticsHandler) GetSpendingByCategory(ctx context.Context, input *GetSpendingByCategoryInput) (*GetSpendingByCategoryOutput, error) {
 	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 	filters.Category = input.Category
@@ -267,6 +285,9 @@ func (h *AnalyticsHandler) GetSpendingByMerchant(ctx context.Context, input *Get
 	if err != nil {
 		return nil, err
 	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
 
 	limit := validateLimit(input.Limit, 10, 1000)
 
@@ -283,6 +304,9 @@ func (h *AnalyticsHandler) GetSpendingByMerchant(ctx context.Context, input *Get
 func (h *AnalyticsHandler) GetSpendingTrends(ctx context.Context, input *GetSpendingTrendsInput) (*GetSpendingTrendsOutput, error) {
 	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 
@@ -360,6 +384,7 @@ type GetTopExpenseInput struct {
 	inputs.AuthenticatedInput
 	StartDate string `query:"start_date" required:"true" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate   string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
+	Scope     string `query:"scope" enum:"personal,household" doc:"Must be omitted or 'personal' — this endpoint exposes a raw transaction ID and does not support household scope (Issue #1369 decision #5)"`
 }
 
 // GetTopExpenseOutput represents the response for GET /analytics/top-expense.
@@ -384,6 +409,9 @@ func (h *AnalyticsHandler) GetCategoryTotalForPeriod(ctx context.Context, input 
 
 // GetTopExpense handles GET /api/v1/analytics/top-expense requests.
 func (h *AnalyticsHandler) GetTopExpense(ctx context.Context, input *GetTopExpenseInput) (*GetTopExpenseOutput, error) {
+	if err := rejectHouseholdScope(input.Scope); err != nil {
+		return nil, err
+	}
 	startDate, endDate, err := dateutil.ParseDateRange(input.StartDate, input.EndDate)
 	if err != nil {
 		return nil, err
@@ -416,7 +444,10 @@ func (h *AnalyticsHandler) GetSavingsRateForPeriod(ctx context.Context, input *G
 		return nil, err
 	}
 
-	response, err := h.service.GetSavingsRateForPeriod(ctx, input.UserID, startDate, endDate)
+	// Standalone endpoint — not in the household-scoped set (Issue #1369 decision #5);
+	// always personal. Household scope is threaded only through GetFinancialSummary's
+	// internal fan-out call to this same service method.
+	response, err := h.service.GetSavingsRateForPeriod(ctx, input.UserID, startDate, endDate, nil)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -453,7 +484,10 @@ func (h *AnalyticsHandler) GetMonthOverMonthSpendingChange(ctx context.Context, 
 		return nil, err
 	}
 
-	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months, accountTypes, includeTransfers)
+	// Standalone endpoint — not in the household-scoped set (Issue #1369 decision #5);
+	// always personal. Household scope is threaded only through GetFinancialSummary's
+	// internal fan-out call to this same service method.
+	response, err := h.service.GetMonthOverMonthSpendingChange(ctx, input.UserID, input.Category, months, accountTypes, includeTransfers, nil)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -469,6 +503,7 @@ type GetLargestTransactionsForPeriodInput struct {
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
 	Limit            int    `query:"limit" doc:"Maximum number of transactions to return (1-100, default 10)" default:"10"`
+	Scope            string `query:"scope" enum:"personal,household" doc:"Must be omitted or 'personal' — this endpoint exposes raw transaction/account IDs and does not support household scope (Issue #1369 decision #5)"`
 }
 
 // GetLargestTransactionsForPeriodOutput represents the response for GET /analytics/largest-transactions.
@@ -478,6 +513,9 @@ type GetLargestTransactionsForPeriodOutput struct {
 
 // GetLargestTransactionsForPeriod handles GET /api/v1/analytics/largest-transactions requests.
 func (h *AnalyticsHandler) GetLargestTransactionsForPeriod(ctx context.Context, input *GetLargestTransactionsForPeriodInput) (*GetLargestTransactionsForPeriodOutput, error) {
+	if err := rejectHouseholdScope(input.Scope); err != nil {
+		return nil, err
+	}
 	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
 	if err != nil {
 		return nil, err
@@ -530,6 +568,7 @@ type GetIncomeSourceBreakdownInput struct {
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types to filter"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfer transactions (true/false, default false)"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetIncomeSourceBreakdownOutput represents the response for GET /analytics/income-sources.
@@ -541,6 +580,9 @@ type GetIncomeSourceBreakdownOutput struct {
 func (h *AnalyticsHandler) GetIncomeSourceBreakdown(ctx context.Context, input *GetIncomeSourceBreakdownInput) (*GetIncomeSourceBreakdownOutput, error) {
 	filters, err := parseSpendingFilters(input.StartDate, input.EndDate, input.AccountTypes, input.IncludeTransfers)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 
@@ -583,6 +625,7 @@ func (h *AnalyticsHandler) GetUnusualSpend(ctx context.Context, input *GetUnusua
 type GetNetWorthTrendInput struct {
 	inputs.AuthenticatedInput
 	Grouping string `query:"grouping" doc:"Bucket size: daily, weekly, or monthly (default monthly)" default:"monthly"`
+	Scope    string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetNetWorthTrendOutput represents the response for GET /analytics/net-worth-trend.
@@ -597,7 +640,12 @@ func (h *AnalyticsHandler) GetNetWorthTrend(ctx context.Context, input *GetNetWo
 		grouping = "monthly"
 	}
 
-	response, err := h.service.GetNetWorthTrend(ctx, input.UserID, grouping)
+	scope, err := resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := h.service.GetNetWorthTrend(ctx, input.UserID, grouping, scope)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -633,6 +681,7 @@ type GetFinancialSummaryInput struct {
 	EndDate          string `query:"end_date" required:"true" doc:"End of date range (YYYY-MM-DD)"`
 	AccountTypes     string `query:"account_types" doc:"Comma-separated account types (optional)"`
 	IncludeTransfers string `query:"include_transfers" doc:"Include transfers (true/false)"`
+	Scope            string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope for the savings-rate, average-spend, top-categories, month-over-month, and net-worth-trend sub-metrics (personal default, or household). Budget-vs-actual always stays personal."`
 }
 
 // GetFinancialSummaryOutput represents the response for GET /analytics/financial-summary.
@@ -650,6 +699,9 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 	if err != nil {
 		return nil, err
 	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
 
 	resp := &domain.FinancialSummaryResponse{
 		GeneratedAt: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
@@ -658,7 +710,7 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 	g, gCtx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		r, e := h.service.GetSavingsRateForPeriod(gCtx, input.UserID, filters.StartDate, filters.EndDate)
+		r, e := h.service.GetSavingsRateForPeriod(gCtx, input.UserID, filters.StartDate, filters.EndDate, filters.HouseholdScope)
 		if e != nil {
 			slog.WarnContext(ctx, "financial_summary: savings_rate sub-metric failed", "error", e)
 			return nil
@@ -688,7 +740,7 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 	})
 
 	g.Go(func() error {
-		r, e := h.service.GetMonthOverMonthSpendingChange(gCtx, input.UserID, "", 6, nil, false)
+		r, e := h.service.GetMonthOverMonthSpendingChange(gCtx, input.UserID, "", 6, nil, false, filters.HouseholdScope)
 		if e != nil {
 			slog.WarnContext(ctx, "financial_summary: mom_change sub-metric failed", "error", e)
 			return nil
@@ -708,7 +760,7 @@ func (h *AnalyticsHandler) GetFinancialSummary(ctx context.Context, input *GetFi
 	})
 
 	g.Go(func() error {
-		r, e := h.service.GetNetWorthTrend(gCtx, input.UserID, "monthly")
+		r, e := h.service.GetNetWorthTrend(gCtx, input.UserID, "monthly", filters.HouseholdScope)
 		if e != nil {
 			slog.WarnContext(ctx, "financial_summary: net_worth_trend sub-metric failed", "error", e)
 			return nil

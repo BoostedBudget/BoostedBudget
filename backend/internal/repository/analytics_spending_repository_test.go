@@ -617,7 +617,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		require.NoError(t, err)
 		assert.InDelta(t, 5000.0, result.Income, 0.001)
 		assert.InDelta(t, 3000.0, result.Expenses, 0.001)
@@ -634,7 +634,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 0.0, result.Income)
 		assert.Equal(t, 0.0, result.Expenses)
@@ -648,7 +648,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnError(pgx.ErrNoRows)
 
-		_, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		_, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		assert.Error(t, err)
 	})
 }

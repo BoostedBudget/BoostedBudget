@@ -20,7 +20,7 @@ type mockAnalyticsRepository struct {
 	getTopExpenseFn                     func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.TopExpenseRow, error)
 	getAverageMonthlySpendFn            func(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.AverageMonthlySpendRow, error)
 	getRecurringSubscriptionsFn         func(ctx context.Context, userID string, lookbackStart time.Time) ([]domain.RecurringSubscriptionRow, error)
-	getSavingsRateForPeriodFn           func(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error)
+	getSavingsRateForPeriodFn           func(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error)
 	getMonthOverMonthSpendingFn         func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error)
 	getLargestTransactionsForPeriodFn   func(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) ([]domain.LargestTransactionRow, error)
 	getCategoryBreakdownForMerchantFn   func(ctx context.Context, userID string, merchantID string, filters domain.SpendingFilters) ([]domain.CategoryBreakdownForMerchantRow, error)
@@ -92,9 +92,9 @@ func (m *mockAnalyticsRepository) GetRecurringSubscriptions(ctx context.Context,
 	return nil, nil
 }
 
-func (m *mockAnalyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateRow, error) {
+func (m *mockAnalyticsRepository) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error) {
 	if m.getSavingsRateForPeriodFn != nil {
-		return m.getSavingsRateForPeriodFn(ctx, userID, startDate, endDate)
+		return m.getSavingsRateForPeriodFn(ctx, userID, startDate, endDate, scope)
 	}
 	return &domain.SavingsRateRow{}, nil
 }
@@ -279,6 +279,47 @@ func TestAnalyticsService_GetCashFlowSummary(t *testing.T) {
 			t.Error("expected error from repository")
 		}
 	})
+}
+
+// TestAnalyticsService_GetCashFlowSummary_HouseholdScopePropagatesToPreviousPeriod
+// guards against Codex adversarial review finding P0-1: previousFilters (built for the
+// period-comparison call) must inherit HouseholdScope from the current-period filters —
+// otherwise the previous-period comparison would silently fall back to personal scope
+// even when the current period is household-scoped. Issue #1369 — Phase 5.
+func TestAnalyticsService_GetCashFlowSummary_HouseholdScopePropagatesToPreviousPeriod(t *testing.T) {
+	ctx := context.Background()
+	loc := time.UTC
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"owner-1", "member-2"}}
+
+	var seenScopes []*domain.HouseholdScope
+	mockRepo := &mockAnalyticsRepository{
+		getCashFlowAggregationFn: func(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowAggregation, error) {
+			seenScopes = append(seenScopes, filters.HouseholdScope)
+			return &domain.CashFlowAggregation{Income: 100, Expenses: 50}, nil
+		},
+	}
+
+	service := NewAnalyticsService(mockRepo)
+	filters := domain.CashFlowFilters{
+		StartDate:      time.Date(2024, 3, 1, 0, 0, 0, 0, loc),
+		EndDate:        time.Date(2024, 3, 31, 0, 0, 0, 0, loc),
+		HouseholdScope: scope,
+	}
+
+	_, err := service.GetCashFlowSummary(ctx, "owner-1", filters)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(seenScopes) != 2 {
+		t.Fatalf("expected 2 repo calls (current + previous period), got %d", len(seenScopes))
+	}
+	if seenScopes[0] != scope {
+		t.Errorf("current-period call must use the requested HouseholdScope")
+	}
+	if seenScopes[1] != scope {
+		t.Errorf("previous-period call must inherit the SAME HouseholdScope, not fall back to personal scope")
+	}
 }
 
 func TestAnalyticsService_GetCashFlowHistory(t *testing.T) {
@@ -1115,13 +1156,13 @@ func TestAnalyticsService_GetSavingsRateForPeriod(t *testing.T) {
 
 	t.Run("happy path: income > expenses yields positive rate", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time) (*domain.SavingsRateRow, error) {
+			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error) {
 				return &domain.SavingsRateRow{Income: 5000.0, Expenses: 3000.0}, nil
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate)
+		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1154,13 +1195,13 @@ func TestAnalyticsService_GetSavingsRateForPeriod(t *testing.T) {
 
 	t.Run("income=0 yields nil savings_rate pointer", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time) (*domain.SavingsRateRow, error) {
+			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error) {
 				return &domain.SavingsRateRow{Income: 0.0, Expenses: 500.0}, nil
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate)
+		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1171,13 +1212,13 @@ func TestAnalyticsService_GetSavingsRateForPeriod(t *testing.T) {
 
 	t.Run("income < expenses yields negative savings rate", func(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{
-			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time) (*domain.SavingsRateRow, error) {
+			getSavingsRateForPeriodFn: func(ctx context.Context, userID string, s time.Time, e time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateRow, error) {
 				return &domain.SavingsRateRow{Income: 2000.0, Expenses: 3000.0}, nil
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate)
+		result, err := service.GetSavingsRateForPeriod(ctx, "user-123", startDate, endDate, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1196,7 +1237,7 @@ func TestAnalyticsService_GetSavingsRateForPeriod(t *testing.T) {
 		mockRepo := &mockAnalyticsRepository{}
 		service := NewAnalyticsService(mockRepo)
 
-		_, err := service.GetSavingsRateForPeriod(ctx, "user-123", endDate, startDate)
+		_, err := service.GetSavingsRateForPeriod(ctx, "user-123", endDate, startDate, nil)
 		if err == nil {
 			t.Error("expected error when end_date before start_date")
 		}
@@ -1213,7 +1254,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("months<2 returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
-		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 1, nil, false)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 1, nil, false, nil)
 		if err == nil {
 			t.Error("expected error when months < 2")
 		}
@@ -1221,7 +1262,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 
 	t.Run("months>24 returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
-		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 25, nil, false)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 25, nil, false, nil)
 		if err == nil {
 			t.Error("expected error when months > 24")
 		}
@@ -1239,7 +1280,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 3, nil, false)
+		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 3, nil, false, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1283,7 +1324,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		}
 		service := NewAnalyticsService(mockRepo)
 
-		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, nil, false)
+		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, nil, false, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1304,7 +1345,7 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 			},
 		}
 		service := NewAnalyticsService(mockRepo)
-		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, []string{"depository"}, false)
+		_, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 6, []string{"depository"}, false, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1789,7 +1830,8 @@ func TestAnalyticsService_GetUnusualSpend(t *testing.T) {
 
 // mockBalanceSnapshotRepository implements the minimal interface needed for testing GetNetWorthTrend.
 type mockBalanceSnapshotRepository struct {
-	getAggregatedHistoryFn func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
+	getAggregatedHistoryFn           func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
+	getAggregatedHistoryForHouseholdFn func(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
 }
 
 func (m *mockBalanceSnapshotRepository) Create(ctx context.Context, snapshot *domain.BalanceSnapshot) error {
@@ -1813,6 +1855,15 @@ func (m *mockBalanceSnapshotRepository) GetLatestByAccountID(ctx context.Context
 func (m *mockBalanceSnapshotRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
 	return nil
 }
+func (m *mockBalanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	return nil, nil
+}
+func (m *mockBalanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+	if m.getAggregatedHistoryForHouseholdFn != nil {
+		return m.getAggregatedHistoryForHouseholdFn(ctx, requestingUserID, scope, startDate, endDate, accountTypes)
+	}
+	return nil, nil
+}
 
 func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 	ctx := context.Background()
@@ -1821,7 +1872,7 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 	t.Run("nil balanceSnapshotRepo returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
 		// No SetBalanceSnapshotRepo call — repo is nil
-		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", nil)
 		if err == nil {
 			t.Error("expected error when balanceSnapshotRepo is nil")
 		}
@@ -1830,7 +1881,7 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 	t.Run("invalid grouping returns error", func(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
 		service.SetBalanceSnapshotRepo(&mockBalanceSnapshotRepository{})
-		_, err := service.GetNetWorthTrend(ctx, "user-123", "quarterly")
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "quarterly", nil)
 		if err == nil {
 			t.Error("expected error for invalid grouping")
 		}
@@ -1854,7 +1905,7 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
 		service.SetBalanceSnapshotRepo(mockBalRepo)
 
-		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1898,7 +1949,7 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
 		service.SetBalanceSnapshotRepo(mockBalRepo)
 
-		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1934,9 +1985,41 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 		service := NewAnalyticsService(&mockAnalyticsRepository{})
 		service.SetBalanceSnapshotRepo(mockBalRepo)
 
-		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly")
+		_, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", nil)
 		if err == nil {
 			t.Error("expected error from repository")
+		}
+	})
+
+	// #1369 — Phase 5: household scope must use GetAggregatedHistoryForHousehold, not the
+	// personal GetAggregatedHistory (which would silently drop other members' data).
+	t.Run("household scope uses GetAggregatedHistoryForHousehold", func(t *testing.T) {
+		day1 := time.Date(2024, 3, 10, 0, 0, 0, 0, loc)
+		scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+		var capturedScope *domain.HouseholdScope
+
+		mockBalRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				t.Fatal("personal GetAggregatedHistory must not be called when scope is household")
+				return nil, nil
+			},
+			getAggregatedHistoryForHouseholdFn: func(ctx context.Context, requestingUserID string, s *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				capturedScope = s
+				return []domain.BalanceHistoryPoint{{Date: day1, TotalBalance: 15000.0}}, nil
+			},
+		}
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(mockBalRepo)
+
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", scope)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected non-nil result")
+		}
+		if capturedScope != scope {
+			t.Error("expected household scope to be passed to GetAggregatedHistoryForHousehold")
 		}
 	})
 }

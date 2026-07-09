@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetFinancialSummaryScope } from './getFinancialSummaryScope';
 
 export type GetFinancialSummaryParams = {
 /**
@@ -48,4 +49,8 @@ account_types?: string;
  * Include transfers (true/false)
  */
 include_transfers?: string;
+/**
+ * Aggregation scope for the savings-rate, average-spend, top-categories, month-over-month, and net-worth-trend sub-metrics (personal default, or household). Budget-vs-actual always stays personal.
+ */
+scope?: GetFinancialSummaryScope;
 };

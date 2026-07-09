@@ -660,6 +660,16 @@
           "in": "query",
           "description": "Include transfer transactions (true/false, default false)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -699,6 +709,16 @@
           "name": "include_transfers",
           "in": "query",
           "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]
@@ -775,6 +795,16 @@
           "in": "query",
           "description": "Include transfers (true/false)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope for the savings-rate, average-spend, top-categories, month-over-month, and net-worth-trend sub-metrics (personal default, or household). Budget-vs-actual always stays personal.",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -814,6 +844,16 @@
           "name": "include_transfers",
           "in": "query",
           "description": "Include transfer transactions (true/false, default false)",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]
@@ -861,6 +901,16 @@
           "in": "query",
           "description": "Maximum number of transactions to return (1-100, default 10)",
           "type": "integer"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Must be omitted or 'personal' — this endpoint exposes raw transaction/account IDs and does not support household scope (Issue #1369 decision #5)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -966,6 +1016,16 @@
           "in": "query",
           "description": "Bucket size: daily, weekly, or monthly (default monthly)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1064,6 +1124,16 @@
           "in": "query",
           "description": "When true, a parent custom category also includes its children (default true)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's.",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1110,6 +1180,16 @@
           "in": "query",
           "description": "Maximum number of merchants to return (default 10)",
           "type": "integer"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1150,6 +1230,16 @@
           "in": "query",
           "description": "Include transfer transactions (true/false, default false)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -1177,6 +1267,16 @@
           "in": "query",
           "required": true,
           "description": "End of date range (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Must be omitted or 'personal' — this endpoint exposes a raw transaction ID and does not support household scope (Issue #1369 decision #5)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]
@@ -2008,6 +2108,16 @@
           "in": "query",
           "description": "Time granularity: daily, weekly, or monthly",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -2033,6 +2143,16 @@
           "name": "as_of_date",
           "in": "query",
           "description": "Get balance as of specific date (YYYY-MM-DD)",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]
@@ -2072,6 +2192,16 @@
           "in": "query",
           "description": "Get net worth as of specific date (YYYY-MM-DD)",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -2109,6 +2239,16 @@
           "name": "granularity",
           "in": "query",
           "description": "Time granularity: daily, weekly, or monthly",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]
@@ -3537,6 +3677,16 @@
           "in": "query",
           "description": "Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ]
     },
@@ -3607,6 +3757,16 @@
           "in": "path",
           "required": true,
           "description": "Transaction UUID",
+          "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)",
+          "enum": [
+            "personal",
+            "household"
+          ],
           "type": "string"
         }
       ]

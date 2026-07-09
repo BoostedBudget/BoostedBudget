@@ -488,6 +488,28 @@ func TestGetTransactions_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// #1369 — Phase 5 decision #5: members must never drill into another member's raw
+// transactions — reject household scope on the transaction list endpoint with 400.
+func TestGetTransactions_HouseholdScope_Returns400(t *testing.T) {
+	userID := "user-123"
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionsInput{
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: userID},
+		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
+		Scope:                 "household",
+	}
+
+	output, err := handler.GetTransactions(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+}
+
 // TestGetTransactionByID_Success tests successful transaction retrieval.
 func TestGetTransactionByID_Success(t *testing.T) {
 	userID := "user-123"
@@ -530,6 +552,26 @@ func TestGetTransactionByID_NotFound(t *testing.T) {
 	assert.Nil(t, output)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+// #1369 — Phase 5 decision #5: reject household scope on transaction detail with 400.
+func TestGetTransactionByID_HouseholdScope_Returns400(t *testing.T) {
+	mockService := &mockTransactionService{}
+	handler := NewTransactionHandler(mockService)
+
+	input := &GetTransactionByIDInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		ID:                 "some-id",
+		Scope:              "household",
+	}
+
+	output, err := handler.GetTransactionByID(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 }
 
 // TestUpdateTransactionTags_Success tests successful tag update.

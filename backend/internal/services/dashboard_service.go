@@ -73,6 +73,9 @@ func NewDashboardService(
 
 // GetBalanceSummary returns current balance overview with breakdown by account type
 func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
+	if filters != nil && filters.HouseholdScope != nil {
+		return s.getBalanceSummaryHousehold(ctx, userID, filters)
+	}
 	// Determine the date for balance snapshot
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
 	if filters != nil && filters.AsOfDate != nil {
@@ -190,6 +193,117 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 	}, nil
 }
 
+// getBalanceSummaryHousehold is the household-scope variant of GetBalanceSummary. It MUST
+// NOT call GetLatestByUserID/GetByUserID — those are single-user and would silently drop
+// every non-requester member's accounts from the aggregate (Codex adversarial review,
+// P0-2). GetSnapshotsAsOfForHousehold/GetForHouseholdScope already dedup joint accounts
+// (freshest-synced copy) and resolve re-link chains via the stable user_account_id, so —
+// unlike the personal path — no further chain-key dedup loop is needed here.
+//
+// The "current" snapshot fetch below intentionally uses time.Now(), not asOfDate — this
+// mirrors the PERSONAL path's existing behavior exactly (GetLatestByUserID has no date
+// parameter at all; filters.AsOfDate only ever affects the response label and the
+// previous-period baseline, never which snapshot counts as "current"). Codex adversarial
+// review flagged this as inconsistent with the AsOfDate param, but making household MORE
+// precise than personal here would itself be a scope-dependent behavioral divergence —
+// out of scope for this phase; see plan decision notes.
+func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
+	scope := filters.HouseholdScope
+	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	if filters.AsOfDate != nil {
+		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+	}
+
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
+	}
+	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get household accounts: %w", err)
+	}
+	accountMap := buildChainAwareAccountMap(accounts)
+
+	byType := make(map[string]*domain.AccountTypeBalance)
+	var totalBalance float64
+	for _, snapshot := range snapshots {
+		account, exists := accountMap[snapshotChainKey(snapshot)]
+		if !exists {
+			continue
+		}
+		if len(filters.AccountTypes) > 0 {
+			typeMatch := false
+			for _, filterType := range filters.AccountTypes {
+				if account.Type == filterType {
+					typeMatch = true
+					break
+				}
+			}
+			if !typeMatch {
+				continue
+			}
+		}
+
+		balance := 0.0
+		if snapshot.CurrentBalance != nil {
+			balance = *snapshot.CurrentBalance
+		}
+
+		if _, exists := byType[account.Type]; !exists {
+			byType[account.Type] = &domain.AccountTypeBalance{
+				Balance:      0,
+				AccountCount: 0,
+				Accounts:     []domain.AccountBalanceDetail{},
+			}
+		}
+		typeBalance := byType[account.Type]
+		typeBalance.Balance += balance
+		typeBalance.AccountCount++
+		typeBalance.Accounts = append(typeBalance.Accounts, domain.AccountBalanceDetail{
+			ID:      account.ID,
+			Name:    account.Name,
+			Balance: balance,
+		})
+		totalBalance += balance
+	}
+
+	var periodComparison *domain.PeriodComparisonData
+	previousDate := asOfDate.AddDate(0, 0, -30)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, endOfDay(previousDate))
+	if err == nil && len(previousSnapshots) > 0 {
+		var previousBalance float64
+		for _, snapshot := range previousSnapshots {
+			if snapshot.CurrentBalance != nil {
+				previousBalance += *snapshot.CurrentBalance
+			}
+		}
+		changeAmount := totalBalance - previousBalance
+		changePercent := 0.0
+		if previousBalance != 0 {
+			changePercent = (changeAmount / previousBalance) * 100
+		}
+		periodComparison = &domain.PeriodComparisonData{
+			PreviousBalance: previousBalance,
+			ChangeAmount:    changeAmount,
+			ChangePercent:   changePercent,
+		}
+	}
+
+	return &domain.BalanceSummaryResponse{
+		AsOfDate:         asOfDate,
+		TotalBalance:     totalBalance,
+		ByType:           byType,
+		PeriodComparison: periodComparison,
+	}, nil
+}
+
+// endOfDay returns the last representable instant of d's calendar day (23:59:59.999999999),
+// so an "as of this date" snapshot lookup (`snapshot_at <= asOf`) includes every snapshot
+// taken that day, not just ones before midnight.
+func endOfDay(d time.Time) time.Time {
+	return d.Truncate(24 * time.Hour).Add(24*time.Hour - time.Nanosecond)
+}
+
 // GetBalanceHistory returns time series balance data for charts
 func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceHistoryResponse, error) {
 	// Default to last 30 days if not specified
@@ -216,8 +330,16 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 		accountTypes = filters.AccountTypes
 	}
 
-	// Get aggregated balance history from repository
-	history, err := s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
+	// Get aggregated balance history from repository. Household mode fans out across every
+	// member's shared accounts (GetAggregatedHistoryForHousehold) instead of the personal,
+	// single-user GetAggregatedHistory.
+	var history []domain.BalanceHistoryPoint
+	var err error
+	if filters != nil && filters.HouseholdScope != nil {
+		history, err = s.balanceSnapshotRepo.GetAggregatedHistoryForHousehold(ctx, userID, filters.HouseholdScope, startDate, endDate, accountTypes)
+	} else {
+		history, err = s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance history: %w", err)
 	}
@@ -317,6 +439,9 @@ func formatAccountTypeLabel(accountType string) string {
 
 // GetNetWorth returns current net worth (assets - liabilities) with breakdown
 func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
+	if filters != nil && filters.HouseholdScope != nil {
+		return s.getNetWorthHousehold(ctx, userID, filters)
+	}
 	// Determine the date for net worth calculation
 	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
 	if filters != nil && filters.AsOfDate != nil {
@@ -492,6 +617,150 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 	}, nil
 }
 
+// getNetWorthHousehold is the household-scope variant of GetNetWorth. As with
+// getBalanceSummaryHousehold, it uses GetSnapshotsAsOfForHousehold/GetForHouseholdScope
+// (never the single-user GetLatestByUserID/GetByUserID — Codex adversarial review, P0-2)
+// and needs no chain-key dedup loop since those methods already collapse joint accounts
+// and re-link chains to one row each. The "current" fetch uses time.Now(), matching the
+// personal path's AsOfDate handling exactly — see getBalanceSummaryHousehold's comment.
+func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
+	scope := filters.HouseholdScope
+	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	if filters.AsOfDate != nil {
+		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+	}
+
+	snapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
+	}
+	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get household accounts: %w", err)
+	}
+	accountMap := buildChainAwareAccountMap(accounts)
+
+	byCategory := make(map[string]*domain.NetWorthCategoryBalance)
+	var totalAssets, totalLiabilities float64
+
+	for _, snapshot := range snapshots {
+		account, exists := accountMap[snapshotChainKey(snapshot)]
+		if !exists {
+			continue
+		}
+		if len(filters.AccountTypes) > 0 {
+			typeMatch := false
+			for _, filterType := range filters.AccountTypes {
+				if account.Type == filterType {
+					typeMatch = true
+					break
+				}
+			}
+			if !typeMatch {
+				continue
+			}
+		}
+
+		balance := 0.0
+		if snapshot.CurrentBalance != nil {
+			balance = *snapshot.CurrentBalance
+		}
+
+		category := domain.AccountTypeCategory(account.Type)
+		if _, exists := byCategory[category]; !exists {
+			byCategory[category] = &domain.NetWorthCategoryBalance{
+				Category:     category,
+				Total:        0,
+				AccountCount: 0,
+				ByType:       make(map[string]*domain.AccountTypeBalance),
+			}
+		}
+		categoryBalance := byCategory[category]
+		if _, exists := categoryBalance.ByType[account.Type]; !exists {
+			categoryBalance.ByType[account.Type] = &domain.AccountTypeBalance{
+				Balance:      0,
+				AccountCount: 0,
+				Accounts:     []domain.AccountBalanceDetail{},
+			}
+		}
+
+		absBalance := balance
+		if category == "liabilities" && balance < 0 {
+			absBalance = -balance
+		}
+
+		typeBalance := categoryBalance.ByType[account.Type]
+		typeBalance.Balance += absBalance
+		typeBalance.AccountCount++
+		typeBalance.Accounts = append(typeBalance.Accounts, domain.AccountBalanceDetail{
+			ID:      account.ID,
+			Name:    account.Name,
+			Balance: absBalance,
+		})
+
+		categoryBalance.Total += absBalance
+		categoryBalance.AccountCount++
+
+		if category == "assets" {
+			totalAssets += absBalance
+		} else {
+			totalLiabilities += absBalance
+		}
+	}
+
+	netWorth := totalAssets - totalLiabilities
+
+	var periodComparison *domain.NetWorthPeriodComparison
+	previousDate := asOfDate.AddDate(0, 0, -30)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, endOfDay(previousDate))
+	if err == nil && len(previousSnapshots) > 0 {
+		var prevAssets, prevLiabilities float64
+		for _, snapshot := range previousSnapshots {
+			account, exists := accountMap[snapshotChainKey(snapshot)]
+			if !exists {
+				continue
+			}
+			balance := 0.0
+			if snapshot.CurrentBalance != nil {
+				balance = *snapshot.CurrentBalance
+			}
+			category := domain.AccountTypeCategory(account.Type)
+			absBalance := balance
+			if category == "liabilities" && balance < 0 {
+				absBalance = -balance
+			}
+			if category == "assets" {
+				prevAssets += absBalance
+			} else {
+				prevLiabilities += absBalance
+			}
+		}
+
+		prevNetWorth := prevAssets - prevLiabilities
+		changeAmount := netWorth - prevNetWorth
+		changePercent := 0.0
+		if prevNetWorth != 0 {
+			changePercent = (changeAmount / prevNetWorth) * 100
+		}
+		periodComparison = &domain.NetWorthPeriodComparison{
+			PreviousNetWorth:      prevNetWorth,
+			PreviousAssets:        prevAssets,
+			PreviousLiabilities:   prevLiabilities,
+			NetWorthChange:        changeAmount,
+			NetWorthChangePercent: changePercent,
+		}
+	}
+
+	return &domain.NetWorthResponse{
+		AsOfDate:         asOfDate,
+		NetWorth:         netWorth,
+		TotalAssets:      totalAssets,
+		TotalLiabilities: totalLiabilities,
+		ByCategory:       byCategory,
+		PeriodComparison: periodComparison,
+	}, nil
+}
+
 // GetNetWorthHistory returns time series net worth data for charts
 func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthHistoryResponse, error) {
 	// Default to last 30 days if not specified
@@ -518,8 +787,15 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 		accountTypes = filters.AccountTypes
 	}
 
-	// Get aggregated balance history from repository
-	history, err := s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
+	// Get aggregated balance history from repository. Household mode fans out across every
+	// member's shared accounts instead of the personal, single-user GetAggregatedHistory.
+	var history []domain.BalanceHistoryPoint
+	var err error
+	if filters != nil && filters.HouseholdScope != nil {
+		history, err = s.balanceSnapshotRepo.GetAggregatedHistoryForHousehold(ctx, userID, filters.HouseholdScope, startDate, endDate, accountTypes)
+	} else {
+		history, err = s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, accountTypes)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance history: %w", err)
 	}

@@ -69,6 +69,11 @@ type DashboardFilters struct {
 	StartDate    *time.Time // Start of date range (for balance history)
 	EndDate      *time.Time // End of date range (for balance history)
 	Granularity  string     // "daily", "weekly", "monthly" (for balance history)
+
+	// HouseholdScope, when non-nil, aggregates across the household's shared accounts
+	// instead of the requesting user's own. nil = personal scope (today's behavior,
+	// byte-identical output). Issue #1369 — Phase 5.
+	HouseholdScope *HouseholdScope
 }
 
 // NetWorthResponse represents the response for GET /api/v1/dashboard/net-worth

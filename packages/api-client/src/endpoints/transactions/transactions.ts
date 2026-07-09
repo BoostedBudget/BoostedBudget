@@ -54,6 +54,7 @@ import type {
   BulkUpdateTransactionCategoryInputBody,
   BulkUpdateTransactionCategoryOutputBody,
   ErrorModel,
+  GetTransactionByIDParams,
   GetTransactionReviewSummaryParams,
   GetTransactionsOutputBody,
   GetTransactionsParams,
@@ -422,12 +423,14 @@ export function useGetTransactionReviewSummary<TData = Awaited<ReturnType<typeof
  */
 export const getTransactionByID = (
     id: string,
+    params?: GetTransactionByIDParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<Transaction>(
-      {url: `/api/v1/transactions/${id}`, method: 'GET', signal
+      {url: `/api/v1/transactions/${id}`, method: 'GET',
+        params, signal
     },
       options);
     }
@@ -435,23 +438,25 @@ export const getTransactionByID = (
 
 
 
-export const getGetTransactionByIDQueryKey = (id: string,) => {
+export const getGetTransactionByIDQueryKey = (id: string,
+    params?: GetTransactionByIDParams,) => {
     return [
-    `/api/v1/transactions/${id}`
+    `/api/v1/transactions/${id}`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetTransactionByIDQueryOptions = <TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetTransactionByIDQueryOptions = <TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(id: string,
+    params?: GetTransactionByIDParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetTransactionByIDQueryKey(id);
+  const queryKey =  queryOptions?.queryKey ?? getGetTransactionByIDQueryKey(id,params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTransactionByID>>> = ({ signal }) => getTransactionByID(id, requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getTransactionByID>>> = ({ signal }) => getTransactionByID(id,params, requestOptions, signal);
 
 
 
@@ -465,7 +470,8 @@ export type GetTransactionByIDQueryError = ErrorType<ErrorModel>
 
 
 export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(
- id: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>> & Pick<
+ id: string,
+    params: undefined |  GetTransactionByIDParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getTransactionByID>>,
           TError,
@@ -475,7 +481,8 @@ export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTrans
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(
- id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>> & Pick<
+ id: string,
+    params?: GetTransactionByIDParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getTransactionByID>>,
           TError,
@@ -485,7 +492,8 @@ export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTrans
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(
- id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ id: string,
+    params?: GetTransactionByIDParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -493,11 +501,12 @@ export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTrans
  */
 
 export function useGetTransactionByID<TData = Awaited<ReturnType<typeof getTransactionByID>>, TError = ErrorType<ErrorModel>>(
- id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ id: string,
+    params?: GetTransactionByIDParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getTransactionByID>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetTransactionByIDQueryOptions(id,options)
+  const queryOptions = getGetTransactionByIDQueryOptions(id,params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
