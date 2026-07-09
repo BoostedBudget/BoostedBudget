@@ -75,6 +75,10 @@ const (
 	EventHouseholdMemberRemoved  = "household_member_removed"
 	EventHouseholdMemberLeft     = "household_member_left"
 
+	// Household account-sharing events (Issue #1368 — Phase 4: account sharing grants)
+	EventHouseholdAccountShared = "household_account_shared"
+	EventHouseholdAccountHidden = "household_account_hidden"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

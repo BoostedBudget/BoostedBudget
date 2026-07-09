@@ -85,6 +85,94 @@ func TestHouseholdShareRepository_InsertConsent(t *testing.T) {
 	assert.Equal(t, "consent-1", c.ID)
 }
 
+func TestHouseholdShareRepository_SetShareVisibility_Share(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdShareMockDB(t)
+	defer mock.Close()
+
+	physIdx := "combined-fp"
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (household_id, user_account_id) WHERE revoked_at IS NULL
+		DO UPDATE SET visibility = EXCLUDED.visibility,
+		              physical_account_blind_idx = EXCLUDED.physical_account_blind_idx,
+		              updated_at = now()
+		RETURNING id, household_id, user_account_id, visibility, shared_at, revoked_at,
+		          physical_account_blind_idx, created_at, updated_at
+	`)).
+		WithArgs("hh-1", "acct-1", &physIdx, domain.ShareVisibilityShared).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
+			"physical_account_blind_idx", "created_at", "updated_at",
+		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityShared, now, nil, &physIdx, now, now))
+
+	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", &physIdx, domain.ShareVisibilityShared)
+	require.NoError(t, err)
+	require.NotNil(t, share)
+	assert.Equal(t, "share-1", share.ID)
+	assert.Equal(t, domain.ShareVisibilityShared, share.Visibility)
+	assert.Nil(t, share.RevokedAt, "PATCH share/hide must never write revoked_at")
+}
+
+func TestHouseholdShareRepository_SetShareVisibility_Hide_NeverTouchesRevokedAt(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdShareMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		INSERT INTO household_account_shares (household_id, user_account_id, physical_account_blind_idx, visibility)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (household_id, user_account_id) WHERE revoked_at IS NULL
+		DO UPDATE SET visibility = EXCLUDED.visibility,
+		              physical_account_blind_idx = EXCLUDED.physical_account_blind_idx,
+		              updated_at = now()
+		RETURNING id, household_id, user_account_id, visibility, shared_at, revoked_at,
+		          physical_account_blind_idx, created_at, updated_at
+	`)).
+		WithArgs("hh-1", "acct-1", (*string)(nil), domain.ShareVisibilityHidden).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_account_id", "visibility", "shared_at", "revoked_at",
+			"physical_account_blind_idx", "created_at", "updated_at",
+		}).AddRow("share-1", "hh-1", "acct-1", domain.ShareVisibilityHidden, now, nil, nil, now, now))
+
+	share, err := repo.SetShareVisibility(context.Background(), "hh-1", "acct-1", nil, domain.ShareVisibilityHidden)
+	require.NoError(t, err)
+	// Hiding an account keeps it "active" (revoked_at NULL) so member-removal's
+	// RevokeSharesForUser still catches and revokes it later. #1368 Phase 4.
+	assert.Nil(t, share.RevokedAt)
+	assert.Equal(t, domain.ShareVisibilityHidden, share.Visibility)
+}
+
+func TestHouseholdShareRepository_ListMyAccountShares(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdShareMockDB(t)
+	defer mock.Close()
+
+	hiddenStr := string(domain.ShareVisibilityHidden)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT ua.id AS user_account_id, has.visibility, has.revoked_at
+		FROM user_accounts ua
+		LEFT JOIN household_account_shares has
+			ON has.user_account_id = ua.id AND has.household_id = $1 AND has.revoked_at IS NULL
+		WHERE ua.user_id = $2
+		ORDER BY ua.id
+	`)).
+		WithArgs("hh-1", "user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"user_account_id", "visibility", "revoked_at"}).
+			AddRow("acct-1", &hiddenStr, nil).
+			AddRow("acct-2", nil, nil)) // acct-2: linked after joining, no grant row yet
+
+	views, err := repo.ListMyAccountShares(context.Background(), "hh-1", "user-1")
+	require.NoError(t, err)
+	require.Len(t, views, 2)
+	require.NotNil(t, views[0].Visibility)
+	assert.Equal(t, domain.ShareVisibilityHidden, *views[0].Visibility)
+	assert.Nil(t, views[1].Visibility, "no grant row yet -> nil visibility, not a default")
+}
+
 func TestHouseholdShareRepository_RevokeSharesForUser(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdShareMockDB(t)

@@ -111,6 +111,7 @@ func TestLoggingMapError_Household(t *testing.T) {
 		{"invalid consent", domain.ErrInvalidConsent, http.StatusBadRequest},
 		{"cannot invite self", domain.ErrCannotInviteSelf, http.StatusBadRequest},
 		{"cannot remove owner", domain.ErrCannotRemoveOwner, http.StatusBadRequest},
+		{"account not owned", domain.ErrAccountNotOwned, http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		tc := tc

@@ -1638,6 +1638,15 @@ func main() {
 		operations.RegisterHouseholdRoutes(humaAPI, humaHouseholdHandler)
 		appLogger.Info("Huma household routes registered (Phase 3)")
 
+		// Register Huma household account-share routes (Issue #1368 — Phase 4: account
+		// sharing grants). *householdService implements the narrow
+		// HouseholdAccountShareService interface alongside the broad HouseholdService one —
+		// the type assertion is safe because NewHouseholdService always returns that
+		// concrete type.
+		humaHouseholdShareHandler := operations.NewHouseholdShareHandler(householdService.(services.HouseholdAccountShareService))
+		operations.RegisterHouseholdShareRoutes(humaAPI, humaHouseholdShareHandler)
+		appLogger.Info("Huma household account-share routes registered (Phase 4)")
+
 		// Register Huma privacy routes (Issue #559: Huma migration)
 		humaPrivacyHandler := operations.NewPrivacyHandler(privacyService)
 		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
