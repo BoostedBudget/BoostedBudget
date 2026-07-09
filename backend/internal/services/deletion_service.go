@@ -304,10 +304,9 @@ func (s *deletionService) requestDeletionTransactional(ctx context.Context, user
 		return err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)

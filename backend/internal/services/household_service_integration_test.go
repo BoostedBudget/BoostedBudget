@@ -515,3 +515,159 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentWithDeleteHousehold_
 		t.Fatalf("expected exactly one of the two race-safe outcomes, got acceptErr=%v deleteErr=%v — a raw/unmapped error here means the lock-order deadlock regressed", acceptErr, deleteErr)
 	}
 }
+
+// TestHouseholdServiceIntegration_AcceptInvite_OwnerStatusRace_NoStaleRead closes a Gap
+// Analysis Round 5 (6th Codex pass) finding, GT-8: AcceptInvite used to read the owner's
+// deletion/subscription status via a plain, non-locking read, so a concurrent Paddle webhook
+// committing an active->cancelled transition on the owner's row could race between that read
+// and AcceptInvite's commit, letting a membership + household entitlement get inserted for an
+// owner whose plan just lapsed. The fix locks the owner's users row (via the same
+// lockAndGetUser helper already used for the caller) before reading their status.
+//
+// PROVING THIS DETERMINISTICALLY — two earlier, simpler versions of this test were tried and
+// both turned out NOT to discriminate a fixed implementation from a broken one, discovered
+// empirically by running each against the fix manually reverted:
+//  1. "Start both concurrently, accept either outcome as valid": the naive assumption was
+//     that a stale-read success would still eventually contend on the owner's row (thought to
+//     be via an implicit FOR KEY SHARE lock from the entitlement insert's FK). That assumption
+//     was wrong — the entitlement's FK is a *composite* one to households(id, owner_user_id),
+//     not to users(id) — so a broken AcceptInvite never touches the owner's row lock at all
+//     and simply completes, unblocked, before the simulated cancel even gets a chance to
+//     commit — which is actually a legitimate ordering, not a bug, so it can't distinguish
+//     anything.
+//  2. "Force the cancel to queue for the owner-row lock before accept starts, then release":
+//     same root problem — without a lock, AcceptInvite's read/decision/commit all happen
+//     before the test ever lets the cancel commit, so the owner genuinely was still active at
+//     the moment AcceptInvite committed. Not a race at all, let alone the TOCTOU one.
+//
+// Both attempts foundered on the same fact: Postgres MVCC always shows the latest COMMITTED
+// data to a fresh read, locked or not — a lock's only real effect is to force a *concurrent
+// writer* to wait, not to change what a reader sees once that writer has already committed.
+// So the only way to deterministically prove "the owner-status decision happens under a lock
+// that a concurrent writer must wait on" is to check that directly, not infer it from
+// AcceptInvite's returned error. This test uses a test-only hook
+// (acceptInviteAfterOwnerCheckHook, nil in production) fired immediately after AcceptInvite's
+// owner-status decision, while its transaction (and, in the fixed code, its owner-row lock)
+// is still open. While paused there, it starts a concurrent "Paddle cancel" UPDATE against the
+// owner's row and asserts, within a bounded window, that the cancel does NOT complete — i.e.
+// is genuinely blocked waiting for AcceptInvite's own transaction to end. A broken
+// implementation holds no lock on the owner's row at this point, so the concurrent UPDATE
+// would complete immediately, uncontended — the test asserts that must never happen.
+func TestHouseholdServiceIntegration_AcceptInvite_OwnerStatusRace_NoStaleRead(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	impl, ok := f.svc.(*householdService)
+	require.True(t, ok, "test relies on the concrete householdService type to install its synchronization hook")
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (owner status race)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	inviteResult, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken := inviteResult.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	reachedHook := make(chan struct{})
+	releaseHook := make(chan struct{})
+	impl.acceptInviteAfterOwnerCheckHook = func() {
+		close(reachedHook)
+		<-releaseHook
+	}
+	t.Cleanup(func() { impl.acceptInviteAfterOwnerCheckHook = nil })
+
+	// Safety net: if any assertion below fails (t.Fatal unwinds via runtime.Goexit, skipping
+	// the rest of the function body), releaseHookOnce still fires via this defer, so the
+	// AcceptInvite goroutine — paused inside the hook, holding an open transaction/connection
+	// — is never leaked. Without this, a failing assertion here would hang the whole test
+	// binary until pool cleanup's connection wait times out.
+	var releaseHookOnce sync.Once
+	releaseHookFn := func() { releaseHookOnce.Do(func() { close(releaseHook) }) }
+	defer releaseHookFn()
+
+	var wg sync.WaitGroup
+	var acceptErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, acceptErr = f.svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
+	}()
+
+	select {
+	case <-reachedHook:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for AcceptInvite to reach the post-owner-check hook")
+	}
+
+	// AcceptInvite is now paused with its owner-status decision made but its transaction
+	// still open. Try to run the simulated Paddle cancel concurrently.
+	cancelDone := make(chan error, 1)
+	cancelPIDReady := make(chan int32, 1)
+	go func() {
+		cancelTx, txErr := f.pool.Begin(ctx)
+		if txErr != nil {
+			cancelPIDReady <- 0
+			cancelDone <- txErr
+			return
+		}
+		var pid int32
+		if scanErr := cancelTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); scanErr != nil {
+			_ = cancelTx.Rollback(ctx)
+			cancelPIDReady <- 0
+			cancelDone <- scanErr
+			return
+		}
+		cancelPIDReady <- pid
+		if _, txErr = cancelTx.Exec(ctx, `UPDATE users SET subscription_status = 'cancelled' WHERE id = $1`, owner.ID); txErr != nil {
+			_ = cancelTx.Rollback(ctx)
+			cancelDone <- txErr
+			return
+		}
+		cancelDone <- cancelTx.Commit(ctx)
+	}()
+	cancelPID := <-cancelPIDReady
+	require.NotZero(t, cancelPID)
+
+	// Rather than inferring "blocked" from elapsed wall-clock time (which a saturated test DB
+	// could make unreliable in either direction), poll pg_stat_activity directly for the
+	// cancel backend's own wait_event_type — this is the same technique proven in the GT-6
+	// deadlock regression test's lock-gate helpers, applied here to confirm a GENUINE lock
+	// wait rather than mere slowness.
+	cancelBlockedOnLock := false
+	deadline := time.Now().Add(3 * time.Second)
+pollLoop:
+	for time.Now().Before(deadline) {
+		select {
+		case cancelErr := <-cancelDone:
+			require.NoError(t, cancelErr) // it did complete — that's the failure being asserted below
+			t.Fatal("the simulated Paddle cancel completed while AcceptInvite's owner-status decision was still pending inside an open transaction — the owner's row is not locked, so the decision was made on a read a concurrent writer could invalidate at any moment")
+		default:
+		}
+
+		var waitEventType *string
+		require.NoError(t, f.pool.QueryRow(ctx,
+			`SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`, cancelPID,
+		).Scan(&waitEventType))
+		if waitEventType != nil && *waitEventType == "Lock" {
+			cancelBlockedOnLock = true
+			break pollLoop
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.True(t, cancelBlockedOnLock,
+		"timed out waiting for the simulated cancel to genuinely block on a lock — AcceptInvite may have finished without ever needing the owner-row lock")
+
+	releaseHookFn()
+	wg.Wait()
+
+	cancelErr := <-cancelDone
+	require.NoError(t, cancelErr, "the simulated Paddle cancel must succeed once AcceptInvite's transaction ends")
+	require.NoError(t, acceptErr, "AcceptInvite legitimately held the owner-row lock first (owner was genuinely still active throughout), so it must succeed")
+}

@@ -415,6 +415,35 @@ func TestHouseholdService_CreateHousehold_Success(t *testing.T) {
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
+// TestHouseholdService_CreateHousehold_PanicMidTransaction_StillRollsBack closes a Gap
+// Analysis Round 5 (6th Codex pass) finding, GT-7: the OLD `var cerr error; defer func() {
+// if cerr != nil { rollback } }()` pattern only rolled back on an EXPLICIT returned error —
+// a panic mid-transaction (nil pointer, index out of range, etc.) unwinds past every
+// `cerr = ...; return cerr` assignment, so cerr stays nil and the deferred rollback never
+// fires, leaking the pooled connection under the app's panic-recovery middleware
+// (internal/middleware/recovery.go). Proves the fix (unconditional
+// `defer func() { _ = tx.Rollback(ctx) }()`, matching the existing codebase idiom already
+// used in registration_service.go/profile_service.go) rolls back even when a downstream
+// call panics.
+func TestHouseholdService_CreateHousehold_PanicMidTransaction_StillRollsBack(t *testing.T) {
+	t.Parallel()
+	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("INSERT INTO households").
+		WithArgs("owner-1", "The Smiths").
+		WillPanic("simulated panic mid-transaction")
+	pool.ExpectRollback()
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = svc.CreateHousehold(context.Background(), "owner-1", "The Smiths")
+	}()
+
+	require.NoError(t, pool.ExpectationsWereMet(), "the transaction must be rolled back even when a downstream call panics")
+}
+
 func TestHouseholdService_CreateHousehold_AlreadyOwnsHousehold_RollsBack(t *testing.T) {
 	t.Parallel()
 	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
@@ -790,6 +819,7 @@ func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("INSERT INTO household_members").
@@ -989,6 +1019,7 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 			pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 				WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 			expectLockCallerRow(pool, "caller-1")
+			expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 			pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 				WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2)) // seats full -> short-circuits after the paying-invitee guard passes
 			pool.ExpectRollback()
@@ -1016,6 +1047,7 @@ func TestHouseholdService_AcceptInvite_OwnerMarkedForDeletion_RollsBack(t *testi
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
@@ -1038,6 +1070,7 @@ func TestHouseholdService_AcceptInvite_OwnerReadOnlyStatus_RollsBack(t *testing.
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectRollback()
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
@@ -1060,6 +1093,7 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
 	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("INSERT INTO household_members").
