@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -334,4 +336,78 @@ func TestCheckLimit_AllResourceTypes(t *testing.T) {
 			assert.Equal(t, tc.expectedLimit, result.Limit, "Limit should match expected for "+tc.name)
 		})
 	}
+}
+
+// mockResolver lets us test both the nil-resolver golden path and the
+// production-mode golden path (non-nil resolver, no household row) explicitly —
+// Codex flagged that a nil-resolver test alone doesn't cover the real prod wiring.
+type mockResolver struct{ mock.Mock }
+
+func (m *mockResolver) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
+	args := m.Called(ctx, user)
+	return args.Get(0).(domain.EffectiveEntitlement), args.Error(1)
+}
+
+func TestGetEffectiveSubscription_NilResolver_GoldenUnchanged(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil) // no SetEntitlementResolver call
+	ctx := context.Background()
+
+	user := &domain.User{ID: "user-123", SubscriptionTier: string(domain.TierPremium)}
+	effective, err := service.GetEffectiveSubscription(ctx, user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierPremium, effective.Tier)
+	assert.Equal(t, 1, effective.UsersIncluded)
+}
+
+func TestGetEffectiveSubscription_ResolverPresentNoHouseholdRow_GoldenUnchanged(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil)
+	resolver := &mockResolver{}
+	user := &domain.User{ID: "user-123", SubscriptionTier: string(domain.TierPremium)}
+	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).Return(domain.EffectiveEntitlement{
+		Tier: "premium", Status: "active", Source: domain.EntitlementSourceOwn,
+	}, nil).Once()
+	service.SetEntitlementResolver(resolver)
+
+	effective, err := service.GetEffectiveSubscription(context.Background(), user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierPremium, effective.Tier, "production wiring with no household row must match solo behavior byte-for-byte")
+	resolver.AssertExpectations(t)
+}
+
+func TestGetEffectiveSubscription_ResolverAppliesHouseholdTier(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil)
+	resolver := &mockResolver{}
+	user := &domain.User{ID: "member-1", SubscriptionTier: string(domain.TierPremium)}
+	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).Return(domain.EffectiveEntitlement{
+		Tier: "household_2", Status: "active", Source: domain.EntitlementSourceHousehold,
+	}, nil).Once()
+	service.SetEntitlementResolver(resolver)
+
+	effective, err := service.GetEffectiveSubscription(context.Background(), user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierHousehold2, effective.Tier)
+	assert.Equal(t, 2, effective.UsersIncluded)
+	resolver.AssertExpectations(t)
+}
+
+func TestGetEffectiveSubscription_ResolverError_FailsOpenToOwnTier(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil)
+	resolver := &mockResolver{}
+	user := &domain.User{ID: "user-123", SubscriptionTier: string(domain.TierPremium)}
+	resolver.On("ResolveEffectiveEntitlement", mock.Anything, user).
+		Return(domain.EffectiveEntitlement{}, errors.New("db timeout")).Once()
+	service.SetEntitlementResolver(resolver)
+
+	effective, err := service.GetEffectiveSubscription(context.Background(), user)
+	require.NoError(t, err, "a resolver error must never break GetEffectiveSubscription for the whole user base")
+	assert.Equal(t, domain.TierPremium, effective.Tier)
+	resolver.AssertExpectations(t)
 }

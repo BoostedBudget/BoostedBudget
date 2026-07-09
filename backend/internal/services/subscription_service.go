@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -11,8 +12,9 @@ import (
 
 // SubscriptionService handles subscription tier management and limit enforcement
 type SubscriptionService struct {
-	tierConfig   *config.TierConfig
-	overrideRepo repository.SubscriptionOverrideRepository
+	tierConfig          *config.TierConfig
+	overrideRepo        repository.SubscriptionOverrideRepository
+	entitlementResolver HouseholdEntitlementResolver
 }
 
 // NewSubscriptionService creates a new subscription service
@@ -24,6 +26,14 @@ func NewSubscriptionService(
 		tierConfig:   tierConfig,
 		overrideRepo: overrideRepo,
 	}
+}
+
+// SetEntitlementResolver injects an optional household entitlement resolver
+// (Issue #1366). Nil-safe: GetEffectiveSubscription falls back to
+// user.ComputeEffectiveTier() when unset, or on any resolver error — an entitlement
+// lookup failure must never break tier/limit resolution for the whole user base.
+func (s *SubscriptionService) SetEntitlementResolver(resolver HouseholdEntitlementResolver) {
+	s.entitlementResolver = resolver
 }
 
 // GetTier returns the tier configuration for a given tier name
@@ -73,13 +83,28 @@ func (s *SubscriptionService) CheckLimit(
 }
 
 // GetEffectiveSubscription returns the effective subscription for a user
-// Combines base tier limits with any user-specific overrides
+// Combines base tier limits with any user-specific overrides and, if an
+// entitlement resolver is injected, household coverage (Issue #1366).
 func (s *SubscriptionService) GetEffectiveSubscription(
 	ctx context.Context,
 	user *domain.User,
 ) (*domain.EffectiveSubscription, error) {
 	// Determine the effective tier: manual override takes precedence if set and not expired
 	tierName := domain.TierName(user.ComputeEffectiveTier())
+
+	// If a household entitlement resolver is injected, let it override the tier — but
+	// fail open on any resolver error so an entitlements-table hiccup never breaks
+	// limit/feature resolution for solo users too. The error is logged (not silently
+	// dropped) so a systemic entitlement-resolution outage is visible in production.
+	if s.entitlementResolver != nil {
+		eff, err := s.entitlementResolver.ResolveEffectiveEntitlement(ctx, user)
+		if err != nil {
+			slog.Warn("household entitlement resolution failed; falling back to own tier",
+				"user_id", user.ID, "error", err)
+		} else {
+			tierName = domain.TierName(eff.Tier)
+		}
+	}
 
 	// Get tier configuration for the effective tier
 	tier, err := s.GetTier(ctx, tierName)
@@ -120,6 +145,7 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 		Features:             tier.Features,
 		HasOverrides:         hasOverrides,
 		ActiveOverridesCount: activeOverridesCount,
+		UsersIncluded:        tier.Pricing.UsersIncluded,
 	}, nil
 }
 

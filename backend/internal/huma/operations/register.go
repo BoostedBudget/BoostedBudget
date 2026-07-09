@@ -84,6 +84,12 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #957: Merchant name handling
 	merchantHandler := &MerchantHandler{}
 
+	// Issue #1366: Household entitlement summary
+	householdEntitlementHandler := &HouseholdEntitlementHandler{}
+
+	// Issue #1367: Household membership, invites & consent gate (Phase 3)
+	householdHandler := &HouseholdHandler{}
+
 	// Register all routes
 	RegisterHealthRoutes(api, healthHandler)
 	RegisterMetricsRoutes(api, metricsHandler)
@@ -142,4 +148,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #957: Merchant name handling
 	RegisterMerchantRoutes(api, merchantHandler)
+
+	// Issue #1366: Household entitlement summary
+	RegisterHouseholdEntitlementRoutes(api, householdEntitlementHandler)
+	RegisterHouseholdRoutes(api, householdHandler)
 }

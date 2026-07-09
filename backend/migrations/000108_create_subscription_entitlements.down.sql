@@ -1,0 +1,5 @@
+-- Rollback for 000108_create_subscription_entitlements
+DROP TRIGGER IF EXISTS update_subscription_entitlements_updated_at ON subscription_entitlements;
+DROP INDEX IF EXISTS idx_subscription_entitlements_household;
+DROP INDEX IF EXISTS idx_subscription_entitlements_user_status;
+DROP TABLE IF EXISTS subscription_entitlements CASCADE;

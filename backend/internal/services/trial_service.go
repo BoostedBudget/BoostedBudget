@@ -41,14 +41,24 @@ type PlaidCleanupForTrial interface {
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
 
+// householdCoverageCheckerForTrial is the narrow capability TrialService needs to
+// detect an active household-sourced entitlement, so the daily trial-expiry job
+// doesn't flip a covered member to inactive and disconnect their Plaid items despite
+// being actively covered (#1367 — Phase 3). Satisfied structurally by
+// *HouseholdEntitlementService.
+type householdCoverageCheckerForTrial interface {
+	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
+}
+
 // TrialService handles trial management for users
 // Issue #679: Implement trial service and auto-grant logic
 type TrialService struct {
-	tierConfig      *config.TierConfig
-	repo            TrialRepository
-	plaidCleanup    PlaidCleanupForTrial
-	retentionMonths int // #930: Months before auto-deletion after trial expiry
-	logger          *slog.Logger
+	tierConfig       *config.TierConfig
+	repo             TrialRepository
+	plaidCleanup     PlaidCleanupForTrial
+	householdChecker householdCoverageCheckerForTrial // #1367 — Phase 3: nil skips the exemption
+	retentionMonths  int                              // #930: Months before auto-deletion after trial expiry
+	logger           *slog.Logger
 }
 
 // NewTrialService creates a new TrialService
@@ -64,6 +74,12 @@ func NewTrialService(
 		retentionMonths: 6,
 		logger:          slog.Default(),
 	}
+}
+
+// SetHouseholdChecker wires the household-coverage exemption for trial expiry.
+// #1367 — Phase 3. Nil-safe: an unset checker preserves pre-#1367 behavior.
+func (s *TrialService) SetHouseholdChecker(c householdCoverageCheckerForTrial) {
+	s.householdChecker = c
 }
 
 // SetRetentionMonths configures the retention period (default: 6).
@@ -170,6 +186,27 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	// #1367 — Phase 3: exempt actively covered household members. Fail closed on an
+	// uncertain check (skip expiry this run) rather than risk wrongly locking out an
+	// actually-covered member — the daily job retries, so this self-heals.
+	if s.householdChecker != nil {
+		covered, err := s.householdChecker.IsCoveredByHousehold(ctx, userID)
+		if err != nil {
+			// Skip the destructive mutation (fail closed on uncertain coverage) but
+			// PROPAGATE the error — swallowing it would make the daily job log a false
+			// success for a user whose trial was never actually processed, hiding an
+			// operational failure and, if the check stays broken, indefinitely
+			// un-expiring trials with no visible signal (Codex review, Medium finding 6).
+			s.logger.Warn("failed to check household coverage during trial expiry; skipping this run",
+				"user_id", userID, "error", err)
+			return fmt.Errorf("failed to check household coverage: %w", err)
+		}
+		if covered {
+			s.logger.Info("skipping trial expiry for actively covered household member", "user_id", userID)
+			return nil
+		}
 	}
 
 	s.logger.Info("expiring trial for user",

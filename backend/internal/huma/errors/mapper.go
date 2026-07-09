@@ -66,6 +66,14 @@ func MapError(err error) error {
 	case errors.Is(err, domain.ErrTransferSuggestionAlreadyActioned):
 		return huma.Error409Conflict("Transfer suggestion has already been accepted or rejected")
 
+	// Household errors (#1367 — Phase 3)
+	case errors.Is(err, domain.ErrHouseholdNotFound):
+		return huma.Error404NotFound("Household not found")
+	case errors.Is(err, domain.ErrInviteNotFound):
+		return huma.Error404NotFound("Invite not found")
+	case errors.Is(err, domain.ErrMemberNotFound):
+		return huma.Error404NotFound("Member not found")
+
 	// Repository errors
 	case errors.Is(err, repository.ErrTransactionNotFound):
 		return huma.Error404NotFound("Transaction not found")
@@ -134,6 +142,35 @@ func MapError(err error) error {
 	case errors.Is(err, repository.ErrIdempotencyKeyConflict):
 		return huma.Error409Conflict("This idempotency key was already used for a different operation. Use a new key to perform a different request.")
 
+	// Household errors (#1367 — Phase 3)
+	case errors.Is(err, domain.ErrAlreadyOwnsHousehold):
+		return huma.Error409Conflict("You already own a household")
+	case errors.Is(err, domain.ErrAlreadyInHousehold):
+		return huma.Error409Conflict("You already belong to a household")
+	case errors.Is(err, domain.ErrHouseholdHasActiveMembers):
+		return huma.Error409Conflict("Remove members before deleting the household")
+	case errors.Is(err, domain.ErrHouseholdSeatsFull):
+		return huma.Error409Conflict("No seats available on this plan")
+	case errors.Is(err, domain.ErrInvitePendingExists):
+		return huma.Error409Conflict("A pending invite already exists for this email")
+	case errors.Is(err, domain.ErrOwnerPlanInactive):
+		return huma.Error409Conflict("The household owner's plan is not currently active")
+	// #1367 decision #6: block immediate free coverage for an invitee with a live Paddle
+	// billing relationship — the refund-liability guard. Scheduled join is Phase 7 (#1371).
+	// Surfaces the advisory eligibility date when known (Codex review, Medium finding 5).
+	case errors.Is(err, domain.ErrInviteeHasActivePaidSubscription):
+		var withDate *domain.InviteeHasActivePaidSubscriptionError
+		if errors.As(err, &withDate) && withDate.EligibleAfter != nil {
+			return huma.Error409Conflict(fmt.Sprintf(
+				"You have an active plan until %s; you can join a household once it ends",
+				withDate.EligibleAfter.Format("January 2, 2006"),
+			))
+		}
+		return huma.Error409Conflict("You have an active plan; you can join a household once it ends")
+	// #1367 decision #9: a covered member cannot start their own Paddle checkout.
+	case errors.Is(err, domain.ErrAlreadyCoveredByHousehold):
+		return huma.Error409Conflict("You're covered under a household plan; leave it before subscribing")
+
 	// ================================
 	// 403 Forbidden - Tier limits exceeded
 	// ================================
@@ -151,6 +188,12 @@ func MapError(err error) error {
 	// Issue #1270: GAP-L — foreign category_id in a condition belongs to another user.
 	case errors.Is(err, domain.ErrBoostConditionForbidden):
 		return huma.Error403Forbidden("Access denied: condition category belongs to another user")
+	// Household errors (#1367 — Phase 3)
+	case errors.Is(err, domain.ErrNotHouseholdOwner):
+		return huma.Error403Forbidden("Only the household owner can perform this action")
+	case errors.Is(err, domain.ErrInviteEmailMismatch):
+		return huma.Error403Forbidden("This invite was sent to a different email address")
+
 	// ================================
 	// 400 Bad Request - Validation errors
 	// ================================
@@ -188,6 +231,13 @@ func MapError(err error) error {
 	case errors.Is(err, domain.ErrInvalidBoost):
 		detail := strings.TrimPrefix(err.Error(), "invalid automation rule: ")
 		return huma.Error400BadRequest(detail)
+	// Household errors (#1367 — Phase 3)
+	case errors.Is(err, domain.ErrInvalidConsent):
+		return huma.Error400BadRequest("Consent is required to join a household")
+	case errors.Is(err, domain.ErrCannotInviteSelf):
+		return huma.Error400BadRequest("You cannot invite yourself")
+	case errors.Is(err, domain.ErrCannotRemoveOwner):
+		return huma.Error400BadRequest("The household owner cannot be removed; disband the household instead")
 
 	// ================================
 	// 503 Service Unavailable - External service failures
@@ -208,6 +258,13 @@ func MapError(err error) error {
 
 	case errors.Is(err, services.ErrSignatureVerificationFailed):
 		return huma.Error401Unauthorized("Webhook signature verification failed")
+	// Household errors (#1367 — Phase 3): the issue specifies 401 for a non-pending or
+	// expired invite at accept/decline time (not 409/404), matching a stale-credential
+	// semantic rather than a state conflict.
+	case errors.Is(err, domain.ErrInviteNotPending):
+		return huma.Error401Unauthorized("This invite is no longer valid")
+	case errors.Is(err, domain.ErrInviteExpired):
+		return huma.Error401Unauthorized("This invite has expired")
 
 	// ================================
 	// 500 Internal Server Error - Default
