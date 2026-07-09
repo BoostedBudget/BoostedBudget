@@ -1409,7 +1409,7 @@ func TestGetBalanceSummary_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1447,7 +1447,7 @@ func TestGetNetWorth_Household_AggregatesAcrossMembers(t *testing.T) {
 	mockAccountRepo := new(MockAccountRepository)
 
 	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(snapshots, nil)
-	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope).Return(accounts, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.AnythingOfType("time.Time")).Return(accounts, nil)
 
 	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
 	filters := &domain.DashboardFilters{HouseholdScope: scope}
@@ -1460,6 +1460,64 @@ func TestGetNetWorth_Household_AggregatesAcrossMembers(t *testing.T) {
 
 	mockSnapshotRepo.AssertNotCalled(t, "GetLatestByUserID", mock.Anything, mock.Anything)
 	mockAccountRepo.AssertNotCalled(t, "GetByUserID", mock.Anything, mock.Anything)
+}
+
+// TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsOf guards
+// against gap-closure G1: the previous-period accountMap must be built with the SAME asOf
+// cutoff as the previous-period snapshot query, or a joint account whose globally-freshest
+// copy has no pre-cutoff history gets silently dropped from the previous-period comparison.
+func TestGetNetWorth_Household_PreviousPeriod_JointAccountResolvesViaMatchingAsOf(t *testing.T) {
+	ctx := context.Background()
+	requestingUserID := "owner-1"
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"owner-1", "member-2"}}
+
+	currentBalance := 1000.0
+	currentSnapshots := []domain.BalanceSnapshot{
+		{ID: "s-current", AccountID: "acct-memberB", UserAccountID: strPtr("ua-memberB"), CurrentBalance: &currentBalance, SnapshotAt: time.Now().UTC()},
+	}
+	currentAccounts := []domain.Account{
+		{ID: "acct-memberB", UserAccountID: strPtr("ua-memberB"), Name: "Joint (member B copy)", Type: "depository"},
+	}
+
+	// Previous-period: the asOf-aware snapshot query resolves to member A's copy (the
+	// globally-freshest member B copy has no snapshot before the cutoff), but the OLD
+	// single-accountMap design would only know about member B's account.
+	previousBalance := 800.0
+	previousSnapshots := []domain.BalanceSnapshot{
+		{ID: "s-prev", AccountID: "acct-memberA", UserAccountID: strPtr("ua-memberA"), CurrentBalance: &previousBalance, SnapshotAt: time.Now().UTC().AddDate(0, 0, -35)},
+	}
+	previousAccounts := []domain.Account{
+		{ID: "acct-memberA", UserAccountID: strPtr("ua-memberA"), Name: "Joint (member A copy)", Type: "depository"},
+	}
+
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+		return time.Since(tm) < time.Minute // "now"-ish call
+	})).Return(currentSnapshots, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+		return time.Since(tm) < time.Minute
+	})).Return(currentAccounts, nil)
+
+	mockSnapshotRepo.On("GetSnapshotsAsOfForHousehold", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+		d := time.Since(tm)
+		return d > 29*24*time.Hour && d < 31*24*time.Hour // ~30-days-ago call
+	})).Return(previousSnapshots, nil)
+	mockAccountRepo.On("GetForHouseholdScope", ctx, requestingUserID, scope, mock.MatchedBy(func(tm time.Time) bool {
+		d := time.Since(tm)
+		return d > 29*24*time.Hour && d < 31*24*time.Hour
+	})).Return(previousAccounts, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+	filters := &domain.DashboardFilters{HouseholdScope: scope}
+	result, err := service.GetNetWorth(ctx, requestingUserID, filters)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.PeriodComparison, "previous-period comparison must not be silently skipped")
+	assert.Equal(t, 800.0, result.PeriodComparison.PreviousAssets,
+		"previous period must resolve member A's joint-account copy via a matching-asOf accountMap, not silently drop it")
 }
 
 func TestGetBalanceHistory_Household_UsesHouseholdAggregatedHistory(t *testing.T) {
