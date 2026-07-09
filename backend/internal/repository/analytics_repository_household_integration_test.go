@@ -389,6 +389,48 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryRollU
 	assert.Empty(t, results, "requester must not see another member's custom-category spending via roll_up=false")
 }
 
+// TestAnalyticsRepository_GetSpendingByCategory_Household_ThreeActiveMembers closes gap
+// G3: every other household test uses exactly 2 members; this proves the CTE's
+// `ua.user_id = ANY($3)` fan-out and aggregation scale correctly to 3+.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_ThreeActiveMembers(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member2 := insertTestUser(t, pool)
+	member3 := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	member2Acct := setupHouseholdMemberAccount(t, pool, member2)
+	member3Acct := setupHouseholdMemberAccount(t, pool, member3)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, member2Acct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, member3Acct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	insertHouseholdTransaction(t, pool, owner, ownerAcct.AccountID, ownerAcct.LinkedItemID, 100, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, member2, member2Acct.AccountID, member2Acct.LinkedItemID, 50, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+	insertHouseholdTransaction(t, pool, member3, member3Acct.AccountID, member3Acct.LinkedItemID, 25, now.AddDate(0, 0, -5), "FOOD_AND_DRINK")
+
+	filters := domain.SpendingFilters{
+		StartDate: now.AddDate(0, -1, 0),
+		EndDate:   now,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member2, member3},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.InDelta(t, 175, results[0].Total, 0.01, "all 3 members' shared-account spending ($100+$50+$25) must be aggregated together")
+	assert.Equal(t, 3, results[0].TransactionCount)
+}
+
 // ─── GetCashFlowAggregation / GetCashFlowGrouped — household scope ───────────
 //
 // The household_accounts CTE fan-out is already exhaustively covered above (visibility,
