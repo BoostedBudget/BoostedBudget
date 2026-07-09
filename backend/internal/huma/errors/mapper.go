@@ -193,6 +193,9 @@ func MapError(err error) error {
 		return huma.Error403Forbidden("Only the household owner can perform this action")
 	case errors.Is(err, domain.ErrInviteEmailMismatch):
 		return huma.Error403Forbidden("This invite was sent to a different email address")
+	// Household account-sharing errors (#1368 — Phase 4)
+	case errors.Is(err, domain.ErrAccountNotOwned):
+		return huma.Error403Forbidden("You do not own this account")
 
 	// ================================
 	// 400 Bad Request - Validation errors

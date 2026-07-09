@@ -2269,6 +2269,18 @@
       "description": "Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability."
     },
     {
+      "operationId": "listMyAccountShares",
+      "method": "GET",
+      "path": "/api/v1/households/me/account-shares",
+      "summary": "List household share visibility for the caller's own accounts",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": false,
+      "description": "Returns the caller's own accounts with their current household-share state. An account with no explicit grant yet (e.g. linked after joining) has a null visibility. Returns 404 if the caller is not an active member of a household."
+    },
+    {
       "operationId": "getHouseholdEntitlement",
       "method": "GET",
       "path": "/api/v1/households/me/entitlement",
@@ -3851,6 +3863,27 @@
       "manifestClass": "write",
       "excluded": false,
       "description": "Updates customization fields (nickname, color, icon, emoji, display order, hidden status) for a user account. Only provided fields are updated.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "User Account UUID",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "operationId": "setHouseholdShareVisibility",
+      "method": "PATCH",
+      "path": "/api/v1/user-accounts/{id}/household-share",
+      "summary": "Set household share visibility for a user account",
+      "tags": [
+        "Household"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Toggles whether this account is included in the household aggregate seen by other members. Active-member-only; the caller must own the account. Returns 404 if the caller is not an active member of a household, 403 if the account does not belong to the caller.",
       "parameters": [
         {
           "name": "id",

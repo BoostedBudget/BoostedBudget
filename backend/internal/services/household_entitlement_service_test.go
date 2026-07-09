@@ -78,6 +78,16 @@ func (m *mockHouseholdRepo) LockHouseholdForUpdate(ctx context.Context, househol
 	return args.String(0), args.Error(1)
 }
 
+// LockActiveMembershipForUser (#1368 — Phase 4 write) is not exercised by these
+// Phase 2 resolver tests; stubbed to satisfy the expanded HouseholdRepository interface.
+func (m *mockHouseholdRepo) LockActiveMembershipForUser(ctx context.Context, userID string) (*domain.Household, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Household), args.Error(1)
+}
+
 func (m *mockHouseholdRepo) UpdateHouseholdName(ctx context.Context, householdID, ownerUserID, name string) error {
 	args := m.Called(ctx, householdID, ownerUserID, name)
 	return args.Error(0)

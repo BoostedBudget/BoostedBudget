@@ -59,10 +59,13 @@ import type {
   GetInvitePreviewResponseBody,
   GetMyHouseholdResponseBody,
   Household,
+  HouseholdAccountShare,
   HouseholdEntitlementSummary,
   HouseholdInvite,
   HouseholdMemberView,
-  UpdateHouseholdNameRequestBody
+  SetHouseholdShareVisibilityRequestBody,
+  UpdateHouseholdNameRequestBody,
+  UserAccountShareView
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -600,6 +603,99 @@ export const useUpdateHouseholdName = <TError = ErrorType<ErrorModel>,
       return useMutation(getUpdateHouseholdNameMutationOptions(options), queryClient);
     }
     /**
+ * Returns the caller's own accounts with their current household-share state. An account with no explicit grant yet (e.g. linked after joining) has a null visibility. Returns 404 if the caller is not an active member of a household.
+ * @summary List household share visibility for the caller's own accounts
+ */
+export const listMyAccountShares = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<UserAccountShareView[] | null>(
+      {url: `/api/v1/households/me/account-shares`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getListMyAccountSharesQueryKey = () => {
+    return [
+    `/api/v1/households/me/account-shares`
+    ] as const;
+    }
+
+
+export const getListMyAccountSharesQueryOptions = <TData = Awaited<ReturnType<typeof listMyAccountShares>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListMyAccountSharesQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listMyAccountShares>>> = ({ signal }) => listMyAccountShares(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListMyAccountSharesQueryResult = NonNullable<Awaited<ReturnType<typeof listMyAccountShares>>>
+export type ListMyAccountSharesQueryError = ErrorType<ErrorModel>
+
+
+export function useListMyAccountShares<TData = Awaited<ReturnType<typeof listMyAccountShares>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMyAccountShares>>,
+          TError,
+          Awaited<ReturnType<typeof listMyAccountShares>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListMyAccountShares<TData = Awaited<ReturnType<typeof listMyAccountShares>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listMyAccountShares>>,
+          TError,
+          Awaited<ReturnType<typeof listMyAccountShares>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListMyAccountShares<TData = Awaited<ReturnType<typeof listMyAccountShares>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List household share visibility for the caller's own accounts
+ */
+
+export function useListMyAccountShares<TData = Awaited<ReturnType<typeof listMyAccountShares>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listMyAccountShares>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListMyAccountSharesQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+/**
  * Returns the authenticated user's effective subscription tier, seat counts, and coverage source, accounting for household membership.
  * @summary Get effective household entitlement
  */
@@ -1060,4 +1156,69 @@ export const useRemoveHouseholdMember = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getRemoveHouseholdMemberMutationOptions(options), queryClient);
+    }
+    /**
+ * Toggles whether this account is included in the household aggregate seen by other members. Active-member-only; the caller must own the account. Returns 404 if the caller is not an active member of a household, 403 if the account does not belong to the caller.
+ * @summary Set household share visibility for a user account
+ */
+export const setHouseholdShareVisibility = (
+    id: string,
+    setHouseholdShareVisibilityRequestBody: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<HouseholdAccountShare>(
+      {url: `/api/v1/user-accounts/${id}/household-share`, method: 'PATCH',
+      headers: {'Content-Type': 'application/json', },
+      data: setHouseholdShareVisibilityRequestBody, signal
+    },
+      options);
+    }
+
+
+
+export const getSetHouseholdShareVisibilityMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setHouseholdShareVisibility>>, TError,{id: string;data: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof setHouseholdShareVisibility>>, TError,{id: string;data: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>}, TContext> => {
+
+const mutationKey = ['setHouseholdShareVisibility'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof setHouseholdShareVisibility>>, {id: string;data: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  setHouseholdShareVisibility(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SetHouseholdShareVisibilityMutationResult = NonNullable<Awaited<ReturnType<typeof setHouseholdShareVisibility>>>
+    export type SetHouseholdShareVisibilityMutationBody = BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>
+    export type SetHouseholdShareVisibilityMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Set household share visibility for a user account
+ */
+export const useSetHouseholdShareVisibility = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setHouseholdShareVisibility>>, TError,{id: string;data: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof setHouseholdShareVisibility>>,
+        TError,
+        {id: string;data: BodyType<NonReadonly<SetHouseholdShareVisibilityRequestBody>>},
+        TContext
+      > => {
+      return useMutation(getSetHouseholdShareVisibilityMutationOptions(options), queryClient);
     }
