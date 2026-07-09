@@ -80,6 +80,48 @@ func TestHouseholdRepository_LockHouseholdForUpdate_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
 }
 
+func TestHouseholdRepository_LockActiveMembershipForUser_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		FROM household_members hm
+		JOIN households h ON h.id = hm.household_id
+		WHERE hm.user_id = $1 AND hm.status = 'active'
+		FOR UPDATE OF hm
+	`)).
+		WithArgs("user-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+
+	h, err := repo.LockActiveMembershipForUser(context.Background(), "user-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", h.ID)
+	assert.Equal(t, "owner-1", h.OwnerUserID)
+}
+
+func TestHouseholdRepository_LockActiveMembershipForUser_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		FROM household_members hm
+		JOIN households h ON h.id = hm.household_id
+		WHERE hm.user_id = $1 AND hm.status = 'active'
+		FOR UPDATE OF hm
+	`)).
+		WithArgs("user-solo").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.LockActiveMembershipForUser(context.Background(), "user-solo")
+	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
+}
+
 func TestHouseholdRepository_UpdateHouseholdName(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdMockDB(t)

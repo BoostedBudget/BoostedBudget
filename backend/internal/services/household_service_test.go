@@ -23,7 +23,11 @@ import (
 // as the plain fields. This exercises the real repository SQL, not interface mocks —
 // consistent with this codebase's existing transactional-test convention (see
 // registration_service_test.go).
-func newTxTestService(t *testing.T, userRepo userLoader, emailSvc EmailService) (pgxmock.PgxPoolIface, HouseholdService) {
+// The concrete *householdService return type (rather than the HouseholdService
+// interface) lets tests exercise the narrow HouseholdAccountShareService methods
+// (#1368 — Phase 4) too, without adding them to the broad HouseholdService interface
+// implemented by operations/household_test.go's mockHouseholdService.
+func newTxTestService(t *testing.T, userRepo userLoader, emailSvc EmailService) (pgxmock.PgxPoolIface, *householdService) {
 	t.Helper()
 	pool, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -33,7 +37,7 @@ func newTxTestService(t *testing.T, userRepo userLoader, emailSvc EmailService) 
 	entSvc := NewHouseholdEntitlementService(entRepo, userRepo, hhRepo, testTierConfig(t))
 	svc := NewHouseholdService(pool, hhRepo, repository.NewHouseholdInviteRepository(pool, enc),
 		repository.NewHouseholdShareRepository(pool), entRepo, entSvc, userRepo, testTierConfig(t), emailSvc, enc)
-	return pool, svc
+	return pool, svc.(*householdService)
 }
 
 // mockHouseholdInviteRepo and mockHouseholdShareRepo let the non-transactional
@@ -108,6 +112,24 @@ func (m *mockHouseholdShareRepo) InsertConsent(ctx context.Context, c *domain.Ho
 func (m *mockHouseholdShareRepo) RevokeSharesForUser(ctx context.Context, householdID, userID string) error {
 	args := m.Called(ctx, householdID, userID)
 	return args.Error(0)
+}
+
+// SetShareVisibility and ListMyAccountShares (#1368 — Phase 4 writes) are not
+// exercised by these Phase 3 tests; stubbed to satisfy the expanded
+// HouseholdShareRepository interface.
+func (m *mockHouseholdShareRepo) SetShareVisibility(ctx context.Context, householdID, userAccountID string, physicalBlindIdx *string, visibility domain.ShareVisibility) (*domain.HouseholdAccountShare, error) {
+	args := m.Called(ctx, householdID, userAccountID, physicalBlindIdx, visibility)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.HouseholdAccountShare), args.Error(1)
+}
+func (m *mockHouseholdShareRepo) ListMyAccountShares(ctx context.Context, householdID, userID string) ([]domain.UserAccountShareView, error) {
+	args := m.Called(ctx, householdID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.UserAccountShareView), args.Error(1)
 }
 
 // testTierConfig loads the real tier config (same pattern as household_entitlement_service_test.go).

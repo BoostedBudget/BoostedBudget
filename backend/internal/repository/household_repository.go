@@ -30,6 +30,14 @@ type HouseholdRepository interface {
 	// no active membership (found=false) is not in any household — the normal solo case.
 	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
 
+	// LockActiveMembershipForUser takes a row lock on the caller's own active
+	// household_members row (FOR UPDATE OF hm) and returns the household it belongs to.
+	// This serializes against RemoveMember, which updates that same row — so a caller
+	// holding this lock is guaranteed not to be concurrently removed for the remainder
+	// of its transaction. Returns domain.ErrHouseholdNotFound if the user has no active
+	// membership. #1368 — Phase 4 (share-visibility TOCTOU guard).
+	LockActiveMembershipForUser(ctx context.Context, userID string) (household *domain.Household, err error)
+
 	// CountActiveMembers returns the number of active (status='active') members,
 	// including the owner's own row.
 	CountActiveMembers(ctx context.Context, householdID string) (int, error)
@@ -103,6 +111,24 @@ func (r *householdRepository) GetHouseholdForUser(ctx context.Context, userID st
 		return nil, false, false, err
 	}
 	return &h, role == string(domain.HouseholdRoleOwner), true, nil
+}
+
+func (r *householdRepository) LockActiveMembershipForUser(ctx context.Context, userID string) (*domain.Household, error) {
+	var h domain.Household
+	err := r.db.QueryRow(ctx, `
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		FROM household_members hm
+		JOIN households h ON h.id = hm.household_id
+		WHERE hm.user_id = $1 AND hm.status = 'active'
+		FOR UPDATE OF hm
+	`, userID).Scan(&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrHouseholdNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
 }
 
 func (r *householdRepository) CountActiveMembers(ctx context.Context, householdID string) (int, error) {
