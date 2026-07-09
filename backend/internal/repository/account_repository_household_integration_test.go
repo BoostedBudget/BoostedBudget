@@ -12,6 +12,7 @@ package repository_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -46,7 +47,7 @@ func TestAccountRepository_GetForHouseholdScope_IncludesSharedMemberAccount(t *t
 	accounts, err := repo.GetForHouseholdScope(ctx, owner, &domain.HouseholdScope{
 		HouseholdID:   hh,
 		MemberUserIDs: []string{owner, member},
-	})
+	}, time.Now().UTC())
 	require.NoError(t, err)
 
 	ids := make(map[string]bool, len(accounts))
@@ -73,7 +74,7 @@ func TestAccountRepository_GetForHouseholdScope_ExcludesHiddenVisibilityShare(t 
 	accounts, err := repo.GetForHouseholdScope(ctx, owner, &domain.HouseholdScope{
 		HouseholdID:   hh,
 		MemberUserIDs: []string{owner, member},
-	})
+	}, time.Now().UTC())
 	require.NoError(t, err)
 	for _, a := range accounts {
 		assert.NotEqual(t, memberAcct.AccountID, a.ID, "hidden-visibility share must be excluded")

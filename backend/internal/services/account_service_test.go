@@ -378,8 +378,8 @@ func (m *MockAccountRepository) GetByUserAccountIDAndUser(ctx context.Context, u
 	return args.Get(0).(*domain.Account), args.Error(1)
 }
 
-func (m *MockAccountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope) ([]domain.Account, error) {
-	args := m.Called(ctx, requestingUserID, scope)
+func (m *MockAccountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	args := m.Called(ctx, requestingUserID, scope, asOf)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

@@ -218,7 +218,10 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope)
+	// asOf=time.Now().UTC() here — this loop's previous-period comparison below sums
+	// snapshots directly without any accountMap lookup, so (unlike getNetWorthHousehold)
+	// only one "now"-asOf account map is ever needed (#1369 gap-closure G1).
+	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
@@ -634,11 +637,11 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household balance snapshots: %w", err)
 	}
-	accounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope)
+	currentAccounts, err := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get household accounts: %w", err)
 	}
-	accountMap := buildChainAwareAccountMap(accounts)
+	accountMap := buildChainAwareAccountMap(currentAccounts)
 
 	byCategory := make(map[string]*domain.NetWorthCategoryBalance)
 	var totalAssets, totalLiabilities float64
@@ -712,42 +715,54 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 
 	var periodComparison *domain.NetWorthPeriodComparison
 	previousDate := asOfDate.AddDate(0, 0, -30)
-	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, endOfDay(previousDate))
+	previousCutoff := endOfDay(previousDate)
+	previousSnapshots, err := s.balanceSnapshotRepo.GetSnapshotsAsOfForHousehold(ctx, userID, scope, previousCutoff)
 	if err == nil && len(previousSnapshots) > 0 {
-		var prevAssets, prevLiabilities float64
-		for _, snapshot := range previousSnapshots {
-			account, exists := accountMap[snapshotChainKey(snapshot)]
-			if !exists {
-				continue
+		// #1369 gap-closure G1: the previous-period account map MUST be built with the SAME
+		// asOf cutoff as previousSnapshots above, not reuse the "now"-asOf accountMap from
+		// the current-period loop. GetForHouseholdScope's joint-account fingerprint winner
+		// depends on asOf — if a joint account's globally-freshest copy has no snapshot
+		// before previousCutoff, the "now" accountMap only knows about that (wrong-for-this-
+		// period) copy's user_account_id, and the lookup below would silently drop the
+		// account instead of resolving to the other member's genuinely earlier copy.
+		previousAccounts, acctErr := s.accountRepo.GetForHouseholdScope(ctx, userID, scope, previousCutoff)
+		if acctErr == nil {
+			previousAccountMap := buildChainAwareAccountMap(previousAccounts)
+			var prevAssets, prevLiabilities float64
+			for _, snapshot := range previousSnapshots {
+				account, exists := previousAccountMap[snapshotChainKey(snapshot)]
+				if !exists {
+					continue
+				}
+				balance := 0.0
+				if snapshot.CurrentBalance != nil {
+					balance = *snapshot.CurrentBalance
+				}
+				category := domain.AccountTypeCategory(account.Type)
+				absBalance := balance
+				if category == "liabilities" && balance < 0 {
+					absBalance = -balance
+				}
+				if category == "assets" {
+					prevAssets += absBalance
+				} else {
+					prevLiabilities += absBalance
+				}
 			}
-			balance := 0.0
-			if snapshot.CurrentBalance != nil {
-				balance = *snapshot.CurrentBalance
-			}
-			category := domain.AccountTypeCategory(account.Type)
-			absBalance := balance
-			if category == "liabilities" && balance < 0 {
-				absBalance = -balance
-			}
-			if category == "assets" {
-				prevAssets += absBalance
-			} else {
-				prevLiabilities += absBalance
-			}
-		}
 
-		prevNetWorth := prevAssets - prevLiabilities
-		changeAmount := netWorth - prevNetWorth
-		changePercent := 0.0
-		if prevNetWorth != 0 {
-			changePercent = (changeAmount / prevNetWorth) * 100
-		}
-		periodComparison = &domain.NetWorthPeriodComparison{
-			PreviousNetWorth:      prevNetWorth,
-			PreviousAssets:        prevAssets,
-			PreviousLiabilities:   prevLiabilities,
-			NetWorthChange:        changeAmount,
-			NetWorthChangePercent: changePercent,
+			prevNetWorth := prevAssets - prevLiabilities
+			changeAmount := netWorth - prevNetWorth
+			changePercent := 0.0
+			if prevNetWorth != 0 {
+				changePercent = (changeAmount / prevNetWorth) * 100
+			}
+			periodComparison = &domain.NetWorthPeriodComparison{
+				PreviousNetWorth:      prevNetWorth,
+				PreviousAssets:        prevAssets,
+				PreviousLiabilities:   prevLiabilities,
+				NetWorthChange:        changeAmount,
+				NetWorthChangePercent: changePercent,
+			}
 		}
 	}
 

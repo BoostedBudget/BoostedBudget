@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -87,7 +88,7 @@ func (m *mockAccountRepositoryForChainResolver) GetByUserAccountIDAndUser(ctx co
 	return nil, nil
 }
 
-func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope) ([]domain.Account, error) {
+func (m *mockAccountRepositoryForChainResolver) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
 	return nil, nil
 }
 

@@ -55,10 +55,14 @@ type AccountRepository interface {
 	// ALL members — not just requestingUserID. Household balance aggregation must use
 	// this instead of GetByUserID, which is single-user and would silently drop every
 	// non-requester member's accounts (Codex adversarial review, P0-2). Joint accounts
-	// dedup to one row per physical fingerprint (freshest-synced copy wins). requestingUserID
-	// is passed through only to satisfy the shared household CTE's parameter typing.
-	// Issue #1369 — Phase 5.
-	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope) ([]domain.Account, error)
+	// dedup to one row per physical fingerprint (freshest-synced copy AT OR BEFORE asOf
+	// wins). requestingUserID is passed through only to satisfy the shared household CTE's
+	// parameter typing. asOf is the point-in-time cutoff used to resolve joint-account
+	// fingerprint winners; it must match the asOf passed to whichever
+	// GetSnapshotsAsOfForHousehold call this account map will be paired with, or the two
+	// can disagree on which member's copy wins for a joint account (Issue #1369
+	// gap-closure G1). Issue #1369 — Phase 5.
+	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
 
 	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
 	// This method performs a LEFT JOIN with linked_items to include institution_name
@@ -474,11 +478,14 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 }
 
 // GetForHouseholdScope retrieves every active account shared into the household across
-// all its members. Uses the balance-oriented household CTE (freshest-synced copy wins for
-// joint-account fingerprint collisions — see householdAccountsCTEForBalances) since account
-// metadata backs balance/net-worth aggregation, not transaction history. Issue #1369 — Phase 5.
-func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope) ([]domain.Account, error) {
-	query := "WITH " + householdAccountsCTEForBalances() + `
+// all its members. Uses the asOf-bounded balance-oriented household CTE (freshest-synced
+// copy AT OR BEFORE asOf wins for joint-account fingerprint collisions — see
+// householdAccountsCTEForBalancesAsOf) since account metadata backs balance/net-worth
+// aggregation, not transaction history. asOf must match whichever
+// GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
+// gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
+func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
 		       a.current_balance, a.available_balance, a.currency_code,
@@ -491,6 +498,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 	`
 
 	args := householdScopeArgs(requestingUserID, scope)
+	args = append(args, asOf)
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
