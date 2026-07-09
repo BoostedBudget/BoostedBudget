@@ -31,6 +31,7 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { GetTransactionsAmountType } from './getTransactionsAmountType';
+import type { GetTransactionsScope } from './getTransactionsScope';
 import type { GetTransactionsSortBy } from './getTransactionsSortBy';
 import type { GetTransactionsSortDir } from './getTransactionsSortDir';
 
@@ -125,4 +126,8 @@ include_investment_activity?: string;
  * Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.
  */
 activity_types?: string;
+/**
+ * Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)
+ */
+scope?: GetTransactionsScope;
 };

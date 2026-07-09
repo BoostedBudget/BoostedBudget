@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetIncomeSourceBreakdownScope } from './getIncomeSourceBreakdownScope';
 
 export type GetIncomeSourceBreakdownParams = {
 /**
@@ -48,4 +49,8 @@ account_types?: string;
  * Include transfer transactions (true/false, default false)
  */
 include_transfers?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetIncomeSourceBreakdownScope;
 };

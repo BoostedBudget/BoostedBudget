@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetTopExpenseScope } from './getTopExpenseScope';
 
 export type GetTopExpenseParams = {
 /**
@@ -40,4 +41,8 @@ start_date: string;
  * End of date range (YYYY-MM-DD)
  */
 end_date: string;
+/**
+ * Must be omitted or 'personal' — this endpoint exposes a raw transaction ID and does not support household scope (Issue #1369 decision #5)
+ */
+scope?: GetTopExpenseScope;
 };

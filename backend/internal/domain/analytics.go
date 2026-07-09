@@ -12,6 +12,11 @@ type CashFlowFilters struct {
 	AccountTypes     []string  // Optional: Filter by account types
 	IncludeTransfers bool      // Optional: Include transfer transactions (default false)
 	Grouping         string    // For history: "daily", "weekly", "monthly"
+
+	// HouseholdScope, when non-nil, aggregates across the household's shared accounts
+	// instead of the requesting user's own. nil = personal scope (today's behavior,
+	// byte-identical output). Issue #1369 — Phase 5.
+	HouseholdScope *HouseholdScope
 }
 
 // Validate checks that the CashFlowFilters have all required fields
@@ -117,6 +122,13 @@ type SpendingFilters struct {
 	// When RollUpChildren is true, a parent custom id also matches its children.
 	CustomCategoryIDs []string
 	RollUpChildren    bool
+
+	// HouseholdScope, when non-nil, aggregates across the household's shared accounts
+	// instead of the requesting user's own. nil = personal scope (today's behavior,
+	// byte-identical output). CustomCategoryIDs always resolve against the requesting
+	// user's own categories, never a household member's — namespace-safe by design.
+	// Issue #1369 — Phase 5.
+	HouseholdScope *HouseholdScope
 }
 
 // SpendingByCategory represents spending totals for a single category
