@@ -293,6 +293,10 @@ export function createApiClient(mutator: FetchMutator) {
       getMyHousehold(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/households/me', method: 'GET', signal })
       },
+      /** GET /api/v1/households/me/account-shares */
+      listMyAccountShares(signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/households/me/account-shares', method: 'GET', signal })
+      },
       /** GET /api/v1/households/me/entitlement */
       getHouseholdEntitlement(signal?: AbortSignal): Promise<unknown> {
         return mutator({ url: '/api/v1/households/me/entitlement', method: 'GET', signal })

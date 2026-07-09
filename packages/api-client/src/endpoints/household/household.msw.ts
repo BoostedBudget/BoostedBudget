@@ -49,9 +49,11 @@ import type {
   GetInvitePreviewResponseBody,
   GetMyHouseholdResponseBody,
   Household,
+  HouseholdAccountShare,
   HouseholdEntitlementSummary,
   HouseholdInvite,
-  HouseholdMemberView
+  HouseholdMemberView,
+  UserAccountShareView
 } from '../../models';
 
 
@@ -65,6 +67,8 @@ export const getGetMyHouseholdResponseMock = (overrideResponse: Partial<Extract<
 
 export const getUpdateHouseholdNameResponseMock = (overrideResponse: Partial<Extract<Household, object>> = {}): Household => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), owner_user_id: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', ...overrideResponse})
 
+export const getListMyAccountSharesResponseMock = (): UserAccountShareView[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({revoked_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), user_account_id: faker.string.alpha({length: {min: 10, max: 20}}), visibility: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), null])})))
+
 export const getGetHouseholdEntitlementResponseMock = (overrideResponse: Partial<Extract<HouseholdEntitlementSummary, object>> = {}): HouseholdEntitlementSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), is_owner: faker.datatype.boolean(), seats_active: faker.number.int(), seats_pending: faker.number.int(), source: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}}), users_included: faker.number.int(), ...overrideResponse})
 
 export const getListHouseholdInvitesResponseMock = (): HouseholdInvite[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({accepted_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), accepted_user_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', household_id: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), invitee_email: faker.string.alpha({length: {min: 10, max: 20}}), inviter_user_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'})))
@@ -72,6 +76,8 @@ export const getListHouseholdInvitesResponseMock = (): HouseholdInvite[] | null 
 export const getCreateHouseholdInviteResponseMock = (overrideResponse: Partial<Extract<CreateInviteResponseBody, object>> = {}): CreateInviteResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), invite: {accepted_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), accepted_user_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', household_id: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), invitee_email: faker.string.alpha({length: {min: 10, max: 20}}), inviter_user_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z'}, invite_link: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getListHouseholdMembersResponseMock = (): HouseholdMemberView[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({avatar_url: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), display_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), joined_at: faker.date.past().toISOString().slice(0, 19) + 'Z', role: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
+
+export const getSetHouseholdShareVisibilityResponseMock = (overrideResponse: Partial<Extract<HouseholdAccountShare, object>> = {}): HouseholdAccountShare => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', household_id: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), revoked_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), shared_at: faker.date.past().toISOString().slice(0, 19) + 'Z', updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_account_id: faker.string.alpha({length: {min: 10, max: 20}}), visibility: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 
 export const getCreateHouseholdMockHandler = (overrideResponse?: Household | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<Household> | Household), options?: RequestHandlerOptions) => {
@@ -154,6 +160,18 @@ export const getUpdateHouseholdNameMockHandler = (overrideResponse?: Household |
   }, options)
 }
 
+export const getListMyAccountSharesMockHandler = (overrideResponse?: UserAccountShareView[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<UserAccountShareView[] | null> | UserAccountShareView[] | null), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/households/me/account-shares', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListMyAccountSharesResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getGetHouseholdEntitlementMockHandler = (overrideResponse?: HouseholdEntitlementSummary | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<HouseholdEntitlementSummary> | HouseholdEntitlementSummary), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/households/me/entitlement', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
@@ -221,6 +239,18 @@ export const getRemoveHouseholdMemberMockHandler = (overrideResponse?: void | ((
       })
   }, options)
 }
+
+export const getSetHouseholdShareVisibilityMockHandler = (overrideResponse?: HouseholdAccountShare | ((info: Parameters<Parameters<typeof http.patch>[1]>[0]) => Promise<HouseholdAccountShare> | HouseholdAccountShare), options?: RequestHandlerOptions) => {
+  return http.patch('*/api/v1/user-accounts/:id/household-share', async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getSetHouseholdShareVisibilityResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 export const getHouseholdMock = () => [
   getCreateHouseholdMockHandler(),
   getGetHouseholdInvitePreviewMockHandler(),
@@ -229,10 +259,12 @@ export const getHouseholdMock = () => [
   getDeleteHouseholdMockHandler(),
   getGetMyHouseholdMockHandler(),
   getUpdateHouseholdNameMockHandler(),
+  getListMyAccountSharesMockHandler(),
   getGetHouseholdEntitlementMockHandler(),
   getListHouseholdInvitesMockHandler(),
   getCreateHouseholdInviteMockHandler(),
   getRevokeHouseholdInviteMockHandler(),
   getListHouseholdMembersMockHandler(),
-  getRemoveHouseholdMemberMockHandler()
+  getRemoveHouseholdMemberMockHandler(),
+  getSetHouseholdShareVisibilityMockHandler()
 ]

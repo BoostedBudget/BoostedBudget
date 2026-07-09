@@ -222,6 +222,23 @@ func (s *HouseholdAccountShare) Validate() error {
 	return nil
 }
 
+// UserAccountShareView projects one of the caller's own user_accounts alongside its
+// current household_account_shares grant (if any) within a specific household. Used by
+// GET /api/v1/households/me/account-shares (#1368 — Phase 4) to render a per-account
+// sharing toggle, including accounts that have never been explicitly shared/hidden.
+//
+// Visibility is nil when no active grant row exists yet for this account (e.g. linked
+// after the member joined the household) — the caller must not assume "shared" or
+// "hidden" in that case; Phase 5/6 decide the effective display default.
+type UserAccountShareView struct {
+	UserAccountID string `json:"user_account_id"`
+	// Visibility intentionally has no `omitempty` — nil must serialize as the JSON
+	// literal `null`, not be omitted, so API consumers can distinguish "no grant yet"
+	// from a missing/older response field (#1368 Codex implementation review, Medium-1).
+	Visibility *ShareVisibility `json:"visibility"`
+	RevokedAt  *time.Time       `json:"revoked_at,omitempty"`
+}
+
 // ─── Phase 3 sentinel errors ─────────────────────────────────────────────────
 //
 // Returned by repository/service write paths (#1367) and mapped to HTTP status
@@ -257,6 +274,12 @@ var (
 	// has an active source='household' entitlement and attempts to start their own paid
 	// subscription. See #1367 decision #9.
 	ErrAlreadyCoveredByHousehold = errors.New("user is already covered by a household plan")
+
+	// ErrAccountNotOwned is returned when a caller attempts to set the household-share
+	// visibility of a user_account they do not own. Mapped to 403 (not 404) — the caller
+	// is authenticated and in a household, they simply lack rights over this specific
+	// account. #1368 — Phase 4.
+	ErrAccountNotOwned = errors.New("user account is not owned by the caller")
 )
 
 // InviteeHasActivePaidSubscriptionError wraps ErrInviteeHasActivePaidSubscription with
