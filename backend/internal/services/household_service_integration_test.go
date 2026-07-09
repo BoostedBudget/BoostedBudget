@@ -46,7 +46,10 @@ func setupHouseholdServiceIntegrationDB(t *testing.T) *pgxpool.Pool {
 type integrationServiceFixture struct {
 	pool        *pgxpool.Pool
 	profileRepo repository.ProfileRepository
-	svc         HouseholdService
+	// svc is the concrete type (not the HouseholdService interface) so integration
+	// tests can also exercise the narrow HouseholdAccountShareService methods
+	// (#1368 — Phase 4) without adding them to the broad HouseholdService interface.
+	svc *householdService
 }
 
 func setupHouseholdServiceIntegration(t *testing.T) *integrationServiceFixture {
@@ -68,7 +71,7 @@ func setupHouseholdServiceIntegration(t *testing.T) *integrationServiceFixture {
 	return &integrationServiceFixture{
 		pool:        pool,
 		profileRepo: profileRepo,
-		svc:         svc,
+		svc:         svc.(*householdService),
 	}
 }
 
@@ -555,8 +558,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentWithDeleteHousehold_
 // would complete immediately, uncontended — the test asserts that must never happen.
 func TestHouseholdServiceIntegration_AcceptInvite_OwnerStatusRace_NoStaleRead(t *testing.T) {
 	f := setupHouseholdServiceIntegration(t)
-	impl, ok := f.svc.(*householdService)
-	require.True(t, ok, "test relies on the concrete householdService type to install its synchronization hook")
+	impl := f.svc // f.svc is already the concrete householdService type — this test installs a synchronization hook on it.
 	ctx := context.Background()
 
 	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
@@ -670,4 +672,145 @@ pollLoop:
 	cancelErr := <-cancelDone
 	require.NoError(t, cancelErr, "the simulated Paddle cancel must succeed once AcceptInvite's transaction ends")
 	require.NoError(t, acceptErr, "AcceptInvite legitimately held the owner-row lock first (owner was genuinely still active throughout), so it must succeed")
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_HiddenAccountIDs_CreatesConsistentHiddenRow
+// is the #1368 (Phase 4) regression proving Decision A: the accept-transaction's
+// hidden_account_ids opt-out (#1367 — Phase 3, household_service.go step (8)) is left
+// UNCHANGED by Phase 4 and produces a row consistent with the corrected data model —
+// visibility='hidden' with revoked_at STAYING NULL, not revoked. If a future change ever
+// makes accept write revoked_at for a pre-hidden account, this catches it: such a row
+// would be invisible to RevokeSharesForUser's `WHERE revoked_at IS NULL` filter, meaning
+// member removal could never revoke it (see household_share_repository.go).
+func TestHouseholdServiceIntegration_AcceptInvite_HiddenAccountIDs_CreatesConsistentHiddenRow(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	var acctID string
+	err = f.pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx)
+		VALUES ($1, 'enc_inst', 'blind_inst_'||gen_random_uuid()::text)
+		RETURNING id::text
+	`, invitee.ID).Scan(&acctID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, acctID) //nolint:errcheck
+	})
+
+	inviteResult, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken := inviteResult.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	// Invitee pre-hides this account before accepting (the GDPR consent-gate opt-out).
+	_, err = f.svc.AcceptInvite(ctx, invitee.ID, rawToken, true, []string{acctID})
+	require.NoError(t, err)
+
+	var visibility string
+	var revokedAt *time.Time
+	err = f.pool.QueryRow(ctx, `SELECT visibility, revoked_at FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		household.ID, acctID).Scan(&visibility, &revokedAt)
+	require.NoError(t, err)
+	require.Equal(t, "hidden", visibility)
+	require.Nil(t, revokedAt, "a pre-hidden account must stay an ACTIVE row (revoked_at NULL) — hidden and revoked are different states")
+
+	// And it must still be reachable by member-removal's revocation path (proves the row
+	// is genuinely active, not orphaned).
+	shareRepo := repository.NewHouseholdShareRepository(f.pool)
+	require.NoError(t, shareRepo.RevokeSharesForUser(ctx, household.ID, invitee.ID))
+	err = f.pool.QueryRow(ctx, `SELECT revoked_at FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+		household.ID, acctID).Scan(&revokedAt)
+	require.NoError(t, err)
+	require.NotNil(t, revokedAt, "RevokeSharesForUser must be able to find and revoke the hidden row")
+}
+
+// TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember_NoActiveShareSurvives
+// proves the #1368 (Phase 4) TOCTOU guard (Codex design-review High-4): a member's own
+// PATCH .../household-share cannot race the owner's concurrent member-removal and leave a
+// dangling active share behind for someone no longer in the household. Both
+// SetAccountShareVisibility and RemoveMember lock the SAME household_members row (the
+// former via LockActiveMembershipForUser FOR UPDATE OF hm, the latter via its UPDATE), so
+// real Postgres row-level locking fully serializes every possible interleaving:
+//   - PATCH commits first  -> RemoveMember's later RevokeSharesForUser revokes the row PATCH just wrote.
+//   - RemoveMember commits first -> PATCH's lock attempt finds no active membership -> 404, no row written.
+//
+// Either way, once both calls complete, no active (revoked_at IS NULL) share may remain
+// for the removed member's account.
+func TestHouseholdServiceIntegration_SetAccountShareVisibility_RaceRemoveMember_NoActiveShareSurvives(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	member := insertIntegrationTestUser(t, f.profileRepo, "member-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, member.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	// Insert the member's active membership row directly — this test only cares about the
+	// share/removal race, not the full invite/entitlement lifecycle already covered by
+	// TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath.
+	_, err = f.pool.Exec(ctx, `
+		INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+	`, household.ID, member.ID)
+	require.NoError(t, err)
+
+	var acctID string
+	err = f.pool.QueryRow(ctx, `
+		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx)
+		VALUES ($1, 'enc_inst', 'blind_inst_'||gen_random_uuid()::text)
+		RETURNING id::text
+	`, member.ID).Scan(&acctID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, acctID) //nolint:errcheck
+	})
+
+	// Pre-seed a 'shared' row so there is something active for the race to contend over.
+	shareRepo := repository.NewHouseholdShareRepository(f.pool)
+	require.NoError(t, shareRepo.InsertShare(ctx, household.ID, acctID, nil, domain.ShareVisibilityShared))
+
+	var wg sync.WaitGroup
+	var patchErr, removeErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, patchErr = f.svc.SetAccountShareVisibility(ctx, member.ID, acctID, domain.ShareVisibilityHidden)
+	}()
+	go func() {
+		defer wg.Done()
+		removeErr = f.svc.RemoveMember(ctx, owner.ID, member.ID)
+	}()
+	wg.Wait()
+
+	require.NoError(t, removeErr, "owner-initiated removal must always succeed regardless of the race outcome")
+	// PATCH either won the race (succeeds, then gets revoked by RemoveMember) or lost it
+	// (finds the membership already gone -> 404). Both are correct; anything else is a bug.
+	if patchErr != nil {
+		require.ErrorIs(t, patchErr, domain.ErrHouseholdNotFound)
+	}
+
+	var activeCount int
+	err = f.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM household_account_shares
+		WHERE household_id = $1 AND user_account_id = $2 AND revoked_at IS NULL
+	`, household.ID, acctID).Scan(&activeCount)
+	require.NoError(t, err)
+	require.Equal(t, 0, activeCount, "no active share may survive for a removed member's account, regardless of interleaving")
 }
