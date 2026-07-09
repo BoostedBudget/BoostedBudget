@@ -612,7 +612,27 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	shareRepo := repository.NewHouseholdShareRepository(tx)
 	entRepo := repository.NewEntitlementRepository(tx)
 
-	// (1)(2) Lock invite; validate pending & not expired.
+	// (0) Non-locking lookup of which household this token belongs to — deliberately
+	// BEFORE any row lock. #1367 Gap Analysis Round 4B, GT-6: locking the invite row
+	// first (as this used to) inverts DeleteHousehold's lock order (household, then —
+	// via ON DELETE CASCADE — its invites), which can deadlock a concurrent accept
+	// against a concurrent disband. Locking the household FIRST here, matching
+	// CreateInvite/DeleteHousehold, makes the acquisition order consistent everywhere.
+	// This lookup is NOT authoritative — never branch on its result beyond "which
+	// household to lock"; the real validation happens after the invite is actually
+	// locked in step (1)(2) below.
+	householdID, cerr := inviteRepo.GetHouseholdIDByTokenHash(ctx, hashToken(rawToken))
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	// (1) Lock household; owner must not be deleted/read-only; seat re-check.
+	ownerUserID, cerr := hhRepo.LockHouseholdForUpdate(ctx, householdID)
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	// (2) Lock invite (the authoritative, race-safe read); validate pending & not expired.
 	inv, cerr := inviteRepo.GetByTokenHashForUpdate(ctx, hashToken(rawToken))
 	if cerr != nil {
 		return nil, cerr
@@ -644,11 +664,8 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		return nil, cerr
 	}
 
-	// (4) Lock household; owner must not be deleted/read-only; seat re-check.
-	ownerUserID, cerr := hhRepo.LockHouseholdForUpdate(ctx, inv.HouseholdID)
-	if cerr != nil {
-		return nil, cerr
-	}
+	// (4) Household is already locked (step 1) — resolve the owner and continue exactly
+	// as before.
 	owner, cerr := s.userRepo.GetUserByID(ctx, ownerUserID)
 	if cerr != nil {
 		return nil, cerr

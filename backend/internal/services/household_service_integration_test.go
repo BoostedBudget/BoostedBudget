@@ -41,6 +41,37 @@ func setupHouseholdServiceIntegrationDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// integrationServiceFixture bundles the service and repos needed by integration tests,
+// reducing setup duplication across the three concurrent AcceptInvite scenarios.
+type integrationServiceFixture struct {
+	pool        *pgxpool.Pool
+	profileRepo repository.ProfileRepository
+	svc         HouseholdService
+}
+
+func setupHouseholdServiceIntegration(t *testing.T) *integrationServiceFixture {
+	t.Helper()
+	pool := setupHouseholdServiceIntegrationDB(t)
+	enc := newTestFieldEncryptor(t)
+
+	profileRepo := repository.NewProfileRepository(pool, enc)
+	householdRepo := repository.NewHouseholdRepository(pool)
+	inviteRepo := repository.NewHouseholdInviteRepository(pool, enc)
+	shareRepo := repository.NewHouseholdShareRepository(pool)
+	entRepo := repository.NewEntitlementRepository(pool)
+	tierConfig := testTierConfig(t)
+	entSvc := NewHouseholdEntitlementService(entRepo, profileRepo, householdRepo, tierConfig)
+	emailSvc := NewEmailServiceMock("", "", "https://app.example.com")
+
+	svc := NewHouseholdService(pool, householdRepo, inviteRepo, shareRepo, entRepo, entSvc, profileRepo, tierConfig, emailSvc, enc)
+
+	return &integrationServiceFixture{
+		pool:        pool,
+		profileRepo: profileRepo,
+		svc:         svc,
+	}
+}
+
 // insertIntegrationTestUser creates a real user row via the real ProfileRepository
 // (so email encryption/blind-indexing round-trips exactly as production does). Callers
 // are responsible for cleanup (see the DELETE FROM users t.Cleanup in the test body).
@@ -60,61 +91,50 @@ func insertIntegrationTestUser(t *testing.T, profileRepo repository.ProfileRepos
 }
 
 func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
-	pool := setupHouseholdServiceIntegrationDB(t)
+	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()
-	enc := newTestFieldEncryptor(t)
 
-	profileRepo := repository.NewProfileRepository(pool, enc)
-	householdRepo := repository.NewHouseholdRepository(pool)
-	inviteRepo := repository.NewHouseholdInviteRepository(pool, enc)
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	entRepo := repository.NewEntitlementRepository(pool)
-	tierConfig := testTierConfig(t)
-	entSvc := NewHouseholdEntitlementService(entRepo, profileRepo, householdRepo, tierConfig)
-	emailSvc := NewEmailServiceMock("", "", "https://app.example.com")
-
-	svc := NewHouseholdService(pool, householdRepo, inviteRepo, shareRepo, entRepo, entSvc, profileRepo, tierConfig, emailSvc, enc)
-
-	owner := insertIntegrationTestUser(t, profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
-	invitee := insertIntegrationTestUser(t, profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
 	})
 
-	household, err := svc.CreateHousehold(ctx, owner.ID, "Integration Test Household")
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
 	})
 
 	// Give the invitee one account so the default-share fan-out has something to do.
 	var acctID string
-	err = pool.QueryRow(ctx, `
+	err = f.pool.QueryRow(ctx, `
 		INSERT INTO user_accounts (user_id, institution_id, institution_id_blind_idx)
 		VALUES ($1, 'enc_inst', 'blind_inst_'||gen_random_uuid()::text)
 		RETURNING id::text
 	`, invitee.ID).Scan(&acctID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, acctID) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM user_accounts WHERE id = $1`, acctID) //nolint:errcheck
 	})
 
-	inviteResult, err := svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	inviteResult, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
 	require.NoError(t, err)
 	rawToken := inviteResult.InviteLink[len("https://app.example.com/households/invites/"):]
 
-	acceptResult, err := svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
+	acceptResult, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, household.ID, acceptResult.Household.ID)
 
 	// Membership row exists and is active.
+	householdRepo := repository.NewHouseholdRepository(f.pool)
 	member, err := householdRepo.GetActiveMember(ctx, household.ID, invitee.ID)
 	require.NoError(t, err)
 	require.Equal(t, domain.HouseholdRoleMember, member.Role)
 
 	// Consent row was written with a non-empty snapshot.
 	var snapshotRaw []byte
-	err = pool.QueryRow(ctx, `SELECT snapshot FROM household_share_consents WHERE household_id = $1 AND user_id = $2`,
+	err = f.pool.QueryRow(ctx, `SELECT snapshot FROM household_share_consents WHERE household_id = $1 AND user_id = $2`,
 		household.ID, invitee.ID).Scan(&snapshotRaw)
 	require.NoError(t, err)
 	var snapshot map[string][]string
@@ -123,12 +143,13 @@ func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
 
 	// Account share was created as 'shared' (not hidden).
 	var visibility string
-	err = pool.QueryRow(ctx, `SELECT visibility FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
+	err = f.pool.QueryRow(ctx, `SELECT visibility FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`,
 		household.ID, acctID).Scan(&visibility)
 	require.NoError(t, err)
 	require.Equal(t, "shared", visibility)
 
 	// Household entitlement was written for the invitee, sourced from the owner.
+	entRepo := repository.NewEntitlementRepository(f.pool)
 	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
 	require.NoError(t, err)
 	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
@@ -138,7 +159,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath(t *testing.T) {
 	// Invite flipped to accepted.
 	var inviteStatus string
 	var acceptedAt *time.Time
-	err = pool.QueryRow(ctx, `SELECT status, accepted_at FROM household_invites WHERE household_id = $1 AND inviter_user_id = $2`,
+	err = f.pool.QueryRow(ctx, `SELECT status, accepted_at FROM household_invites WHERE household_id = $1 AND inviter_user_id = $2`,
 		household.ID, owner.ID).Scan(&inviteStatus, &acceptedAt)
 	require.NoError(t, err)
 	require.Equal(t, "accepted", inviteStatus)
@@ -216,44 +237,42 @@ func waitForBlockedByGate(t *testing.T, gatePID int32, want int) {
 // closes a Gap Analysis Round 2 (GT-5) test-hardening item: the existing real-DB
 // concurrency proof (repository.TestHouseholdAcceptConcurrency_SeatCapEnforced) only
 // exercises a repo-level analog (Lock -> Count -> Insert), not the FULL service-level
-// AcceptInvite transaction racing on the SAME invite token. This proves the invite-row
-// `SELECT ... FOR UPDATE` actually serializes two concurrent accepts of one token (e.g. a
-// double-click) — the second call must see the flipped status, not double-accept.
+// AcceptInvite transaction racing on the SAME invite token. This proves two concurrent
+// accepts of one token (e.g. a double-click) are fully serialized — the second call must
+// see the flipped status, not double-accept.
+//
+// Gates the invite row specifically (Codex Round 4B/GT-6 note: since AcceptInvite now
+// locks the household before the invite — see GT-6 — both callers actually contend on the
+// SAME household row first; whichever wins then reaches this gate and blocks on the
+// invite-row lock, while the loser is only transitively blocked, via the winner's held
+// household lock, on this same gate. waitForBlockedByGate's recursive pg_blocking_pids CTE
+// correctly counts both as gate-blocked either way, so this still proves full end-to-end
+// serialization — just via a household-then-invite chain rather than two direct invite-row
+// waiters).
 func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowLockEnforced(t *testing.T) {
-	pool := setupHouseholdServiceIntegrationDB(t)
+	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()
-	enc := newTestFieldEncryptor(t)
 
-	profileRepo := repository.NewProfileRepository(pool, enc)
-	householdRepo := repository.NewHouseholdRepository(pool)
-	inviteRepo := repository.NewHouseholdInviteRepository(pool, enc)
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	entRepo := repository.NewEntitlementRepository(pool)
-	tierConfig := testTierConfig(t)
-	entSvc := NewHouseholdEntitlementService(entRepo, profileRepo, householdRepo, tierConfig)
-	emailSvc := NewEmailServiceMock("", "", "https://app.example.com")
-	svc := NewHouseholdService(pool, householdRepo, inviteRepo, shareRepo, entRepo, entSvc, profileRepo, tierConfig, emailSvc, enc)
-
-	owner := insertIntegrationTestUser(t, profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
-	invitee := insertIntegrationTestUser(t, profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
 	})
 
-	household, err := svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (same token)")
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (same token)")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
 	})
 
-	inviteResult, err := svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	inviteResult, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
 	require.NoError(t, err)
 	rawToken := inviteResult.InviteLink[len("https://app.example.com/households/invites/"):]
 
 	// Gate: hold the invite row's lock BEFORE starting the two real accept attempts, so
 	// both are guaranteed to actually contend for it — proving real lock contention
 	// rather than hoping goroutine scheduling happens to overlap them.
-	gateTx, err := pool.Begin(ctx)
+	gateTx, err := f.pool.Begin(ctx)
 	require.NoError(t, err)
 	gateReleased := false
 	defer func() {
@@ -279,7 +298,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowL
 	for i := 0; i < attempts; i++ {
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
+			_, errs[i] = f.svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
 		}(i)
 	}
 
@@ -319,39 +338,28 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentSameToken_InviteRowL
 // AcceptInvite transaction — not just the repository-level Lock->Count->Insert analog —
 // prevents seat overflow when both racing invitees try to claim the single remaining seat.
 func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_SeatCapEnforced(t *testing.T) {
-	pool := setupHouseholdServiceIntegrationDB(t)
+	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()
-	enc := newTestFieldEncryptor(t)
-
-	profileRepo := repository.NewProfileRepository(pool, enc)
-	householdRepo := repository.NewHouseholdRepository(pool)
-	inviteRepo := repository.NewHouseholdInviteRepository(pool, enc)
-	shareRepo := repository.NewHouseholdShareRepository(pool)
-	entRepo := repository.NewEntitlementRepository(pool)
-	tierConfig := testTierConfig(t)
-	entSvc := NewHouseholdEntitlementService(entRepo, profileRepo, householdRepo, tierConfig)
-	emailSvc := NewEmailServiceMock("", "", "https://app.example.com")
-	svc := NewHouseholdService(pool, householdRepo, inviteRepo, shareRepo, entRepo, entSvc, profileRepo, tierConfig, emailSvc, enc)
 
 	// Owner starts on household_3 (3 seats) so both invites can be created — the
 	// invite-creation seat gate counts active+pending, so a 2-seat household could never
 	// have had two simultaneously-pending invites in the first place.
-	owner := insertIntegrationTestUser(t, profileRepo, "owner-"+t.Name()+"@example.com", "household_3", "active")
-	inviteeA := insertIntegrationTestUser(t, profileRepo, "invitee-a-"+t.Name()+"@example.com", "premium", "trial")
-	inviteeB := insertIntegrationTestUser(t, profileRepo, "invitee-b-"+t.Name()+"@example.com", "premium", "trial")
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_3", "active")
+	inviteeA := insertIntegrationTestUser(t, f.profileRepo, "invitee-a-"+t.Name()+"@example.com", "premium", "trial")
+	inviteeB := insertIntegrationTestUser(t, f.profileRepo, "invitee-b-"+t.Name()+"@example.com", "premium", "trial")
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, inviteeA.ID, inviteeB.ID}) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, inviteeA.ID, inviteeB.ID}) //nolint:errcheck
 	})
 
-	household, err := svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (seat race)")
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (seat race)")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
 	})
 
-	inviteA, err := svc.CreateInvite(ctx, owner.ID, inviteeA.Email, "https://app.example.com")
+	inviteA, err := f.svc.CreateInvite(ctx, owner.ID, inviteeA.Email, "https://app.example.com")
 	require.NoError(t, err)
-	inviteB, err := svc.CreateInvite(ctx, owner.ID, inviteeB.Email, "https://app.example.com")
+	inviteB, err := f.svc.CreateInvite(ctx, owner.ID, inviteeB.Email, "https://app.example.com")
 	require.NoError(t, err)
 	tokenA := inviteA.InviteLink[len("https://app.example.com/households/invites/"):]
 	tokenB := inviteB.InviteLink[len("https://app.example.com/households/invites/"):]
@@ -359,14 +367,14 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_Seat
 	// Simulate the owner downgrading from household_3 (3 seats) to household_2 (2 seats)
 	// after both invites were issued but before either invitee accepts. Owner (1 active)
 	// + one more accept = 2 = included; the second concurrent accept must be rejected.
-	_, err = pool.Exec(ctx, `UPDATE users SET subscription_tier = 'household_2' WHERE id = $1`, owner.ID)
+	_, err = f.pool.Exec(ctx, `UPDATE users SET subscription_tier = 'household_2' WHERE id = $1`, owner.ID)
 	require.NoError(t, err)
 
 	// Gate: hold the household row's lock BEFORE starting the two real accept attempts.
 	// Each invitee's own invite row is distinct (no contention there); the real
 	// contention point this test proves is the shared household-row FOR UPDATE +
 	// seat re-check, so the gate must target `households`, not `household_invites`.
-	gateTx, err := pool.Begin(ctx)
+	gateTx, err := f.pool.Begin(ctx)
 	require.NoError(t, err)
 	gateReleased := false
 	defer func() {
@@ -387,11 +395,11 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_Seat
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = svc.AcceptInvite(ctx, inviteeA.ID, tokenA, true, nil)
+		_, errs[0] = f.svc.AcceptInvite(ctx, inviteeA.ID, tokenA, true, nil)
 	}()
 	go func() {
 		defer wg.Done()
-		_, errs[1] = svc.AcceptInvite(ctx, inviteeB.ID, tokenB, true, nil)
+		_, errs[1] = f.svc.AcceptInvite(ctx, inviteeB.ID, tokenB, true, nil)
 	}()
 
 	waitForBlockedByGate(t, gatePID, 2)
@@ -413,4 +421,97 @@ func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_Seat
 	}
 	require.Equal(t, 1, successes, "exactly one of the two racing invitees must win the last seat")
 	require.Equal(t, 1, seatsFull, "the loser must see the household as full, never overfilling seats")
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_ConcurrentWithDeleteHousehold_NoDeadlock
+// closes a lock-order-inversion deadlock found by a user-requested final Codex adversarial
+// review (Gap Analysis Round 4B, GT-6): AcceptInvite used to lock the invite row before the
+// household row, while DeleteHousehold locks the household row first and then (via
+// household_invites.household_id ON DELETE CASCADE) needs to lock/remove that same invite
+// row. A concurrent accept + disband on the same household could deadlock — Postgres aborts
+// one side with an unmapped SQLSTATE 40P01, which fell through errors/mapper.go's default
+// case as a raw 500 instead of a clean domain sentinel.
+//
+// The fix reorders AcceptInvite to lock the household BEFORE the invite (matching
+// CreateInvite/DeleteHousehold), via a new non-locking GetHouseholdIDByTokenHash lookup
+// used only to learn which household to lock first. Both paths now contend for the SAME
+// FIRST lock (the household row), so there are exactly two valid, race-safe outcomes —
+// never a deadlock or an unmapped error:
+//   - Accept wins the household lock first, inserts the member, and commits BEFORE Delete's
+//     CountActiveMembers check runs → Delete correctly sees 2 active members and gets
+//     domain.ErrHouseholdHasActiveMembers.
+//   - Delete wins the household lock first, sees only 1 active member (Accept hasn't
+//     inserted anything yet), and deletes the household (cascading away the pending
+//     invite) → Accept's own LockHouseholdForUpdate then finds no such row and gets
+//     domain.ErrHouseholdNotFound.
+func TestHouseholdServiceIntegration_AcceptInvite_ConcurrentWithDeleteHousehold_NoDeadlock(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (accept vs disband)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		// DeleteHousehold may have already removed this row (one of the two valid
+		// outcomes) — a 0-row DELETE is harmless.
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	inviteResult, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken := inviteResult.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	// Gate: hold the household row's lock BEFORE starting the accept and the disband, so
+	// both are guaranteed to actually contend for it — this is the FIRST lock either path
+	// takes now that AcceptInvite has been reordered, so no separate invite-row gate is
+	// needed (unlike the sibling seat-cap test above, which gates a lock acquired only
+	// partway through each transaction).
+	gateTx, err := f.pool.Begin(ctx)
+	require.NoError(t, err)
+	gateReleased := false
+	defer func() {
+		if !gateReleased {
+			_ = gateTx.Rollback(ctx)
+		}
+	}()
+	var gatePID int32
+	require.NoError(t, gateTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&gatePID))
+	var lockedID string
+	require.NoError(t, gateTx.QueryRow(ctx,
+		`SELECT id::text FROM households WHERE id = $1 FOR UPDATE`, household.ID,
+	).Scan(&lockedID))
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = f.svc.AcceptInvite(ctx, invitee.ID, rawToken, true, nil)
+	}()
+	go func() {
+		defer wg.Done()
+		errs[1] = f.svc.DeleteHousehold(ctx, owner.ID)
+	}()
+
+	waitForBlockedByGate(t, gatePID, 2)
+	require.NoError(t, gateTx.Rollback(ctx)) // release the gate — both goroutines now race for real
+	gateReleased = true
+
+	wg.Wait()
+
+	acceptErr, deleteErr := errs[0], errs[1]
+	switch {
+	case acceptErr == nil && errors.Is(deleteErr, domain.ErrHouseholdHasActiveMembers):
+		// Accept won: inserted the member before Delete's active-count check ran.
+	case deleteErr == nil && errors.Is(acceptErr, domain.ErrHouseholdNotFound):
+		// Delete won: removed the household (cascading the invite) before Accept
+		// re-acquired the household lock.
+	default:
+		t.Fatalf("expected exactly one of the two race-safe outcomes, got acceptErr=%v deleteErr=%v — a raw/unmapped error here means the lock-order deadlock regressed", acceptErr, deleteErr)
+	}
 }
