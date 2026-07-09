@@ -171,6 +171,10 @@ type householdService struct {
 	enc             *appcrypto.FieldEncryptor
 	analytics       phclient.Analytics
 	memberProfiles  MemberProfileResolver
+
+	// acceptInviteAfterOwnerCheckHook is a test-only synchronization seam (see the call site
+	// in AcceptInvite for why it exists). Always nil in production.
+	acceptInviteAfterOwnerCheckHook func()
 }
 
 // NewHouseholdService creates a new HouseholdService. db must be the same pool used to
@@ -228,10 +232,14 @@ func (s *householdService) CreateHousehold(ctx context.Context, ownerUserID, nam
 		return nil, err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer (Gap Analysis Round 5, GT-7): a panic mid-transaction
+	// unwinds past every `cerr = ...; return cerr` assignment, so a conditional
+	// `if cerr != nil` check here would never fire and the transaction would leak under the
+	// app's panic-recovery middleware. Rollback after a successful Commit is a documented
+	// pgx no-op (ErrTxClosed, discarded) — this matches the existing codebase idiom already
+	// used in registration_service.go/profile_service.go.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
@@ -304,10 +312,9 @@ func (s *householdService) DeleteHousehold(ctx context.Context, userID string) e
 		return err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
@@ -391,10 +398,9 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		return err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
@@ -459,10 +465,9 @@ func (s *householdService) CreateInvite(ctx context.Context, ownerUserID, invite
 		return nil, err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
@@ -559,10 +564,9 @@ func (s *householdService) DeclineInvite(ctx context.Context, callerUserID, rawT
 		return err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	inviteRepo := repository.NewHouseholdInviteRepository(tx, s.enc)
@@ -601,10 +605,9 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		return nil, err
 	}
 	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
-		if cerr != nil {
-			_ = tx.Rollback(ctx)
-		}
+		_ = tx.Rollback(ctx)
 	}()
 
 	inviteRepo := repository.NewHouseholdInviteRepository(tx, s.enc)
@@ -664,9 +667,23 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		return nil, cerr
 	}
 
-	// (4) Household is already locked (step 1) — resolve the owner and continue exactly
-	// as before.
-	owner, cerr := s.userRepo.GetUserByID(ctx, ownerUserID)
+	// (4) Household is already locked (step 1). Also lock the OWNER's own user row before
+	// reading their deletion/subscription status (Gap Analysis Round 5, GT-8): without
+	// this, a concurrent Paddle webhook or the trial-expiry job could commit an
+	// active->cancelled transition on the owner's row between this read and our commit,
+	// letting a membership + household entitlement get inserted for an owner whose plan
+	// just lapsed. Locking closes the race outright; ownerUserID is expected to differ from
+	// callerUserID in the normal case (CreateInvite rejects self-invites by email at
+	// creation time), so this ordinarily locks a different row than the caller-lock above.
+	// Even in the theoretical edge case where they coincide (e.g. the owner's email later
+	// changes to match a still-pending invite's invitee_email), re-acquiring the same row's
+	// FOR UPDATE lock twice within one transaction is a safe, idempotent no-op in Postgres —
+	// not a double-lock bug. Verified this introduces no new deadlock cycle: no other
+	// household-write path (DeleteHousehold, CreateInvite, RevokeInvite,
+	// RemoveMember, DeclineInvite) ever takes a FOR UPDATE lock on the owner's own users
+	// row, so this can only ever put AcceptInvite in a one-directional wait against
+	// unrelated single-lock writers (profile updates, Paddle webhooks) — never a cycle.
+	owner, cerr := s.lockAndGetUser(ctx, tx, ownerUserID)
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -674,6 +691,18 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		cerr = domain.ErrOwnerPlanInactive
 		return nil, cerr
 	}
+
+	// Test-only synchronization seam (always nil in production): invoked immediately after
+	// the owner-status decision, while this transaction (and its owner-row lock) is still
+	// open. Exists solely so the real-DB regression test for this fix
+	// (TestHouseholdServiceIntegration_AcceptInvite_OwnerStatusRace_NoStaleRead, #1367 Gap
+	// Analysis Round 5, GT-8) can deterministically prove a concurrent owner-status write is
+	// genuinely blocked at this point, rather than relying on incidental lock timing that
+	// does not reliably discriminate a fixed implementation from a broken one.
+	if s.acceptInviteAfterOwnerCheckHook != nil {
+		s.acceptInviteAfterOwnerCheckHook()
+	}
+
 	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
 	if cerr != nil {
 		return nil, cerr
