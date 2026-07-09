@@ -340,6 +340,55 @@ func TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryNames
 	assert.InDelta(t, 30, results[0].Total, 0.01)
 }
 
+// TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryRollUpFalse_RejectsForeignCategory
+// closes gap-closure G4: with roll_up=false, buildSpendingFilter's else-branch had no
+// user_id ownership check on custom_category_override_id (unlike the RollUpChildren=true
+// branch, which scopes via a `user_id = $1::uuid` subquery). Inert in personal mode (the
+// outer query's `t.user_id = $1` already constrains to the requester's own transactions),
+// but live in household mode: a requester supplying another member's custom category ID
+// with roll_up=false must not see that member's spending.
+func TestAnalyticsRepository_GetSpendingByCategory_Household_CustomCategoryRollUpFalse_RejectsForeignCategory(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewAnalyticsRepository(pool)
+
+	owner, member, hh, _, memberAcct := setupTwoMemberSharedHousehold(t, pool)
+	now := time.Now().UTC()
+
+	// Member has their OWN custom category and a transaction using it.
+	var memberCustomCatID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Member Custom')
+		RETURNING id::text
+	`, member).Scan(&memberCustomCatID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM custom_categories WHERE id = $1`, memberCustomCatID) //nolint:errcheck
+	})
+	_, err = pool.Exec(ctx, `
+		INSERT INTO transactions (user_id, account_id, linked_item_id, source, name, merchant_name, amount, date, pending,
+			category_override_kind, custom_category_override_id, effective_category_name)
+		VALUES ($1, $2, $3, 'plaid', 'Test Txn', 'Test Merchant', 999, $4, false, 'custom', $5, 'Member Custom')
+	`, member, memberAcct.AccountID, memberAcct.LinkedItemID, now.AddDate(0, 0, -5).Format("2006-01-02"), memberCustomCatID)
+	require.NoError(t, err)
+
+	// Owner (the requester) probes with the MEMBER's category ID, roll_up=false.
+	filters := domain.SpendingFilters{
+		StartDate:         now.AddDate(0, -1, 0),
+		EndDate:           now,
+		CustomCategoryIDs: []string{memberCustomCatID},
+		RollUpChildren:    false,
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   hh,
+			MemberUserIDs: []string{owner, member},
+		},
+	}
+
+	results, err := repo.GetSpendingByCategory(ctx, owner, filters)
+	require.NoError(t, err)
+	assert.Empty(t, results, "requester must not see another member's custom-category spending via roll_up=false")
+}
+
 // ─── GetCashFlowAggregation / GetCashFlowGrouped — household scope ───────────
 //
 // The household_accounts CTE fan-out is already exhaustively covered above (visibility,

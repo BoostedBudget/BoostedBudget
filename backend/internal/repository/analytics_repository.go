@@ -645,8 +645,14 @@ func buildSpendingFilter(filters domain.SpendingFilters, baseArgs []interface{})
 				idList, idList,
 			)
 		} else {
+			// #1369 gap-closure G4: this branch previously had no ownership check at all
+			// (unlike the RollUpChildren=true branch above), inert in personal mode only
+			// because the outer query's `t.user_id = $1` already constrained results to the
+			// requester's own transactions. Household mode's cross-member fan-out makes it
+			// live — namespace it the same way, without the parent_id OR-widening.
 			clause += fmt.Sprintf(
-				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id::text IN (%s)",
+				" AND t.category_override_kind = 'custom' AND t.custom_category_override_id IN ("+
+					"SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN (%s))",
 				idList,
 			)
 		}
