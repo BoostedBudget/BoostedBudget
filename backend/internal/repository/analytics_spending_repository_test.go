@@ -100,10 +100,14 @@ func TestGetSpendingByCategory(t *testing.T) {
 }
 
 // TestGetSpendingByCategoryHousehold_SingleRoundTrip closes gap G2 (issue's explicit ask:
-// "verify via query count in integration test"). pgxmock's ExpectationsWereMet fails if the
-// code under test issues more or fewer queries than expected — exactly one ExpectQuery here
-// proves the household CTE fan-out is a single SQL round trip, not N+1 across household
-// accounts/members.
+// "verify via query count in integration test"). This is a pgxmock-based UNIT test, not a
+// live-Postgres integration test — pgxmock's ExpectationsWereMet fails if the code under
+// test issues more or fewer queries than expected, so exactly one ExpectQuery here proves
+// the household CTE fan-out issues a single SQL round trip (one Query() call), not N+1
+// across household accounts/members. A real-Postgres integration test can't easily assert
+// call-count without the same kind of driver interception, so a mock is the right tool for
+// this specific property (flagged for clarity during #1369 gap-closure round 2 — the
+// pre-fix comment could read as claiming live-DB integration coverage, which this isn't).
 func TestGetSpendingByCategoryHousehold_SingleRoundTrip(t *testing.T) {
 	mock, repo := setupAnalyticsMockDB(t)
 	defer mock.Close()

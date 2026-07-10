@@ -261,7 +261,7 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 // account is dropped from the whole series, not merely clipped at share_started_at. A full
 // fix needs the day-by-day dedup in latest_per_account_per_day to pick its own per-day
 // winner rather than relying on one query-wide `household_accounts` resolution — tracked as
-// a fast-follow, not fixed in this phase. Issue #1369 — Phase 5.
+// a fast-follow in #1378, not fixed in this phase. Issue #1369 — Phase 5.
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
