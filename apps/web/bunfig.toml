@@ -51,7 +51,8 @@ preload = [
   "./src/test/mocks/investments-api.ts",
   "./src/test/mocks/investments-hooks.ts",
   "./src/test/mocks/merchants-api.ts",
-  "./src/test/mocks/session-dismiss.ts"
+  "./src/test/mocks/session-dismiss.ts",
+  "./src/test/mocks/household-api.ts"
 ]
 # NOTE: cash-flow-hooks.ts excluded — real hook implementation tests need API-level mocks only.
 # NOTE: Tests requiring real implementations run via test-conflict-files.sh from /tmp.
