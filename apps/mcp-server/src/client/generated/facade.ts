@@ -534,8 +534,8 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/transactions/review-summary', method: 'GET', params, signal })
       },
       /** GET /api/v1/transactions/{id} */
-      getTransactionByID(id: string, signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: `/api/v1/transactions/${id}`, method: 'GET', signal })
+      getTransactionByID(id: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: `/api/v1/transactions/${id}`, method: 'GET', params, signal })
       },
       /** PUT /api/v1/transactions/{id}/category */
       updateTransactionCategory(id: string, data?: unknown, signal?: AbortSignal): Promise<unknown> {

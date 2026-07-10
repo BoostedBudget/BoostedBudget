@@ -1535,13 +1535,28 @@ func main() {
 		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
 		boostExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
+		// Construct the household service ahead of the dashboard/analytics handlers below —
+		// both need it to resolve `scope=household` requests (Issue #1369 — Phase 5).
+		// Route registration for the household/household-share endpoints themselves still
+		// happens further down, reusing this same householdService instance.
+		householdService := services.NewHouseholdService(
+			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
+			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
+		)
+		householdService.SetAnalytics(phClient)
+		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
+		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
+		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
+		// (clerk.SetKey is already called there, well before the server accepts requests).
+		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+
 		// Register Huma dashboard routes (Issue #559: Huma migration)
-		humaDashboardHandler := operations.NewDashboardHandler(dashboardService)
+		humaDashboardHandler := operations.NewDashboardHandler(dashboardService, householdService)
 		operations.RegisterDashboardRoutes(humaAPI, humaDashboardHandler)
 		appLogger.Info("Huma dashboard routes registered")
 
 		// Register Huma analytics routes (Issue #559: Huma migration)
-		humaAnalyticsHandler := operations.NewAnalyticsHandler(analyticsService)
+		humaAnalyticsHandler := operations.NewAnalyticsHandler(analyticsService, householdService)
 		operations.RegisterAnalyticsRoutes(humaAPI, humaAnalyticsHandler)
 		appLogger.Info("Huma analytics routes registered")
 
@@ -1624,16 +1639,8 @@ func main() {
 		appLogger.Info("Huma household entitlement routes registered")
 
 		// Register Huma household routes (Issue #1367 — Phase 3: membership, invites & consent gate)
-		householdService := services.NewHouseholdService(
-			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
-			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
-		)
-		householdService.SetAnalytics(phClient)
-		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
-		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
-		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
-		// (clerk.SetKey is already called there, well before the server accepts requests).
-		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+		// householdService was already constructed above (before the dashboard/analytics
+		// handlers, which also need it to resolve `scope=household` — Issue #1369 Phase 5).
 		humaHouseholdHandler := operations.NewHouseholdHandler(householdService, cfg.FrontendURL)
 		operations.RegisterHouseholdRoutes(humaAPI, humaHouseholdHandler)
 		appLogger.Info("Huma household routes registered (Phase 3)")

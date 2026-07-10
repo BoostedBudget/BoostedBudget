@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetNetWorthScope } from './getNetWorthScope';
 
 export type GetNetWorthParams = {
 /**
@@ -40,4 +41,8 @@ account_types?: string;
  * Get net worth as of specific date (YYYY-MM-DD)
  */
 as_of_date?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetNetWorthScope;
 };

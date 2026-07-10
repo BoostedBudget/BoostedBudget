@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,9 +53,14 @@ type mockAnalyticsService struct {
 	categoryTotalErr                        error
 	topExpenseResponse                      *domain.TopExpenseResponse
 	topExpenseErr                           error
+	// lastCashFlowFilters/lastSpendingFilters capture the most recent call's filters, so
+	// tests can assert HouseholdScope was (or wasn't) threaded through. #1369 — Phase 5.
+	lastCashFlowFilters *domain.CashFlowFilters
+	lastSpendingFilters *domain.SpendingFilters
 }
 
 func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowSummaryResponse, error) {
+	m.lastCashFlowFilters = &filters
 	if m.summaryErr != nil {
 		return nil, m.summaryErr
 	}
@@ -61,6 +68,7 @@ func (m *mockAnalyticsService) GetCashFlowSummary(ctx context.Context, userID st
 }
 
 func (m *mockAnalyticsService) GetCashFlowHistory(ctx context.Context, userID string, filters domain.CashFlowFilters) (*domain.CashFlowHistoryResponse, error) {
+	m.lastCashFlowFilters = &filters
 	if m.historyErr != nil {
 		return nil, m.historyErr
 	}
@@ -68,14 +76,17 @@ func (m *mockAnalyticsService) GetCashFlowHistory(ctx context.Context, userID st
 }
 
 func (m *mockAnalyticsService) GetSpendingByCategory(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingByCategoryResponse, error) {
+	m.lastSpendingFilters = &filters
 	return m.spendingByCategoryResponse, m.spendingByCategoryErr
 }
 
 func (m *mockAnalyticsService) GetSpendingByMerchant(ctx context.Context, userID string, filters domain.SpendingFilters, limit int) (*domain.SpendingByMerchantResponse, error) {
+	m.lastSpendingFilters = &filters
 	return m.spendingByMerchantResponse, m.spendingByMerchantErr
 }
 
 func (m *mockAnalyticsService) GetSpendingTrends(ctx context.Context, userID string, filters domain.SpendingFilters) (*domain.SpendingTrendsResponse, error) {
+	m.lastSpendingFilters = &filters
 	return m.spendingTrendsResponse, m.spendingTrendsErr
 }
 
@@ -95,11 +106,11 @@ func (m *mockAnalyticsService) GetRecurringSubscriptions(_ context.Context, _ st
 	return m.recurringSubscriptionsResponse, m.recurringSubscriptionsErr
 }
 
-func (m *mockAnalyticsService) GetSavingsRateForPeriod(_ context.Context, _ string, _ time.Time, _ time.Time) (*domain.SavingsRateResponse, error) {
+func (m *mockAnalyticsService) GetSavingsRateForPeriod(_ context.Context, _ string, _ time.Time, _ time.Time, _ *domain.HouseholdScope) (*domain.SavingsRateResponse, error) {
 	return m.savingsRateResponse, m.savingsRateErr
 }
 
-func (m *mockAnalyticsService) GetMonthOverMonthSpendingChange(_ context.Context, _ string, _ string, _ int, _ []string, _ bool) (*domain.MonthOverMonthResponse, error) {
+func (m *mockAnalyticsService) GetMonthOverMonthSpendingChange(_ context.Context, _ string, _ string, _ int, _ []string, _ bool, _ *domain.HouseholdScope) (*domain.MonthOverMonthResponse, error) {
 	return m.monthOverMonthResponse, m.monthOverMonthErr
 }
 
@@ -113,7 +124,8 @@ func (m *mockAnalyticsService) GetCategoryBreakdownForMerchant(_ context.Context
 
 // Note: signature accepts merchantID (UUID) instead of merchantName per #1348 G2b
 
-func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, _ domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
+func (m *mockAnalyticsService) GetIncomeSourceBreakdown(_ context.Context, _ string, filters domain.SpendingFilters) (*domain.IncomeSourceBreakdownResponse, error) {
+	m.lastSpendingFilters = &filters
 	return m.incomeSourceBreakdownResponse, m.incomeSourceBreakdownErr
 }
 
@@ -121,7 +133,7 @@ func (m *mockAnalyticsService) GetUnusualSpend(_ context.Context, _ string, _ ti
 	return m.unusualSpendResponse, m.unusualSpendErr
 }
 
-func (m *mockAnalyticsService) GetNetWorthTrend(_ context.Context, _ string, _ string) (*domain.NetWorthTrendResponse, error) {
+func (m *mockAnalyticsService) GetNetWorthTrend(_ context.Context, _ string, _ string, _ *domain.HouseholdScope) (*domain.NetWorthTrendResponse, error) {
 	return m.netWorthTrendResponse, m.netWorthTrendErr
 }
 
@@ -164,7 +176,7 @@ func TestGetCashFlowSummary_Success(t *testing.T) {
 		summaryResponse: createTestCashFlowSummary(),
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -186,7 +198,7 @@ func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 		summaryResponse: createTestCashFlowSummary(),
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -205,7 +217,7 @@ func TestGetCashFlowSummary_WithFilters(t *testing.T) {
 func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -222,7 +234,7 @@ func TestGetCashFlowSummary_MissingStartDate(t *testing.T) {
 func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -239,7 +251,7 @@ func TestGetCashFlowSummary_MissingEndDate(t *testing.T) {
 func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -257,7 +269,7 @@ func TestGetCashFlowSummary_InvalidStartDate(t *testing.T) {
 func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -275,7 +287,7 @@ func TestGetCashFlowSummary_InvalidEndDate(t *testing.T) {
 func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -293,7 +305,7 @@ func TestGetCashFlowSummary_EndBeforeStart(t *testing.T) {
 func TestGetCashFlowSummary_InvalidIncludeTransfers(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -314,7 +326,7 @@ func TestGetCashFlowSummary_ServiceError(t *testing.T) {
 		summaryErr: errors.New("database error"),
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -333,7 +345,7 @@ func TestGetCashFlowHistory_Success(t *testing.T) {
 		historyResponse: createTestCashFlowHistory(),
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -354,7 +366,7 @@ func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 		historyResponse: createTestCashFlowHistory(),
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -372,7 +384,7 @@ func TestGetCashFlowHistory_WithGrouping(t *testing.T) {
 func TestGetCashFlowHistory_InvalidGrouping(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCashFlowHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -394,7 +406,7 @@ func TestAnalyticsRouteRegistration(t *testing.T) {
 	}
 
 	_, api := humatest.New(t)
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	RegisterAnalyticsRoutes(api, handler)
 
 	// Test GET /api/v1/analytics/cash-flow-summary (without auth, should fail with 401)
@@ -410,7 +422,7 @@ func TestAnalyticsResponseJSON(t *testing.T) {
 	mockService := &mockAnalyticsService{}
 
 	_, api := humatest.New(t)
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	RegisterAnalyticsRoutes(api, handler)
 
 	resp := api.Get("/api/v1/analytics/cash-flow-summary")
@@ -434,7 +446,7 @@ func TestGetSpendingByCategory_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSpendingByCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -463,7 +475,7 @@ func TestGetSpendingByCategory_WithCategoryFilter(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSpendingByCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -480,7 +492,7 @@ func TestGetSpendingByCategory_WithCategoryFilter(t *testing.T) {
 
 // TestGetSpendingByCategory_InvalidDate tests date validation.
 func TestGetSpendingByCategory_InvalidDate(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetSpendingByCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -499,7 +511,7 @@ func TestGetSpendingByCategory_InvalidDate(t *testing.T) {
 func TestGetSpendingByCategory_ServiceError(t *testing.T) {
 	handler := NewAnalyticsHandler(&mockAnalyticsService{
 		spendingByCategoryErr: errors.New("database error"),
-	})
+	}, nil)
 
 	input := &GetSpendingByCategoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -526,7 +538,7 @@ func TestGetSpendingByMerchant_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSpendingByMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -553,7 +565,7 @@ func TestGetSpendingByMerchant_CustomLimit(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSpendingByMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -570,7 +582,7 @@ func TestGetSpendingByMerchant_CustomLimit(t *testing.T) {
 
 // TestGetSpendingByMerchant_InvalidDate tests date validation.
 func TestGetSpendingByMerchant_InvalidDate(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetSpendingByMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -605,7 +617,7 @@ func TestGetSpendingTrends_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSpendingTrendsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -623,7 +635,7 @@ func TestGetSpendingTrends_Success(t *testing.T) {
 
 // TestGetSpendingTrends_InvalidDate tests date validation.
 func TestGetSpendingTrends_InvalidDate(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetSpendingTrendsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -649,7 +661,7 @@ func TestGetAverageMonthlySpend_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetAverageMonthlySpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -667,7 +679,7 @@ func TestGetAverageMonthlySpend_Success(t *testing.T) {
 
 // TestGetAverageMonthlySpend_EndBeforeStart tests date validation.
 func TestGetAverageMonthlySpend_EndBeforeStart(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetAverageMonthlySpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -686,7 +698,7 @@ func TestGetAverageMonthlySpend_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		averageMonthlySpendErr: errors.New("db error"),
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetAverageMonthlySpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -718,7 +730,7 @@ func TestGetRecurringSubscriptions_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetRecurringSubscriptionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
@@ -738,7 +750,7 @@ func TestGetRecurringSubscriptions_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{
 		recurringSubscriptionsErr: errors.New("db error"),
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetRecurringSubscriptionsInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -763,7 +775,7 @@ func TestGetSavingsRateForPeriod_Success(t *testing.T) {
 			EndDate:     "2024-03-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSavingsRateForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -781,7 +793,7 @@ func TestGetSavingsRateForPeriod_Success(t *testing.T) {
 
 // TestGetSavingsRateForPeriod_EndBeforeStart tests date validation.
 func TestGetSavingsRateForPeriod_EndBeforeStart(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetSavingsRateForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -798,7 +810,7 @@ func TestGetSavingsRateForPeriod_EndBeforeStart(t *testing.T) {
 // TestGetSavingsRateForPeriod_ServiceError tests service error propagation.
 func TestGetSavingsRateForPeriod_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{savingsRateErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetSavingsRateForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -821,7 +833,7 @@ func TestGetMonthOverMonthSpendingChange_Success(t *testing.T) {
 			MonthCount: 6,
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -842,7 +854,7 @@ func TestGetMonthOverMonthSpendingChange_AccountTypesAndTransfers(t *testing.T) 
 	mockService := &mockAnalyticsService{
 		monthOverMonthResponse: &domain.MonthOverMonthResponse{MonthCount: 3},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -864,7 +876,7 @@ func TestGetMonthOverMonthSpendingChange_AccountTypesAndTransfers(t *testing.T) 
 // TestGetMonthOverMonthSpendingChange_ServiceError tests service error propagation.
 func TestGetMonthOverMonthSpendingChange_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{monthOverMonthErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -879,7 +891,7 @@ func TestGetMonthOverMonthSpendingChange_ServiceError(t *testing.T) {
 
 // TestGetMonthOverMonthSpendingChange_MonthsNegative tests that negative months returns 400.
 func TestGetMonthOverMonthSpendingChange_MonthsNegative(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Months:             -1, // negative — should be 400, not silently default to 6
@@ -893,7 +905,7 @@ func TestGetMonthOverMonthSpendingChange_MonthsNegative(t *testing.T) {
 // TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers tests that invalid include_transfers
 // returns 400, consistent with all other analytics handlers.
 func TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Months:             6,
@@ -907,7 +919,7 @@ func TestGetMonthOverMonthSpendingChange_InvalidIncludeTransfers(t *testing.T) {
 
 // TestGetMonthOverMonthSpendingChange_MonthsAboveMax tests that months>24 returns 400.
 func TestGetMonthOverMonthSpendingChange_MonthsAboveMax(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Months:             25, // above max
@@ -922,7 +934,7 @@ func TestGetMonthOverMonthSpendingChange_MonthsAboveMax(t *testing.T) {
 // Huma pre-fills the default (6) for omitted query params before the handler runs;
 // explicit ?months=0 is outside the documented 2-24 range and should be rejected.
 func TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	input := &GetMonthOverMonthSpendingChangeInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Months:             0, // explicit zero — outside 2-24 range, should return 400
@@ -937,7 +949,7 @@ func TestGetMonthOverMonthSpendingChange_MonthsZeroDefaults(t *testing.T) {
 func TestGetMonthOverMonthSpendingChange_MonthsBoundaries(t *testing.T) {
 	for _, months := range []int{2, 24} {
 		mockSvc := &mockAnalyticsService{monthOverMonthResponse: &domain.MonthOverMonthResponse{MonthCount: months}}
-		handler := NewAnalyticsHandler(mockSvc)
+		handler := NewAnalyticsHandler(mockSvc, nil)
 		input := &GetMonthOverMonthSpendingChangeInput{
 			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 			Months:             months,
@@ -960,7 +972,7 @@ func TestGetLargestTransactionsForPeriod_Success(t *testing.T) {
 			EndDate:   "2024-03-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetLargestTransactionsForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -978,7 +990,7 @@ func TestGetLargestTransactionsForPeriod_Success(t *testing.T) {
 
 // TestGetLargestTransactionsForPeriod_EndBeforeStart tests date validation.
 func TestGetLargestTransactionsForPeriod_EndBeforeStart(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetLargestTransactionsForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -995,7 +1007,7 @@ func TestGetLargestTransactionsForPeriod_EndBeforeStart(t *testing.T) {
 // TestGetLargestTransactionsForPeriod_ServiceError tests service error propagation.
 func TestGetLargestTransactionsForPeriod_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{largestTransactionsErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetLargestTransactionsForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1007,6 +1019,28 @@ func TestGetLargestTransactionsForPeriod_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+}
+
+// #1369 — Phase 5 decision #5: largest-transactions exposes raw transaction/account IDs
+// and must reject household scope with 400 rather than leak a household member's data.
+func TestGetLargestTransactionsForPeriod_HouseholdScope_Returns400(t *testing.T) {
+	mockService := &mockAnalyticsService{}
+	handler := NewAnalyticsHandler(mockService, nil)
+
+	input := &GetLargestTransactionsForPeriodInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+		Scope:              "household",
+	}
+
+	output, err := handler.GetLargestTransactionsForPeriod(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 }
 
 // TestGetCategoryBreakdownForMerchant_Success tests successful merchant category breakdown.
@@ -1023,7 +1057,7 @@ func TestGetCategoryBreakdownForMerchant_Success(t *testing.T) {
 			EndDate:    "2024-03-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCategoryBreakdownForMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1042,7 +1076,7 @@ func TestGetCategoryBreakdownForMerchant_Success(t *testing.T) {
 
 // TestGetCategoryBreakdownForMerchant_EndBeforeStart tests date validation.
 func TestGetCategoryBreakdownForMerchant_EndBeforeStart(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetCategoryBreakdownForMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1060,7 +1094,7 @@ func TestGetCategoryBreakdownForMerchant_EndBeforeStart(t *testing.T) {
 // TestGetCategoryBreakdownForMerchant_ServiceError tests service error propagation.
 func TestGetCategoryBreakdownForMerchant_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{categoryBreakdownForMerchantErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetCategoryBreakdownForMerchantInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1087,7 +1121,7 @@ func TestGetIncomeSourceBreakdown_Success(t *testing.T) {
 			EndDate:     "2024-03-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetIncomeSourceBreakdownInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1105,7 +1139,7 @@ func TestGetIncomeSourceBreakdown_Success(t *testing.T) {
 
 // TestGetIncomeSourceBreakdown_EndBeforeStart tests date validation.
 func TestGetIncomeSourceBreakdown_EndBeforeStart(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetIncomeSourceBreakdownInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1122,7 +1156,7 @@ func TestGetIncomeSourceBreakdown_EndBeforeStart(t *testing.T) {
 // TestGetIncomeSourceBreakdown_ServiceError tests service error propagation.
 func TestGetIncomeSourceBreakdown_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{incomeSourceBreakdownErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetIncomeSourceBreakdownInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1136,10 +1170,100 @@ func TestGetIncomeSourceBreakdown_ServiceError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// ─── #1369 — Phase 5 fast-follow (Codex review P1): wire scope=household into
+// spending-by-merchant, spending-trends, and income-source-breakdown, which already had
+// tested household repository variants (analytics_repository.go) but no HTTP-reachable
+// scope param — Codex flagged these as unreachable dead code. ────────────────────────────
+
+func TestGetSpendingByMerchant_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockAnalyticsService{spendingByMerchantResponse: &domain.SpendingByMerchantResponse{}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	input := &GetSpendingByMerchantInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetSpendingByMerchant(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
+}
+
+func TestGetSpendingByMerchant_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockService := &mockAnalyticsService{spendingByMerchantResponse: &domain.SpendingByMerchantResponse{}}
+	mockHousehold := &mockHouseholdService{}
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	input := &GetSpendingByMerchantInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetSpendingByMerchant(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Nil(t, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestGetSpendingTrends_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockAnalyticsService{spendingTrendsResponse: &domain.SpendingTrendsResponse{}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	input := &GetSpendingTrendsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetSpendingTrends(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
+}
+
+func TestGetIncomeSourceBreakdown_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockAnalyticsService{incomeSourceBreakdownResponse: &domain.IncomeSourceBreakdownResponse{}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	input := &GetIncomeSourceBreakdownInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-03-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetIncomeSourceBreakdown(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
+}
+
 // TestSpendingRouteRegistration tests that spending routes are properly registered.
 func TestSpendingRouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	RegisterAnalyticsRoutes(api, handler)
 
 	// All spending endpoints should exist (return 401, not 404)
@@ -1187,7 +1311,7 @@ func TestGetUnusualSpend_Success(t *testing.T) {
 			SigmaThreshold: 2.0,
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetUnusualSpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "2024-04-01",
@@ -1204,7 +1328,7 @@ func TestGetUnusualSpend_Success(t *testing.T) {
 }
 
 func TestGetUnusualSpend_InvalidDate(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	input := &GetUnusualSpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "bad-date",
@@ -1216,7 +1340,7 @@ func TestGetUnusualSpend_InvalidDate(t *testing.T) {
 
 func TestGetUnusualSpend_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{unusualSpendErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetUnusualSpendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		StartDate:          "2024-04-01",
@@ -1239,7 +1363,7 @@ func TestGetNetWorthTrend_Success(t *testing.T) {
 			EndDate:   "2024-03-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetNetWorthTrendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Grouping:           "monthly",
@@ -1261,7 +1385,7 @@ func TestGetNetWorthTrend_DefaultsToMonthly(t *testing.T) {
 	}
 	// Wrap service to capture grouping
 	_ = capturedGrouping
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetNetWorthTrendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Grouping:           "", // empty → should default to monthly
@@ -1273,7 +1397,7 @@ func TestGetNetWorthTrend_DefaultsToMonthly(t *testing.T) {
 
 func TestGetNetWorthTrend_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{netWorthTrendErr: errors.New("repo not configured")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetNetWorthTrendInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Grouping:           "monthly",
@@ -1304,7 +1428,7 @@ func TestGetBudgetVsActual_Success(t *testing.T) {
 			Period:         "monthly",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetBudgetVsActualInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Period:             "monthly",
@@ -1322,7 +1446,7 @@ func TestGetBudgetVsActual_Success(t *testing.T) {
 
 func TestGetBudgetVsActual_ServiceError(t *testing.T) {
 	mockService := &mockAnalyticsService{budgetVsActualErr: errors.New("invalid period")}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 	input := &GetBudgetVsActualInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Period:             "biannual",
@@ -1334,7 +1458,7 @@ func TestGetBudgetVsActual_ServiceError(t *testing.T) {
 
 func TestGetBudgetVsActual_RouteRegistration(t *testing.T) {
 	_, api := humatest.New(t)
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 	RegisterAnalyticsRoutes(api, handler)
 
 	// Verify JSON contract: budget-vs-actual returns the expected structure
@@ -1347,7 +1471,7 @@ func TestGetBudgetVsActual_RouteRegistration(t *testing.T) {
 			Period:         "monthly",
 		},
 	}
-	handler2 := NewAnalyticsHandler(mockService)
+	handler2 := NewAnalyticsHandler(mockService, nil)
 	input := &GetBudgetVsActualInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 		Period:             "monthly",
@@ -1412,7 +1536,7 @@ func TestGetFinancialSummary_AllSubMetricsSucceed(t *testing.T) {
 			EndDate:   "2024-01-31",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetFinancialSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1432,6 +1556,37 @@ func TestGetFinancialSummary_AllSubMetricsSucceed(t *testing.T) {
 	assert.NotNil(t, output.Body.MomChange)
 	assert.NotNil(t, output.Body.BudgetVsActual)
 	assert.NotNil(t, output.Body.NetWorthTrend)
+}
+
+// TestGetFinancialSummary_HouseholdScope_ResolvesAndThreadsIntoSubMetrics covers Issue
+// #1369 decision #5: GetFinancialSummary must resolve `scope=household` once and thread it
+// into its aggregate sub-metrics (savings-rate, average-spend, top-categories,
+// month-over-month, net-worth-trend). errgroup runs the sub-calls concurrently, but
+// g.Wait() (called before GetFinancialSummary returns) happens-before this assertion, so
+// reading mockService.lastSpendingFilters here is race-free.
+func TestGetFinancialSummary_HouseholdScope_ResolvesAndThreadsIntoSubMetrics(t *testing.T) {
+	mockService := &mockAnalyticsService{
+		spendingByCategoryResponse: &domain.SpendingByCategoryResponse{},
+	}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockService, mockHousehold)
+	input := &GetFinancialSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Scope:              "household",
+	}
+
+	output, err := handler.GetFinancialSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastSpendingFilters)
+	assert.Same(t, scope, mockService.lastSpendingFilters.HouseholdScope, "top-categories sub-metric must receive the resolved household scope")
+	mockHousehold.AssertExpectations(t)
 }
 
 // TestGetFinancialSummary_OneSubMetricFails verifies that when one sub-metric
@@ -1460,7 +1615,7 @@ func TestGetFinancialSummary_OneSubMetricFails(t *testing.T) {
 			Grouping: "monthly",
 		},
 	}
-	handler := NewAnalyticsHandler(mockService)
+	handler := NewAnalyticsHandler(mockService, nil)
 
 	input := &GetFinancialSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1482,7 +1637,7 @@ func TestGetFinancialSummary_OneSubMetricFails(t *testing.T) {
 // TestGetFinancialSummary_InvalidDateRange verifies that date validation errors
 // propagate as 400 (non-degradable pre-work).
 func TestGetFinancialSummary_InvalidDateRange(t *testing.T) {
-	handler := NewAnalyticsHandler(&mockAnalyticsService{})
+	handler := NewAnalyticsHandler(&mockAnalyticsService{}, nil)
 
 	input := &GetFinancialSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1509,7 +1664,7 @@ func TestGetCategoryTotalForPeriod_Success(t *testing.T) {
 		EndDate:           "2024-01-31",
 	}
 	mockSvc := &mockAnalyticsService{categoryTotalResponse: expected}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetCategoryTotalForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1526,7 +1681,7 @@ func TestGetCategoryTotalForPeriod_Success(t *testing.T) {
 
 func TestGetCategoryTotalForPeriod_InvalidDateRange(t *testing.T) {
 	mockSvc := &mockAnalyticsService{}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetCategoryTotalForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1542,7 +1697,7 @@ func TestGetCategoryTotalForPeriod_InvalidDateRange(t *testing.T) {
 
 func TestGetCategoryTotalForPeriod_ServiceError(t *testing.T) {
 	mockSvc := &mockAnalyticsService{categoryTotalErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetCategoryTotalForPeriodInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1568,7 +1723,7 @@ func TestGetTopExpense_Success(t *testing.T) {
 		EndDate:       "2024-01-31",
 	}
 	mockSvc := &mockAnalyticsService{topExpenseResponse: expected}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetTopExpenseInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1584,7 +1739,7 @@ func TestGetTopExpense_Success(t *testing.T) {
 
 func TestGetTopExpense_InvalidDateRange(t *testing.T) {
 	mockSvc := &mockAnalyticsService{}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetTopExpenseInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1599,7 +1754,7 @@ func TestGetTopExpense_InvalidDateRange(t *testing.T) {
 
 func TestGetTopExpense_ServiceError(t *testing.T) {
 	mockSvc := &mockAnalyticsService{topExpenseErr: errors.New("db error")}
-	handler := NewAnalyticsHandler(mockSvc)
+	handler := NewAnalyticsHandler(mockSvc, nil)
 
 	input := &GetTopExpenseInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -1610,4 +1765,116 @@ func TestGetTopExpense_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+}
+
+// #1369 — Phase 5 decision #5: top-expense exposes a raw transaction ID and must reject
+// household scope with 400 rather than leak a household member's transaction.
+func TestGetTopExpense_HouseholdScope_Returns400(t *testing.T) {
+	mockSvc := &mockAnalyticsService{}
+	handler := NewAnalyticsHandler(mockSvc, nil)
+
+	input := &GetTopExpenseInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetTopExpense(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+}
+
+// ─── #1369 — Phase 5: golden regression — scope=personal (the default) must stay
+// byte-identical to pre-Phase-5 behavior. These lock in that the personal path never
+// touches the household service and never attaches a HouseholdScope to filters, for the
+// three core-scoped analytics endpoints not already covered by dashboard_test.go's
+// equivalent guards. ───────────────────────────────────────────────────────────────────
+
+func TestGetCashFlowSummary_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockSvc := &mockAnalyticsService{summaryResponse: &domain.CashFlowSummaryResponse{}}
+	mockHousehold := &mockHouseholdService{}
+	// No .On(...) set up — if the handler called ResolveScope for personal/absent scope,
+	// this mock would panic ("I don't know what to return").
+
+	handler := NewAnalyticsHandler(mockSvc, mockHousehold)
+	input := &GetCashFlowSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetCashFlowSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockSvc.lastCashFlowFilters)
+	assert.Nil(t, mockSvc.lastCashFlowFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestGetCashFlowHistory_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockSvc := &mockAnalyticsService{historyResponse: &domain.CashFlowHistoryResponse{}}
+	mockHousehold := &mockHouseholdService{}
+
+	handler := NewAnalyticsHandler(mockSvc, mockHousehold)
+	input := &GetCashFlowHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetCashFlowHistory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockSvc.lastCashFlowFilters)
+	assert.Nil(t, mockSvc.lastCashFlowFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestGetSpendingByCategory_PersonalScope_NeverCallsHouseholdServiceGolden(t *testing.T) {
+	mockSvc := &mockAnalyticsService{spendingByCategoryResponse: &domain.SpendingByCategoryResponse{}}
+	mockHousehold := &mockHouseholdService{}
+
+	handler := NewAnalyticsHandler(mockSvc, mockHousehold)
+	input := &GetSpendingByCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+	}
+	output, err := handler.GetSpendingByCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockSvc.lastSpendingFilters)
+	assert.Nil(t, mockSvc.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestGetSpendingByCategory_HouseholdScope_ResolvesAndAttachesToFilters completes the
+// core-4 scope-resolution coverage (dashboard's balance-summary/net-worth/history variants
+// are covered in dashboard_test.go); cash-flow's resolution path is exercised implicitly by
+// the golden tests above plus the shared resolveHouseholdScopeIfRequested unit coverage.
+func TestGetSpendingByCategory_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockSvc := &mockAnalyticsService{spendingByCategoryResponse: &domain.SpendingByCategoryResponse{}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewAnalyticsHandler(mockSvc, mockHousehold)
+	input := &GetSpendingByCategoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-01-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetSpendingByCategory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockSvc.lastSpendingFilters)
+	assert.Same(t, scope, mockSvc.lastSpendingFilters.HouseholdScope)
+	mockHousehold.AssertExpectations(t)
 }

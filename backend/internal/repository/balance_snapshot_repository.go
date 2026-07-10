@@ -37,6 +37,20 @@ type BalanceSnapshotRepository interface {
 	// Uses DISTINCT ON (account_id) to get only the latest snapshot per account.
 	GetLatestByUserID(ctx context.Context, userID string) ([]domain.BalanceSnapshot, error)
 
+	// GetSnapshotsAsOfForHousehold retrieves, for every account currently shared into the
+	// household (across ALL members, not just requestingUserID), the latest snapshot at or
+	// before asOf. Used for both the current point-in-time balance (asOf=now) and a
+	// previous-period comparison (asOf=now-30d) — household mode must never fall back to
+	// the personal GetByUserIDAndDateRange, which silently drops other members' data
+	// (Codex adversarial review, P0-3). Joint accounts dedup to the freshest-synced copy.
+	// Issue #1369 — Phase 5.
+	GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error)
+
+	// GetAggregatedHistoryForHousehold is the household-scope variant of
+	// GetAggregatedHistory: aggregates across every account shared into the household,
+	// clipped per-account to share_started_at. Issue #1369 — Phase 5.
+	GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error)
+
 	// GetLatestByAccountID retrieves the most recent balance snapshot for a specific account.
 	// Used for deduplication checking (5-minute window) before creating new snapshots.
 	GetLatestByAccountID(ctx context.Context, accountID string) (*domain.BalanceSnapshot, error)
@@ -209,6 +223,124 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 		ORDER BY COALESCE(user_account_id::text, account_id::text), snapshot_at DESC
 	`
 	return r.scanSnapshots(ctx, query, userID)
+}
+
+// GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
+// account shared into the household, across all members. Joint accounts (same physical
+// fingerprint shared by two members) dedup via householdAccountsCTEForBalances, which picks
+// the freshest-synced copy — then DISTINCT ON here also collapses that chosen
+// user_account_id to its single latest-as-of-asOf snapshot. Issue #1369 — Phase 5.
+func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
+
+	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
+		SELECT DISTINCT ON (bs.user_account_id)
+		       bs.id, bs.account_id, bs.user_account_id, bs.user_id, bs.current_balance, bs.available_balance,
+		       bs.currency_code, bs.snapshot_at, bs.source, bs.created_at
+		FROM balance_snapshots bs
+		JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
+		WHERE bs.snapshot_at <= $4
+		ORDER BY bs.user_account_id, bs.snapshot_at DESC
+	`
+
+	args := householdScopeArgs(requestingUserID, scope)
+	args = append(args, asOf)
+	return r.scanSnapshots(ctx, query, args...)
+}
+
+// GetAggregatedHistoryForHousehold is the household-scope variant of GetAggregatedHistory:
+// aggregates across every account shared into the household, clipped per-account to
+// share_started_at.
+//
+// Known limitation (related to Codex adversarial review P1-2, fixed for the point-in-time
+// case via householdAccountsCTEForBalancesAsOf/GetSnapshotsAsOfForHousehold): this method
+// still uses householdAccountsCTEForBalances, which picks ONE globally-freshest winner per
+// joint-account fingerprint for the WHOLE query — not per calendar day. If a joint account's
+// freshest-ever copy belongs to a member who joined/started syncing partway through
+// [startDate, endDate], the OTHER member's genuinely earlier history for that same physical
+// account is dropped from the whole series, not merely clipped at share_started_at. A full
+// fix needs the day-by-day dedup in latest_per_account_per_day to pick its own per-day
+// winner rather than relying on one query-wide `household_accounts` resolution — tracked as
+// a fast-follow in #1378, not fixed in this phase. Issue #1369 — Phase 5.
+func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
+
+	const queryBase = `
+		WITH ` + `%s,` + `
+		latest_per_account_per_day AS (
+		    SELECT
+		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		        bs.user_account_id AS chain_key,
+		        MAX(bs.snapshot_at) AS latest_at,
+		        MAX(bs.id::text) AS latest_id
+		    FROM balance_snapshots bs
+		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
+		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
+		      %s
+		    GROUP BY snapshot_date, chain_key
+		),
+		deduped AS (
+		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
+		           bs.current_balance, a.type AS account_type
+		    FROM balance_snapshots bs
+		    JOIN latest_per_account_per_day l
+		      ON bs.user_account_id = l.chain_key
+		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
+		      AND bs.snapshot_at = l.latest_at
+		      AND bs.id::text = l.latest_id
+		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		)
+		SELECT snapshot_date,
+		       COALESCE(account_type, '') AS account_type,
+		       SUM(current_balance) AS type_balance
+		FROM deduped
+		GROUP BY snapshot_date, account_type
+		ORDER BY snapshot_date ASC, account_type ASC
+	`
+
+	args := householdScopeArgs(requestingUserID, scope)
+	args = append(args, startDate, endDate)
+
+	var query string
+	if len(accountTypes) > 0 {
+		args = append(args, accountTypes)
+		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalances(), "AND a.type = ANY($6)")
+	} else {
+		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalances(), "")
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []domain.BalanceHistoryPoint
+	var current *domain.BalanceHistoryPoint
+	for rows.Next() {
+		var d time.Time
+		var accountType string
+		var bal float64
+		if err := rows.Scan(&d, &accountType, &bal); err != nil {
+			return nil, err
+		}
+		if current == nil || !current.Date.Equal(d) {
+			history = append(history, domain.BalanceHistoryPoint{Date: d, ByType: map[string]float64{}})
+			current = &history[len(history)-1]
+		}
+		current.TotalBalance += bal
+		if accountType != "" {
+			current.ByType[accountType] += bal
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return history, nil
 }
 
 // GetLatestByAccountID retrieves the most recent balance snapshot for a specific account

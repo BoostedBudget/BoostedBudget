@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetSpendingByCategoryScope } from './getSpendingByCategoryScope';
 
 export type GetSpendingByCategoryParams = {
 /**
@@ -60,4 +61,8 @@ custom_category_ids?: string;
  * When true, a parent custom category also includes its children (default true)
  */
 roll_up?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership). Custom category scoping always resolves to the requester's own categories, never a household member's.
+ */
+scope?: GetSpendingByCategoryScope;
 };
