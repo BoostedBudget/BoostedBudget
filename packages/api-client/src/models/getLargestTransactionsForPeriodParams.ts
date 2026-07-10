@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetLargestTransactionsForPeriodScope } from './getLargestTransactionsForPeriodScope';
 
 export type GetLargestTransactionsForPeriodParams = {
 /**
@@ -52,4 +53,8 @@ include_transfers?: string;
  * Maximum number of transactions to return (1-100, default 10)
  */
 limit?: number;
+/**
+ * Must be omitted or 'personal' — this endpoint exposes raw transaction/account IDs and does not support household scope (Issue #1369 decision #5)
+ */
+scope?: GetLargestTransactionsForPeriodScope;
 };

@@ -222,6 +222,18 @@ func (s *HouseholdAccountShare) Validate() error {
 	return nil
 }
 
+// HouseholdScope carries a validated household-aggregation request: which household to
+// aggregate and which active members' accounts are in scope. A nil *HouseholdScope on a
+// filter struct means "personal" — today's single-user behavior, unchanged.
+//
+// Repositories must treat a populated HouseholdScope as pre-validated: MemberUserIDs is
+// resolved by HouseholdService.ResolveScope from the caller's own active membership, never
+// accepted directly from request input. Issue #1369 — Phase 5.
+type HouseholdScope struct {
+	HouseholdID   string
+	MemberUserIDs []string
+}
+
 // UserAccountShareView projects one of the caller's own user_accounts alongside its
 // current household_account_shares grant (if any) within a specific household. Used by
 // GET /api/v1/households/me/account-shares (#1368 — Phase 4) to render a per-account

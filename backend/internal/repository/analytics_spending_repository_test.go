@@ -99,6 +99,42 @@ func TestGetSpendingByCategory(t *testing.T) {
 	})
 }
 
+// TestGetSpendingByCategoryHousehold_SingleRoundTrip closes gap G2 (issue's explicit ask:
+// "verify via query count in integration test"). This is a pgxmock-based UNIT test, not a
+// live-Postgres integration test — pgxmock's ExpectationsWereMet fails if the code under
+// test issues more or fewer queries than expected, so exactly one ExpectQuery here proves
+// the household CTE fan-out issues a single SQL round trip (one Query() call), not N+1
+// across household accounts/members. A real-Postgres integration test can't easily assert
+// call-count without the same kind of driver interception, so a mock is the right tool for
+// this specific property (flagged for clarity during #1369 gap-closure round 2 — the
+// pre-fix comment could read as claiming live-DB integration coverage, which this isn't).
+func TestGetSpendingByCategoryHousehold_SingleRoundTrip(t *testing.T) {
+	mock, repo := setupAnalyticsMockDB(t)
+	defer mock.Close()
+
+	userID := "owner-1"
+	filters := domain.SpendingFilters{
+		StartDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC),
+		HouseholdScope: &domain.HouseholdScope{
+			HouseholdID:   "hh-1",
+			MemberUserIDs: []string{"owner-1", "member-2"},
+		},
+	}
+
+	rows := pgxmock.NewRows([]string{"category", "category_display", "total", "transaction_count"}).
+		AddRow("FOOD_AND_DRINK", "Food and Drink", 150.0, 3)
+	// Args: requestingUserID, householdID, memberUserIDs ($1-$3 via householdScopeArgs),
+	// plus StartDate/EndDate ($4-$5) — see getSpendingByCategoryHousehold.
+	mock.ExpectQuery(`WITH household_accounts`).
+		WithArgs(userID, filters.HouseholdScope.HouseholdID, filters.HouseholdScope.MemberUserIDs, filters.StartDate, filters.EndDate).
+		WillReturnRows(rows)
+
+	_, err := repo.GetSpendingByCategory(context.Background(), userID, filters)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet(), "household spending-by-category must be exactly one SQL round trip")
+}
+
 func TestGetSpendingByMerchant(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
@@ -617,7 +653,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		require.NoError(t, err)
 		assert.InDelta(t, 5000.0, result.Income, 0.001)
 		assert.InDelta(t, 3000.0, result.Expenses, 0.001)
@@ -634,7 +670,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnRows(rows)
 
-		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		result, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		require.NoError(t, err)
 		assert.Equal(t, 0.0, result.Income)
 		assert.Equal(t, 0.0, result.Expenses)
@@ -648,7 +684,7 @@ func TestGetSavingsRateForPeriod(t *testing.T) {
 			WithArgs(userID, startDate, endDate).
 			WillReturnError(pgx.ErrNoRows)
 
-		_, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+		_, err := repo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, nil)
 		assert.Error(t, err)
 	})
 }

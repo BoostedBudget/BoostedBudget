@@ -17,12 +17,16 @@ import (
 // DashboardHandler handles dashboard-related HTTP requests.
 // Issue #353: Balance tracking dashboard
 type DashboardHandler struct {
-	service services.DashboardService
+	service      services.DashboardService
+	householdSvc services.HouseholdService
 }
 
-// NewDashboardHandler creates a new DashboardHandler instance.
-func NewDashboardHandler(service services.DashboardService) *DashboardHandler {
-	return &DashboardHandler{service: service}
+// NewDashboardHandler creates a new DashboardHandler instance. householdSvc resolves
+// `scope=household` requests into a validated domain.HouseholdScope (Issue #1369 —
+// Phase 5); it must never be nil in production wiring since every scoped endpoint below
+// depends on it.
+func NewDashboardHandler(service services.DashboardService, householdSvc services.HouseholdService) *DashboardHandler {
+	return &DashboardHandler{service: service, householdSvc: householdSvc}
 }
 
 // --- Input/Output Types ---
@@ -32,6 +36,7 @@ type GetBalanceSummaryInput struct {
 	inputs.AuthenticatedInput
 	AccountTypes string `query:"account_types" doc:"Comma-separated account types to filter (investment, checking, savings, credit, loan)"`
 	AsOfDate     string `query:"as_of_date" doc:"Get balance as of specific date (YYYY-MM-DD)"`
+	Scope        string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetBalanceSummaryOutput represents the response for getting balance summary.
@@ -46,6 +51,7 @@ type GetBalanceHistoryInput struct {
 	StartDate    string `query:"start_date" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate      string `query:"end_date" doc:"End of date range (YYYY-MM-DD)"`
 	Granularity  string `query:"granularity" doc:"Time granularity: daily, weekly, or monthly"`
+	Scope        string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetBalanceHistoryOutput represents the response for getting balance history.
@@ -93,6 +99,7 @@ type GetNetWorthInput struct {
 	inputs.AuthenticatedInput
 	AccountTypes string `query:"account_types" doc:"Comma-separated account types to filter (depository, investment, credit, loan)"`
 	AsOfDate     string `query:"as_of_date" doc:"Get net worth as of specific date (YYYY-MM-DD)"`
+	Scope        string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetNetWorthOutput represents the response for getting net worth.
@@ -107,6 +114,7 @@ type GetNetWorthHistoryInput struct {
 	StartDate    string `query:"start_date" doc:"Start of date range (YYYY-MM-DD)"`
 	EndDate      string `query:"end_date" doc:"End of date range (YYYY-MM-DD)"`
 	Granularity  string `query:"granularity" doc:"Time granularity: daily, weekly, or monthly"`
+	Scope        string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership)"`
 }
 
 // GetNetWorthHistoryOutput represents the response for getting net worth history.
@@ -161,6 +169,9 @@ func (h *DashboardHandler) GetBalanceSummary(ctx context.Context, input *GetBala
 	if err != nil {
 		return nil, err
 	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
 
 	response, err := h.service.GetBalanceSummary(ctx, input.UserID, filters)
 	if err != nil {
@@ -175,6 +186,9 @@ func (h *DashboardHandler) GetBalanceSummary(ctx context.Context, input *GetBala
 func (h *DashboardHandler) GetBalanceHistory(ctx context.Context, input *GetBalanceHistoryInput) (*GetBalanceHistoryOutput, error) {
 	filters, err := parseFilters(input.AccountTypes, "", input.StartDate, input.EndDate, input.Granularity)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 
@@ -232,6 +246,9 @@ func (h *DashboardHandler) GetNetWorth(ctx context.Context, input *GetNetWorthIn
 	if err != nil {
 		return nil, err
 	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
+		return nil, err
+	}
 
 	response, err := h.service.GetNetWorth(ctx, input.UserID, filters)
 	if err != nil {
@@ -246,6 +263,9 @@ func (h *DashboardHandler) GetNetWorth(ctx context.Context, input *GetNetWorthIn
 func (h *DashboardHandler) GetNetWorthHistory(ctx context.Context, input *GetNetWorthHistoryInput) (*GetNetWorthHistoryOutput, error) {
 	filters, err := parseFilters(input.AccountTypes, "", input.StartDate, input.EndDate, input.Granularity)
 	if err != nil {
+		return nil, err
+	}
+	if filters.HouseholdScope, err = resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope); err != nil {
 		return nil, err
 	}
 

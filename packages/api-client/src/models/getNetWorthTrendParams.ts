@@ -30,10 +30,15 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetNetWorthTrendScope } from './getNetWorthTrendScope';
 
 export type GetNetWorthTrendParams = {
 /**
  * Bucket size: daily, weekly, or monthly (default monthly)
  */
 grouping?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetNetWorthTrendScope;
 };

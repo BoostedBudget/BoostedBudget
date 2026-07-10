@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetCashFlowHistoryScope } from './getCashFlowHistoryScope';
 
 export type GetCashFlowHistoryParams = {
 /**
@@ -52,4 +53,8 @@ account_types?: string;
  * Include transfer transactions (true/false, default false)
  */
 include_transfers?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetCashFlowHistoryScope;
 };

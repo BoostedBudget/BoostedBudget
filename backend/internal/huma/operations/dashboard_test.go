@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,9 +29,13 @@ type mockDashboardService struct {
 	typesErr        error
 	netWorthErr     error
 	netWorthHistErr error
+	// lastFilters captures the filters passed into the most recent scoped call, so
+	// tests can assert HouseholdScope was (or wasn't) threaded through. #1369 — Phase 5.
+	lastFilters *domain.DashboardFilters
 }
 
 func (m *mockDashboardService) GetBalanceSummary(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
+	m.lastFilters = filters
 	if m.summaryErr != nil {
 		return nil, m.summaryErr
 	}
@@ -37,6 +43,7 @@ func (m *mockDashboardService) GetBalanceSummary(ctx context.Context, userID str
 }
 
 func (m *mockDashboardService) GetBalanceHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceHistoryResponse, error) {
+	m.lastFilters = filters
 	if m.historyErr != nil {
 		return nil, m.historyErr
 	}
@@ -51,6 +58,7 @@ func (m *mockDashboardService) GetAccountTypes(ctx context.Context, userID strin
 }
 
 func (m *mockDashboardService) GetNetWorth(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
+	m.lastFilters = filters
 	if m.netWorthErr != nil {
 		return nil, m.netWorthErr
 	}
@@ -58,6 +66,7 @@ func (m *mockDashboardService) GetNetWorth(ctx context.Context, userID string, f
 }
 
 func (m *mockDashboardService) GetNetWorthHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthHistoryResponse, error) {
+	m.lastFilters = filters
 	if m.netWorthHistErr != nil {
 		return nil, m.netWorthHistErr
 	}
@@ -115,7 +124,7 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 		balanceSummary: createTestBalanceSummary(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -134,7 +143,7 @@ func TestGetBalanceSummary_WithFilters(t *testing.T) {
 		balanceSummary: createTestBalanceSummary(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -153,7 +162,7 @@ func TestGetBalanceSummary_InvalidDate(t *testing.T) {
 		balanceSummary: createTestBalanceSummary(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -172,7 +181,7 @@ func TestGetBalanceSummary_ServiceError(t *testing.T) {
 		summaryErr: errors.New("database error"),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceSummaryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -189,7 +198,7 @@ func TestGetBalanceHistory_Success(t *testing.T) {
 		balanceHistory: createTestBalanceHistory(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -208,7 +217,7 @@ func TestGetBalanceHistory_WithFilters(t *testing.T) {
 		balanceHistory: createTestBalanceHistory(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -229,7 +238,7 @@ func TestGetBalanceHistory_InvalidStartDate(t *testing.T) {
 		balanceHistory: createTestBalanceHistory(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -248,7 +257,7 @@ func TestGetBalanceHistory_InvalidEndDate(t *testing.T) {
 		balanceHistory: createTestBalanceHistory(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetBalanceHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -267,7 +276,7 @@ func TestGetAccountTypes_Success(t *testing.T) {
 		accountTypes: createTestAccountTypes(),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetAccountTypesInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -286,7 +295,7 @@ func TestGetAccountTypes_ServiceError(t *testing.T) {
 		typesErr: errors.New("database error"),
 	}
 
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetAccountTypesInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -304,7 +313,7 @@ func TestDashboardRouteRegistration(t *testing.T) {
 	}
 
 	_, api := humatest.New(t)
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 	RegisterDashboardRoutes(api, handler)
 
 	// Test GET /api/v1/dashboard/balance-summary (without auth, should fail with 401)
@@ -320,7 +329,7 @@ func TestDashboardDefaultLayoutRoute(t *testing.T) {
 	mockService := &mockDashboardService{}
 
 	_, api := humatest.New(t)
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 	RegisterDashboardRoutes(api, handler)
 
 	// Test GET /api/v1/dashboard/default-layout (public, should not require auth)
@@ -334,7 +343,7 @@ func TestDashboardResponseJSON(t *testing.T) {
 	mockService := &mockDashboardService{}
 
 	_, api := humatest.New(t)
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 	RegisterDashboardRoutes(api, handler)
 
 	resp := api.Get("/api/v1/dashboard/balance-summary")
@@ -359,7 +368,7 @@ func TestGetNetWorth_Success(t *testing.T) {
 		NetWorth: 50000.00,
 	}
 	mockService := &mockDashboardService{netWorth: expected}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -373,7 +382,7 @@ func TestGetNetWorth_Success(t *testing.T) {
 
 func TestGetNetWorth_InvalidDate(t *testing.T) {
 	mockService := &mockDashboardService{}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -387,7 +396,7 @@ func TestGetNetWorth_InvalidDate(t *testing.T) {
 
 func TestGetNetWorth_ServiceError(t *testing.T) {
 	mockService := &mockDashboardService{netWorthErr: errors.New("service failed")}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -403,7 +412,7 @@ func TestGetNetWorthHistory_Success(t *testing.T) {
 		Granularity: "monthly",
 	}
 	mockService := &mockDashboardService{netWorthHistory: expected}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -419,7 +428,7 @@ func TestGetNetWorthHistory_Success(t *testing.T) {
 
 func TestGetNetWorthHistory_InvalidStartDate(t *testing.T) {
 	mockService := &mockDashboardService{}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -434,7 +443,7 @@ func TestGetNetWorthHistory_InvalidStartDate(t *testing.T) {
 
 func TestGetNetWorthHistory_ServiceError(t *testing.T) {
 	mockService := &mockDashboardService{netWorthHistErr: errors.New("service failed")}
-	handler := NewDashboardHandler(mockService)
+	handler := NewDashboardHandler(mockService, nil)
 
 	input := &GetNetWorthHistoryInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
@@ -445,4 +454,123 @@ func TestGetNetWorthHistory_ServiceError(t *testing.T) {
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+}
+
+// ─── #1369 — Phase 5: scope=household resolution ─────────────────────────────
+
+func TestGetBalanceSummary_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockDashboardService{balanceSummary: createTestBalanceSummary()}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetBalanceSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Scope:              "household",
+	}
+	output, err := handler.GetBalanceSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastFilters)
+	assert.Same(t, scope, mockService.lastFilters.HouseholdScope, "resolved scope must be attached to the filters passed to the service")
+	mockHousehold.AssertExpectations(t)
+}
+
+func TestGetBalanceSummary_HouseholdScope_NotInHousehold_Returns404(t *testing.T) {
+	mockService := &mockDashboardService{balanceSummary: createTestBalanceSummary()}
+	mockHousehold := &mockHouseholdService{}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(nil, domain.ErrHouseholdNotFound)
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetBalanceSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Scope:              "household",
+	}
+	output, err := handler.GetBalanceSummary(context.Background(), input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.GetStatus())
+}
+
+func TestGetBalanceSummary_PersonalScope_NeverCallsHouseholdService(t *testing.T) {
+	mockService := &mockDashboardService{balanceSummary: createTestBalanceSummary()}
+	mockHousehold := &mockHouseholdService{}
+	// No .On(...) set up — if the handler called ResolveScope for personal scope, this
+	// mock would panic ("I don't know what to return").
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetBalanceSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	output, err := handler.GetBalanceSummary(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastFilters)
+	assert.Nil(t, mockService.lastFilters.HouseholdScope)
+	mockHousehold.AssertNotCalled(t, "ResolveScope", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestGetNetWorth_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockDashboardService{netWorth: &domain.NetWorthResponse{NetWorth: 1500.00, TotalAssets: 1500.00}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetNetWorthInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Scope:              "household",
+	}
+	output, err := handler.GetNetWorth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastFilters)
+	assert.Same(t, scope, mockService.lastFilters.HouseholdScope)
+}
+
+func TestGetBalanceHistory_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockDashboardService{balanceHistory: createTestBalanceHistory()}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetBalanceHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		Scope:              "household",
+	}
+	output, err := handler.GetBalanceHistory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastFilters)
+	assert.Same(t, scope, mockService.lastFilters.HouseholdScope)
+}
+
+func TestGetNetWorthHistory_HouseholdScope_ResolvesAndAttachesToFilters(t *testing.T) {
+	mockService := &mockDashboardService{netWorthHistory: &domain.NetWorthHistoryResponse{Snapshots: []domain.NetWorthHistorySnapshot{{NetWorth: 1500.00}}}}
+	mockHousehold := &mockHouseholdService{}
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-123", "member-2"}}
+	mockHousehold.On("ResolveScope", mock.Anything, "user-123", "household").Return(scope, nil)
+
+	handler := NewDashboardHandler(mockService, mockHousehold)
+	input := &GetNetWorthHistoryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+		StartDate:          "2024-01-01",
+		EndDate:            "2024-12-31",
+		Scope:              "household",
+	}
+	output, err := handler.GetNetWorthHistory(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, mockService.lastFilters)
+	assert.Same(t, scope, mockService.lastFilters.HouseholdScope)
 }
