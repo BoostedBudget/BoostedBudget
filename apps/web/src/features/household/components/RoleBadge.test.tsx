@@ -74,4 +74,26 @@ describe('RoleBadge', () => {
       expect(screen.getByTestId('role-badge-owner')).toBeInTheDocument()
     })
   })
+
+  describe('Variant prop handling', () => {
+    it('does not leak variant attribute onto DOM element', () => {
+      const { container } = render(<RoleBadge role="owner" />)
+      const badge = container.firstChild as HTMLElement
+      // Variant should never appear as a DOM attribute since it's omitted from props type
+      expect(badge.getAttribute('variant')).toBeNull()
+      expect(badge.hasAttribute('variant')).toBe(false)
+    })
+
+    it('correctly computes variant from role prop only', () => {
+      const { container: ownerContainer } = render(<RoleBadge role="owner" />)
+      const ownerBadge = ownerContainer.firstChild as HTMLElement
+      expect(ownerBadge.className).toContain('bg-primary')
+
+      const { container: memberContainer } = render(
+        <RoleBadge role="member" />
+      )
+      const memberBadge = memberContainer.firstChild as HTMLElement
+      expect(memberBadge.className).toContain('bg-secondary')
+    })
+  })
 })

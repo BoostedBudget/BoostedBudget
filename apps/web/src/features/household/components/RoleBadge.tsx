@@ -15,7 +15,7 @@ import {
 
 export interface RoleBadgeProps
   extends React.HTMLAttributes<HTMLSpanElement>,
-    HouseholdBadgeVariants {
+    Omit<HouseholdBadgeVariants, 'variant'> {
   /** Household member role: owner or member */
   role: 'owner' | 'member'
 }
