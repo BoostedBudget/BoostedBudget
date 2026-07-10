@@ -66,7 +66,7 @@ describe('useHouseholdInvites', () => {
     const { result } = renderHook(() => useHouseholdInvites(), { wrapper: createWrapper(queryClient) })
 
     expect(result.current.invites).toEqual(mockInvites)
-    expect(result.current.error).toBeNull()
+    expect(result.current.actionErrorMessage).toBeNull()
   })
 
   it('createInvite calls the mutation and invalidates listHouseholdInvites + getHouseholdEntitlement', async () => {
@@ -106,7 +106,7 @@ describe('useHouseholdInvites', () => {
     })
 
     await waitFor(() => {
-      expect(result.current.error).toBe('A pending invite already exists for this email')
+      expect(result.current.actionErrorMessage).toBe('A pending invite already exists for this email')
     })
   })
 
@@ -126,7 +126,7 @@ describe('useHouseholdInvites', () => {
     })
 
     await waitFor(() => {
-      expect(result.current.error).toBe('No seats available on this plan')
+      expect(result.current.actionErrorMessage).toBe('No seats available on this plan')
     })
   })
 
@@ -141,7 +141,7 @@ describe('useHouseholdInvites', () => {
     })
 
     await waitFor(() => {
-      expect(result.current.error).toBe('Something went wrong. Please try again.')
+      expect(result.current.actionErrorMessage).toBe('Something went wrong. Please try again.')
     })
   })
 

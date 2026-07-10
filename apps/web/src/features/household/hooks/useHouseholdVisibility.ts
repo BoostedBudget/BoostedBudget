@@ -7,7 +7,8 @@
  * visibility>` for O(1) lookups) and `useSetHouseholdShareVisibility`.
  *
  * Query-key invalidation investigation (see also useAcceptInvite.ts, which
- * duplicates this same helper for its own accept-success invalidation):
+ * shares the same `invalidateScopedDashboardAnalyticsQueries` helper for its
+ * own accept-success invalidation):
  * `packages/api-client/src/endpoints/dashboard/dashboard.ts` and
  * `.../analytics/analytics.ts` define each scoped query's key as
  *   `[url, ...(params ? [params] : [])]`
@@ -20,28 +21,19 @@
  * key helper with no params and invalidating on that key invalidates BOTH
  * scope variants in one call, regardless of which scopes are actually
  * cached. No manual key-slicing is needed — the generated helper's own
- * "no-params" behavior already produces the right prefix.
+ * "no-params" behavior already produces the right prefix. See
+ * `invalidateScopedQueries.ts` for the shared helper implementing this.
  */
 
 import { useCallback, useMemo } from 'react'
-import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   useListMyAccountShares,
   useSetHouseholdShareVisibility,
   getListMyAccountSharesQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
-import {
-  getGetBalanceSummaryQueryKey,
-  getGetBalanceHistoryQueryKey,
-  getGetNetWorthQueryKey,
-  getGetNetWorthHistoryQueryKey,
-} from '@boostedbudget/api-client/endpoints/dashboard/dashboard'
-import {
-  getGetCashFlowSummaryQueryKey,
-  getGetCashFlowHistoryQueryKey,
-  getGetNetWorthTrendQueryKey,
-} from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { UserAccountShareView } from '@boostedbudget/api-client/models'
+import { invalidateScopedDashboardAnalyticsQueries } from './invalidateScopedQueries'
 
 export type ShareVisibility = 'shared' | 'hidden' | null
 
@@ -54,23 +46,6 @@ export interface UseHouseholdVisibilityResult {
   error: Error | null
   refetch: () => Promise<void>
   setVisibility: (userAccountId: string, visibility: 'shared' | 'hidden') => Promise<void>
-}
-
-/**
- * Invalidates the 7 scoped dashboard/analytics queries so both the
- * `personal` and `household` scope variants refresh. See file-header comment
- * for why calling each key helper with no arguments is the correct approach.
- */
-async function invalidateScopedDashboardAnalyticsQueries(queryClient: QueryClient): Promise<void> {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: getGetBalanceSummaryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetCashFlowSummaryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetBalanceHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetCashFlowHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthTrendQueryKey() }),
-  ])
 }
 
 export function useHouseholdVisibility(): UseHouseholdVisibilityResult {
