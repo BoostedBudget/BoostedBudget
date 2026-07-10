@@ -11,6 +11,8 @@ import {
 } from '@boostedbudget/api-client/endpoints/household/household'
 import { getGetBalanceSummaryQueryKey, getGetNetWorthQueryKey } from '@boostedbudget/api-client/endpoints/dashboard/dashboard'
 import { getGetCashFlowSummaryQueryKey } from '@boostedbudget/api-client/endpoints/analytics/analytics'
+import { getGetUserProfileQueryKey } from '@boostedbudget/api-client/endpoints/profile/profile'
+import { getGetAccountsQueryKey } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import {
   mockUseGetHouseholdInvitePreview,
   mockUseAcceptHouseholdInvite,
@@ -126,7 +128,7 @@ describe('useAcceptInvite', () => {
     })
   })
 
-  it('accept() success invalidates getMyHousehold, listHouseholdMembers, getHouseholdEntitlement, listMyAccountShares, and the scoped dashboard/analytics queries', async () => {
+  it('accept() success invalidates getMyHousehold, listHouseholdMembers, getHouseholdEntitlement, listMyAccountShares, profile, accounts, and the scoped dashboard/analytics queries', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = spyOn(queryClient, 'invalidateQueries')
     mockAcceptHouseholdInviteMutateAsync.mockResolvedValue(mockAcceptResponse)
@@ -142,9 +144,28 @@ describe('useAcceptInvite', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getListHouseholdMembersQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetHouseholdEntitlementQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getListMyAccountSharesQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetUserProfileQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetAccountsQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetBalanceSummaryQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetCashFlowSummaryQueryKey() })
+    })
+  })
+
+  it('accept() success invalidates profile and accounts queries specifically (effective tier and account visibility change on join)', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const invalidateSpy = spyOn(queryClient, 'invalidateQueries')
+    mockAcceptHouseholdInviteMutateAsync.mockResolvedValue(mockAcceptResponse)
+
+    const { result } = renderHook(() => useAcceptInvite('token-1'), { wrapper: createWrapper(queryClient) })
+
+    await act(async () => {
+      await result.current.accept()
+    })
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetUserProfileQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetAccountsQueryKey() })
     })
   })
 
