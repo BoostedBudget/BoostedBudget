@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetSpendingByMerchantScope } from './getSpendingByMerchantScope';
 
 export type GetSpendingByMerchantParams = {
 /**
@@ -52,4 +53,8 @@ include_transfers?: string;
  * Maximum number of merchants to return (default 10)
  */
 limit?: number;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetSpendingByMerchantScope;
 };

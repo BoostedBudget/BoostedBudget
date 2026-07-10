@@ -56,11 +56,14 @@ type AnalyticsService interface {
 
 	// GetSavingsRateForPeriod returns the savings rate (income - expenses) / income for a period.
 	// Returns nil savings_rate pointer when income is zero. AI-tool-callable (Issue #1215 PR2).
-	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateResponse, error)
+	// scope, when non-nil, aggregates across the household's shared accounts (Issue #1369 —
+	// Phase 5); nil = personal (today's behavior, unchanged).
+	GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateResponse, error)
 
 	// GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period delta.
-	// category is optional; accountTypes and includeTransfers filter the data. Issue #1215 PR2/gaps.
-	GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool) (*domain.MonthOverMonthResponse, error)
+	// category is optional; accountTypes and includeTransfers filter the data. scope, when
+	// non-nil, aggregates across the household's shared accounts (Issue #1369 — Phase 5).
+	GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool, scope *domain.HouseholdScope) (*domain.MonthOverMonthResponse, error)
 
 	// GetLargestTransactionsForPeriod returns the N largest expense transactions in a date range.
 	// AI-tool-callable (Issue #1215 PR2).
@@ -81,7 +84,9 @@ type AnalyticsService interface {
 
 	// GetNetWorthTrend returns net worth bucketed by grouping (daily/weekly/monthly) over
 	// the trailing 12 months. Requires SetBalanceSnapshotRepo. AI-tool-callable (Issue #1215 PR3).
-	GetNetWorthTrend(ctx context.Context, userID string, grouping string) (*domain.NetWorthTrendResponse, error)
+	// scope, when non-nil, aggregates across the household's shared accounts (Issue #1369
+	// — Phase 5); nil = personal (today's behavior, unchanged).
+	GetNetWorthTrend(ctx context.Context, userID string, grouping string, scope *domain.HouseholdScope) (*domain.NetWorthTrendResponse, error)
 
 	// GetBudgetVsActual returns active budgets for the given budget period with allocated vs spent amounts.
 	// period selects budgets by their configured budget period (weekly/monthly/quarterly/yearly/custom).
@@ -132,6 +137,10 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 		EndDate:          previousEnd,
 		AccountTypes:     filters.AccountTypes,
 		IncludeTransfers: filters.IncludeTransfers,
+		// HouseholdScope must carry over — otherwise the previous-period comparison
+		// silently falls back to personal scope even when the current period is
+		// household-scoped (Codex adversarial review, P0-1). Issue #1369 — Phase 5.
+		HouseholdScope: filters.HouseholdScope,
 	}
 
 	previousAgg, err := s.analyticsRepo.GetCashFlowAggregation(ctx, userID, previousFilters)
@@ -556,12 +565,12 @@ func (s *analyticsService) GetRecurringSubscriptions(ctx context.Context, userID
 
 // GetSavingsRateForPeriod returns the savings rate for a date range.
 // SavingsRate = (income - expenses) / income; nil when income is zero.
-func (s *analyticsService) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time) (*domain.SavingsRateResponse, error) {
+func (s *analyticsService) GetSavingsRateForPeriod(ctx context.Context, userID string, startDate time.Time, endDate time.Time, scope *domain.HouseholdScope) (*domain.SavingsRateResponse, error) {
 	if endDate.Before(startDate) {
 		return nil, fmt.Errorf("end_date cannot be before start_date")
 	}
 
-	row, err := s.analyticsRepo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate)
+	row, err := s.analyticsRepo.GetSavingsRateForPeriod(ctx, userID, startDate, endDate, scope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get savings rate: %w", err)
 	}
@@ -584,7 +593,7 @@ func (s *analyticsService) GetSavingsRateForPeriod(ctx context.Context, userID s
 
 // GetMonthOverMonthSpendingChange returns monthly spend buckets with period-over-period delta.
 // months must be between 2 and 24. accountTypes and includeTransfers are forwarded to the repo layer.
-func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool) (*domain.MonthOverMonthResponse, error) {
+func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, userID string, category string, months int, accountTypes []string, includeTransfers bool, scope *domain.HouseholdScope) (*domain.MonthOverMonthResponse, error) {
 	if months < 2 || months > 24 {
 		return nil, fmt.Errorf("months must be between 2 and 24")
 	}
@@ -593,6 +602,7 @@ func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, 
 	filters := domain.SpendingFilters{
 		AccountTypes:     accountTypes,
 		IncludeTransfers: includeTransfers,
+		HouseholdScope:   scope,
 	}
 	rows, err := s.analyticsRepo.GetMonthOverMonthSpending(ctx, userID, startDate, category, filters)
 	if err != nil {
@@ -781,7 +791,7 @@ func (s *analyticsService) GetUnusualSpend(ctx context.Context, userID string, s
 // GetNetWorthTrend returns net worth bucketed by grouping (daily/weekly/monthly) over the trailing 12 months.
 // Reuses BalanceSnapshotRepository.GetAggregatedHistory. Requires SetBalanceSnapshotRepo to be called first.
 // AI-tool-callable (Issue #1215 PR3).
-func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, grouping string) (*domain.NetWorthTrendResponse, error) {
+func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, grouping string, scope *domain.HouseholdScope) (*domain.NetWorthTrendResponse, error) {
 	if s.balanceSnapshotRepo == nil {
 		return nil, fmt.Errorf("balance snapshot repository not configured")
 	}
@@ -794,7 +804,15 @@ func (s *analyticsService) GetNetWorthTrend(ctx context.Context, userID string, 
 	endDate := time.Now()
 	startDate := endDate.AddDate(-1, 0, 0)
 
-	points, err := s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
+	// Household mode fans out across every member's shared accounts instead of the
+	// personal, single-user GetAggregatedHistory (Issue #1369 — Phase 5).
+	var points []domain.BalanceHistoryPoint
+	var err error
+	if scope != nil {
+		points, err = s.balanceSnapshotRepo.GetAggregatedHistoryForHousehold(ctx, userID, scope, startDate, endDate, nil)
+	} else {
+		points, err = s.balanceSnapshotRepo.GetAggregatedHistory(ctx, userID, startDate, endDate, nil)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get balance history: %w", err)
 	}

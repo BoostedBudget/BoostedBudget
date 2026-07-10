@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetBalanceHistoryScope } from './getBalanceHistoryScope';
 
 export type GetBalanceHistoryParams = {
 /**
@@ -48,4 +49,8 @@ end_date?: string;
  * Time granularity: daily, weekly, or monthly
  */
 granularity?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership)
+ */
+scope?: GetBalanceHistoryScope;
 };

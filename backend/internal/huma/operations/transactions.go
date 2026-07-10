@@ -81,6 +81,10 @@ type GetTransactionsInput struct {
 	// ActivityTypes filters investment activity by normalized trade type when
 	// include_investment_activity=true. Values: buy, sell, dividend, reinvest, fee, cash, other.
 	ActivityTypes string `query:"activity_types" doc:"Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true."`
+
+	// Scope must never be "household" — members must never drill into another member's
+	// raw transactions (Issue #1369 decision #5). Rejected with 400 in the handler.
+	Scope string `query:"scope" enum:"personal,household" doc:"Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)"`
 }
 
 // GetTransactionsOutput represents the response for listing transactions.
@@ -101,6 +105,8 @@ type GetTransactionsOutput struct {
 type GetTransactionByIDInput struct {
 	inputs.AuthenticatedInput
 	ID string `path:"id" doc:"Transaction UUID"`
+	// Scope must never be "household" (Issue #1369 decision #5). Rejected with 400.
+	Scope string `query:"scope" enum:"personal,household" doc:"Must be omitted or 'personal' — this endpoint does not support household scope (Issue #1369 decision #5)"`
 }
 
 // GetTransactionByIDOutput represents the response for getting a transaction.
@@ -231,6 +237,9 @@ type GetPlaidCategoriesOutput struct {
 // GetTransactions handles GET /api/v1/transactions requests.
 // Retrieves transactions for the authenticated user with optional filters and cursor-based pagination.
 func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTransactionsInput) (*GetTransactionsOutput, error) {
+	if err := rejectHouseholdScope(input.Scope); err != nil {
+		return nil, err
+	}
 	// Decode cursor if present
 	var cursor *domain.TransactionCursor
 	if input.Cursor != "" {
@@ -427,6 +436,9 @@ func (h *TransactionHandler) GetTransactions(ctx context.Context, input *GetTran
 // GetTransactionByID handles GET /api/v1/transactions/:id requests.
 // Retrieves a specific transaction by ID.
 func (h *TransactionHandler) GetTransactionByID(ctx context.Context, input *GetTransactionByIDInput) (*GetTransactionByIDOutput, error) {
+	if err := rejectHouseholdScope(input.Scope); err != nil {
+		return nil, err
+	}
 	tx, err := h.service.GetTransactionByID(ctx, input.UserID, input.ID)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)

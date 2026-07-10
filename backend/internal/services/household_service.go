@@ -152,6 +152,20 @@ type HouseholdService interface {
 	AcceptInvite(ctx context.Context, callerUserID, rawToken string, consent bool, hiddenAccountIDs []string) (*HouseholdAcceptResult, error)
 	DeclineInvite(ctx context.Context, callerUserID, rawToken string) error
 
+	// ActiveMemberUserIDs returns the user IDs of all active members of householdID
+	// (owner included), in joined_at order. One query. Issue #1369 — Phase 5.
+	ActiveMemberUserIDs(ctx context.Context, householdID string) ([]string, error)
+
+	// ResolveScope turns a `scope` query-param value into a validated
+	// *domain.HouseholdScope for the requesting user, or nil for personal scope.
+	// `""` and `"personal"` both return (nil, nil) — today's single-user behavior.
+	// `"household"` resolves the caller's own active household membership and its
+	// current active members; a caller with no active household membership gets
+	// domain.ErrHouseholdNotFound (mapped to HTTP 404 by callers). Repositories must
+	// trust only a HouseholdScope returned from here — never one built from raw
+	// request input. Issue #1369 — Phase 5.
+	ResolveScope(ctx context.Context, requestingUserID, scopeParam string) (*domain.HouseholdScope, error)
+
 	SetAnalytics(a phclient.Analytics)
 	// SetMemberProfileResolver wires optional (nil-safe) Clerk name/avatar enrichment for
 	// ListMembers. #1367 — Phase 3 Round 2 (GT-3).
@@ -390,6 +404,38 @@ func (s *householdService) ListMembers(ctx context.Context, userID string) ([]Ho
 		views[i].AvatarURL = avatar
 	}
 	return views, nil
+}
+
+// ─── Phase 5 (#1369): household aggregation scope resolution ────────────────
+
+func (s *householdService) ActiveMemberUserIDs(ctx context.Context, householdID string) ([]string, error) {
+	members, err := s.householdRepo.ListMembers(ctx, householdID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(members))
+	for i, m := range members {
+		ids[i] = m.UserID
+	}
+	return ids, nil
+}
+
+func (s *householdService) ResolveScope(ctx context.Context, requestingUserID, scopeParam string) (*domain.HouseholdScope, error) {
+	if scopeParam == "" || scopeParam == "personal" {
+		return nil, nil
+	}
+	household, _, found, err := s.householdRepo.GetHouseholdForUser(ctx, requestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, domain.ErrHouseholdNotFound
+	}
+	memberIDs, err := s.ActiveMemberUserIDs(ctx, household.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.HouseholdScope{HouseholdID: household.ID, MemberUserIDs: memberIDs}, nil
 }
 
 func (s *householdService) RemoveMember(ctx context.Context, actorUserID, targetUserID string) error {

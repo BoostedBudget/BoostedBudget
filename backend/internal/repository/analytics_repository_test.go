@@ -374,15 +374,15 @@ func TestBuildSpendingFilter_CustomCategoryRollup(t *testing.T) {
 		}
 	})
 
-	t.Run("no rollup matches exact ids only", func(t *testing.T) {
+	t.Run("no rollup matches exact ids only, namespaced to requester (#1369 gap-closure G4)", func(t *testing.T) {
 		filters := domain.SpendingFilters{
 			IncludeTransfers:  true,
 			CustomCategoryIDs: []string{"id1"},
 			RollUpChildren:    false,
 		}
 		clause, _, _ := buildSpendingFilter(filters, base)
-		if !contains(clause, "custom_category_override_id::text IN") {
-			t.Errorf("expected exact-id match, got: %s", clause)
+		if !contains(clause, "custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1::uuid AND id::text IN") {
+			t.Errorf("expected exact-id match namespaced to requester's own custom categories, got: %s", clause)
 		}
 		if contains(clause, "parent_id::text IN") {
 			t.Errorf("did not expect rollup subquery, got: %s", clause)
