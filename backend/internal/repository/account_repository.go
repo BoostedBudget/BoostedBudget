@@ -50,6 +50,20 @@ type AccountRepository interface {
 	// GetByUserID retrieves all accounts for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]domain.Account, error)
 
+	// GetForHouseholdScope retrieves every active account currently shared into the
+	// household (visibility='shared', not revoked, owner is an active member), across
+	// ALL members — not just requestingUserID. Household balance aggregation must use
+	// this instead of GetByUserID, which is single-user and would silently drop every
+	// non-requester member's accounts (Codex adversarial review, P0-2). Joint accounts
+	// dedup to one row per physical fingerprint (freshest-synced copy AT OR BEFORE asOf
+	// wins). requestingUserID is passed through only to satisfy the shared household CTE's
+	// parameter typing. asOf is the point-in-time cutoff used to resolve joint-account
+	// fingerprint winners; it must match the asOf passed to whichever
+	// GetSnapshotsAsOfForHousehold call this account map will be paired with, or the two
+	// can disagree on which member's copy wins for a joint account (Issue #1369
+	// gap-closure G1). Issue #1369 — Phase 5.
+	GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error)
+
 	// GetAccountsWithInstitution retrieves all accounts for a user with institution names
 	// This method performs a LEFT JOIN with linked_items to include institution_name
 	GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error)
@@ -419,6 +433,73 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	`
 
 	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []domain.Account
+	for rows.Next() {
+		var account domain.Account
+		err := rows.Scan(
+			&account.ID,
+			&account.LinkedItemID,
+			&account.UserID,
+			&account.PlaidAccountID,
+			&account.Name,
+			&account.OfficialName,
+			&account.Type,
+			&account.Subtype,
+			&account.Mask,
+			&account.CurrentBalance,
+			&account.AvailableBalance,
+			&account.CurrencyCode,
+			&account.Status,
+			&account.UserAccountID,
+			&account.ReplacedByID,
+			&account.ReplacedAt,
+			&account.CreatedAt,
+			&account.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := r.decryptAccountPIIFields(&account); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return accounts, nil
+}
+
+// GetForHouseholdScope retrieves every active account shared into the household across
+// all its members. Uses the asOf-bounded balance-oriented household CTE (freshest-synced
+// copy AT OR BEFORE asOf wins for joint-account fingerprint collisions — see
+// householdAccountsCTEForBalancesAsOf) since account metadata backs balance/net-worth
+// aggregation, not transaction history. asOf must match whichever
+// GetSnapshotsAsOfForHousehold call this account map is paired with (Issue #1369
+// gap-closure G1) — see the interface doc for why. Issue #1369 — Phase 5.
+func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.Account, error) {
+	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
+		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
+		       a.name, a.official_name, a.type, a.subtype, a.mask,
+		       a.current_balance, a.available_balance, a.currency_code,
+		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
+		       a.created_at, a.updated_at
+		FROM accounts a
+		JOIN household_accounts ha ON ha.user_account_id = a.user_account_id
+		WHERE a.status = 'active'
+		ORDER BY a.created_at ASC
+	`
+
+	args := householdScopeArgs(requestingUserID, scope)
+	args = append(args, asOf)
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
