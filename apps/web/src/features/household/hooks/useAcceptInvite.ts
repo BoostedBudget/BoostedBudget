@@ -17,9 +17,9 @@
  * `getHouseholdEntitlement`, `listMyAccountShares`, and the 7 scoped
  * dashboard/analytics queries (both `personal` and `household` scope
  * variants) — joining a household changes almost everything the user sees.
- * See useHouseholdVisibility.ts for the full query-key-shape investigation
- * behind the scoped-invalidation helper (duplicated here rather than shared,
- * per this task's one-file-per-hook scope).
+ * See `invalidateScopedQueries.ts` for the full query-key-shape investigation
+ * behind the shared scoped-invalidation helper (also used by
+ * useHouseholdVisibility.ts).
  *
  * NOTE (scope gap, intentionally deferred): profile/effective-tier and
  * accounts queries are NOT invalidated here because their query-key helpers
@@ -31,7 +31,7 @@
  */
 
 import { useCallback, useState } from 'react'
-import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   useGetHouseholdInvitePreview,
   useAcceptHouseholdInvite,
@@ -41,18 +41,9 @@ import {
   getGetHouseholdEntitlementQueryKey,
   getListMyAccountSharesQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
-import {
-  getGetBalanceSummaryQueryKey,
-  getGetBalanceHistoryQueryKey,
-  getGetNetWorthQueryKey,
-  getGetNetWorthHistoryQueryKey,
-} from '@boostedbudget/api-client/endpoints/dashboard/dashboard'
-import {
-  getGetCashFlowSummaryQueryKey,
-  getGetCashFlowHistoryQueryKey,
-  getGetNetWorthTrendQueryKey,
-} from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { GetInvitePreviewResponseBody, AcceptInviteResponseBody } from '@boostedbudget/api-client/models'
+import { invalidateScopedDashboardAnalyticsQueries } from './invalidateScopedQueries'
+import { getErrorStatus } from './errorStatus'
 
 export type AcceptInviteErrorKind = 'not_found' | 'email_mismatch' | 'seats_full' | 'unknown' | null
 
@@ -64,21 +55,6 @@ export interface UseAcceptInviteResult {
   accept: (hiddenAccountIds?: string[]) => Promise<AcceptInviteResponseBody>
   decline: () => Promise<void>
   refetchPreview: () => Promise<void>
-}
-
-function getErrorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object') return undefined
-
-  if ('response' in error) {
-    const response = (error as { response?: { status?: number } }).response
-    if (response?.status !== undefined) return response.status
-  }
-
-  if ('status' in error) {
-    return (error as { status?: number }).status
-  }
-
-  return undefined
 }
 
 function classifyErrorKind(error: unknown): AcceptInviteErrorKind {
@@ -94,24 +70,6 @@ function classifyErrorKind(error: unknown): AcceptInviteErrorKind {
     default:
       return 'unknown'
   }
-}
-
-/**
- * Invalidates the 7 scoped dashboard/analytics queries so both the
- * `personal` and `household` scope variants refresh. Duplicated from
- * useHouseholdVisibility.ts's helper of the same shape — see that file's
- * header comment for the full query-key-shape investigation.
- */
-async function invalidateScopedDashboardAnalyticsQueries(queryClient: QueryClient): Promise<void> {
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: getGetBalanceSummaryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetCashFlowSummaryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetBalanceHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetCashFlowHistoryQueryKey() }),
-    queryClient.invalidateQueries({ queryKey: getGetNetWorthTrendQueryKey() }),
-  ])
 }
 
 export function useAcceptInvite(token: string): UseAcceptInviteResult {

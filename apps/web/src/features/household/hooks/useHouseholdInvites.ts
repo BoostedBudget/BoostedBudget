@@ -27,31 +27,26 @@ import {
   getGetHouseholdEntitlementQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
 import type { HouseholdInvite, CreateInviteResponseBody } from '@boostedbudget/api-client/models'
+import { getErrorStatus } from './errorStatus'
 
 export interface UseHouseholdInvitesResult {
   invites: HouseholdInvite[]
   isLoading: boolean
-  /** Friendly message from the most recent list/create/revoke/regenerate failure, or null. */
-  error: string | null
+  /**
+   * Friendly message from the most recent list/create/revoke/regenerate
+   * failure, or null. NOTE: this is deliberately NOT named `error` — unlike
+   * the sibling hooks (useHousehold, useHouseholdMembers,
+   * useHouseholdVisibility, useAcceptInvite), which expose `error: Error |
+   * null` for "did the underlying query fail", this field is a friendly
+   * action-result string. Same name, incompatible type/semantics, so it's
+   * named distinctly to avoid a collision for consumers building shared
+   * error-display components across all five hooks.
+   */
+  actionErrorMessage: string | null
   refetch: () => Promise<void>
   createInvite: (email: string) => Promise<CreateInviteResponseBody>
   revokeInvite: (inviteId: string) => Promise<void>
   regenerateInvite: (inviteId: string, email: string) => Promise<CreateInviteResponseBody>
-}
-
-function getErrorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object') return undefined
-
-  if ('response' in error) {
-    const response = (error as { response?: { status?: number } }).response
-    if (response?.status !== undefined) return response.status
-  }
-
-  if ('status' in error) {
-    return (error as { status?: number }).status
-  }
-
-  return undefined
 }
 
 function getErrorDetail(error: unknown): string | undefined {
@@ -160,12 +155,12 @@ export function useHouseholdInvites(): UseHouseholdInvitesResult {
     [revokeInviteMutation, createInviteMutation, invalidateInviteQueries, queryRefetch]
   )
 
-  const error = actionError ?? (queryError ? toFriendlyMessage(queryError) : null)
+  const actionErrorMessage = actionError ?? (queryError ? toFriendlyMessage(queryError) : null)
 
   return {
     invites,
     isLoading,
-    error,
+    actionErrorMessage,
     refetch,
     createInvite,
     revokeInvite,

@@ -113,6 +113,53 @@ describe('useHouseholdVisibility', () => {
     })
   })
 
+  it('setVisibility invalidation actually marks BOTH personal- and household-scope cache entries stale in a real QueryClient', async () => {
+    // Finding #2 (review): the other invalidation tests in this file spy on
+    // `invalidateQueries` and assert it was called with the key-getter's own
+    // return value — that proves the call site uses the right key literal,
+    // but not that TanStack Query's prefix-matching actually invalidates
+    // BOTH `scope=personal` and `scope=household` cached variants. This test
+    // seeds a real (unmocked) QueryClient cache with both scope variants for
+    // one of the 7 scoped queries, triggers the real setVisibility mutation
+    // path, and asserts both cache entries are now marked stale — proving
+    // the real prefix-match semantics, not just a call-arg assertion.
+    //
+    // NOTE: uses getGetNetWorthQueryKey rather than
+    // getGetBalanceSummaryQueryKey — this test file's suite runs under the
+    // project's global bunfig.toml preloads, which include
+    // `src/test/mocks/dashboard-api.ts`. That file calls `mock.module()` on
+    // the dashboard endpoints module for ALL tests process-wide (bun:test
+    // module mocks are global, not scoped to a file), and its
+    // `getGetBalanceSummaryQueryKey`/`getGetBalanceHistoryQueryKey` stubs
+    // always append a `params` element (even `undefined`) instead of
+    // conditionally spreading it — breaking the real prefix-match shape this
+    // test needs to exercise. `getGetNetWorthQueryKey` is untouched by that
+    // mock (and by analytics-api.ts's equivalent), so it resolves to the
+    // real generated implementation here.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    mockSetHouseholdShareVisibilityMutateAsync.mockResolvedValue(undefined)
+
+    const personalKey = getGetNetWorthQueryKey({ scope: 'personal' })
+    const householdKey = getGetNetWorthQueryKey({ scope: 'household' })
+    queryClient.setQueryData(personalKey, { total_balance: 100 })
+    queryClient.setQueryData(householdKey, { total_balance: 250 })
+
+    // Sanity check: neither entry starts out invalidated.
+    expect(queryClient.getQueryState(personalKey)?.isInvalidated).toBe(false)
+    expect(queryClient.getQueryState(householdKey)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useHouseholdVisibility(), { wrapper: createWrapper(queryClient) })
+
+    await act(async () => {
+      await result.current.setVisibility('ua-1', 'hidden')
+    })
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(personalKey)?.isInvalidated).toBe(true)
+      expect(queryClient.getQueryState(householdKey)?.isInvalidated).toBe(true)
+    })
+  })
+
   it('propagates setVisibility failures without invalidating', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = spyOn(queryClient, 'invalidateQueries')
