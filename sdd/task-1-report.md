@@ -134,6 +134,43 @@ Successfully implemented the household feature module scaffold with badge compon
 - All 21 tests output clean
 - No stray console output or unhandled errors
 
+## Review Fix: RoleBadge Variant Prop Leak
+
+**Commit:** `37080606` (#1370: Fix RoleBadge variant prop leak (review fix))
+
+### Issue Identified
+Code review found that `RoleBadgeProps` extended the full `HouseholdBadgeVariants` type (including `variant`), unlike its sibling `SeatUsageBadge` which correctly used `Omit<HouseholdBadgeVariants, 'variant'>`. This caused the following problem:
+
+- Type-valid caller code like `<RoleBadge role="owner" variant="member" />` would compile without error
+- At runtime, the `variant` prop would be spread onto the underlying `<span>` element via `{...props}`
+- React would emit a warning: invalid DOM attribute `variant` on `<span>`
+- The passed `variant` value had zero visual effect (component computes variant from `role` prop only)
+
+### Fix Applied
+1. **Updated `RoleBadgeProps` type definition** (line 16-21):
+   - Changed from: `extends React.HTMLAttributes<HTMLSpanElement>, HouseholdBadgeVariants`
+   - Changed to: `extends React.HTMLAttributes<HTMLSpanElement>, Omit<HouseholdBadgeVariants, 'variant'>`
+   - Matches exact pattern used in `SeatUsageBadgeProps` (line 16-18 of SeatUsageBadge.tsx)
+
+2. **Added tests to verify the fix** (added to RoleBadge.test.tsx, new "Variant prop handling" describe block):
+   - Test: "does not leak variant attribute onto DOM element" — confirms `variant` attribute is never present on the rendered `<span>`
+   - Test: "correctly computes variant from role prop only" — confirms component still applies correct variant classes based only on `role` prop
+
+### Test Results
+```
+$ bun test src/features/household
+✅ 23 pass, 0 fail (was 21, now includes 2 new tests)
+✅ All tests output pristine, no warnings
+```
+
+### TypeScript Results
+```
+$ bun run typecheck
+✅ Clean output (no errors)
+```
+
+The `Omit<HouseholdBadgeVariants, 'variant'>` type change now correctly prevents TypeScript from accepting `variant` as a prop on `<RoleBadge />`.
+
 ## Next Steps (for later tasks)
 
 This scaffold provides a solid foundation for:
