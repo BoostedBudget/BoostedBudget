@@ -18,7 +18,7 @@
  * is stubbed per-test via `navigator.clipboard`, mirroring
  * `useCopyToClipboard.test.tsx`.
  */
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -110,22 +110,42 @@ describe('InvitePanel', () => {
         invite_link: 'https://app.boostedbudget.com/invite/token-abc',
       })
 
-      renderPanel()
+      // Regression guard for the UTC-pinning fix in `formatExpiresAt`: spy on
+      // `toLocaleDateString` (calling through to the real implementation, so
+      // the rendered text below is unaffected) and assert it was invoked with
+      // `timeZone: 'UTC'`. Asserting on the *rendered string* alone
+      // ("Jan 8, 2025") would NOT catch a regression where someone removes
+      // the `timeZone: 'UTC'` option: on a UTC CI runner (the typical
+      // merge-gating environment), `expires_at`'s UTC-midnight instant
+      // formats identically whether or not the option is present. Asserting
+      // directly on the call options makes this test fail on ANY host
+      // timezone if the option is ever dropped.
+      const toLocaleDateStringSpy = spyOn(Date.prototype, 'toLocaleDateString')
 
-      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'new@example.com' } })
-      fireEvent.click(screen.getByRole('button', { name: /generate link/i }))
+      try {
+        renderPanel()
 
-      await waitFor(() => {
-        expect(mockCreateHouseholdInviteMutateAsync).toHaveBeenCalledWith({
-          data: { email: 'new@example.com' },
+        fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'new@example.com' } })
+        fireEvent.click(screen.getByRole('button', { name: /generate link/i }))
+
+        await waitFor(() => {
+          expect(mockCreateHouseholdInviteMutateAsync).toHaveBeenCalledWith({
+            data: { email: 'new@example.com' },
+          })
         })
-      })
 
-      expect(await screen.findByText(/token-abc/)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /^copy$/i })).toBeInTheDocument()
-      // expires_at is formatted human-readably, not the raw ISO string
-      expect(screen.queryByText('2025-01-08T00:00:00Z')).not.toBeInTheDocument()
-      expect(screen.getByText(/Jan 8, 2025/)).toBeInTheDocument()
+        expect(await screen.findByText(/token-abc/)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: /^copy$/i })).toBeInTheDocument()
+        // expires_at is formatted human-readably, not the raw ISO string
+        expect(screen.queryByText('2025-01-08T00:00:00Z')).not.toBeInTheDocument()
+        expect(screen.getByText(/Jan 8, 2025/)).toBeInTheDocument()
+
+        expect(toLocaleDateStringSpy).toHaveBeenCalled()
+        const [, options] = toLocaleDateStringSpy.mock.calls[0] as [unknown, Intl.DateTimeFormatOptions]
+        expect(options).toMatchObject({ timeZone: 'UTC' })
+      } finally {
+        toLocaleDateStringSpy.mockRestore()
+      }
     })
 
     it('shows "Copied!" on the copy button after copying the link', async () => {
