@@ -21,6 +21,10 @@ export { HouseholdCard, type HouseholdCardProps } from './components/HouseholdCa
 export { LeaveHouseholdDialog, type LeaveHouseholdDialogProps } from './components/LeaveHouseholdDialog'
 export { DisbandHouseholdDialog, type DisbandHouseholdDialogProps } from './components/DisbandHouseholdDialog'
 
+// Members roster + composing tab (Task 4b)
+export { MembersList, type MembersListProps } from './components/MembersList'
+export { HouseholdTab, type HouseholdTabProps } from './HouseholdTab'
+
 // Types
 export type {
   Household,
