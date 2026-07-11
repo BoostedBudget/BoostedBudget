@@ -26,6 +26,8 @@
 import { useState } from 'react'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useHouseholdMembers } from '../hooks/useHouseholdMembers'
 
 export interface LeaveHouseholdDialogProps {
@@ -36,6 +38,7 @@ export interface LeaveHouseholdDialogProps {
 export function LeaveHouseholdDialog({ open, onOpenChange }: LeaveHouseholdDialogProps) {
   const { user } = useProfile()
   const { removeMember } = useHouseholdMembers()
+  const trackEvent = useTrackEvent()
 
   const [isLeaving, setIsLeaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +50,11 @@ export function LeaveHouseholdDialog({ open, onOpenChange }: LeaveHouseholdDialo
     setIsLeaving(true)
     try {
       await removeMember(user.id)
+      // Fire only once the leave has actually persisted, never on failure.
+      // This is the member's OWN leave action — distinct from
+      // HOUSEHOLD_MEMBER_REMOVED, which MembersList fires when the owner
+      // removes someone else via the same removeMember() call.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_LEFT)
       onOpenChange(false)
     } catch {
       setError('Could not leave the household. Please try again.')

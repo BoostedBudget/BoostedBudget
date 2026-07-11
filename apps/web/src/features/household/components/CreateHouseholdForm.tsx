@@ -24,6 +24,8 @@ import {
 } from '@boostedbudget/api-client/endpoints/household/household'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getErrorDetail } from '../hooks/errorStatus'
 
 export interface CreateHouseholdFormProps {
@@ -33,6 +35,7 @@ export interface CreateHouseholdFormProps {
 export function CreateHouseholdForm({ className }: CreateHouseholdFormProps = {}) {
   const queryClient = useQueryClient()
   const createHouseholdMutation = useCreateHousehold()
+  const trackEvent = useTrackEvent()
 
   const [name, setName] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -62,6 +65,8 @@ export function CreateHouseholdForm({ className }: CreateHouseholdFormProps = {}
         queryClient.invalidateQueries({ queryKey: getGetMyHouseholdQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getGetHouseholdEntitlementQueryKey() }),
       ])
+      // Fire only once the create has actually persisted — never on failure.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_CREATED)
       setName('')
     } catch (err) {
       setSubmitError(getErrorDetail(err) ?? 'Could not create household. Please try again.')

@@ -56,6 +56,29 @@ export const ANALYTICS_EVENTS = {
   // Issue #1370 Task 8: Household feature — per-account share/hide toggle
   HOUSEHOLD_ACCOUNT_SHARE_CHANGED: 'household_account_share_changed',
 
+  // Issue #1370 Task 10: Household feature — remaining lifecycle/invite events.
+  // No payloads carry PII (household name, member name, invitee email) —
+  // only non-PII aggregate counts / method discriminators are passed, per
+  // docs/security/posthog-pii-masking.md's "pass IDs/counts, not names" rule.
+  HOUSEHOLD_CREATED: 'household_created',
+  HOUSEHOLD_RENAMED: 'household_renamed',
+  HOUSEHOLD_DISBANDED: 'household_disbanded',
+  HOUSEHOLD_LEFT: 'household_left',
+  HOUSEHOLD_MEMBER_REMOVED: 'household_member_removed',
+  HOUSEHOLD_INVITE_CREATED: 'household_invite_created',
+  HOUSEHOLD_INVITE_REVOKED: 'household_invite_revoked',
+  // A single event for regenerate (revoke+create as one user action) rather
+  // than firing HOUSEHOLD_INVITE_REVOKED + HOUSEHOLD_INVITE_CREATED back to
+  // back — regenerate is one user-initiated action, not two.
+  HOUSEHOLD_INVITE_REGENERATED: 'household_invite_regenerated',
+  HOUSEHOLD_INVITE_ACCEPTED: 'household_invite_accepted',
+  HOUSEHOLD_INVITE_DECLINED: 'household_invite_declined',
+  // Fired for BOTH "Save & Continue" and "Skip" in ShareNewAccountsDialog —
+  // both are batch-writes of visibility (Skip is not a no-op, see that
+  // component's doc comment) — the `method` property distinguishes them
+  // rather than using two separate event names.
+  HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED: 'household_new_accounts_share_saved',
+
   // Billing
   CHECKOUT_STARTED: 'checkout_started',
   CHECKOUT_COMPLETED: 'checkout_completed',

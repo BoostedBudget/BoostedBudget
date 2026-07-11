@@ -31,6 +31,8 @@ import {
   mockCreateHouseholdInviteMutateAsync,
   mockRevokeHouseholdInviteMutateAsync,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { InvitePanel } from './InvitePanel'
 
 function renderPanel() {
@@ -76,6 +78,7 @@ describe('InvitePanel', () => {
     mockRefetchHouseholdInvites.mockClear()
     mockCreateHouseholdInviteMutateAsync.mockClear()
     mockRevokeHouseholdInviteMutateAsync.mockClear()
+    mockTrackEvent.mockClear()
 
     setInvites([])
     mockUseCreateHouseholdInvite.mockReturnValue({
@@ -474,6 +477,98 @@ describe('InvitePanel', () => {
       expect(regenerateButton).toHaveAttribute('aria-describedby', emailNode.id)
       expect(revokeButton).not.toHaveAttribute('aria-label')
       expect(regenerateButton).not.toHaveAttribute('aria-label')
+    })
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_INVITE_CREATED after a successful generate, with no PII payload', async () => {
+      mockCreateHouseholdInviteMutateAsync.mockResolvedValueOnce({
+        invite: makeInvite(),
+        invite_link: 'https://app.boostedbudget.com/invite/token-abc',
+      })
+      renderPanel()
+
+      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'new@example.com' } })
+      fireEvent.click(screen.getByRole('button', { name: /generate link/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_CREATED)
+      })
+      // No call anywhere passed the raw email as a property.
+      for (const call of mockTrackEvent.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain('new@example.com')
+      }
+    })
+
+    it('does NOT fire HOUSEHOLD_INVITE_CREATED when generate fails', async () => {
+      mockCreateHouseholdInviteMutateAsync.mockRejectedValueOnce({
+        response: { status: 409, data: { detail: 'A pending invite already exists for this email.' } },
+      })
+      renderPanel()
+
+      fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'dup@example.com' } })
+      fireEvent.click(screen.getByRole('button', { name: /generate link/i }))
+
+      await screen.findByText('A pending invite already exists for this email.')
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_CREATED)
+    })
+
+    it('fires HOUSEHOLD_INVITE_REVOKED after a successful revoke', async () => {
+      setInvites([makeInvite({ id: 'invite-42', invitee_email: 'target@example.com' })])
+      mockRevokeHouseholdInviteMutateAsync.mockResolvedValueOnce(undefined)
+      renderPanel()
+
+      fireEvent.click(screen.getByRole('button', { name: /^revoke$/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REVOKED)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_INVITE_REVOKED when revoke fails', async () => {
+      setInvites([makeInvite({ id: 'invite-42', invitee_email: 'target@example.com' })])
+      mockRevokeHouseholdInviteMutateAsync.mockRejectedValueOnce(new Error('revoke failed'))
+      renderPanel()
+
+      fireEvent.click(screen.getByRole('button', { name: /^revoke$/i }))
+
+      await waitFor(() => {
+        expect(mockRevokeHouseholdInviteMutateAsync).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REVOKED)
+    })
+
+    it('fires HOUSEHOLD_INVITE_REGENERATED (not CREATED/REVOKED) after a successful regenerate', async () => {
+      setInvites([makeInvite({ id: 'invite-42', invitee_email: 'target@example.com' })])
+      mockRevokeHouseholdInviteMutateAsync.mockResolvedValueOnce(undefined)
+      mockCreateHouseholdInviteMutateAsync.mockResolvedValueOnce({
+        invite: makeInvite({ id: 'invite-99' }),
+        invite_link: 'https://app.boostedbudget.com/invite/token-def',
+      })
+      renderPanel()
+
+      fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REGENERATED)
+      })
+      // A single user action (regenerate) fires exactly one distinct event —
+      // not the created/revoked pair as well.
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_CREATED)
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REVOKED)
+    })
+
+    it('does NOT fire HOUSEHOLD_INVITE_REGENERATED when regenerate fails', async () => {
+      setInvites([makeInvite({ id: 'invite-42', invitee_email: 'target@example.com' })])
+      mockRevokeHouseholdInviteMutateAsync.mockRejectedValueOnce(new Error('revoke failed'))
+      renderPanel()
+
+      fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }))
+
+      await waitFor(() => {
+        expect(mockRevokeHouseholdInviteMutateAsync).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REGENERATED)
     })
   })
 })

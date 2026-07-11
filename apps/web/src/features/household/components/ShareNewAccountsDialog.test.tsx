@@ -25,6 +25,8 @@ import {
   mockSetHouseholdShareVisibilityMutateAsync,
 } from '@/test/mocks/household-api'
 import { mockToastError } from '@/test/mocks/sonner'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { ShareNewAccountsDialog } from './ShareNewAccountsDialog'
 
 function makeAccount(overrides: Partial<Account> = {}): Account {
@@ -72,6 +74,7 @@ describe('ShareNewAccountsDialog', () => {
     mockUseSetHouseholdShareVisibility.mockClear()
     mockSetHouseholdShareVisibilityMutateAsync.mockClear()
     mockToastError.mockClear()
+    mockTrackEvent.mockClear()
 
     mockUseListMyAccountShares.mockReturnValue({
       data: [],
@@ -259,5 +262,68 @@ describe('ShareNewAccountsDialog', () => {
       expect(onOpenChange).toHaveBeenCalledWith(false)
     })
     expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED with method "save" and correct counts on Save & Continue', async () => {
+      const onOpenChange = mock(() => {})
+      const accounts = [
+        makeAccount({ id: 'account-1', user_account_id: 'ua-1', name: 'Checking' }),
+        makeAccount({ id: 'account-2', user_account_id: 'ua-2', name: 'Savings' }),
+      ]
+      renderDialog(accounts, onOpenChange)
+
+      const switches = screen.getAllByRole('switch')
+      fireEvent.click(switches[1]) // toggle second account off (hidden)
+
+      fireEvent.click(screen.getByRole('button', { name: /save (&|and) continue/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED, {
+          method: 'save',
+          shared_count: 1,
+          hidden_count: 1,
+        })
+      })
+    })
+
+    it('fires HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED with method "skip" and all-shared counts on Skip', async () => {
+      const onOpenChange = mock(() => {})
+      const accounts = [
+        makeAccount({ id: 'account-1', user_account_id: 'ua-1', name: 'Checking' }),
+        makeAccount({ id: 'account-2', user_account_id: 'ua-2', name: 'Savings' }),
+      ]
+      renderDialog(accounts, onOpenChange)
+
+      const switches = screen.getAllByRole('switch')
+      fireEvent.click(switches[0]) // toggled off, but Skip force-shares everything
+
+      fireEvent.click(screen.getByRole('button', { name: /skip/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED, {
+          method: 'skip',
+          shared_count: 2,
+          hidden_count: 0,
+        })
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED when the batch write fails', async () => {
+      const onOpenChange = mock(() => {})
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('forbidden'))
+      const accounts = [makeAccount({ id: 'account-1', user_account_id: 'ua-1', name: 'Checking' })]
+      renderDialog(accounts, onOpenChange)
+
+      fireEvent.click(screen.getByRole('button', { name: /save (&|and) continue/i }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED,
+        expect.anything()
+      )
+    })
   })
 })

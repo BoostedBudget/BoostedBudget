@@ -51,6 +51,8 @@ import {
   getGetHouseholdEntitlementQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useHousehold } from '../hooks/useHousehold'
 import { getErrorDetail } from '../hooks/errorStatus'
 
@@ -79,6 +81,7 @@ export function DisbandHouseholdDialog({ open, onOpenChange }: DisbandHouseholdD
   const queryClient = useQueryClient()
   const { seatsUsed, isOwner, isLoading } = useHousehold()
   const deleteHouseholdMutation = useDeleteHousehold()
+  const trackEvent = useTrackEvent()
 
   const [isDisbanding, setIsDisbanding] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -97,6 +100,8 @@ export function DisbandHouseholdDialog({ open, onOpenChange }: DisbandHouseholdD
         queryClient.invalidateQueries({ queryKey: getGetMyHouseholdQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getGetHouseholdEntitlementQueryKey() }),
       ])
+      // Fire only once the disband has actually persisted, never on failure.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_DISBANDED)
       onOpenChange(false)
     } catch (err) {
       setError(getErrorDetail(err) ?? 'Could not disband the household. Please try again.')

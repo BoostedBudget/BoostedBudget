@@ -23,6 +23,8 @@ import {
   mockUseUpdateHouseholdName,
   mockUpdateHouseholdNameMutateAsync,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { HouseholdCard } from './HouseholdCard'
 
 const mockHousehold: Household = {
@@ -78,6 +80,7 @@ describe('HouseholdCard', () => {
     mockRefetchHouseholdEntitlement.mockClear()
     mockUseUpdateHouseholdName.mockClear()
     mockUpdateHouseholdNameMutateAsync.mockClear()
+    mockTrackEvent.mockClear()
 
     mockUseUpdateHouseholdName.mockReturnValue({
       mutateAsync: mockUpdateHouseholdNameMutateAsync,
@@ -169,5 +172,41 @@ describe('HouseholdCard', () => {
 
     expect(screen.getByText('The Smiths')).toBeInTheDocument()
     expect(mockUpdateHouseholdNameMutateAsync).not.toHaveBeenCalled()
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_RENAMED after a successful rename', async () => {
+      mockUpdateHouseholdNameMutateAsync.mockResolvedValueOnce({
+        ...mockHousehold,
+        name: 'The Joneses',
+      })
+      setHousehold(makeEntitlement({ is_owner: true }))
+      renderCard()
+
+      fireEvent.click(screen.getByRole('button', { name: /rename household/i }))
+      const input = screen.getByDisplayValue('The Smiths')
+      fireEvent.change(input, { target: { value: 'The Joneses' } })
+      fireEvent.click(screen.getByRole('button', { name: /save household name/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_RENAMED)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_RENAMED when the rename fails', async () => {
+      mockUpdateHouseholdNameMutateAsync.mockRejectedValueOnce({
+        response: { status: 422, data: { detail: 'Household name is invalid.' } },
+      })
+      setHousehold(makeEntitlement({ is_owner: true }))
+      renderCard()
+
+      fireEvent.click(screen.getByRole('button', { name: /rename household/i }))
+      const input = screen.getByDisplayValue('The Smiths')
+      fireEvent.change(input, { target: { value: 'Bad Name' } })
+      fireEvent.click(screen.getByRole('button', { name: /save household name/i }))
+
+      await screen.findByText('Household name is invalid.')
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_RENAMED)
+    })
   })
 })

@@ -22,6 +22,8 @@ import {
   mockUseCreateHousehold,
   mockCreateHouseholdMutateAsync,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { CreateHouseholdForm } from './CreateHouseholdForm'
 
 function renderForm(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -35,6 +37,7 @@ describe('CreateHouseholdForm', () => {
   beforeEach(() => {
     mockUseCreateHousehold.mockClear()
     mockCreateHouseholdMutateAsync.mockClear()
+    mockTrackEvent.mockClear()
     mockUseCreateHousehold.mockReturnValue({
       mutateAsync: mockCreateHouseholdMutateAsync,
       isPending: false,
@@ -63,6 +66,37 @@ describe('CreateHouseholdForm', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetMyHouseholdQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetHouseholdEntitlementQueryKey() })
     })
+  })
+
+  it('fires HOUSEHOLD_CREATED after a successful create', async () => {
+    mockCreateHouseholdMutateAsync.mockResolvedValueOnce({
+      id: 'household-1',
+      name: 'The Smiths',
+      owner_user_id: 'user-1',
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    })
+    renderForm()
+
+    fireEvent.change(screen.getByLabelText(/household name/i), { target: { value: 'The Smiths' } })
+    fireEvent.click(screen.getByRole('button', { name: /create household/i }))
+
+    await waitFor(() => {
+      expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_CREATED)
+    })
+  })
+
+  it('does NOT fire HOUSEHOLD_CREATED when the create call fails', async () => {
+    mockCreateHouseholdMutateAsync.mockRejectedValueOnce({
+      response: { status: 422, data: { detail: 'Household name is invalid.' } },
+    })
+    renderForm()
+
+    fireEvent.change(screen.getByLabelText(/household name/i), { target: { value: 'The Smiths' } })
+    fireEvent.click(screen.getByRole('button', { name: /create household/i }))
+
+    await screen.findByText('Household name is invalid.')
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_CREATED)
   })
 
   it('trims whitespace from the submitted name', async () => {

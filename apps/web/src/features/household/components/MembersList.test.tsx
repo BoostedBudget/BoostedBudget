@@ -31,6 +31,8 @@ import {
   mockRefetchMyHousehold,
   mockRefetchHouseholdEntitlement,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { MembersList } from './MembersList'
 
 const mockHousehold: Household = {
@@ -113,6 +115,7 @@ describe('MembersList', () => {
     mockUseGetHouseholdEntitlement.mockClear()
     mockRefetchMyHousehold.mockClear()
     mockRefetchHouseholdEntitlement.mockClear()
+    mockTrackEvent.mockClear()
 
     setMembers(mockMembers)
     setEntitlement(makeEntitlement())
@@ -228,5 +231,30 @@ describe('MembersList', () => {
 
     expect(removeButton).toHaveAttribute('aria-describedby', nameNode.id)
     expect(removeButton).not.toHaveAttribute('aria-label')
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_MEMBER_REMOVED after a successful removal', async () => {
+      mockRemoveHouseholdMemberMutateAsync.mockResolvedValueOnce(undefined)
+      renderList()
+
+      fireEvent.click(screen.getByRole('button', { name: /^remove$/i }))
+      fireEvent.click(screen.getByRole('button', { name: /remove member/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_MEMBER_REMOVED)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_MEMBER_REMOVED when removal fails', async () => {
+      mockRemoveHouseholdMemberMutateAsync.mockRejectedValueOnce(new Error('boom'))
+      renderList()
+
+      fireEvent.click(screen.getByRole('button', { name: /^remove$/i }))
+      fireEvent.click(screen.getByRole('button', { name: /remove member/i }))
+
+      await screen.findByText(/could not remove this member/i)
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_MEMBER_REMOVED)
+    })
   })
 })

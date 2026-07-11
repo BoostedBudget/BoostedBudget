@@ -42,6 +42,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth, useClerk } from '@clerk/react-router'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useAcceptInvite } from '../hooks/useAcceptInvite'
 import { ConsentPreview } from './ConsentPreview'
 
@@ -71,6 +73,7 @@ export function AcceptInvitePage() {
   const { isSignedIn, isLoaded: isAuthLoaded } = useAuth()
   const { openSignIn } = useClerk()
   const { preview, isPreviewLoading, errorKind, accept, decline, refetchPreview } = useAcceptInvite(token ?? '')
+  const trackEvent = useTrackEvent()
 
   const [hiddenAccountIds, setHiddenAccountIds] = useState<string[]>([])
   const [isJoining, setIsJoining] = useState(false)
@@ -89,6 +92,12 @@ export function AcceptInvitePage() {
     try {
       await accept(hiddenAccountIds)
       setAccepted(true)
+      // Fire only once the join has actually persisted, never on failure.
+      // hidden_account_count is an aggregate count, not PII — see
+      // docs/security/posthog-pii-masking.md.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_ACCEPTED, {
+        hidden_account_count: hiddenAccountIds.length,
+      })
     } catch {
       // errorKind (email_mismatch / seats_full / unknown) is already surfaced by the hook.
     } finally {
@@ -101,6 +110,7 @@ export function AcceptInvitePage() {
     try {
       await decline()
       setDeclined(true)
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_DECLINED)
     } catch {
       // errorKind is already surfaced by the hook.
     } finally {
