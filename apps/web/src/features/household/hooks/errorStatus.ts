@@ -23,3 +23,22 @@ export function getErrorStatus(error: unknown): number | undefined {
 
   return undefined
 }
+
+/**
+ * getErrorDetail
+ *
+ * Issue #1370: Household feature — components layer (shared helper)
+ *
+ * Extracts a backend-supplied friendly `detail` message from an axios-style
+ * error `{ response: { data: { detail } } }` if present. Used by
+ * CreateHouseholdForm, HouseholdCard, and DisbandHouseholdDialog to surface
+ * server validation messages to users.
+ */
+export function getErrorDetail(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  if ('response' in error) {
+    const response = (error as { response?: { data?: { detail?: string } } }).response
+    if (response?.data?.detail) return response.data.detail
+  }
+  return undefined
+}

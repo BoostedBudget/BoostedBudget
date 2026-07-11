@@ -45,6 +45,27 @@ export const mockUseRemoveHouseholdMember = mock(() => ({
   isPending: false,
 }))
 
+// --- useCreateHousehold ---
+export const mockCreateHouseholdMutateAsync = mock(() => Promise.resolve(undefined))
+export const mockUseCreateHousehold = mock(() => ({
+  mutateAsync: mockCreateHouseholdMutateAsync,
+  isPending: false,
+}))
+
+// --- useUpdateHouseholdName ---
+export const mockUpdateHouseholdNameMutateAsync = mock(() => Promise.resolve(undefined))
+export const mockUseUpdateHouseholdName = mock(() => ({
+  mutateAsync: mockUpdateHouseholdNameMutateAsync,
+  isPending: false,
+}))
+
+// --- useDeleteHousehold ---
+export const mockDeleteHouseholdMutateAsync = mock(() => Promise.resolve(undefined))
+export const mockUseDeleteHousehold = mock(() => ({
+  mutateAsync: mockDeleteHouseholdMutateAsync,
+  isPending: false,
+}))
+
 // --- useListHouseholdInvites ---
 export const mockRefetchHouseholdInvites = mock(() => Promise.resolve({}))
 export const mockUseListHouseholdInvites = mock(() => ({
@@ -113,6 +134,9 @@ mock.module('@boostedbudget/api-client/endpoints/household/household', () => ({
   useGetHouseholdEntitlement: mockUseGetHouseholdEntitlement,
   useListHouseholdMembers: mockUseListHouseholdMembers,
   useRemoveHouseholdMember: mockUseRemoveHouseholdMember,
+  useCreateHousehold: mockUseCreateHousehold,
+  useUpdateHouseholdName: mockUseUpdateHouseholdName,
+  useDeleteHousehold: mockUseDeleteHousehold,
   useListHouseholdInvites: mockUseListHouseholdInvites,
   useCreateHouseholdInvite: mockUseCreateHouseholdInvite,
   useRevokeHouseholdInvite: mockUseRevokeHouseholdInvite,
