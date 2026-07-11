@@ -21,6 +21,8 @@ import {
   mockRefetchHouseholdMembers,
   mockRemoveHouseholdMemberMutateAsync,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { LeaveHouseholdDialog } from './LeaveHouseholdDialog'
 
 const mockUser: User = {
@@ -59,6 +61,7 @@ describe('LeaveHouseholdDialog', () => {
     mockUseRemoveHouseholdMember.mockClear()
     mockRefetchHouseholdMembers.mockClear()
     mockRemoveHouseholdMemberMutateAsync.mockClear()
+    mockTrackEvent.mockClear()
 
     mockUseGetUserProfile.mockReturnValue({
       data: mockUser,
@@ -120,5 +123,28 @@ describe('LeaveHouseholdDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: /leave household/i }))
 
     expect(await screen.findByText(/could not leave the household/i)).toBeInTheDocument()
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_LEFT after a successful leave', async () => {
+      mockRemoveHouseholdMemberMutateAsync.mockResolvedValueOnce(undefined)
+      renderDialog()
+
+      fireEvent.click(screen.getByRole('button', { name: /leave household/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_LEFT)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_LEFT when leaving fails', async () => {
+      mockRemoveHouseholdMemberMutateAsync.mockRejectedValueOnce(new Error('boom'))
+      renderDialog()
+
+      fireEvent.click(screen.getByRole('button', { name: /leave household/i }))
+
+      await screen.findByText(/could not leave the household/i)
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_LEFT)
+    })
   })
 })

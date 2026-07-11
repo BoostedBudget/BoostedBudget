@@ -61,6 +61,8 @@ import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DataTable } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { RoleBadge } from './RoleBadge'
 import { useHousehold } from '../hooks/useHousehold'
 import { useHouseholdMembers } from '../hooks/useHouseholdMembers'
@@ -96,6 +98,7 @@ function formatJoinedAt(dateStr: string): string {
 export function MembersList({ className }: MembersListProps = {}) {
   const { members, isLoading, removeMember } = useHouseholdMembers()
   const { isOwner } = useHousehold()
+  const trackEvent = useTrackEvent()
 
   const [pendingRemoval, setPendingRemoval] = useState<HouseholdMemberView | null>(null)
   const [isRemoving, setIsRemoving] = useState(false)
@@ -115,6 +118,11 @@ export function MembersList({ className }: MembersListProps = {}) {
     setIsRemoving(true)
     try {
       await removeMember(pendingRemoval.user_id)
+      // Fire only once the removal has actually persisted, never on failure.
+      // This is the OWNER removing someone else — distinct from
+      // HOUSEHOLD_LEFT, which LeaveHouseholdDialog fires for a member's own
+      // leave action via the same removeMember() call.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_MEMBER_REMOVED)
       setPendingRemoval(null)
     } catch {
       setError('Could not remove this member. Please try again.')

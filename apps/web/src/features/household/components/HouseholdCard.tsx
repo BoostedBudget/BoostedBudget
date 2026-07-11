@@ -27,6 +27,8 @@ import {
 } from '@boostedbudget/api-client/endpoints/household/household'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { RoleBadge } from './RoleBadge'
 import { SeatUsageBadge } from './SeatUsageBadge'
 import { useHousehold } from '../hooks/useHousehold'
@@ -40,6 +42,7 @@ export function HouseholdCard({ className }: HouseholdCardProps = {}) {
   const queryClient = useQueryClient()
   const { household, isOwner, seatsUsed, seatsTotal } = useHousehold()
   const updateHouseholdNameMutation = useUpdateHouseholdName()
+  const trackEvent = useTrackEvent()
 
   const [isEditing, setIsEditing] = useState(false)
   const [draftName, setDraftName] = useState('')
@@ -77,6 +80,9 @@ export function HouseholdCard({ className }: HouseholdCardProps = {}) {
     try {
       await updateHouseholdNameMutation.mutateAsync({ data: { name: trimmed } })
       await queryClient.invalidateQueries({ queryKey: getGetMyHouseholdQueryKey() })
+      // Fire only once the rename has actually persisted, never on failure.
+      // No household name in the payload — see events.ts's PII note.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_RENAMED)
       setIsEditing(false)
     } catch (err) {
       setSubmitError(getErrorDetail(err) ?? 'Could not rename household. Please try again.')

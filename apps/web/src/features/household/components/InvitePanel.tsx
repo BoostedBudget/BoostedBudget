@@ -19,6 +19,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useCopyToClipboard } from '@/shared/hooks'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useHouseholdInvites } from '../hooks/useHouseholdInvites'
 import type { HouseholdInvite } from '../types'
 import type { CreateInviteResponseBody } from '@boostedbudget/api-client/models'
@@ -155,6 +157,7 @@ function PendingInviteRow({
 export function InvitePanel() {
   const { invites, isLoading, actionErrorMessage, createInvite, revokeInvite, regenerateInvite } =
     useHouseholdInvites()
+  const trackEvent = useTrackEvent()
 
   const [email, setEmail] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -184,6 +187,9 @@ export function InvitePanel() {
       const result = await createInvite(trimmedEmail)
       setGeneratedInvite(result)
       setEmail('')
+      // Fire only once the invite has actually persisted, never on failure.
+      // No email/link in the payload — see events.ts's PII note.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_CREATED)
     })
     setIsGenerating(false)
   }
@@ -195,6 +201,7 @@ export function InvitePanel() {
     await runGuarded(async () => {
       await revokeInvite(inviteId)
       setGeneratedInvite((current) => (current?.invite.id === inviteId ? null : current))
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REVOKED)
     })
     setRevokingId(null)
   }
@@ -209,6 +216,10 @@ export function InvitePanel() {
     await runGuarded(async () => {
       const result = await regenerateInvite(invite.id, invite.invitee_email)
       setGeneratedInvite(result)
+      // A single event for the single user action (revoke+create under the
+      // hood, but one "Regenerate" click) — not HOUSEHOLD_INVITE_REVOKED +
+      // HOUSEHOLD_INVITE_CREATED back to back.
+      trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_REGENERATED)
     })
     setRegeneratingId(null)
   }

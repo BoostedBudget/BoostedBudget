@@ -77,6 +77,8 @@ import { Switch } from '@/components/ui/switch'
 import { AccountSummaryHeader } from '@/features/accounts/components/AccountSummaryHeader'
 import { getAccountTypeLabel } from '@/features/accounts/utils'
 import type { Account } from '@/features/accounts/types'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useHouseholdVisibility } from '../hooks/useHouseholdVisibility'
 
 export interface ShareNewAccountsDialogProps {
@@ -117,6 +119,7 @@ interface ShareNewAccountsDialogContentProps {
 
 function ShareNewAccountsDialogContent({ accounts, onOpenChange }: ShareNewAccountsDialogContentProps) {
   const { setVisibility } = useHouseholdVisibility()
+  const trackEvent = useTrackEvent()
   // Set of user_account_ids the member has toggled OFF (hidden). Every
   // account starts shared (switch on) — mirrors ConsentPreview's hiddenIds
   // model.
@@ -144,12 +147,13 @@ function ShareNewAccountsDialogContent({ accounts, onOpenChange }: ShareNewAccou
     setIsSaving(true)
     setError(null)
 
+    const getVisibility = (userAccountId: string): 'shared' | 'hidden' =>
+      forceShared || !hiddenIds.has(userAccountId) ? 'shared' : 'hidden'
+
     const results = await Promise.allSettled(
-      writableAccounts.map((account) => {
-        const visibility: 'shared' | 'hidden' =
-          forceShared || !hiddenIds.has(account.user_account_id) ? 'shared' : 'hidden'
-        return setVisibility(account.user_account_id, visibility)
-      })
+      writableAccounts.map((account) =>
+        setVisibility(account.user_account_id, getVisibility(account.user_account_id))
+      )
     )
 
     setIsSaving(false)
@@ -164,6 +168,19 @@ function ShareNewAccountsDialogContent({ accounts, onOpenChange }: ShareNewAccou
       toast.error(message)
       return
     }
+
+    // Fire only once the batch write has actually persisted, never on
+    // failure. Both "Save & Continue" and "Skip" write visibility (Skip is
+    // not a no-op — see the component doc comment), so both fire the same
+    // event, distinguished by `method`. Counts are aggregate (not PII).
+    const sharedCount = writableAccounts.filter(
+      (account) => getVisibility(account.user_account_id) === 'shared'
+    ).length
+    trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED, {
+      method: forceShared ? 'skip' : 'save',
+      shared_count: sharedCount,
+      hidden_count: writableAccounts.length - sharedCount,
+    })
 
     onOpenChange(false)
   }

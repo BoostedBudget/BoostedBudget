@@ -29,6 +29,8 @@ import {
 import { mockUseAuth, mockUseClerk, mockUseUser, createMockClerkAuth, createMockClerk, createMockClerkUser } from '@/test/mocks/clerk'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockNavigate } from '@/test/mocks/react-router'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { AcceptInvitePage } from './AcceptInvitePage'
 
 const mockPreview: GetInvitePreviewResponseBody = {
@@ -98,6 +100,7 @@ describe('AcceptInvitePage', () => {
     mockUseUser.mockClear()
     mockUseGetAccounts.mockClear()
     mockNavigate.mockClear()
+    mockTrackEvent.mockClear()
 
     mockUseGetHouseholdInvitePreview.mockReturnValue({
       data: mockPreview,
@@ -330,6 +333,74 @@ describe('AcceptInvitePage', () => {
     await waitFor(() => {
       expect(mockDeclineHouseholdInviteMutateAsync).toHaveBeenCalledWith({ token: 'tok-123' })
       expect(screen.getByText(/invite declined/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('Analytics (#1370 Task 10)', () => {
+    it('fires HOUSEHOLD_INVITE_ACCEPTED with a hidden_account_count of 0 when nothing is toggled off', async () => {
+      mockAcceptHouseholdInviteMutateAsync.mockResolvedValue(mockAcceptResponse)
+      renderPage('tok-123')
+
+      fireEvent.click(screen.getByRole('button', { name: /join household/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_ACCEPTED, {
+          hidden_account_count: 0,
+        })
+      })
+    })
+
+    it('fires HOUSEHOLD_INVITE_ACCEPTED with the count of toggled-off accounts', async () => {
+      mockAcceptHouseholdInviteMutateAsync.mockResolvedValue(mockAcceptResponse)
+      renderPage('tok-123')
+
+      const [accountSwitch] = screen.getAllByRole('switch')
+      fireEvent.click(accountSwitch)
+      fireEvent.click(screen.getByRole('button', { name: /join household/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_ACCEPTED, {
+          hidden_account_count: 1,
+        })
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_INVITE_ACCEPTED when the join mutation fails', async () => {
+      mockAcceptHouseholdInviteMutateAsync.mockRejectedValue({ response: { status: 409 } })
+      renderPage()
+
+      fireEvent.click(screen.getByRole('button', { name: /join household/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/now full/i)).toBeInTheDocument()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.HOUSEHOLD_INVITE_ACCEPTED,
+        expect.anything()
+      )
+    })
+
+    it('fires HOUSEHOLD_INVITE_DECLINED after a successful decline', async () => {
+      mockDeclineHouseholdInviteMutateAsync.mockResolvedValue(undefined)
+      renderPage('tok-123')
+
+      fireEvent.click(screen.getByRole('button', { name: /decline/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_DECLINED)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_INVITE_DECLINED when decline fails', async () => {
+      mockDeclineHouseholdInviteMutateAsync.mockRejectedValue(new Error('network down'))
+      renderPage('tok-123')
+
+      fireEvent.click(screen.getByRole('button', { name: /decline/i }))
+
+      await waitFor(() => {
+        expect(mockDeclineHouseholdInviteMutateAsync).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_INVITE_DECLINED)
     })
   })
 })

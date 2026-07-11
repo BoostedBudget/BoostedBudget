@@ -26,6 +26,8 @@ import {
   mockUseDeleteHousehold,
   mockDeleteHouseholdMutateAsync,
 } from '@/test/mocks/household-api'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { DisbandHouseholdDialog } from './DisbandHouseholdDialog'
 
 const mockHousehold: Household = {
@@ -80,6 +82,7 @@ describe('DisbandHouseholdDialog', () => {
     mockRefetchHouseholdEntitlement.mockClear()
     mockUseDeleteHousehold.mockClear()
     mockDeleteHouseholdMutateAsync.mockClear()
+    mockTrackEvent.mockClear()
 
     mockUseDeleteHousehold.mockReturnValue({
       mutateAsync: mockDeleteHouseholdMutateAsync,
@@ -128,6 +131,31 @@ describe('DisbandHouseholdDialog', () => {
       fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'disband' } })
 
       expect(screen.getByRole('button', { name: /disband household/i })).not.toBeDisabled()
+    })
+
+    it('fires HOUSEHOLD_DISBANDED after a successful disband', async () => {
+      mockDeleteHouseholdMutateAsync.mockResolvedValueOnce(undefined)
+      renderDialog()
+
+      fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'DISBAND' } })
+      fireEvent.click(screen.getByRole('button', { name: /disband household/i }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_DISBANDED)
+      })
+    })
+
+    it('does NOT fire HOUSEHOLD_DISBANDED when the disband mutation fails', async () => {
+      mockDeleteHouseholdMutateAsync.mockRejectedValueOnce(new Error('boom'))
+      renderDialog()
+
+      fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'DISBAND' } })
+      fireEvent.click(screen.getByRole('button', { name: /disband household/i }))
+
+      await waitFor(() => {
+        expect(mockDeleteHouseholdMutateAsync).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.HOUSEHOLD_DISBANDED)
     })
   })
 
