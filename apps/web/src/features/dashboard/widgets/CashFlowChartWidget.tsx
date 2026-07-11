@@ -49,6 +49,7 @@ function CashFlowChartWidget() {
       endDate: context?.filters.endDate || '',
       accountTypes: context?.filters.accountTypes,
       includeTransfers: false,
+      scope: context?.scope,
     },
     enabled: Boolean(context?.filters.startDate && context?.filters.endDate),
   })

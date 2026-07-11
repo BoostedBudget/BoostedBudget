@@ -51,6 +51,8 @@ export const ANALYTICS_EVENTS = {
   WIDGET_ADDED: 'widget_added',
   WIDGET_REMOVED: 'widget_removed',
   TIMEFRAME_CHANGED: 'timeframe_changed',
+  // Issue #1370: Household feature — Personal/Household dashboard scope toggle
+  DASHBOARD_SCOPE_CHANGED: 'dashboard_scope_changed',
 
   // Billing
   CHECKOUT_STARTED: 'checkout_started',

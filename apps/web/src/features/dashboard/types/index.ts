@@ -49,12 +49,18 @@ export interface AccountTypesResponse {
   types: AccountTypeInfo[];
 }
 
+// Issue #1370: Household feature — Personal/Household dashboard scope toggle.
+// 'personal' is the backend default; 'household' requires active household
+// membership (enforced server-side). See ScopeSegmentedControl for the UI toggle.
+export type DashboardScope = 'personal' | 'household';
+
 export interface DashboardFilters {
   accountTypes?: string[];
   asOfDate?: string;
   startDate?: string;
   endDate?: string;
   granularity?: 'daily' | 'weekly' | 'monthly';
+  scope?: DashboardScope;
 }
 
 export interface CashFlowFilters {
@@ -63,6 +69,7 @@ export interface CashFlowFilters {
   accountTypes?: string[];
   includeTransfers?: boolean;
   grouping?: 'daily' | 'weekly' | 'monthly';
+  scope?: DashboardScope;
 }
 
 export interface CashFlowPeriodComparison {

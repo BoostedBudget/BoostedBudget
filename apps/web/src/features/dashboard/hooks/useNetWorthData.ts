@@ -51,6 +51,7 @@ export function useNetWorthData(filters?: DashboardFilters): UseNetWorthDataResu
     return {
       account_types: filters.accountTypes?.join(','),
       as_of_date: filters.asOfDate,
+      scope: filters.scope,
     };
   }, [filters]);
 
@@ -61,6 +62,7 @@ export function useNetWorthData(filters?: DashboardFilters): UseNetWorthDataResu
       start_date: filters.startDate,
       end_date: filters.endDate,
       granularity: filters.granularity,
+      scope: filters.scope,
     };
   }, [filters]);
 
