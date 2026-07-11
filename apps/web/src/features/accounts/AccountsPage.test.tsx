@@ -12,8 +12,8 @@
  * confirmation-dialog.test.tsx run in separate groups within test-conflict-files.sh.
  */
 
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -52,6 +52,61 @@ mock.module('./components/AccountTable', () => ({
       </tbody>
     </table>
   ),
+}))
+
+// Issue #1370 Task 9: Simplify PlaidLinkButton — exposes a single button that
+// fires `onSuccess` with a test-controllable ExchangePublicTokenResponse.
+// The real PlaidLinkButton's own success path routes through
+// react-plaid-link's `open()`, which is globally mocked to a no-op (see
+// plaid-api.ts) — there is no way to drive its real onSuccess callback from
+// a test. Stubbing here lets this file test AccountsPage's own
+// `handleAccountsLinked` orchestration (which accounts get passed to
+// ShareNewAccountsDialog, whether it opens at all) directly, without
+// duplicating PlaidLinkButton's own (separately-scoped) internals.
+// `item_id` (the Plaid PROVIDER's item id) is deliberately given a value
+// that never matches any test account's `linked_item_id` below — proving
+// AccountsPage filters on `linked_item_id`, not `item_id` (Issue #1370 Task
+// 9 fix: these are genuinely different backend fields; see
+// AccountsPage.tsx's handleAccountsLinked comment).
+export const plaidLinkStubConfig: {
+  response: { success: boolean; item_id: string; linked_item_id: string; accounts_linked: number }
+} = {
+  response: { success: true, item_id: 'plaid-provider-item-decoy', linked_item_id: 'item-1', accounts_linked: 1 },
+}
+mock.module('./PlaidLinkButton', () => ({
+  PlaidLinkButton: ({ onSuccess }: { onSuccess?: (response: typeof plaidLinkStubConfig.response) => void }) => (
+    <button onClick={() => onSuccess?.(plaidLinkStubConfig.response)}>Connect Bank Account</button>
+  ),
+}))
+
+// Issue #1370 Task 9: Simplify the household module — controls `isInHousehold`
+// per test and exposes a minimal ShareNewAccountsDialog stub that renders the
+// `accounts` prop it was given (so tests can assert exactly which accounts
+// AccountsPage passed in). ShareNewAccountsDialog's own per-row rendering,
+// toggle state, and Save/Skip write behavior are covered by its own test
+// file (ShareNewAccountsDialog.test.tsx) — this file only verifies
+// AccountsPage's orchestration: gating on isInHousehold and filtering by
+// linked_item_id.
+export const mockUseHousehold = mock(() => ({ isInHousehold: false }))
+mock.module('@/features/household', () => ({
+  useHousehold: mockUseHousehold,
+  ShareNewAccountsDialog: ({
+    open,
+    accounts,
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    accounts: { id: string; name: string }[]
+  }) =>
+    open ? (
+      <div data-testid="share-new-accounts-dialog">
+        {accounts.map((account) => (
+          <span key={account.id} data-testid="share-dialog-account">
+            {account.name}
+          </span>
+        ))}
+      </div>
+    ) : null,
 }))
 
 // Mock useAccountCustomization
@@ -143,6 +198,9 @@ describe('AccountsPage', () => {
     mockCreateLinkTokenMutateAsync.mockClear()
     mockUseExchangePublicToken.mockClear()
     mockExchangePublicTokenMutateAsync.mockClear()
+    mockUseHousehold.mockClear()
+    mockUseHousehold.mockReturnValue({ isInHousehold: false })
+    plaidLinkStubConfig.response = { success: true, item_id: 'plaid-provider-item-decoy', linked_item_id: 'item-1', accounts_linked: 1 }
 
     // Configure default: loaded state with premium user, unlimited accounts
     mockUseGetUserProfile.mockReturnValue({
@@ -387,6 +445,153 @@ describe('AccountsPage', () => {
       fireEvent.click(row)
 
       expect(mockNavigate).toHaveBeenCalledWith('/accounts/acc-1')
+    })
+  })
+
+  describe('post-Plaid-link household share dialog (Task 9)', () => {
+    const newAccount = {
+      id: 'acc-new',
+      name: 'New Checking',
+      linked_item_id: 'item-1',
+      institution_name: 'Chase',
+      type: 'depository',
+      subtype: 'checking',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 500,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+    const unrelatedAccount = {
+      id: 'acc-unrelated',
+      name: 'Unrelated Savings',
+      linked_item_id: 'item-2',
+      institution_name: 'Ally',
+      type: 'depository',
+      subtype: 'savings',
+      status: 'active',
+      is_hidden: false,
+      current_balance: 2000,
+      created_at: '2025-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: [] },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      })
+    })
+
+    it('opens the share dialog with only the just-linked accounts when in a household', async () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      mockRefetchAccounts.mockResolvedValueOnce({
+        data: { accounts: [newAccount, unrelatedAccount] },
+      })
+
+      renderAccountsPage()
+
+      const [ctaButton] = await screen.findAllByRole('button', { name: /connect bank account/i })
+      fireEvent.click(ctaButton)
+
+      const dialog = await screen.findByTestId('share-new-accounts-dialog')
+      const accountNames = within(dialog)
+        .getAllByTestId('share-dialog-account')
+        .map((el) => el.textContent)
+      expect(accountNames).toEqual(['New Checking'])
+    })
+
+    it('never opens the share dialog for a solo (non-household) user', async () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: false })
+      mockRefetchAccounts.mockResolvedValueOnce({
+        data: { accounts: [newAccount] },
+      })
+
+      renderAccountsPage()
+
+      const [ctaButton] = await screen.findAllByRole('button', { name: /connect bank account/i })
+      fireEvent.click(ctaButton)
+
+      await waitFor(() => expect(mockRefetchAccounts).toHaveBeenCalled())
+      expect(screen.queryByTestId('share-new-accounts-dialog')).not.toBeInTheDocument()
+    })
+
+    it('filters strictly by linked_item_id === the response linked_item_id, not "any newly present account", and NOT by item_id', async () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      // The exchange response reports linked_item_id "item-2", even though
+      // item-1's account is also "newly present" in this refetch — only the
+      // item-2 account must be treated as just-linked. `item_id` is set to a
+      // decoy value that doesn't match ANY test account's linked_item_id —
+      // if AccountsPage regressed to filtering on `item_id` (the bug this
+      // test guards against), zero accounts would match and this assertion
+      // would fail.
+      plaidLinkStubConfig.response = {
+        success: true,
+        item_id: 'plaid-provider-item-decoy',
+        linked_item_id: 'item-2',
+        accounts_linked: 1,
+      }
+      mockRefetchAccounts.mockResolvedValueOnce({
+        data: { accounts: [newAccount, unrelatedAccount] },
+      })
+
+      renderAccountsPage()
+
+      const [ctaButton] = await screen.findAllByRole('button', { name: /connect bank account/i })
+      fireEvent.click(ctaButton)
+
+      const dialog = await screen.findByTestId('share-new-accounts-dialog')
+      const accountNames = within(dialog)
+        .getAllByTestId('share-dialog-account')
+        .map((el) => el.textContent)
+      expect(accountNames).toEqual(['Unrelated Savings'])
+    })
+
+    it('does not open the dialog when no account matches the linked_item_id', async () => {
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      plaidLinkStubConfig.response = {
+        success: true,
+        item_id: 'plaid-provider-item-decoy',
+        linked_item_id: 'item-does-not-exist',
+        accounts_linked: 1,
+      }
+      mockRefetchAccounts.mockResolvedValueOnce({
+        data: { accounts: [newAccount, unrelatedAccount] },
+      })
+
+      renderAccountsPage()
+
+      const [ctaButton] = await screen.findAllByRole('button', { name: /connect bank account/i })
+      fireEvent.click(ctaButton)
+
+      await waitFor(() => expect(mockRefetchAccounts).toHaveBeenCalled())
+      expect(screen.queryByTestId('share-new-accounts-dialog')).not.toBeInTheDocument()
+    })
+
+    it('never lets a refetchAccounts failure become an unhandled rejection (PlaidLinkButton does not await/catch onSuccess)', async () => {
+      // Regression guard: handleAccountsLinked is now `async`, but
+      // PlaidLinkButton.tsx's real onSuccess call site is fire-and-forget
+      // (no `await`, no `.catch()`). If handleAccountsLinked didn't catch
+      // its own errors, a refetchAccounts() rejection would become an
+      // unhandled promise rejection instead of being handled gracefully.
+      mockUseHousehold.mockReturnValue({ isInHousehold: true })
+      const consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {})
+      mockRefetchAccounts.mockRejectedValueOnce(new Error('network error'))
+
+      renderAccountsPage()
+
+      const [ctaButton] = await screen.findAllByRole('button', { name: /connect bank account/i })
+      fireEvent.click(ctaButton)
+
+      await waitFor(() => {
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          'Failed to refresh accounts after linking:',
+          expect.any(Error)
+        )
+      })
+      expect(screen.queryByTestId('share-new-accounts-dialog')).not.toBeInTheDocument()
+
+      consoleErrorSpy.mockRestore()
     })
   })
 })
