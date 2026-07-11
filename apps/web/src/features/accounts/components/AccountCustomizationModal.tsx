@@ -31,6 +31,8 @@ import { IconSelector } from './IconSelector'
 import { EmojiInput } from './EmojiInput'
 import { AccountIconDisplay } from './AccountIconDisplay'
 import { useHousehold, useHouseholdVisibility } from '@/features/household'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import type { Account, AccountIcon, UpdateAccountRequest } from '../types'
 
 // Internal component to handle modal content with its own state
@@ -57,6 +59,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
   // canShowShareSwitch is true.
   const { isInHousehold } = useHousehold()
   const { isShared, isLoading: isSharesLoading, setVisibility } = useHouseholdVisibility()
+  const trackEvent = useTrackEvent()
   const userAccountId = account.user_account_id
   // No user_account_id means the account can't be looked up via
   // useHouseholdVisibility, so the row is hidden entirely rather than
@@ -143,17 +146,20 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
       // Household sharing hits a separate endpoint from the appearance
       // `changes` payload above, so it must never be folded into `onSave`.
       // Fired via Promise.allSettled (not Promise.all): a failure in one must
-      // not block or hide the outcome of the other. `onSave`, when invoked,
-      // is the parent's wrapped handler and closes the modal itself on
-      // success — that's unaffected by whatever happens to the
-      // share-visibility call.
+      // not block or hide the outcome of the other. Unlike before, `onSave`
+      // here is the raw parent prop — it no longer closes the modal as a
+      // side effect. Closing is decided below, once BOTH results are known,
+      // so a share-visibility failure can never be masked by an unrelated
+      // appearance-save success (or vice versa).
       const results = await Promise.allSettled([
         hasAppearanceChanges ? onSave(account, changes) : Promise.resolve(),
         shareVisibilityChanged && userAccountId
           ? setVisibility(userAccountId, wantsShared ? 'shared' : 'hidden')
           : Promise.resolve(),
       ])
-      const shareResult = results[1]
+      const [appearanceResult, shareResult] = results
+      const appearanceFailed = hasAppearanceChanges && appearanceResult.status === 'rejected'
+      const shareFailed = shareVisibilityChanged && shareResult.status === 'rejected'
 
       // onSave's own mutation hook is responsible for surfacing appearance-save
       // failures (toast/logging), same as before this change. setVisibility has
@@ -161,22 +167,40 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
       // explicitly — otherwise the user gets no signal that sharing didn't
       // change, even though the switch itself already flipped back visually
       // next time the modal reopens (since the failed write never persisted).
-      if (shareVisibilityChanged && shareResult.status === 'rejected') {
-        toast.error('Failed to update household sharing. Please try again.')
+      if (shareFailed) {
+        // Directionally accurate messaging (privacy-consequential case): if the
+        // user was trying to REVOKE household sharing and the write failed, the
+        // account is STILL shared — say so explicitly rather than a generic
+        // failure message, since silently believing an account went private
+        // when it didn't is the real risk here. Trying to share (safe-by-
+        // default) can use a generic message.
+        toast.error(
+          wantsShared
+            ? 'Failed to update household sharing. Please try again.'
+            : 'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
+      } else if (shareVisibilityChanged) {
+        // Fire only once the share-visibility write has actually persisted,
+        // never on failure and never merely on toggling the switch.
+        trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_ACCOUNT_SHARE_CHANGED, {
+          visibility: wantsShared ? 'shared' : 'hidden',
+        })
       }
 
-      // When only the share visibility changed (no appearance changes), nothing
-      // else closes the modal — do it explicitly, but only once the share save
-      // has actually succeeded. A failed share-only save must leave the modal
-      // open so the user can see the error and retry, not silently believe the
-      // change went through.
-      if (!hasAppearanceChanges && shareResult.status === 'fulfilled') {
+      // Only close the modal once every attempted write has actually
+      // succeeded. This intentionally covers all four save shapes:
+      // appearance-only, share-only, both, and neither attempted (the early
+      // return above already handles "no changes"). Closing on a partial
+      // mixed-save failure would let a failed share-visibility write hide
+      // behind a successful appearance save, silently misleading the user
+      // about their household-sharing state.
+      if (!appearanceFailed && !shareFailed) {
         onCancel()
       }
     } finally {
       setIsSubmitting(false)
     }
-  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, activeTab, onSave, onCancel, userAccountId, wantsShared, initialShareVisibility, setVisibility])
+  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, activeTab, onSave, onCancel, userAccountId, wantsShared, initialShareVisibility, setVisibility, trackEvent])
 
   return (
     <>
@@ -417,11 +441,13 @@ export function AccountCustomizationModal({
   onSave,
   isSaving = false,
 }: AccountCustomizationModalProps) {
-  const handleSave = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
-    await onSave(account, changes)
-    onOpenChange(false)
-  }, [onSave, onOpenChange])
-
+  // Issue #1370 Task 8: closing the modal used to be an implicit side effect
+  // of this wrapper's `onSave` call succeeding — which meant an appearance
+  // save succeeding could close the modal even though a parallel
+  // share-visibility write (fired inside ModalContent's handleSave) had
+  // failed. `ModalContent` now evaluates both outcomes itself and calls
+  // `onCancel` (below) only once every attempted write has succeeded, so
+  // `onSave` is passed straight through with no wrapping needed here.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
@@ -429,7 +455,7 @@ export function AccountCustomizationModal({
           <ModalContent
             key={account.id}
             account={account}
-            onSave={handleSave}
+            onSave={onSave}
             onCancel={() => onOpenChange(false)}
             isSaving={isSaving}
           />

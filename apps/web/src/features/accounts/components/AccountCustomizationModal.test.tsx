@@ -36,6 +36,8 @@ import {
   mockSetHouseholdShareVisibilityMutateAsync,
 } from '@/test/mocks/household-api'
 import { mockToastError } from '@/test/mocks/sonner'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 // Issue #1370 Task 8: AccountCustomizationModal now calls useHousehold()/
 // useHouseholdVisibility() unconditionally (Rules of Hooks — the household
@@ -151,6 +153,7 @@ describe('AccountCustomizationModal', () => {
     mockUseSetHouseholdShareVisibility.mockClear()
     mockSetHouseholdShareVisibilityMutateAsync.mockClear()
     mockToastError.mockClear()
+    mockTrackEvent.mockClear()
     mockNotInHousehold()
     mockShares([])
     mockUseSetHouseholdShareVisibility.mockReturnValue({
@@ -1247,10 +1250,49 @@ describe('AccountCustomizationModal', () => {
       })
     })
 
-    it('leaves the modal open and shows a toast when a share-only save fails', async () => {
+    it('leaves the modal open and shows a still-shared warning when un-sharing fails (share-only save)', async () => {
       const user = userEvent.setup()
       mockInHousehold()
       mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // Starting visibility is 'shared'; toggling off attempts to un-share.
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalled()
+      })
+      await waitFor(() => {
+        // Directionally accurate message: the write failed while trying to
+        // REVOKE sharing, so the account is still shared — that's the
+        // privacy-consequential case the message must call out explicitly,
+        // not a generic failure message.
+        expect(mockToastError).toHaveBeenCalledWith(
+          'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
+      })
+
+      // A failed share-only save must not silently close the modal.
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      // No analytics event on failure.
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('shows a generic failure message when SHARING (not un-sharing) fails', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      // Starting visibility is 'hidden' (no share grant); toggling on attempts to share.
+      mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
       mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
 
       renderModal(
@@ -1266,14 +1308,13 @@ describe('AccountCustomizationModal', () => {
       await user.click(screen.getByRole('button', { name: 'Save Changes' }))
 
       await waitFor(() => {
-        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalled()
-      })
-      await waitFor(() => {
         expect(mockToastError).toHaveBeenCalledWith('Failed to update household sharing. Please try again.')
       })
 
-      // A failed share-only save must not silently close the modal.
+      // Lower-stakes failure direction — safe-by-default — but still must
+      // not silently close the modal.
       expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      expect(mockTrackEvent).not.toHaveBeenCalled()
     })
 
     it('disables Save/Cancel while a share-only save is in flight, to prevent double-submission', async () => {
@@ -1312,7 +1353,7 @@ describe('AccountCustomizationModal', () => {
       })
     })
 
-    it('surfaces a toast when setVisibility fails even though the appearance save succeeded', async () => {
+    it('stays open and surfaces a still-shared warning when setVisibility fails even though the appearance save succeeded (Finding 1 regression)', async () => {
       const user = userEvent.setup()
       mockInHousehold()
       mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
@@ -1336,8 +1377,116 @@ describe('AccountCustomizationModal', () => {
           householdAccount,
           expect.objectContaining({ nickname: 'New Name' })
         )
-        expect(mockToastError).toHaveBeenCalledWith('Failed to update household sharing. Please try again.')
+        expect(mockToastError).toHaveBeenCalledWith(
+          'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
       })
+
+      // The core Finding 1 bug: the appearance save succeeded, but the modal
+      // must NOT close, because the parallel share-visibility write failed.
+      // Closing here would let the user walk away believing the account was
+      // made private when it is still shared with the household.
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      // No analytics event on a failed share-visibility write.
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('closes the modal when both appearance and share-visibility saves succeed', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockToastError).not.toHaveBeenCalled()
+    })
+
+    it('fires HOUSEHOLD_ACCOUNT_SHARE_CHANGED with the new visibility once the share-visibility write succeeds', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // shared -> hidden
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          ANALYTICS_EVENTS.HOUSEHOLD_ACCOUNT_SHARE_CHANGED,
+          { visibility: 'hidden' }
+        )
+      })
+    })
+
+    it('does not fire HOUSEHOLD_ACCOUNT_SHARE_CHANGED when the share-visibility write fails', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('does not fire HOUSEHOLD_ACCOUNT_SHARE_CHANGED when the switch is left untouched (appearance-only save)', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+      expect(mockTrackEvent).not.toHaveBeenCalled()
     })
   })
 })
