@@ -12,6 +12,9 @@ export { SeatUsageBadge, type SeatUsageBadgeProps } from './components/SeatUsage
 // Badge variants
 export { householdBadgeVariants, type HouseholdBadgeVariants } from './components/householdBadgeVariants'
 
+// Invite panel
+export { InvitePanel } from './components/InvitePanel'
+
 // Types
 export type {
   Household,
