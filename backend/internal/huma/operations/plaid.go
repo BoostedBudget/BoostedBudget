@@ -51,8 +51,15 @@ type ExchangePublicTokenInput struct {
 type ExchangePublicTokenOutput struct {
 	Body struct {
 		Success  bool   `json:"success"`
-		ItemID   string `json:"item_id"`
-		Accounts int    `json:"accounts_linked"`
+		ItemID   string `json:"item_id" doc:"The Plaid provider's item id — NOT the same as any account's linked_item_id"`
+		// LinkedItemID is the internal linked_items.id (Issue #1370 Task 9),
+		// distinct from ItemID (the Plaid provider's own item id). It's the
+		// value that matches domain.Account.LinkedItemID (set from
+		// linkedItem.ID in account_service.go's LinkAccounts), so callers can
+		// find just-linked accounts by filtering GetAccounts results on
+		// `linked_item_id == linked_item_id` from this response.
+		LinkedItemID string `json:"linked_item_id" doc:"The internal linked item id — matches an account's linked_item_id field"`
+		Accounts     int    `json:"accounts_linked"`
 	}
 }
 
@@ -150,6 +157,7 @@ func (h *PlaidHandler) ExchangePublicToken(ctx context.Context, input *ExchangeP
 	output := &ExchangePublicTokenOutput{}
 	output.Body.Success = true
 	output.Body.ItemID = result.LinkedItem.ItemID
+	output.Body.LinkedItemID = result.LinkedItem.ID
 	output.Body.Accounts = len(result.Accounts)
 
 	return output, nil

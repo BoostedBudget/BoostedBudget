@@ -49,7 +49,7 @@ import type {
 } from '../../models';
 
 
-export const getExchangePublicTokenResponseMock = (overrideResponse: Partial<Extract<ExchangePublicTokenOutputBody, object>> = {}): ExchangePublicTokenOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts_linked: faker.number.int(), item_id: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
+export const getExchangePublicTokenResponseMock = (overrideResponse: Partial<Extract<ExchangePublicTokenOutputBody, object>> = {}): ExchangePublicTokenOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts_linked: faker.number.int(), item_id: faker.string.alpha({length: {min: 10, max: 20}}), linked_item_id: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
 
 export const getCreateLinkTokenResponseMock = (overrideResponse: Partial<Extract<LinkTokenResponse, object>> = {}): LinkTokenResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expiration: faker.date.past().toISOString().slice(0, 19) + 'Z', link_token: faker.string.alpha({length: {min: 10, max: 20}}), request_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 

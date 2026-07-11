@@ -29,6 +29,12 @@ export { HouseholdTab, type HouseholdTabProps } from './HouseholdTab'
 export { AcceptInvitePage } from './components/AcceptInvitePage'
 export { ConsentPreview, type ConsentPreviewProps } from './components/ConsentPreview'
 
+// Post-Plaid-link share dialog (Task 9: AccountsPage integration)
+export {
+  ShareNewAccountsDialog,
+  type ShareNewAccountsDialogProps,
+} from './components/ShareNewAccountsDialog'
+
 // Hooks (Task 3: ProfilePage integration)
 export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
 export { useAcceptInvite, type UseAcceptInviteResult, type AcceptInviteErrorKind } from './hooks/useAcceptInvite'

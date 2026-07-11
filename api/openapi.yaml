@@ -2799,12 +2799,17 @@ components:
           format: int64
           type: integer
         item_id:
+          description: The Plaid provider's item id — NOT the same as any account's linked_item_id
+          type: string
+        linked_item_id:
+          description: The internal linked item id — matches an account's linked_item_id field
           type: string
         success:
           type: boolean
       required:
         - success
         - item_id
+        - linked_item_id
         - accounts_linked
       type: object
     FinancialSummaryResponse:
