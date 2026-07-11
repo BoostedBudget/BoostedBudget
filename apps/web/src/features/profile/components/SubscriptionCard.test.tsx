@@ -279,4 +279,28 @@ describe('SubscriptionCard', () => {
     })
 
   })
+
+  describe('Seat usage line', () => {
+    it('should show seat usage when seatUsage is passed with total > 1', () => {
+      renderWithRouter(
+        <SubscriptionCard tier="household_5" status="active" seatUsage={{ used: 2, total: 5 }} />
+      )
+
+      expect(screen.getByText(/2 of 5 seats used/i)).toBeInTheDocument()
+    })
+
+    it('should omit seat usage line when seatUsage is undefined', () => {
+      renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
+
+      expect(screen.queryByText(/seats used/i)).not.toBeInTheDocument()
+    })
+
+    it('should omit seat usage line when seatUsage.total is 1', () => {
+      renderWithRouter(
+        <SubscriptionCard tier="premium" status="active" seatUsage={{ used: 1, total: 1 }} />
+      )
+
+      expect(screen.queryByText(/seats used/i)).not.toBeInTheDocument()
+    })
+  })
 })

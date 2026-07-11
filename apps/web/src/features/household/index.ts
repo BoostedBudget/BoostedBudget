@@ -25,6 +25,9 @@ export { DisbandHouseholdDialog, type DisbandHouseholdDialogProps } from './comp
 export { MembersList, type MembersListProps } from './components/MembersList'
 export { HouseholdTab, type HouseholdTabProps } from './HouseholdTab'
 
+// Hooks (Task 3: ProfilePage integration)
+export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
+
 // Types
 export type {
   Household,

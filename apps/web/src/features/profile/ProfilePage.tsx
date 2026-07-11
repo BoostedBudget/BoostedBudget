@@ -15,6 +15,7 @@ const CustomCategoryManager = lazy(() =>
   }))
 )
 import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
+import { useHousehold, HouseholdTab } from '@/features/household'
 import { useRegions } from '../../shared/hooks/useRegions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
 import { abbreviateUUID } from '../../shared/utils'
@@ -28,9 +29,21 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
   const { user, loading, error, refetch } = useProfile()
   const { isAdmin, loading: adminLoading } = useIsAdmin()
   const { adminModeEnabled, toggleAdminMode } = useAdminMode()
-  const [activeTab, setActiveTab] = useTabState('tab', 'profile', ['profile', 'privacy', 'categories'] as const)
+  const household = useHousehold()
+  // Household tab is only shown for users actively in a household, or whose
+  // tier includes more than one seat (eligible to create one). `seatsTotal`
+  // reflects the user's effective-tier entitlement regardless of membership,
+  // so this single check covers both cases without a second tier lookup.
+  const showHouseholdTab = household.isInHousehold || household.seatsTotal > 1
+  const validTabs = showHouseholdTab
+    ? (['profile', 'privacy', 'categories', 'household'] as const)
+    : (['profile', 'privacy', 'categories'] as const)
+  const [activeTab, setActiveTab] = useTabState('tab', 'profile', validTabs)
   const { copy, copied } = useCopyToClipboard()
   const { getRegionWithFlag } = useRegions()
+  const seatUsage = household.seatsTotal > 1
+    ? { used: household.seatsUsed, total: household.seatsTotal }
+    : undefined
 
   function handleProfileUpdate(_updatedUser: User) {
     // Refetch to get the updated user data from server
@@ -115,6 +128,18 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
         >
           Categories
         </button>
+        {showHouseholdTab && (
+          <button
+            className={`bg-transparent border-none border-b-[3px] px-6 py-3 text-base font-medium cursor-pointer transition-all duration-200 -mb-[2px] ${
+              activeTab === 'household'
+                ? 'active text-primary border-b-primary font-semibold'
+                : 'text-muted-foreground border-b-transparent hover:text-foreground hover:bg-muted'
+            }`}
+            onClick={() => setActiveTab('household')}
+          >
+            Household
+          </button>
+        )}
       </div>
 
       {activeTab === 'profile' && (
@@ -181,6 +206,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
               tier={user.effective_tier ?? user.subscription_tier}
               status={user.subscription_status}
               trialDaysRemaining={user.trial_days_remaining}
+              seatUsage={seatUsage}
             />
           </Card>
 
@@ -210,6 +236,8 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
           </Suspense>
         </Card>
       )}
+
+      {showHouseholdTab && activeTab === 'household' && <HouseholdTab />}
     </div>
   )
 }
