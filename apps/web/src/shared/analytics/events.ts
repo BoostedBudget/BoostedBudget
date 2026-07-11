@@ -53,6 +53,8 @@ export const ANALYTICS_EVENTS = {
   TIMEFRAME_CHANGED: 'timeframe_changed',
   // Issue #1370: Household feature — Personal/Household dashboard scope toggle
   DASHBOARD_SCOPE_CHANGED: 'dashboard_scope_changed',
+  // Issue #1370 Task 8: Household feature — per-account share/hide toggle
+  HOUSEHOLD_ACCOUNT_SHARE_CHANGED: 'household_account_share_changed',
 
   // Billing
   CHECKOUT_STARTED: 'checkout_started',
