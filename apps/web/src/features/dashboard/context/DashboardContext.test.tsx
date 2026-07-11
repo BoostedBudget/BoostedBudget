@@ -296,6 +296,38 @@ describe('DashboardContext', () => {
     })
   })
 
+  describe('Scope (Issue #1370)', () => {
+    it('should default scope to personal', () => {
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+
+      expect(result.current.scope).toBe('personal')
+    })
+
+    it('should update scope with setScope', () => {
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+
+      act(() => {
+        result.current.setScope('household')
+      })
+
+      expect(result.current.scope).toBe('household')
+    })
+
+    it('should allow switching back to personal', () => {
+      const { result } = renderHook(() => useDashboardContext(), { wrapper })
+
+      act(() => {
+        result.current.setScope('household')
+      })
+      expect(result.current.scope).toBe('household')
+
+      act(() => {
+        result.current.setScope('personal')
+      })
+      expect(result.current.scope).toBe('personal')
+    })
+  })
+
   describe('isEditing', () => {
     it('should have initial isEditing as false', () => {
       const { result } = renderHook(() => useDashboardContext(), { wrapper })
@@ -351,12 +383,14 @@ describe('DashboardContext', () => {
       const firstSetFilters = result.current.setFilters
       const firstSetTimeframe = result.current.setTimeframe
       const firstSetIsEditing = result.current.setIsEditing
+      const firstSetScope = result.current.setScope
 
       rerender()
 
       expect(result.current.setFilters).toBe(firstSetFilters)
       expect(result.current.setTimeframe).toBe(firstSetTimeframe)
       expect(result.current.setIsEditing).toBe(firstSetIsEditing)
+      expect(result.current.setScope).toBe(firstSetScope)
     })
   })
 

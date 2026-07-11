@@ -43,6 +43,8 @@ describe('CashFlowSummaryWidget', () => {
     setIsEditing: mock(() => {}),
     hasAccounts: false,
     accountsLoading: false,
+    scope: 'personal',
+    setScope: mock(() => {}),
   }
 
   const mockSummaryData = {
