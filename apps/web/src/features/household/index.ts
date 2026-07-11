@@ -15,6 +15,12 @@ export { householdBadgeVariants, type HouseholdBadgeVariants } from './component
 // Invite panel
 export { InvitePanel } from './components/InvitePanel'
 
+// Household management components (Task 4a)
+export { CreateHouseholdForm, type CreateHouseholdFormProps } from './components/CreateHouseholdForm'
+export { HouseholdCard, type HouseholdCardProps } from './components/HouseholdCard'
+export { LeaveHouseholdDialog, type LeaveHouseholdDialogProps } from './components/LeaveHouseholdDialog'
+export { DisbandHouseholdDialog, type DisbandHouseholdDialogProps } from './components/DisbandHouseholdDialog'
+
 // Types
 export type {
   Household,
