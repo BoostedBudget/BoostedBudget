@@ -25,8 +25,13 @@ export { DisbandHouseholdDialog, type DisbandHouseholdDialogProps } from './comp
 export { MembersList, type MembersListProps } from './components/MembersList'
 export { HouseholdTab, type HouseholdTabProps } from './HouseholdTab'
 
+// Invite-accept standalone page (Task 6)
+export { AcceptInvitePage } from './components/AcceptInvitePage'
+export { ConsentPreview, type ConsentPreviewProps } from './components/ConsentPreview'
+
 // Hooks (Task 3: ProfilePage integration)
 export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
+export { useAcceptInvite, type UseAcceptInviteResult, type AcceptInviteErrorKind } from './hooks/useAcceptInvite'
 
 // Types
 export type {
