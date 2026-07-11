@@ -33,6 +33,13 @@ export { ConsentPreview, type ConsentPreviewProps } from './components/ConsentPr
 export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
 export { useAcceptInvite, type UseAcceptInviteResult, type AcceptInviteErrorKind } from './hooks/useAcceptInvite'
 
+// Hooks (Task 8: AccountCustomizationModal integration)
+export {
+  useHouseholdVisibility,
+  type UseHouseholdVisibilityResult,
+  type ShareVisibility,
+} from './hooks/useHouseholdVisibility'
+
 // Types
 export type {
   Household,
