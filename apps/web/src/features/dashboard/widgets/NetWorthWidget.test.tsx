@@ -264,5 +264,33 @@ describe('NetWorthWidget', () => {
         })
       )
     })
+
+    it('should pass scope: personal from dashboard context by default (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'personal',
+      })
+      setMockDataState({ summary: mockSummary, history: mockHistory })
+
+      renderWidget()
+
+      expect(mockUseNetWorthData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'personal' })
+      )
+    })
+
+    it('should pass scope: household from dashboard context to useNetWorthData (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'household',
+      })
+      setMockDataState({ summary: mockSummary, history: mockHistory })
+
+      renderWidget()
+
+      expect(mockUseNetWorthData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'household' })
+      )
+    })
   })
 })

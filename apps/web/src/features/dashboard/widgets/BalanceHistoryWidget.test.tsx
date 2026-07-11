@@ -161,4 +161,34 @@ describe('BalanceHistoryWidget', () => {
       expect(screen.getByText('Breakdown')).toBeInTheDocument()
     })
   })
+
+  describe('Context Integration', () => {
+    it('should pass scope: personal from dashboard context by default (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'personal',
+      })
+      setMockDataState({ history: mockHistory })
+
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+
+      expect(mockUseDashboardData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'personal' })
+      )
+    })
+
+    it('should pass scope: household from dashboard context to useDashboardData (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'household',
+      })
+      setMockDataState({ history: mockHistory })
+
+      render(<BalanceHistoryWidget widgetId="test-1" onRemove={mock(() => {})} />)
+
+      expect(mockUseDashboardData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'household' })
+      )
+    })
+  })
 })

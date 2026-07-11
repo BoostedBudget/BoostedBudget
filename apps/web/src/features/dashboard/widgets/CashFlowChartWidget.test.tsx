@@ -175,6 +175,34 @@ describe('CashFlowChartWidget', () => {
         })
       )
     })
+
+    it('should pass scope: personal from dashboard context by default (Issue #1370)', () => {
+      const personalContext = { ...mockContextValue, scope: 'personal' as const }
+      render(
+        <TestWrapper contextValue={personalContext}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
+        </TestWrapper>
+      )
+      expect(mockUseCashFlowHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filters: expect.objectContaining({ scope: 'personal' }),
+        })
+      )
+    })
+
+    it('should pass scope: household from dashboard context to useCashFlowHistory (Issue #1370)', () => {
+      const householdContext = { ...mockContextValue, scope: 'household' as const }
+      render(
+        <TestWrapper contextValue={householdContext}>
+          <CashFlowChartWidget widgetId="test-1" onRemove={mock(() => {})} />
+        </TestWrapper>
+      )
+      expect(mockUseCashFlowHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filters: expect.objectContaining({ scope: 'household' }),
+        })
+      )
+    })
   })
 
   describe('Layout and Styling', () => {
