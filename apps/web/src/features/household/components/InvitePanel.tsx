@@ -29,9 +29,12 @@ import type { CreateInviteResponseBody } from '@boostedbudget/api-client/models'
  * Pinned to `timeZone: 'UTC'` deliberately: `expires_at` is a UTC-midnight
  * cutoff from the backend, and formatting it in the viewer's local timezone
  * would shift the displayed calendar day backward for anyone west of UTC
- * (i.e. all of the Americas) — an off-by-one that's easy to miss because
- * test environments (happy-dom) default their `Intl` timezone to UTC and
- * never surface it.
+ * (i.e. all of the Americas) — an off-by-one that's easy to miss because a
+ * UTC CI runner formats this same UTC-midnight instant identically whether
+ * or not `timeZone: 'UTC'` is present, masking a regression there. See the
+ * regression test in InvitePanel.test.tsx, which spies on
+ * `toLocaleDateString` to assert the option is actually passed, independent
+ * of the test runner's host timezone.
  */
 function formatExpiresAt(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString(undefined, {
