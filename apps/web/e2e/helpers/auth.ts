@@ -1,4 +1,7 @@
-import { Page, expect, test, TestInfo } from '@playwright/test';
+import { Browser, BrowserContext, Page, expect, test, TestInfo } from '@playwright/test';
+import { clerk } from '@clerk/testing/playwright';
+import { ensureTestUserExists } from './clerk-admin';
+import { getAuthToken, API_BASE } from './api/client';
 
 /**
  * Clerk Helper Functions for E2E Tests
@@ -168,6 +171,103 @@ export function skipIfNoAuth(testInfo: TestInfo): void {
   // Skip if running in chromium-no-auth project (these tests require auth)
   if (testInfo.project.name === 'chromium-no-auth') {
     test.skip(true, 'Test requires authentication - skipping in chromium-no-auth project');
+  }
+}
+
+/**
+ * Result of createSecondIdentityContext: a fresh, independently-authenticated
+ * browser context + page, plus a close() convenience for test cleanup.
+ */
+export interface SecondIdentitySession {
+  context: BrowserContext;
+  page: Page;
+  close: () => Promise<void>;
+}
+
+/**
+ * Open a second, independently-authenticated Page for household invite E2E tests
+ * (issue #1370's "invitee" identity).
+ *
+ * Design choice: this uses an in-test `browser.newContext()` + `clerk.signIn()` rather
+ * than a second Playwright project + `*.setup.ts` producing a persisted `e2e/.auth/invitee.json`.
+ * Only 1-2 specs need a second identity, so a per-spec context avoids a global
+ * project-matrix change in playwright.config.ts. It deliberately does NOT touch or reuse
+ * the primary `e2e/.auth/user.json` storage state — the returned context/page are fully
+ * separate from the default `page` fixture (which is pre-authenticated as the primary user
+ * via the `chromium` project's `storageState: authFile`).
+ *
+ * Calls ensureTestUserExists(email) first since the invitee may not exist yet in this
+ * Clerk test tenant. Also grants a trial subscription (mirroring auth.setup.ts's
+ * grant-trial call for the primary user) so the invitee can pass PremiumRoute's
+ * subscription-status gate (src/auth/PremiumRoute.tsx) and reach protected routes like
+ * /dashboard — a brand-new user's first profile fetch normally auto-grants a trial via
+ * registration_service.go, but auth.setup.ts's own comments document a known race where
+ * that grant doesn't land before the first protected-route check, hence the explicit
+ * defensive call here too.
+ *
+ * Caller is responsible for calling the returned close() (or context.close()) when done.
+ */
+export async function createSecondIdentityContext(
+  browser: Browser,
+  email: string
+): Promise<SecondIdentitySession> {
+  await ensureTestUserExists(email);
+
+  const context = await browser.newContext();
+
+  // Exception-safety: if anything below throws (goto, signIn, waitForFunction, etc.),
+  // close the context we just opened before rethrowing. Without this, a failure here
+  // would leak the context for the rest of the test run — the caller only receives (and
+  // can only close) a session object if this function returns successfully, so it has no
+  // handle to clean up a partially-constructed one.
+  try {
+    const page = await context.newPage();
+
+    await page.goto('/');
+    await acceptCookieConsent(page);
+
+    await clerk.signIn({ page, emailAddress: email });
+
+    // Mirror auth.setup.ts's post-signIn stabilization: clerk.signIn() can trigger a page
+    // reload that destroys the JS execution context, so wait for load + a brief hydration
+    // pause before any page.evaluate()-based calls (e.g. getAuthToken via apiClient).
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000);
+
+    try {
+      await page.waitForFunction(
+        () => {
+          const clerkWindow = (window as unknown as { Clerk?: { session?: { id?: string } } }).Clerk;
+          return clerkWindow?.session?.id != null;
+        },
+        { timeout: 15000 }
+      );
+    } catch {
+      // Session may still hydrate on first API call; let the caller's assertions surface
+      // any real failure rather than throwing here.
+    }
+
+    // Best-effort trial grant — same admin endpoint auth.setup.ts uses for the primary
+    // user. Not fatal if it fails (e.g. endpoint disabled outside ENVIRONMENT=qa, or the
+    // auto-grant on first profile fetch already succeeded) — let the caller's own
+    // assertions be the source of truth on whether the invitee can reach protected routes.
+    const token = await getAuthToken(page);
+    try {
+      await page.request.post(`${API_BASE}/api/v1/admin/subscription/grant-trial`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+
+    return {
+      context,
+      page,
+      close: () => context.close(),
+    };
+  } catch (err) {
+    await context.close();
+    throw err;
   }
 }
 
