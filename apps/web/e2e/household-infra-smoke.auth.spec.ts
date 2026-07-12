@@ -18,6 +18,10 @@ import {
 // Requires TEST_CLERK_EMAIL_2 (see e2e/.env.test.example) in addition to the existing
 // TEST_CLERK_EMAIL/TEST_CLERK_PASSWORD — skips gracefully if unset, mirroring
 // auth.setup.ts's handling of missing primary credentials.
+//
+// NOTE (Task 12, Codex review): household-invite.auth.spec.ts mutates this exact same
+// owner/invitee state and can race this file if both are matched in a local (2-worker) run —
+// see that file's header comment for the known-limitation writeup. CI (workers: 1) is safe.
 
 test.describe('Household E2E infrastructure smoke test (#1370)', () => {
   // households.owner_user_id and household_members(user_id) WHERE status='active' are both
