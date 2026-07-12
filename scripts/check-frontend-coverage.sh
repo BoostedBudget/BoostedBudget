@@ -50,15 +50,40 @@ COMBINED="/tmp/bbudget-frontend-coverage-$$.lcov"
 mkdir -p "$WEB_DIR/coverage"
 FILTERED="$WEB_DIR/coverage/combined.lcov"
 
-# Clean up only the temp intermediate on exit
-trap "rm -f '$COMBINED'" EXIT
+# Directory for SF-normalized copies of each input lcov file (see add_lcov below).
+NORMALIZED_DIR="/tmp/bbudget-frontend-coverage-normalized-$$"
+mkdir -p "$NORMALIZED_DIR"
+
+# Clean up the temp intermediate + normalized-copy dir on exit
+trap "rm -f '$COMBINED'; rm -rf '$NORMALIZED_DIR'" EXIT
 
 # --- Merge all lcov groups ---
+# SF-path normalization (issue #1370 exposed this; root cause is #1323):
+# apps/web/scripts/test-regular.sh cd's into apps/web before running bun, so its
+# lcov.info records SF paths relative to apps/web (e.g. "SF:src/foo.ts").
+# apps/web/scripts/test-conflict-files.sh deliberately cd's into /tmp first
+# (issue #1323, to dodge bunfig.toml autoload), so ITS lcov.info records the
+# SAME logical file under a /tmp-relative path (e.g.
+# "SF:../../Users/.../apps/web/src/foo.ts"). `lcov -a` keys strictly on the
+# literal SF string, so any file imported by both a regular test and a
+# conflict-group test was counted as TWO separate "files" in the merge, and
+# the (usually narrower) conflict-group copy dragged the aggregate down.
+# Adding issue #1370's new conflict-group test widened the duplicate set past
+# the coverage threshold and surfaced this as a false failure.
+# Fix: rewrite every input lcov file's SF paths onto the same apps/web-relative
+# convention (anchored on the full "/apps/web/src/" segment, not a bare
+# "/apps/web/", so this never touches packages/* paths) before merging.
 LCOV_ARGS=""
-add_lcov() { [ -f "$1" ] && LCOV_ARGS="$LCOV_ARGS -a $1" || true; }
+add_lcov() {
+  local src="$1"
+  [ -f "$src" ] || return 0
+  local normalized="$NORMALIZED_DIR/$(echo "$src" | tr '/' '_').lcov"
+  sed -E 's#^SF:.*/apps/web/src/#SF:src/#' "$src" > "$normalized"
+  LCOV_ARGS="$LCOV_ARGS -a $normalized"
+}
 
 add_lcov "$WEB_DIR/coverage/lcov.info"
-for group in a b c d; do
+for group in a b c d e; do
   add_lcov "$WEB_DIR/coverage-conflict/group-$group/lcov.info"
 done
 
