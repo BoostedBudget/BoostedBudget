@@ -23,6 +23,15 @@
  * cached. No manual key-slicing is needed — the generated helper's own
  * "no-params" behavior already produces the right prefix. See
  * `invalidateScopedQueries.ts` for the shared helper implementing this.
+ *
+ * 404 retry suppression (final-review fix): the backend returns 404
+ * (ErrHouseholdNotFound) for `ListMyAccountShares` when the caller isn't in a
+ * household at all — an expected, common state (solo users), not a
+ * transient failure. Without suppressing retries here, every solo-user
+ * consumer of this hook (e.g. AccountCustomizationModal, which calls it
+ * unconditionally whenever the modal opens) fires a request that TanStack
+ * Query retries up to 3x by default on every mount. Mirrors the
+ * `is404Error`-based retry-suppression pattern in useHousehold.ts.
  */
 
 import { useCallback, useMemo } from 'react'
@@ -34,6 +43,7 @@ import {
 } from '@boostedbudget/api-client/endpoints/household/household'
 import type { UserAccountShareView } from '@boostedbudget/api-client/models'
 import { invalidateScopedDashboardAnalyticsQueries } from './invalidateScopedQueries'
+import { getErrorStatus } from './errorStatus'
 
 export type ShareVisibility = 'shared' | 'hidden' | null
 
@@ -56,7 +66,14 @@ export function useHouseholdVisibility(): UseHouseholdVisibilityResult {
     isLoading,
     error: queryError,
     refetch: queryRefetch,
-  } = useListMyAccountShares()
+  } = useListMyAccountShares({
+    query: {
+      retry: (failureCount, error) => {
+        if (getErrorStatus(error) === 404) return false
+        return failureCount < 2
+      },
+    },
+  })
 
   const shares = useMemo(
     () => (data ?? []) as unknown as UserAccountShareView[],

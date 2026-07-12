@@ -160,6 +160,32 @@ describe('useHouseholdVisibility', () => {
     })
   })
 
+  it('suppresses retries on a 404 (solo user, no household) but retries other errors up to failureCount < 2', () => {
+    // Finding #2 (final review): the backend returns 404 (ErrHouseholdNotFound)
+    // for ListMyAccountShares when the caller isn't in a household — an
+    // expected, common state for solo users, not a transient failure.
+    // Without this, TanStack Query's default retry (3x) turns every
+    // solo-user mount of a useHouseholdVisibility consumer (e.g.
+    // AccountCustomizationModal, which calls the hook unconditionally) into
+    // a retry storm. `useListMyAccountShares` is mocked at the module level
+    // in this test file, so we assert the retry-suppression logic by
+    // invoking the `query.retry` function this hook actually passes in,
+    // rather than exercising real network retry behavior.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    renderHook(() => useHouseholdVisibility(), { wrapper: createWrapper(queryClient) })
+
+    const lastCallOptions = mockUseListMyAccountShares.mock.calls.at(-1)?.[0] as
+      | { query?: { retry?: (failureCount: number, error: unknown) => boolean } }
+      | undefined
+    const retry = lastCallOptions?.query?.retry
+    expect(retry).toBeInstanceOf(Function)
+
+    expect(retry?.(0, { response: { status: 404 } })).toBe(false)
+    expect(retry?.(1, { response: { status: 404 } })).toBe(false)
+    expect(retry?.(0, { response: { status: 500 } })).toBe(true)
+    expect(retry?.(2, { response: { status: 500 } })).toBe(false)
+  })
+
   it('propagates setVisibility failures without invalidating', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = spyOn(queryClient, 'invalidateQueries')

@@ -20,6 +20,7 @@ import {
   getGetHouseholdEntitlementQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
 import type { Household, HouseholdEntitlementSummary } from '../types'
+import { getErrorStatus } from './errorStatus'
 
 export interface UseHouseholdResult {
   household: Household | null
@@ -38,18 +39,7 @@ export interface UseHouseholdResult {
  * Mirrors the pattern in `features/budgets/hooks/useCurrentBudget.ts`.
  */
 function is404Error(error: unknown): boolean {
-  if (!error) return false
-
-  if (typeof error === 'object' && 'response' in error) {
-    const response = (error as { response?: { status?: number } }).response
-    return response?.status === 404
-  }
-
-  if (typeof error === 'object' && 'status' in error) {
-    return (error as { status?: number }).status === 404
-  }
-
-  return false
+  return getErrorStatus(error) === 404
 }
 
 export function useHousehold(): UseHouseholdResult {
