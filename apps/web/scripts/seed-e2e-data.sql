@@ -281,23 +281,37 @@ BEGIN
     -- runtime secret unavailable to this seed script, but nothing in this E2E flow reads
     -- institution_id_blind_idx for an equality lookup (no re-link, no joint-account
     -- fingerprint dedup is exercised here) — it only needs to be non-null, not
-    -- cryptographically real. mask_blind_idx is scanned into a nullable `*string` and can
-    -- stay NULL. Refreshed on every ON CONFLICT (not just updated_at) so a database that
-    -- already had a NULL-blind-idx row from before this fix self-heals on the next seed run.
+    -- cryptographically real.
+    --
+    -- mask_blind_idx is scanned into a nullable `*string`, so it could stay NULL from a
+    -- read standpoint — BUT migration 000100 defines
+    -- unique_user_accounts_inst_mask_blind as UNIQUE (user_id, institution_id_blind_idx,
+    -- mask_blind_idx) NULLS NOT DISTINCT WHERE institution_id_blind_idx IS NOT NULL. With
+    -- NULLS NOT DISTINCT, Postgres treats NULL as an ordinary, colliding value in this
+    -- index (not "distinct from everything" as usual) — so three rows sharing the same
+    -- user_id + institution_id_blind_idx + a NULL mask_blind_idx would violate this unique
+    -- index on the second/third INSERT and roll back this entire DO block (all of Step 2
+    -- through Step 4, not just these rows). Each row below therefore gets its own
+    -- placeholder mask_blind_idx = md5(mask), matching the same "non-null but not
+    -- cryptographically real" reasoning as institution_id_blind_idx above. Refreshed on
+    -- every ON CONFLICT (not just updated_at) so a database that already had a NULL-blind-idx
+    -- row from before this fix self-heals on the next seed run. Any additional accounts
+    -- seeded at this same institution (ins_e2e_test) MUST also get a distinct
+    -- mask_blind_idx to avoid re-triggering this exact collision.
     -- =============================================================================
-    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx)
-    VALUES (v_user_id, v_institution_id, '1234', 'E2E Checking', 'depository', 'checking', md5(v_institution_id))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '1234', 'E2E Checking', 'depository', 'checking', md5(v_institution_id), md5('1234'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_checking_ua_id;
 
-    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx)
-    VALUES (v_user_id, v_institution_id, '5678', 'E2E Savings', 'depository', 'savings', md5(v_institution_id))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '5678', 'E2E Savings', 'depository', 'savings', md5(v_institution_id), md5('5678'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_savings_ua_id;
 
-    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx)
-    VALUES (v_user_id, v_institution_id, '9012', 'E2E Credit Card', 'credit', 'credit card', md5(v_institution_id))
-    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '9012', 'E2E Credit Card', 'credit', 'credit card', md5(v_institution_id), md5('9012'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
     RETURNING id INTO v_credit_ua_id;
 
     UPDATE accounts SET user_account_id = v_checking_ua_id WHERE id = v_checking_id;
