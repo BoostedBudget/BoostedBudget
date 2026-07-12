@@ -6,7 +6,19 @@ import type { HouseholdMemberView } from '../types'
 import {
   getListHouseholdMembersQueryKey,
   getGetHouseholdEntitlementQueryKey,
+  getGetMyHouseholdQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
+import {
+  getGetBalanceSummaryQueryKey,
+  getGetBalanceHistoryQueryKey,
+  getGetNetWorthQueryKey,
+  getGetNetWorthHistoryQueryKey,
+} from '@boostedbudget/api-client/endpoints/dashboard/dashboard'
+import {
+  getGetCashFlowSummaryQueryKey,
+  getGetCashFlowHistoryQueryKey,
+  getGetNetWorthTrendQueryKey,
+} from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import {
   mockUseListHouseholdMembers,
   mockUseRemoveHouseholdMember,
@@ -67,7 +79,16 @@ describe('useHouseholdMembers', () => {
     expect(result.current.members).toEqual([])
   })
 
-  it('removeMember calls the mutation with the userId and invalidates listHouseholdMembers + getHouseholdEntitlement', async () => {
+  it('removeMember calls the mutation with the userId and invalidates listHouseholdMembers + getHouseholdEntitlement + getMyHousehold + the 7 scoped dashboard/analytics queries', async () => {
+    // Finding #1 (final review): removeMember is used for BOTH an owner
+    // removing another member AND self-leave (LeaveHouseholdDialog calling
+    // removeMember(ownUserId)). getMyHousehold must be invalidated so
+    // useHousehold()'s cached isInHousehold flips to false on self-leave —
+    // otherwise stale in-household UI (Household tab, HouseholdCard,
+    // ScopeSegmentedControl's reset-on-leave effect) never updates. The
+    // scoped dashboard/analytics queries must also be invalidated so an
+    // owner's household-scope view stops over-counting the removed member's
+    // shared balances.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = spyOn(queryClient, 'invalidateQueries')
     mockRemoveHouseholdMemberMutateAsync.mockResolvedValue(undefined)
@@ -81,6 +102,41 @@ describe('useHouseholdMembers', () => {
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getListHouseholdMembersQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetHouseholdEntitlementQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetMyHouseholdQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetBalanceSummaryQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetCashFlowSummaryQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetBalanceHistoryQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthHistoryQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetCashFlowHistoryQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthTrendQueryKey() })
+    })
+  })
+
+  it('removeMember invalidation actually marks the cached getMyHousehold entry stale in a real QueryClient (self-leave regression)', async () => {
+    // Finding #1 (final review): proves the fix at the cache level, not just
+    // via a call-arg spy — seeds a real QueryClient with a cached
+    // getMyHousehold entry (the shape useHousehold() would have after a
+    // member loads their household), triggers the real removeMember
+    // mutation path (mirroring LeaveHouseholdDialog calling
+    // removeMember(ownUserId)), and asserts the cache entry is now stale so
+    // useHousehold()'s next read/refetch will see isInHousehold flip false.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    mockRemoveHouseholdMemberMutateAsync.mockResolvedValue(undefined)
+
+    const myHouseholdKey = getGetMyHouseholdQueryKey()
+    queryClient.setQueryData(myHouseholdKey, {
+      household: { id: 'household-1', name: 'The Smiths' },
+      summary: { is_owner: false, seats_active: 2, seats_pending: 0, source: 'household', tier: 'household_3', users_included: 3 },
+    })
+    expect(queryClient.getQueryState(myHouseholdKey)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useHouseholdMembers(), { wrapper: createWrapper(queryClient) })
+
+    await result.current.removeMember('user-1')
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(myHouseholdKey)?.isInvalidated).toBe(true)
     })
   })
 

@@ -27,7 +27,7 @@ import {
   getGetHouseholdEntitlementQueryKey,
 } from '@boostedbudget/api-client/endpoints/household/household'
 import type { HouseholdInvite, CreateInviteResponseBody } from '@boostedbudget/api-client/models'
-import { getErrorStatus } from './errorStatus'
+import { getErrorStatus, getErrorDetail } from './errorStatus'
 
 export interface UseHouseholdInvitesResult {
   invites: HouseholdInvite[]
@@ -47,17 +47,6 @@ export interface UseHouseholdInvitesResult {
   createInvite: (email: string) => Promise<CreateInviteResponseBody>
   revokeInvite: (inviteId: string) => Promise<void>
   regenerateInvite: (inviteId: string, email: string) => Promise<CreateInviteResponseBody>
-}
-
-function getErrorDetail(error: unknown): string | undefined {
-  if (!error || typeof error !== 'object') return undefined
-
-  if ('response' in error) {
-    const response = (error as { response?: { data?: { detail?: string } } }).response
-    if (response?.data?.detail) return response.data.detail
-  }
-
-  return undefined
 }
 
 /** Maps a raw mutation/query error into a user-facing string. */
