@@ -73,6 +73,10 @@ trap "rm -f '$COMBINED'; rm -rf '$NORMALIZED_DIR'" EXIT
 # Fix: rewrite every input lcov file's SF paths onto the same apps/web-relative
 # convention (anchored on the full "/apps/web/src/" segment, not a bare
 # "/apps/web/", so this never touches packages/* paths) before merging.
+# The anchor is a literal path segment, not derived from $WEB_DIR: every input
+# here always originates from this same repo's own apps/web (test-regular.sh
+# and test-conflict-files.sh both only ever run against it), so a second,
+# unrelated "apps/web/src" tree can't appear among these inputs.
 LCOV_ARGS=""
 add_lcov() {
   local src="$1"

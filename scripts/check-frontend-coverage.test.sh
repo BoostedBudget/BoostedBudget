@@ -48,7 +48,7 @@ fail() { print_error "$1"; FAILURES=$((FAILURES + 1)); }
 pass() { print_success "$1"; }
 
 # --- Build a fake <web-dir> with fixture LCOV files ---
-TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(mktemp -d)" || { print_error "mktemp -d failed — cannot build fixture web-dir"; exit 1; }
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 mkdir -p "$TMP_DIR/coverage" \
@@ -65,6 +65,13 @@ mkdir -p "$TMP_DIR/coverage" \
 # "unused" --remove pattern as a hard error and aborts before the threshold
 # check ever runs — a real repo checkout always has api-client files in the
 # denominator, so this only bites synthetic fixtures like this one.
+#
+# Also includes packages/shared-types/matching.ts, fully covered, under its
+# real (non-apps/web) relative path — this file is hand-written and MUST stay
+# counted after normalization + filtering (see check-frontend-coverage.sh's
+# own "packages/shared-types/matching.ts is hand-written and IS counted"
+# comment). It never matches the SF-normalization regex (it doesn't contain
+# "/apps/web/src/"), so this asserts that stays true.
 cat > "$TMP_DIR/coverage/lcov.info" <<'EOF'
 SF:src/foo.ts
 DA:1,1
@@ -79,6 +86,11 @@ DA:1,1
 DA:2,1
 LF:2
 LH:2
+end_of_record
+SF:../packages/shared-types/src/matching.ts
+DA:1,1
+LF:1
+LH:1
 end_of_record
 EOF
 
@@ -111,9 +123,9 @@ EOF
 
 # --- Run the real script under test ---
 # Threshold of 95 is deliberately unreachable unless BOTH bugs are fixed:
-#   - current (buggy) behavior: foo.ts double-counted, bar.ts entirely missing -> 50.0% (4/8)
-#   - partial fix (group e added, no SF normalization): 3 "files" -> 63.6% (7/11)
-#   - full fix (normalization + group e): 2 files, union of foo.ts -> 100% (7/7)
+#   - current (buggy) behavior: foo.ts double-counted, bar.ts entirely missing -> 55.6% (5/9)
+#   - partial fix (group e added, no SF normalization): 4 "files" -> 66.7% (8/12)
+#   - full fix (normalization + group e): 3 files, union of foo.ts -> 100% (9/9)
 THRESHOLD=95
 print_info "Running $TARGET against fixture web-dir (threshold ${THRESHOLD})..."
 set +e
@@ -135,12 +147,12 @@ LIST_OUTPUT="$(lcov --list "$COMBINED" 2>&1)"
 print_info "lcov --list of merged+filtered output:"
 echo "$LIST_OUTPUT"
 
-# --- Assertion 1: exactly 2 unique source files (foo.ts, bar.ts), not 3 ---
+# --- Assertion 1: exactly 3 unique source files (foo.ts, bar.ts, matching.ts) ---
 SF_COUNT=$(grep -c '^SF:' "$COMBINED" || true)
-if [ "$SF_COUNT" -eq 2 ]; then
-  pass "Exactly 2 unique source files in merged output (got $SF_COUNT)"
+if [ "$SF_COUNT" -eq 3 ]; then
+  pass "Exactly 3 unique source files in merged output (got $SF_COUNT)"
 else
-  fail "Expected exactly 2 unique source files in merged output, got $SF_COUNT (foo.ts is still double-counted under two SF paths, and/or bar.ts is missing/duplicated)"
+  fail "Expected exactly 3 unique source files in merged output, got $SF_COUNT (foo.ts is still double-counted under two SF paths, and/or bar.ts is missing/duplicated)"
 fi
 
 # --- Assertion 2: bar.ts (group e) is present at all ---
@@ -174,6 +186,16 @@ if [ "$SCRIPT_EXIT" -eq 0 ]; then
   pass "check-frontend-coverage.sh exited 0 (threshold ${THRESHOLD}% met)"
 else
   fail "check-frontend-coverage.sh exited $SCRIPT_EXIT (expected 0 — threshold ${THRESHOLD}% should be met once both bugs are fixed)"
+fi
+
+# --- Assertion 6: packages/shared-types/matching.ts survives untouched ---
+# (proves the SF-normalization regex, anchored on "/apps/web/src/", never
+# touches non-apps/web paths — this file must stay counted, per
+# check-frontend-coverage.sh's own "IS counted" comment)
+if grep -q '^SF:\.\./packages/shared-types/src/matching\.ts$' "$COMBINED"; then
+  pass "packages/shared-types/matching.ts survives normalization+filtering under its real path"
+else
+  fail "packages/shared-types/matching.ts is missing or its SF path was altered by normalization — it must never match the /apps/web/src/ regex"
 fi
 
 echo
