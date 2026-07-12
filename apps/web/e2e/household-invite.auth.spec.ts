@@ -187,6 +187,52 @@ test.describe('Household invite → consent preview → accept → shared dashbo
       await invitee.page.waitForLoadState('domcontentloaded')
 
       // =========================================================================
+      // ASSERT (owner, real UI): the household-tab/seat-count half of this task's TDD
+      // checklist ("Accept join → household tab shows new member; SubscriptionCard shows
+      // updated seat count"). ACT 3 below and the dashboard-scope assertion at the end of
+      // this test only exercise the INVITEE's view (dashboard balance aggregation) —
+      // neither touches the OWNER's household tab, so this block fills that gap using the
+      // owner's `page`, which has stayed live and authenticated since ARRANGE.
+      //
+      // A fresh `page.goto` (not the stale in-memory /accounts view) matters here for the
+      // same reason ACT 1's /accounts navigation needed one: `page` was last navigated
+      // there for the account-share step, well before the invitee's accept above changed
+      // server-side state, so React Query needs a fresh mount to refetch
+      // listHouseholdMembers/getHouseholdEntitlement rather than serving a stale cache.
+      // =========================================================================
+      await page.goto('/profile?tab=household')
+      await acceptCookieConsent(page)
+      await page.waitForLoadState('domcontentloaded')
+
+      // MembersList never renders a member's email — household_service.go's
+      // clerkDisplayName() deliberately never falls back to email ("more sensitive than a
+      // missing name, handled separately if ever needed"), so matching on `secondEmail`
+      // text is not viable here regardless of what Clerk profile fields the invitee
+      // identity happens to have set. The one per-row thing MembersList renders that's
+      // both stable and known ahead of time is the identity cell's
+      // `id={`member-name-${member.user_id}`}` span (MembersList.tsx) — and this test
+      // already captured the invitee's user id (`inviteeUserId`, looked up via
+      // GET /user/profile above) before the invite was ever created. Locating on that id
+      // proves the invitee's row is actually present without depending on a guessed
+      // display name.
+      await expect(page.locator(`[id="member-name-${inviteeUserId}"]`)).toBeVisible({
+        timeout: 15000,
+      })
+
+      // SeatUsageBadge (rendered inside HouseholdCard on this tab, `data-slot=
+      // "seat-usage-badge"`) renders literally `${used}/${total}` (SeatUsageBadge.tsx).
+      // The household's total seat count depends on the owner's tier and isn't a fixture
+      // this test controls — but whatever it is, the invitee's accept above only succeeds
+      // because of HouseholdService's own accept-time seat re-check
+      // (household_service.go: `if activeCount >= ownerTier.Pricing.UsersIncluded`), which
+      // means total must already be > 1 active member for this point in the test to have
+      // been reached at all. Asserting on the "used" half alone ("2/") is therefore both
+      // sufficient and total-agnostic.
+      await expect(page.locator('[data-slot="seat-usage-badge"]')).toHaveText(/^2\//, {
+        timeout: 15000,
+      })
+
+      // =========================================================================
       // ACT 3 (invitee, real UI): the default dashboard layout
       // (config/default_dashboard_layout.yaml) doesn't include the Account Cards widget —
       // only cash-flow-chart and balance-history, which are chart/canvas-only and can't be
