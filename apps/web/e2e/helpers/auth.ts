@@ -251,13 +251,53 @@ export async function createSecondIdentityContext(
     // user. Not fatal if it fails (e.g. endpoint disabled outside ENVIRONMENT=qa, or the
     // auto-grant on first profile fetch already succeeded) — let the caller's own
     // assertions be the source of truth on whether the invitee can reach protected routes.
+    const doTrialGrant = async (authToken: string | null): Promise<boolean> => {
+      try {
+        const response = await page.request.post(
+          `${API_BASE}/api/v1/admin/subscription/grant-trial`,
+          {
+            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+          }
+        );
+        return response.ok();
+      } catch {
+        return false;
+      }
+    };
+
     const token = await getAuthToken(page);
-    try {
-      await page.request.post(`${API_BASE}/api/v1/admin/subscription/grant-trial`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-    } catch {
-      // Non-fatal — see comment above.
+    await doTrialGrant(token);
+
+    // Mirror auth.setup.ts's recovery path: the grant-trial call can race Clerk's
+    // session hydration (or land before the grant has propagated), leaving the invitee
+    // stuck on the pricing gate instead of /dashboard. Check page state the same way
+    // auth.setup.ts does and, if we landed on pricing, re-extract a fresh JWT and retry
+    // the grant once before handing the session back to the caller. Still best-effort —
+    // no throw here — the caller's own assertions remain the source of truth.
+    await page.goto('/dashboard');
+    await page.waitForLoadState('domcontentloaded');
+
+    const dashboard = page.locator('h1:has-text("Dashboard")');
+    const pricing = page.locator('text=Choose your plan');
+    const pricingLoading = page.locator('text=Loading pricing plans');
+
+    const checkPageState = () =>
+      Promise.race([
+        dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
+        pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
+        pricingLoading.waitFor({ timeout: 30000 }).then(() => 'pricingLoading' as const),
+      ]).catch(() => 'timeout' as const);
+
+    const initialResult = await checkPageState();
+
+    if (initialResult === 'pricing' || initialResult === 'pricingLoading') {
+      const freshToken = await getAuthToken(page);
+      const granted = await doTrialGrant(freshToken);
+      if (granted) {
+        await page.goto('/dashboard');
+        await page.waitForLoadState('domcontentloaded');
+        await checkPageState();
+      }
     }
 
     return {
