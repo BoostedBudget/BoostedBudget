@@ -52,6 +52,15 @@ mock.module('../widgets/WidgetCatalog', () => ({
     isOpen ? <div data-testid="widget-catalog">Widget Catalog</div> : null,
 }))
 
+// ScopeSegmentedControl (Issue #1370) is stubbed for the same reason as
+// DashboardGrid/WidgetCatalog above: its real implementation calls
+// useHousehold(), which needs a QueryClientProvider ancestor this test file
+// doesn't set up. ScopeSegmentedControl's own behavior (visibility, selection,
+// reset-on-leave-household) is covered by ScopeSegmentedControl.test.tsx.
+mock.module('./ScopeSegmentedControl', () => ({
+  ScopeSegmentedControl: () => <div data-testid="scope-segmented-control-stub" />,
+}))
+
 // GettingStartedChecklist is mocked locally since it has no preload and the test needs a
 // controllable stub with dismiss/step callbacks.
 mock.module('./GettingStartedChecklist', () => ({

@@ -43,6 +43,8 @@ describe('CashFlowSummaryWidget', () => {
     setIsEditing: mock(() => {}),
     hasAccounts: false,
     accountsLoading: false,
+    scope: 'personal',
+    setScope: mock(() => {}),
   }
 
   const mockSummaryData = {
@@ -251,6 +253,40 @@ describe('CashFlowSummaryWidget', () => {
             endDate: '2024-01-31',
           }),
           enabled: true,
+        })
+      )
+    })
+
+    it('should pass scope: personal from dashboard context by default (Issue #1370)', () => {
+      setMockCashFlowState({ data: mockSummaryData })
+      const personalContext = { ...mockContextValue, scope: 'personal' as const }
+
+      render(
+        <TestWrapper contextValue={personalContext}>
+          <CashFlowSummaryWidget {...defaultProps} />
+        </TestWrapper>
+      )
+
+      expect(mockUseCashFlowSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filters: expect.objectContaining({ scope: 'personal' }),
+        })
+      )
+    })
+
+    it('should pass scope: household from dashboard context to useCashFlowSummary (Issue #1370)', () => {
+      setMockCashFlowState({ data: mockSummaryData })
+      const householdContext = { ...mockContextValue, scope: 'household' as const }
+
+      render(
+        <TestWrapper contextValue={householdContext}>
+          <CashFlowSummaryWidget {...defaultProps} />
+        </TestWrapper>
+      )
+
+      expect(mockUseCashFlowSummary).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filters: expect.objectContaining({ scope: 'household' }),
         })
       )
     })

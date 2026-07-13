@@ -107,6 +107,16 @@ DECLARE
     v_credit_id UUID;
     v_budget_id UUID;
     v_series_id UUID := gen_random_uuid();
+    -- Issue #1370 Task 12: stable UserAccount ids backing accounts.user_account_id.
+    -- Populated below so household-sharing (AccountCustomizationModal's "Share with
+    -- household" switch requires a non-null account.user_account_id — see
+    -- MatchOrCreate's (user_id, institution_id, mask) matching in
+    -- user_account_service.go) works against these seeded accounts, exactly as it
+    -- would for a real Plaid-linked account.
+    v_checking_ua_id UUID;
+    v_savings_ua_id UUID;
+    v_credit_ua_id UUID;
+    v_institution_id VARCHAR := 'ins_e2e_test'; -- Must match linked_items.institution_id above
 BEGIN
     -- Get the user ID
     SELECT id INTO v_user_id FROM users WHERE clerk_user_id = '__E2E_CLERK_USER_ID__';
@@ -244,6 +254,95 @@ BEGIN
         current_balance = EXCLUDED.current_balance,
         available_balance = EXCLUDED.available_balance
     RETURNING id INTO v_credit_id;
+
+    -- =============================================================================
+    -- Step 3b: Create stable UserAccount rows + link accounts.user_account_id
+    -- Issue #1370 Task 12: a real Plaid Link exchange always creates a user_accounts
+    -- row via UserAccountService.MatchOrCreate (matched on user_id + institution_id +
+    -- mask) and stamps accounts.user_account_id with its id (migration 000033/000037).
+    -- This seed script inserts directly into `accounts` and previously skipped that
+    -- step entirely, leaving accounts.user_account_id NULL. Several features key off
+    -- that column being non-null for these accounts — most relevantly here,
+    -- AccountCustomizationModal's "Share with household" switch
+    -- (canShowShareSwitch = isInHousehold && !!account.user_account_id) never renders
+    -- without it, which would silently break any E2E test that shares a seeded
+    -- account with a household. Mirrors MatchOrCreate's own matching/conflict key.
+    --
+    -- institution_id/mask are stored PLAINTEXT here (not "ENC$"-prefixed), matching how
+    -- MatchOrCreate would store them pre-encryption-migration (#964). This is safe:
+    -- FieldEncryptor.DecryptString() treats any value without the "ENC$" prefix as a
+    -- plaintext passthrough (dual-read for the encryption migration window), so no
+    -- decrypt error occurs when these rows are read back.
+    --
+    -- institution_id_blind_idx, however, MUST be non-NULL: ListActiveUserAccountFingerprints
+    -- (household_share_repository.go) scans it into a non-pointer Go `string`, which errors
+    -- on SQL NULL — and this exact query backs SetAccountShareVisibility, the endpoint the
+    -- "Share with household" switch calls. A real blind index is HMAC-SHA256 keyed by a
+    -- runtime secret unavailable to this seed script, but nothing in this E2E flow reads
+    -- institution_id_blind_idx for an equality lookup (no re-link, no joint-account
+    -- fingerprint dedup is exercised here) — it only needs to be non-null, not
+    -- cryptographically real.
+    --
+    -- mask_blind_idx is scanned into a nullable `*string`, so it could stay NULL from a
+    -- read standpoint — BUT migration 000100 defines
+    -- unique_user_accounts_inst_mask_blind as UNIQUE (user_id, institution_id_blind_idx,
+    -- mask_blind_idx) NULLS NOT DISTINCT WHERE institution_id_blind_idx IS NOT NULL. With
+    -- NULLS NOT DISTINCT, Postgres treats NULL as an ordinary, colliding value in this
+    -- index (not "distinct from everything" as usual) — so three rows sharing the same
+    -- user_id + institution_id_blind_idx + a NULL mask_blind_idx would violate this unique
+    -- index on the second/third INSERT and roll back this entire DO block (all of Step 2
+    -- through Step 4, not just these rows). Each row below therefore gets its own
+    -- placeholder mask_blind_idx = md5(mask), matching the same "non-null but not
+    -- cryptographically real" reasoning as institution_id_blind_idx above. Refreshed on
+    -- every ON CONFLICT (not just updated_at) so a database that already had a NULL-blind-idx
+    -- row from before this fix self-heals on the next seed run. Any additional accounts
+    -- seeded at this same institution (ins_e2e_test) MUST also get a distinct
+    -- mask_blind_idx to avoid re-triggering this exact collision.
+    -- =============================================================================
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '1234', 'E2E Checking', 'depository', 'checking', md5(v_institution_id), md5('1234'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    RETURNING id INTO v_checking_ua_id;
+
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '5678', 'E2E Savings', 'depository', 'savings', md5(v_institution_id), md5('5678'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    RETURNING id INTO v_savings_ua_id;
+
+    INSERT INTO user_accounts (user_id, institution_id, mask, account_name_hint, primary_type, primary_subtype, institution_id_blind_idx, mask_blind_idx)
+    VALUES (v_user_id, v_institution_id, '9012', 'E2E Credit Card', 'credit', 'credit card', md5(v_institution_id), md5('9012'))
+    ON CONFLICT (user_id, institution_id, mask) DO UPDATE SET updated_at = NOW(), institution_id_blind_idx = EXCLUDED.institution_id_blind_idx, mask_blind_idx = EXCLUDED.mask_blind_idx
+    RETURNING id INTO v_credit_ua_id;
+
+    UPDATE accounts SET user_account_id = v_checking_ua_id WHERE id = v_checking_id;
+    UPDATE accounts SET user_account_id = v_savings_ua_id WHERE id = v_savings_id;
+    UPDATE accounts SET user_account_id = v_credit_ua_id WHERE id = v_credit_id;
+
+    -- =============================================================================
+    -- Step 3c: Create today's balance snapshots
+    -- Issue #1370 Task 12: GetBalanceSummary (personal AND household scope) reads
+    -- exclusively from balance_snapshots (BalanceSnapshotRepository.GetLatestByUserID /
+    -- GetSnapshotsAsOfForHousehold) — never accounts.current_balance directly. Real
+    -- accounts get a snapshot row on every Plaid webhook sync
+    -- (transaction_sync_service.go's createBalanceSnapshots); this seed script's
+    -- directly-inserted accounts never go through that path, so without this step no
+    -- dashboard balance widget (personal or household scope) would ever show these
+    -- accounts, regardless of whether household sharing itself is working correctly.
+    -- Snapshots are keyed by user_account_id (required by the household-scope query's
+    -- household_accounts CTE join), not just account_id.
+    -- No unique constraint remains on (account_id, snapshot_at) since #364's migration
+    -- to timestamp-based snapshots (multiple snapshots/day are valid) — delete+insert
+    -- keeps this step idempotent across repeated seed runs instead of accumulating a
+    -- new row per run.
+    -- =============================================================================
+    DELETE FROM balance_snapshots
+      WHERE account_id IN (v_checking_id, v_savings_id, v_credit_id) AND source = 'e2e_seed';
+
+    INSERT INTO balance_snapshots (account_id, user_id, user_account_id, current_balance, available_balance, currency_code, snapshot_at, source)
+    VALUES
+        (v_checking_id, v_user_id, v_checking_ua_id, 5000.00, 4850.00, 'USD', NOW(), 'e2e_seed'),
+        (v_savings_id, v_user_id, v_savings_ua_id, 10000.00, 10000.00, 'USD', NOW(), 'e2e_seed'),
+        (v_credit_id, v_user_id, v_credit_ua_id, -1500.00, 3500.00, 'USD', NOW(), 'e2e_seed');
 
     -- =============================================================================
     -- Step 4: Create test transactions (last 30 days)

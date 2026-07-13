@@ -781,6 +781,8 @@ describe('PII coverage — currency surfaces (widgets + sub-components)', () => 
       setIsEditing: mock(() => {}),
       hasAccounts: true,
       accountsLoading: false,
+      scope: 'personal' as const,
+      setScope: mock(() => {}),
     }
     function CashFlowWrapper({ children }: { children: ReactNode }) {
       const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })

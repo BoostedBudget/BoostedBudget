@@ -108,6 +108,12 @@
     "gzip": true
   },
   {
+    "name": "household",
+    "path": "apps/web/dist/assets/household-*.js",
+    "limit": "9 KB",
+    "gzip": true
+  },
+  {
     "name": "savings",
     "path": "apps/web/dist/assets/savings-*.js",
     "limit": "9 KB",

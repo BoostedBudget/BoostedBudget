@@ -25,8 +25,9 @@ import {
 import { useProfile } from '../profile/hooks/useProfile'
 import { useAccountCustomization } from './hooks/useAccountCustomization'
 import { useAccountFilters } from './hooks/useAccountFilters'
-import type { Account, UpdateAccountRequest } from './types'
+import type { Account, ExchangePublicTokenResponse, UpdateAccountRequest } from './types'
 import { isReplaced } from './hooks/useActiveAccounts'
+import { useHousehold, ShareNewAccountsDialog } from '@/features/household'
 
 // Get initial view from localStorage
 function getInitialView(): ListView {
@@ -39,6 +40,9 @@ function getInitialView(): ListView {
   return 'cards' // Default to cards
 }
 
+// Reusable grid style for responsive account cards layout
+const ACCOUNT_GRID_STYLE = { gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }
+
 export function AccountsPage() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -48,6 +52,13 @@ export function AccountsPage() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [accountToDelete, setAccountToDelete] = useState<Account | null>(null)
+  // Issue #1370 Task 9: post-Plaid-link household share dialog. Dialog
+  // visibility and its account list are tracked separately from
+  // `isInHousehold` below — the dialog only OPENS when both "in a
+  // household" and "at least one just-linked account was found" are true,
+  // decided inside handleAccountsLinked.
+  const [justLinkedAccounts, setJustLinkedAccounts] = useState<Account[]>([])
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false)
 
   const {
     sort,
@@ -78,6 +89,7 @@ export function AccountsPage() {
   const accountsQueryKey = getGetAccountsQueryKey({ include_hidden: 'true' })
 
   const { loading: userLoading, refetch: refetchProfile } = useProfile()
+  const { isInHousehold } = useHousehold()
 
   const loading = accountsLoading || userLoading
   const error = accountsError ? 'Failed to load accounts. Please try again.' : null
@@ -87,9 +99,46 @@ export function AccountsPage() {
     isUpdating,
   } = useAccountCustomization()
 
-  function handleAccountsLinked() {
-    refetchAccounts()
-    refetchProfile()
+  // `ExchangePublicTokenResponse` never carries the new account ids
+  // directly (see types.ts), so the just-linked accounts are resolved by
+  // refetching accounts and filtering by `linked_item_id ===
+  // response.linked_item_id` — NOT `response.item_id`. `item_id` is the
+  // Plaid PROVIDER's item id (`LinkedItem.ItemID` on the backend); an
+  // account's `linked_item_id` is the INTERNAL `linked_items.id` (set from
+  // `linkedItem.ID` in account_service.go). These are different values, so
+  // matching on `item_id` would never find the just-linked accounts in
+  // production. Filtering by `linked_item_id` (rather than diffing "accounts
+  // that are newly present") also avoids over-including an unrelated account
+  // linked concurrently by another tab/session.
+  // Wrapped in try/catch so this async function's returned Promise never
+  // rejects: `PlaidLinkButton.tsx`'s `onSuccess?.(...)` call is
+  // fire-and-forget (not awaited, no `.catch()`), and by the time it fires
+  // the bank link itself has already succeeded — a failure refreshing the
+  // accounts list / opening the share dialog afterward is a distinct,
+  // lower-severity problem that must not surface as an unhandled promise
+  // rejection, nor be misattributed as a "bank connection failed" error
+  // (which is what PlaidLinkButton's own try/catch messaging is for).
+  async function handleAccountsLinked(response: ExchangePublicTokenResponse) {
+    try {
+      const result = await refetchAccounts()
+      refetchProfile()
+
+      if (!isInHousehold) return
+
+      const freshAccounts = result.data?.accounts ?? []
+      const linkedAccounts = freshAccounts.filter(
+        (account) => account.linked_item_id === response.linked_item_id
+      )
+      if (linkedAccounts.length > 0) {
+        setJustLinkedAccounts(linkedAccounts)
+        setIsShareDialogOpen(true)
+      }
+    } catch (err) {
+      // The accounts list will catch up on the next natural refetch (e.g.
+      // revisiting this page) — logging is sufficient here since the link
+      // itself already succeeded.
+      console.error('Failed to refresh accounts after linking:', err)
+    }
   }
 
   async function handleDeleteAccount(account: Account) {
@@ -373,14 +422,14 @@ export function AccountsPage() {
           ) : loading && displayedAccounts.length === 0 ? (
             <div role="status">
               <span className="sr-only">Loading accounts…</span>
-              <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} aria-hidden="true">
+              <div className="grid gap-6 max-sm:grid-cols-1" style={ACCOUNT_GRID_STYLE} aria-hidden="true">
                 {Array.from({ length: 4 }).map((_, i) => (
                   <div key={i} className="h-48 rounded-lg bg-skeleton motion-safe:animate-pulse motion-reduce:animate-none" />
                 ))}
               </div>
             </div>
           ) : (
-            <div className="grid gap-6 max-sm:grid-cols-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
+            <div className="grid gap-6 max-sm:grid-cols-1" style={ACCOUNT_GRID_STYLE}>
               {displayedAccounts.map((account) => (
                 <AccountCard
                   key={account.id}
@@ -410,6 +459,12 @@ export function AccountsPage() {
         description={accountToDelete ? buildDeleteDescription(accountToDelete) : ''}
         confirmText={accountToDelete ? (accountToDelete.nickname || accountToDelete.official_name || accountToDelete.name) : ''}
         loading={deleteAccountMutation.isPending}
+      />
+
+      <ShareNewAccountsDialog
+        open={isShareDialogOpen}
+        onOpenChange={setIsShareDialogOpen}
+        accounts={justLinkedAccounts}
       />
     </div>
   )

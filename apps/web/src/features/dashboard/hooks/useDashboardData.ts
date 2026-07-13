@@ -60,6 +60,7 @@ export function useDashboardData(filters?: DashboardFilters): UseDashboardDataRe
     return {
       account_types: filters.accountTypes?.join(','),
       as_of_date: filters.asOfDate,
+      scope: filters.scope,
     };
   }, [filters]);
 
@@ -70,6 +71,7 @@ export function useDashboardData(filters?: DashboardFilters): UseDashboardDataRe
       start_date: filters.startDate,
       end_date: filters.endDate,
       granularity: filters.granularity,
+      scope: filters.scope,
     };
   }, [filters]);
 

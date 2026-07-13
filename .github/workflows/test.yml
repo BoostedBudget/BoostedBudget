@@ -220,7 +220,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
           # Key: go-modules-<os>-go<version>-<sum-hash>
@@ -542,7 +542,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
@@ -598,7 +598,7 @@ jobs:
 
       - name: Save Go modules cache
         if: always() && steps.cache-go-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
@@ -650,7 +650,7 @@ jobs:
 
       - name: Restore Go modules cache
         id: cache-go-modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ~/go/pkg/mod
           key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}

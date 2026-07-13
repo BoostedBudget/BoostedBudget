@@ -10,7 +10,8 @@
  * Issue #307: Account Customization
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { toast } from 'sonner'
 import {
   Dialog,
   DialogContent,
@@ -24,11 +25,14 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Users, UserX } from 'lucide-react'
 import { ColorPicker } from './ColorPicker'
 import { IconSelector } from './IconSelector'
 import { EmojiInput } from './EmojiInput'
 import { AccountIconDisplay } from './AccountIconDisplay'
+import { useHousehold, useHouseholdVisibility } from '@/features/household'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import type { Account, AccountIcon, UpdateAccountRequest } from '../types'
 
 // Internal component to handle modal content with its own state
@@ -48,6 +52,51 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
   const [isHidden, setIsHidden] = useState(account.is_hidden || false)
   const [showHideConfirm, setShowHideConfirm] = useState(false)
   const [activeTab, setActiveTab] = useState<'icon' | 'emoji'>(account.custom_emoji ? 'emoji' : 'icon')
+
+  // Issue #1370 Task 8: household sharing is a separate domain/endpoint from
+  // UpdateAccountRequest (see handleSave below). Hooks run unconditionally
+  // (Rules of Hooks); the share row itself only renders when
+  // canShowShareSwitch is true.
+  const { isInHousehold } = useHousehold()
+  const { isShared, isLoading: isSharesLoading, setVisibility } = useHouseholdVisibility()
+  const trackEvent = useTrackEvent()
+  const userAccountId = account.user_account_id
+  // No user_account_id means the account can't be looked up via
+  // useHouseholdVisibility, so the row is hidden entirely rather than
+  // disabled — same "hidden, not inert" pattern as ScopeSegmentedControl.
+  const canShowShareSwitch = isInHousehold && !!userAccountId
+  const [initialShareVisibility, setInitialShareVisibility] = useState(() =>
+    userAccountId ? isShared(userAccountId) : false
+  )
+  const [wantsShared, setWantsShared] = useState(initialShareVisibility)
+  // The lazy-init above can run before useHouseholdVisibility's query has
+  // resolved (this modal may be the first place on the page that calls it),
+  // in which case `isShared` sees an empty `shares` list and both states are
+  // wrongly seeded to `false`. Once real data lands, re-sync — but only if
+  // the user hasn't already interacted with the switch, so a slow background
+  // refetch can never clobber an in-progress edit.
+  const userToggledShareRef = useRef(false)
+  useEffect(() => {
+    if (isSharesLoading || !userAccountId || userToggledShareRef.current) return
+    const shared = isShared(userAccountId)
+    setInitialShareVisibility(shared)
+    setWantsShared(shared)
+  }, [isSharesLoading, userAccountId, isShared])
+  // Belt-and-suspenders for the loading race above: the resync effect only
+  // protects an in-progress *toggle*, but the user could otherwise still
+  // click Save while the query is loading and the switch is showing a
+  // provisional (possibly wrong) value — since nothing was "changed" from
+  // that wrong baseline, no PATCH would fire and the modal would just close
+  // having silently shown the wrong state. Disabling the switch while
+  // loading removes the window entirely: there's nothing to act on until the
+  // real value is known.
+  const isShareSwitchDisabled = isSharesLoading
+
+  // Local submit guard: `isSaving` (prop) only reflects the parent's own
+  // appearance-save mutation, so a share-only save (no appearance changes)
+  // has no external pending flag — without this, a slow setVisibility call
+  // could be double-submitted by a second click.
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Build display name for preview
   const displayName = nickname || account.official_name || account.name || 'Account'
@@ -84,13 +133,74 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
       changes.is_hidden = isHidden
     }
 
-    // Only save if there are changes
-    if (Object.keys(changes).length > 0) {
-      await onSave(account, changes)
-    } else {
+    const hasAppearanceChanges = Object.keys(changes).length > 0
+    const shareVisibilityChanged = !!userAccountId && wantsShared !== initialShareVisibility
+
+    if (!hasAppearanceChanges && !shareVisibilityChanged) {
       onCancel()
+      return
     }
-  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, activeTab, onSave, onCancel])
+
+    setIsSubmitting(true)
+    try {
+      // Household sharing hits a separate endpoint from the appearance
+      // `changes` payload above, so it must never be folded into `onSave`.
+      // Fired via Promise.allSettled (not Promise.all): a failure in one must
+      // not block or hide the outcome of the other. Unlike before, `onSave`
+      // here is the raw parent prop — it no longer closes the modal as a
+      // side effect. Closing is decided below, once BOTH results are known,
+      // so a share-visibility failure can never be masked by an unrelated
+      // appearance-save success (or vice versa).
+      const results = await Promise.allSettled([
+        hasAppearanceChanges ? onSave(account, changes) : Promise.resolve(),
+        shareVisibilityChanged && userAccountId
+          ? setVisibility(userAccountId, wantsShared ? 'shared' : 'hidden')
+          : Promise.resolve(),
+      ])
+      const [appearanceResult, shareResult] = results
+      const appearanceFailed = hasAppearanceChanges && appearanceResult.status === 'rejected'
+      const shareFailed = shareVisibilityChanged && shareResult.status === 'rejected'
+
+      // onSave's own mutation hook is responsible for surfacing appearance-save
+      // failures (toast/logging), same as before this change. setVisibility has
+      // no such caller-side handling, so a rejection here must be surfaced
+      // explicitly — otherwise the user gets no signal that sharing didn't
+      // change, even though the switch itself already flipped back visually
+      // next time the modal reopens (since the failed write never persisted).
+      if (shareFailed) {
+        // Directionally accurate messaging (privacy-consequential case): if the
+        // user was trying to REVOKE household sharing and the write failed, the
+        // account is STILL shared — say so explicitly rather than a generic
+        // failure message, since silently believing an account went private
+        // when it didn't is the real risk here. Trying to share (safe-by-
+        // default) can use a generic message.
+        toast.error(
+          wantsShared
+            ? 'Failed to update household sharing. Please try again.'
+            : 'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
+      } else if (shareVisibilityChanged) {
+        // Fire only once the share-visibility write has actually persisted,
+        // never on failure and never merely on toggling the switch.
+        trackEvent(ANALYTICS_EVENTS.HOUSEHOLD_ACCOUNT_SHARE_CHANGED, {
+          visibility: wantsShared ? 'shared' : 'hidden',
+        })
+      }
+
+      // Only close the modal once every attempted write has actually
+      // succeeded. This intentionally covers all four save shapes:
+      // appearance-only, share-only, both, and neither attempted (the early
+      // return above already handles "no changes"). Closing on a partial
+      // mixed-save failure would let a failed share-visibility write hide
+      // behind a successful appearance save, silently misleading the user
+      // about their household-sharing state.
+      if (!appearanceFailed && !shareFailed) {
+        onCancel()
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [account, nickname, customColor, customIcon, customEmoji, isHidden, activeTab, onSave, onCancel, userAccountId, wantsShared, initialShareVisibility, setVisibility, trackEvent])
 
   return (
     <>
@@ -222,6 +332,43 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
             title={isHidden ? 'Show account' : 'Hide account'}
           />
         </div>
+
+        {/* Share with household toggle — Issue #1370 Task 8. Distinct from
+            "Hide Account" above: that controls the OWNER's own default view;
+            this controls whether OTHER household members can see the account
+            at all (household aggregation only counts visibility === 'shared'). */}
+        {canShowShareSwitch && (
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {wantsShared ? <Users className="h-4 w-4" /> : <UserX className="h-4 w-4" />}
+                {wantsShared ? 'Share with household' : 'Hidden from household'}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {wantsShared
+                  ? 'Other household members can see this account in shared views.'
+                  : 'Excluded from household totals and hidden from other members.'}
+              </p>
+            </div>
+            <Switch
+              checked={wantsShared}
+              onCheckedChange={(checked) => {
+                // Mark the switch as user-touched so the loading-resync
+                // effect above never overwrites this edit with a lagging
+                // fetch result.
+                userToggledShareRef.current = true
+                setWantsShared(checked)
+              }}
+              disabled={isShareSwitchDisabled}
+              aria-label={wantsShared ? 'Hide from household' : 'Share with household'}
+              title={
+                isShareSwitchDisabled
+                  ? 'Loading household sharing status…'
+                  : wantsShared ? 'Hide from household' : 'Share with household'
+              }
+            />
+          </div>
+        )}
       </div>
 
       <DialogFooter>
@@ -229,16 +376,16 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           type="button"
           variant="outline"
           onClick={onCancel}
-          disabled={isSaving}
+          disabled={isSaving || isSubmitting}
         >
           Cancel
         </Button>
         <Button
           type="button"
           onClick={handleSave}
-          disabled={isSaving}
+          disabled={isSaving || isSubmitting}
         >
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {(isSaving || isSubmitting) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Save Changes
         </Button>
       </DialogFooter>
@@ -294,11 +441,13 @@ export function AccountCustomizationModal({
   onSave,
   isSaving = false,
 }: AccountCustomizationModalProps) {
-  const handleSave = useCallback(async (account: Account, changes: Partial<UpdateAccountRequest>) => {
-    await onSave(account, changes)
-    onOpenChange(false)
-  }, [onSave, onOpenChange])
-
+  // Issue #1370 Task 8: closing the modal used to be an implicit side effect
+  // of this wrapper's `onSave` call succeeding — which meant an appearance
+  // save succeeding could close the modal even though a parallel
+  // share-visibility write (fired inside ModalContent's handleSave) had
+  // failed. `ModalContent` now evaluates both outcomes itself and calls
+  // `onCancel` (below) only once every attempted write has succeeded, so
+  // `onSave` is passed straight through with no wrapping needed here.
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
@@ -306,7 +455,7 @@ export function AccountCustomizationModal({
           <ModalContent
             key={account.id}
             account={account}
-            onSave={handleSave}
+            onSave={onSave}
             onCancel={() => onOpenChange(false)}
             isSaving={isSaving}
           />

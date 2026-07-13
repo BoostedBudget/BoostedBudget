@@ -165,6 +165,23 @@ describe('useCashFlowData', () => {
         )
       })
 
+      // Issue #1370: Personal/Household dashboard scope toggle — the key
+      // regression this task must guard: `scope` must reach the actual
+      // generated-hook params.
+      it('should forward scope: "household" to the query params', () => {
+        configureSummaryQuery({ data: mockSummary })
+
+        renderHook(
+          () => useCashFlowSummary({ filters: { ...mockFilters, scope: 'household' } }),
+          { wrapper: createWrapper() }
+        )
+
+        expect(mockUseGetCashFlowSummary).toHaveBeenCalledWith(
+          expect.objectContaining({ scope: 'household' }),
+          expect.any(Object)
+        )
+      })
+
       it('should set data from query response', async () => {
         configureSummaryQuery({ data: mockSummary })
 
@@ -345,6 +362,23 @@ describe('useCashFlowData', () => {
             start_date: '2024-01-01',
             end_date: '2024-01-31',
           }),
+          expect.any(Object)
+        )
+      })
+
+      // Issue #1370: Personal/Household dashboard scope toggle — the key
+      // regression this task must guard: `scope` must reach the actual
+      // generated-hook params.
+      it('should forward scope: "household" to the query params', () => {
+        configureHistoryQuery({ data: mockHistory })
+
+        renderHook(
+          () => useCashFlowHistory({ filters: { ...mockFilters, scope: 'household' } }),
+          { wrapper: createWrapper() }
+        )
+
+        expect(mockUseGetCashFlowHistory).toHaveBeenCalledWith(
+          expect.objectContaining({ scope: 'household' }),
           expect.any(Object)
         )
       })

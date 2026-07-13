@@ -32,7 +32,14 @@ export interface ExchangePublicTokenRequest {
 
 export interface ExchangePublicTokenResponse {
   success: boolean
+  /** The Plaid provider's item id — NOT the same value as any account's `linked_item_id`. */
   item_id: string
+  /**
+   * The internal linked_items.id — matches `Account.linked_item_id` (Issue
+   * #1370 Task 9). Use THIS field, not `item_id`, to find which accounts
+   * were just linked after a post-link accounts refetch.
+   */
+  linked_item_id: string
   accounts_linked: number
 }
 
