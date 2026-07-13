@@ -23,6 +23,26 @@ export const mockUseGetBalanceHistory = mock(() => ({
   refetch: mockRefetchBalanceHistory,
 }))
 
+// === useGetNetWorth (for useNetWorthData) ===
+// Issue #1370: added so useNetWorthData.test.tsx can exercise the real hook
+// implementation (previously only wrapper-level mocked via net-worth-hooks.ts).
+export const mockRefetchNetWorth = mock(() => Promise.resolve({}))
+export const mockUseGetNetWorth = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchNetWorth,
+}))
+
+// === useGetNetWorthHistory (for useNetWorthData) ===
+export const mockRefetchNetWorthHistory = mock(() => Promise.resolve({}))
+export const mockUseGetNetWorthHistory = mock(() => ({
+  data: undefined,
+  isLoading: true,
+  error: null,
+  refetch: mockRefetchNetWorthHistory,
+}))
+
 // === useGetAccountTypes (for useDashboardData) ===
 export const mockRefetchAccountTypes = mock(() => Promise.resolve({}))
 export const mockUseGetAccountTypes = mock(() => ({
@@ -76,6 +96,14 @@ export const mockGetBalanceHistoryQueryKey = mock((params: unknown) => [
 ])
 export const mockGetAccountTypesQueryKey = mock(() => ['account-types'])
 export const mockGetDefaultLayoutQueryKey = mock(() => ['dashboard', 'default-layout'])
+// NOTE: getGetNetWorthQueryKey/getGetNetWorthHistoryQueryKey are deliberately NOT
+// overridden here (unlike the balance-summary/history key getters above) — they're
+// left to fall through via the `...RealDashboardModule` spread below. Several tests
+// (e.g. useHouseholdVisibility.test.tsx's real-QueryClient prefix-match invalidation
+// test) rely on at least one of the 7 scoped query-key getters resolving to the REAL
+// generated implementation (which conditionally omits the `params` key segment when
+// called with no arguments) rather than a simplified test double that always appends
+// a `params` element — see that test's inline comment for the full explanation.
 
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/dashboard/dashboard', () => ({
@@ -87,6 +115,8 @@ mock.module('@boostedbudget/api-client/endpoints/dashboard/dashboard', () => ({
   useSaveDashboardPreferences: mockUseSaveDashboardPreferences,
   useResetDashboardPreferences: mockUseResetDashboardPreferences,
   useGetDefaultLayout: mockUseGetDefaultLayout,
+  useGetNetWorth: mockUseGetNetWorth,
+  useGetNetWorthHistory: mockUseGetNetWorthHistory,
   getGetBalanceSummaryQueryKey: mockGetBalanceSummaryQueryKey,
   getGetBalanceHistoryQueryKey: mockGetBalanceHistoryQueryKey,
   getGetAccountTypesQueryKey: mockGetAccountTypesQueryKey,

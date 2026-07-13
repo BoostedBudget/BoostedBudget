@@ -13,6 +13,7 @@ import { useGettingStarted } from '../hooks/useGettingStarted'
 import { DashboardGrid, WidgetCatalog } from '../widgets'
 import { AccountTypeFilter } from './AccountTypeFilter'
 import { TimeframeSelector } from './TimeframeSelector'
+import { ScopeSegmentedControl } from './ScopeSegmentedControl'
 import { GettingStartedChecklist } from './GettingStartedChecklist'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
@@ -24,7 +25,7 @@ import '../widgets'
 
 function DashboardContent() {
   const { getToken } = useAuth()
-  const { filters, setFilters, isEditing, setIsEditing, hasAccounts } = useDashboardContext()
+  const { filters, setFilters, isEditing, setIsEditing, hasAccounts, scope } = useDashboardContext()
   const trackEvent = useTrackEvent()
 
   useEffect(() => {
@@ -58,11 +59,16 @@ function DashboardContent() {
     }
   }, [gettingStarted.isCelebrating, trackEvent])
 
-  // Fetch account types for filter
+  // Fetch account types for filter. accountTypes itself isn't scope-sensitive (not one
+  // of the 7 scoped endpoints), but this call also fires useGetBalanceSummary/History
+  // under the hood (their results are unused here) — passing `scope` keeps those
+  // incidental fetches consistent with the user's current toggle selection instead of
+  // always querying personal scope regardless of what's selected.
   const { accountTypes } = useDashboardData({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
+    scope,
   })
 
   const handleAccountTypeChange = useCallback((types: string[]) => {
@@ -222,6 +228,7 @@ function DashboardContent() {
               onChange={handleAccountTypeChange}
             />
           )}
+          <ScopeSegmentedControl />
         </div>
 
         {/* Widget Grid - Full Width */}

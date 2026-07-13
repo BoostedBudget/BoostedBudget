@@ -17,7 +17,7 @@ import { WidgetEmptyState } from './WidgetEmptyState'
 import type { WidgetProps } from '../types'
 
 function BalanceHistoryWidget(_props: WidgetProps) {
-  const { filters } = useDashboardContext()
+  const { filters, scope } = useDashboardContext()
   const [showTypeBreakdown, setShowTypeBreakdown] = useState(false)
 
   const dashboardFilters = useMemo(
@@ -25,8 +25,9 @@ function BalanceHistoryWidget(_props: WidgetProps) {
       startDate: filters.startDate,
       endDate: filters.endDate,
       accountTypes: filters.accountTypes,
+      scope,
     }),
-    [filters.startDate, filters.endDate, filters.accountTypes]
+    [filters.startDate, filters.endDate, filters.accountTypes, scope]
   )
 
   const filterKey = useMemo(

@@ -217,6 +217,52 @@ describe('useDashboardData', () => {
         expect.any(Object)
       )
     })
+
+    // Issue #1370: Personal/Household dashboard scope toggle — the key regression
+    // this task must guard: `scope` must reach the actual generated-hook params.
+    it('should forward scope: "household" to both summary and history query params', () => {
+      configureQueries({
+        summary: { data: mockBalanceSummary },
+        history: { data: mockBalanceHistory },
+        types: { data: mockAccountTypes },
+      })
+
+      const filters: DashboardFilters = {
+        startDate: '2025-11-01',
+        endDate: '2025-11-15',
+        scope: 'household',
+      }
+
+      renderHook(() => useDashboardData(filters), {
+        wrapper: createWrapper(),
+      })
+
+      expect(mockUseGetBalanceSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'household' }),
+        expect.any(Object)
+      )
+      expect(mockUseGetBalanceHistory).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'household' }),
+        expect.any(Object)
+      )
+    })
+
+    it('should default scope to undefined (personal) when not specified', () => {
+      configureQueries({
+        summary: { data: mockBalanceSummary },
+        history: { data: mockBalanceHistory },
+        types: { data: mockAccountTypes },
+      })
+
+      renderHook(() => useDashboardData({ startDate: '2025-11-01', endDate: '2025-11-15' }), {
+        wrapper: createWrapper(),
+      })
+
+      expect(mockUseGetBalanceSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: undefined }),
+        expect.any(Object)
+      )
+    })
   })
 
   describe('Error Handling', () => {

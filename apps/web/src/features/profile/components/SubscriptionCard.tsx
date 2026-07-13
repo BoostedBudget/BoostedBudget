@@ -17,6 +17,14 @@ interface SubscriptionCardProps {
   tier: string // User's subscription_tier from API
   status: string // User's subscription_status from API
   trialDaysRemaining?: number
+  /**
+   * Household seat usage (used/total). Caller (ProfilePage) computes this via
+   * `useHousehold()` and passes it down — this component stays presentational
+   * and never calls `useHousehold()` itself. Omit (or pass `total <= 1`) to
+   * render nothing extra; this is distinct from the tier's static seat-COUNT
+   * feature-list line ("For N household members") built in `buildFeatureList`.
+   */
+  seatUsage?: { used: number; total: number }
 }
 
 
@@ -51,7 +59,7 @@ function buildFeatureList(tierData: SubscriptionTier): string[] {
   return features
 }
 
-export function SubscriptionCard({ tier, status, trialDaysRemaining }: SubscriptionCardProps) {
+export function SubscriptionCard({ tier, status, trialDaysRemaining, seatUsage }: SubscriptionCardProps) {
   const { tiers, loading, error } = useSubscriptionTiers()
 
   // Handle loading state
@@ -119,6 +127,11 @@ export function SubscriptionCard({ tier, status, trialDaysRemaining }: Subscript
             </li>
           ))}
         </ul>
+        {seatUsage && seatUsage.total > 1 && (
+          <p className="text-sm text-muted-foreground mt-2">
+            {seatUsage.used} of {seatUsage.total} seats used
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">

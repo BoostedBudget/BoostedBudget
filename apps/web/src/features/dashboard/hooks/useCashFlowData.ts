@@ -53,6 +53,7 @@ export function useCashFlowSummary(
       start_date: filters.startDate,
       end_date: filters.endDate,
       account_types: filters.accountTypes?.join(','),
+      scope: filters.scope,
     };
   }, [filters]);
 
@@ -121,6 +122,7 @@ export function useCashFlowHistory(
       end_date: filters.endDate,
       account_types: filters.accountTypes?.join(','),
       grouping: filters.grouping,
+      scope: filters.scope,
     };
   }, [filters]);
 
