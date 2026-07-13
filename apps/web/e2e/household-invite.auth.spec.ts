@@ -233,6 +233,29 @@ test.describe('Household invite → consent preview → accept → shared dashbo
       })
 
       // =========================================================================
+      // ASSERT (owner, real UI): the OTHER half of the same TDD line — "Accept join →
+      // household tab shows new member; SubscriptionCard shows updated seat count". Added
+      // after an adversarial (Codex) review of this file's first pass (commit 6b70a242)
+      // found that the assertions above only ever prove HouseholdCard's SeatUsageBadge is
+      // correct — SubscriptionCard is a genuinely separate component, rendered on the
+      // default `/profile` tab (not `?tab=household`), with its own independent seat-usage
+      // rendering (plain text, not <SeatUsageBadge>) that could regress on its own even with
+      // the badge assertion above passing. A second navigation is required because the two
+      // components live on different `activeTab` branches of ProfilePage and are never both
+      // mounted at once.
+      // =========================================================================
+      await page.goto('/profile')
+      await acceptCookieConsent(page)
+      await page.waitForLoadState('domcontentloaded')
+
+      // SubscriptionCard renders seat usage as `${used} of ${total} seats used`
+      // (SubscriptionCard.tsx), a different literal format from SeatUsageBadge's
+      // `${used}/${total}` for the same underlying data. Same total-agnostic reasoning as
+      // the SeatUsageBadge assertion above applies — only "used" (2) is asserted, not the
+      // exact total.
+      await expect(page.getByText(/^2 of \d+ seats used$/)).toBeVisible({ timeout: 15000 })
+
+      // =========================================================================
       // ACT 3 (invitee, real UI): the default dashboard layout
       // (config/default_dashboard_layout.yaml) doesn't include the Account Cards widget —
       // only cash-flow-chart and balance-history, which are chart/canvas-only and can't be
