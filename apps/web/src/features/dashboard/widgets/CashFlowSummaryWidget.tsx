@@ -113,8 +113,9 @@ function CashFlowSummaryWidget(_props: WidgetProps) {
       endDate: context?.filters.endDate || '',
       accountTypes: context?.filters.accountTypes,
       includeTransfers: false,
+      scope: context?.scope,
     }),
-    [context?.filters]
+    [context?.filters, context?.scope]
   );
 
   const { data, loading, error } = useCashFlowSummary({

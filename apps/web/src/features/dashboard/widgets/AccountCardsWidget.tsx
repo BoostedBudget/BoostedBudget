@@ -15,14 +15,15 @@ import { WidgetEmptyState } from './WidgetEmptyState';
 import type { WidgetProps } from '../types';
 
 function AccountCardsWidget(_props: WidgetProps) {
-  const { filters } = useDashboardContext();
+  const { filters, scope } = useDashboardContext();
 
   // useMemo to prevent infinite re-renders from new object references
   const dashboardFilters = useMemo(() => ({
     startDate: filters.startDate,
     endDate: filters.endDate,
     accountTypes: filters.accountTypes,
-  }), [filters.startDate, filters.endDate, filters.accountTypes]);
+    scope,
+  }), [filters.startDate, filters.endDate, filters.accountTypes, scope]);
 
   const { summary, loading, error } = useDashboardData(dashboardFilters);
 

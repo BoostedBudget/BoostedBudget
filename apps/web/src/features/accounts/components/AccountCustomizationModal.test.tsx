@@ -20,8 +20,98 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode, ReactElement } from 'react'
 import { AccountCustomizationModal } from './AccountCustomizationModal'
 import type { Account } from '../types'
+import type { GetMyHouseholdResponseBody, UserAccountShareView } from '@boostedbudget/api-client/models'
+import {
+  mockUseGetMyHousehold,
+  mockUseGetHouseholdEntitlement,
+  mockRefetchMyHousehold,
+  mockRefetchHouseholdEntitlement,
+  mockUseListMyAccountShares,
+  mockRefetchMyAccountShares,
+  mockUseSetHouseholdShareVisibility,
+  mockSetHouseholdShareVisibilityMutateAsync,
+} from '@/test/mocks/household-api'
+import { mockToastError } from '@/test/mocks/sonner'
+import { mockTrackEvent } from '@/test/mocks/track-event'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
+
+// Issue #1370 Task 8: AccountCustomizationModal now calls useHousehold()/
+// useHouseholdVisibility() unconditionally (Rules of Hooks — the household
+// share row only *renders* conditionally, but the hooks always run). Both
+// hooks call useQueryClient() internally, so every render needs a
+// QueryClientProvider ancestor (mirrors ScopeSegmentedControl.test.tsx /
+// useHousehold.test.tsx's own wrapper pattern).
+function createWrapper() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
+
+function renderModal(ui: ReactElement) {
+  return render(ui, { wrapper: createWrapper() })
+}
+
+const mockHouseholdResponse: GetMyHouseholdResponseBody = {
+  household: {
+    id: 'household-1',
+    name: 'The Smiths',
+    owner_user_id: 'user-1',
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+  },
+  summary: {
+    is_owner: true,
+    seats_active: 2,
+    seats_pending: 0,
+    source: 'household',
+    tier: 'household_3',
+    users_included: 3,
+  },
+}
+
+function mockInHousehold() {
+  mockUseGetMyHousehold.mockReturnValue({
+    data: mockHouseholdResponse,
+    isLoading: false,
+    error: null,
+    refetch: mockRefetchMyHousehold,
+  })
+  mockUseGetHouseholdEntitlement.mockReturnValue({
+    data: mockHouseholdResponse.summary,
+    isLoading: false,
+    error: null,
+    refetch: mockRefetchHouseholdEntitlement,
+  })
+}
+
+function mockNotInHousehold() {
+  mockUseGetMyHousehold.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+    refetch: mockRefetchMyHousehold,
+  })
+  mockUseGetHouseholdEntitlement.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+    refetch: mockRefetchHouseholdEntitlement,
+  })
+}
+
+function mockShares(shares: UserAccountShareView[]) {
+  mockUseListMyAccountShares.mockReturnValue({
+    data: shares,
+    isLoading: false,
+    error: null,
+    refetch: mockRefetchMyAccountShares,
+  })
+}
 
 describe('AccountCustomizationModal', () => {
   const mockOnOpenChange = mock(() => {})
@@ -49,11 +139,32 @@ describe('AccountCustomizationModal', () => {
   beforeEach(() => {
     mockOnOpenChange.mockClear()
     mockOnSave.mockClear()
+
+    // Household mocks are process-global (shared across test files via
+    // mock.module()) — reset to a deterministic "not in household, no shares"
+    // baseline before each test so unrelated tests aren't affected by state
+    // left over from the "Household Sharing" describe block below.
+    mockUseGetMyHousehold.mockClear()
+    mockUseGetHouseholdEntitlement.mockClear()
+    mockRefetchMyHousehold.mockClear()
+    mockRefetchHouseholdEntitlement.mockClear()
+    mockUseListMyAccountShares.mockClear()
+    mockRefetchMyAccountShares.mockClear()
+    mockUseSetHouseholdShareVisibility.mockClear()
+    mockSetHouseholdShareVisibilityMutateAsync.mockClear()
+    mockToastError.mockClear()
+    mockTrackEvent.mockClear()
+    mockNotInHousehold()
+    mockShares([])
+    mockUseSetHouseholdShareVisibility.mockReturnValue({
+      mutateAsync: mockSetHouseholdShareVisibilityMutateAsync,
+      isPending: false,
+    })
   })
 
   describe('Modal Open/Close', () => {
     it('renders dialog when open=true', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -67,7 +178,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('does not render dialog content when open=false', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={false}
@@ -80,7 +191,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('does not render ModalContent when account is null', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={null}
           open={true}
@@ -95,7 +206,7 @@ describe('AccountCustomizationModal', () => {
 
     it('calls onOpenChange when cancel is clicked', async () => {
       const user = userEvent.setup()
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -117,7 +228,7 @@ describe('AccountCustomizationModal', () => {
         nickname: 'My Checking',
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithNickname}
           open={true}
@@ -130,7 +241,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('falls back to official_name when no nickname', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -148,7 +259,7 @@ describe('AccountCustomizationModal', () => {
         official_name: undefined,
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithoutOfficialName}
           open={true}
@@ -168,7 +279,7 @@ describe('AccountCustomizationModal', () => {
         nickname: undefined,
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithNoNames}
           open={true}
@@ -188,7 +299,7 @@ describe('AccountCustomizationModal', () => {
         nickname: 'My Savings',
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithNickname}
           open={true}
@@ -207,7 +318,7 @@ describe('AccountCustomizationModal', () => {
         custom_emoji: '💰',
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithEmoji}
           open={true}
@@ -221,7 +332,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('initializes on icon tab when account has no emoji', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -239,7 +350,7 @@ describe('AccountCustomizationModal', () => {
     it('calls onSave with changed fields', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -263,7 +374,7 @@ describe('AccountCustomizationModal', () => {
     it('calls onCancel when no changes made', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -281,7 +392,7 @@ describe('AccountCustomizationModal', () => {
     it('closes modal after successful save', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -302,7 +413,7 @@ describe('AccountCustomizationModal', () => {
 
   describe('Loading State', () => {
     it('shows loading spinner when isSaving=true', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -317,7 +428,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('disables buttons when isSaving=true', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -332,7 +443,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('enables buttons when isSaving=false', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -354,7 +465,7 @@ describe('AccountCustomizationModal', () => {
         custom_emoji: '💰',
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithEmoji}
           open={true}
@@ -373,7 +484,7 @@ describe('AccountCustomizationModal', () => {
         custom_icon: 'wallet' as const,
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithIcon}
           open={true}
@@ -389,7 +500,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('shows first letter when no icon or emoji', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -407,7 +518,7 @@ describe('AccountCustomizationModal', () => {
         custom_color: '#EF4444',
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={accountWithColor}
           open={true}
@@ -428,7 +539,7 @@ describe('AccountCustomizationModal', () => {
         is_hidden: true,
       }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={hiddenAccount}
           open={true}
@@ -441,7 +552,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('does not show hidden badge when is_hidden is false', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -456,7 +567,7 @@ describe('AccountCustomizationModal', () => {
     it('toggles hidden state when clicked (via confirmation)', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -479,7 +590,7 @@ describe('AccountCustomizationModal', () => {
     it('shows hidden badge after confirming hide', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -501,7 +612,7 @@ describe('AccountCustomizationModal', () => {
     it('switches between icon and emoji tabs', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -520,7 +631,7 @@ describe('AccountCustomizationModal', () => {
     it('shows emoji input when emoji tab is active', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -537,7 +648,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('shows icon selector when icon tab is active', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -553,7 +664,7 @@ describe('AccountCustomizationModal', () => {
 
   describe('Nickname Input', () => {
     it('shows generic placeholder and has maxLength/helper text', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -575,7 +686,7 @@ describe('AccountCustomizationModal', () => {
 
   describe('Dialog Content', () => {
     it('renders dialog description and institution info with PII protection', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -601,7 +712,7 @@ describe('AccountCustomizationModal', () => {
     })
 
     it('renders color picker', () => {
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -619,7 +730,7 @@ describe('AccountCustomizationModal', () => {
     it('opens confirmation dialog when toggling visible account to hidden', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -638,7 +749,7 @@ describe('AccountCustomizationModal', () => {
       const user = userEvent.setup()
       const hiddenAccount: Account = { ...mockAccount, is_hidden: true }
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={hiddenAccount}
           open={true}
@@ -655,7 +766,7 @@ describe('AccountCustomizationModal', () => {
     it('cancelling the dialog leaves the account visible', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -678,7 +789,7 @@ describe('AccountCustomizationModal', () => {
     it('confirming the dialog marks the account as hidden', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -701,7 +812,7 @@ describe('AccountCustomizationModal', () => {
     it('saving after confirming hide calls onSave with is_hidden: true', async () => {
       const user = userEvent.setup()
 
-      render(
+      renderModal(
         <AccountCustomizationModal
           account={mockAccount}
           open={true}
@@ -722,6 +833,660 @@ describe('AccountCustomizationModal', () => {
           expect.objectContaining({ is_hidden: true }),
         )
       })
+    })
+  })
+
+  describe('Household Sharing (Issue #1370 Task 8)', () => {
+    const householdAccount: Account = {
+      ...mockAccount,
+      user_account_id: 'ua-123',
+    }
+
+    it('does not show the household share switch when not in a household', () => {
+      mockNotInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // Only the pre-existing "Hide Account" switch should be present.
+      expect(screen.getAllByRole('switch')).toHaveLength(1)
+      expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
+      expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
+    })
+
+    it('does not show the household share switch when the account has no user_account_id', () => {
+      mockInHousehold()
+      mockShares([])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount} // no user_account_id
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getAllByRole('switch')).toHaveLength(1)
+      expect(screen.queryByText('Share with household')).not.toBeInTheDocument()
+      expect(screen.queryByText('Hidden from household')).not.toBeInTheDocument()
+    })
+
+    it('shows the household share switch when in a household with a usable user_account_id', () => {
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getAllByRole('switch')).toHaveLength(2)
+    })
+
+    it('initializes checked when the account visibility is "shared"', () => {
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getByText('Share with household')).toBeInTheDocument()
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('initializes unchecked when the account visibility is "hidden"', () => {
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getByText('Hidden from household')).toBeInTheDocument()
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('initializes unchecked when the account has no share grant (null visibility)', () => {
+      mockInHousehold()
+      mockShares([]) // no grant at all — verified backend semantics: null === not-shared
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('toggling off then saving calls setVisibility with "hidden", keyed by user_account_id', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'true')
+
+      await user.click(householdSwitch)
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'false')
+
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+          id: 'ua-123',
+          data: { visibility: 'hidden' },
+        })
+      })
+
+      // Regression: the household-share write must never leak into the
+      // onSave/changes payload — no appearance fields changed, so onSave
+      // should not be called at all.
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('toggling on then saving calls setVisibility with "shared"', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      await user.click(householdSwitch)
+
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+          id: 'ua-123',
+          data: { visibility: 'shared' },
+        })
+      })
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('does not call setVisibility when the switch is left untouched', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+      expect(mockOnSave).not.toHaveBeenCalled()
+    })
+
+    it('closes the modal after a share-only save (no appearance changes)', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+    })
+
+    it('fires both onSave and setVisibility when appearance and share visibility both change', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          householdAccount,
+          expect.objectContaining({ nickname: 'New Name' })
+        )
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+          id: 'ua-123',
+          data: { visibility: 'hidden' },
+        })
+      })
+    })
+
+    it('does not call setVisibility when the account has no user_account_id, even in a household', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={mockAccount} // no user_account_id
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalled()
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('does not call setVisibility when the switch is toggled and then toggled back before saving', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      await user.click(householdSwitch) // shared -> hidden
+      await user.click(householdSwitch) // hidden -> back to shared (original)
+
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('re-syncs the switch once the shares query resolves after mounting while still loading', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      // Shares query is still in flight when the modal first mounts.
+      mockUseListMyAccountShares.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      })
+
+      const { rerender } = renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      expect(screen.getByRole('switch', { name: /household/i })).toHaveAttribute('aria-checked', 'false')
+
+      // Query resolves with a "shared" grant for this account.
+      mockUseListMyAccountShares.mockReturnValue({
+        data: [{ user_account_id: 'ua-123', visibility: 'shared' }],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      })
+      rerender(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByRole('switch', { name: /household/i })).toHaveAttribute('aria-checked', 'true')
+      })
+
+      // The re-synced value is now the baseline — saving without touching
+      // the switch must not treat it as a change.
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+    })
+
+    it('disables the switch while the shares query is loading, closing the window for the user to act on a provisional value', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockUseListMyAccountShares.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      })
+
+      const { rerender } = renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      const householdSwitch = screen.getByRole('switch', { name: /household/i })
+      expect(householdSwitch).toBeDisabled()
+
+      // Clicking a disabled switch must not toggle it — the real value
+      // ('hidden' here) is still unknown while the query is loading.
+      await user.click(householdSwitch)
+      expect(householdSwitch).toHaveAttribute('aria-checked', 'false')
+
+      // Query resolves with 'hidden' — matches the untouched provisional
+      // state, so the switch stays unchecked, is re-enabled, and saving
+      // does not treat this as a change.
+      mockUseListMyAccountShares.mockReturnValue({
+        data: [{ user_account_id: 'ua-123', visibility: 'hidden' }],
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      })
+      rerender(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await waitFor(() => {
+        expect(screen.getByRole('switch', { name: /household/i })).not.toBeDisabled()
+      })
+      expect(screen.getByRole('switch', { name: /household/i })).toHaveAttribute('aria-checked', 'false')
+
+      // Now that it's enabled, the user can toggle it normally and the
+      // change is saved as expected.
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalledWith({
+          id: 'ua-123',
+          data: { visibility: 'shared' },
+        })
+      })
+    })
+
+    it('leaves the modal open and shows a still-shared warning when un-sharing fails (share-only save)', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // Starting visibility is 'shared'; toggling off attempts to un-share.
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockSetHouseholdShareVisibilityMutateAsync).toHaveBeenCalled()
+      })
+      await waitFor(() => {
+        // Directionally accurate message: the write failed while trying to
+        // REVOKE sharing, so the account is still shared — that's the
+        // privacy-consequential case the message must call out explicitly,
+        // not a generic failure message.
+        expect(mockToastError).toHaveBeenCalledWith(
+          'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
+      })
+
+      // A failed share-only save must not silently close the modal.
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      // No analytics event on failure.
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('shows a generic failure message when SHARING (not un-sharing) fails', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      // Starting visibility is 'hidden' (no share grant); toggling on attempts to share.
+      mockShares([{ user_account_id: 'ua-123', visibility: 'hidden' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith('Failed to update household sharing. Please try again.')
+      })
+
+      // Lower-stakes failure direction — safe-by-default — but still must
+      // not silently close the modal.
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('disables Save/Cancel while a share-only save is in flight, to prevent double-submission', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      let resolveSetVisibility: () => void = () => {}
+      mockSetHouseholdShareVisibilityMutateAsync.mockImplementationOnce(
+        () => new Promise<undefined>((resolve) => {
+          resolveSetVisibility = () => resolve(undefined)
+        })
+      )
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Save Changes/i })).toBeDisabled()
+      })
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+
+      resolveSetVisibility()
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+    })
+
+    it('stays open and surfaces a still-shared warning when setVisibility fails even though the appearance save succeeded (Finding 1 regression)', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnSave).toHaveBeenCalledWith(
+          householdAccount,
+          expect.objectContaining({ nickname: 'New Name' })
+        )
+        expect(mockToastError).toHaveBeenCalledWith(
+          'Failed to stop sharing with your household — this account is still visible to household members. Please try again.'
+        )
+      })
+
+      // The core Finding 1 bug: the appearance save succeeded, but the modal
+      // must NOT close, because the parallel share-visibility write failed.
+      // Closing here would let the user walk away believing the account was
+      // made private when it is still shared with the household.
+      expect(mockOnOpenChange).not.toHaveBeenCalledWith(false)
+      // No analytics event on a failed share-visibility write.
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('closes the modal when both appearance and share-visibility saves succeed', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockToastError).not.toHaveBeenCalled()
+    })
+
+    it('fires HOUSEHOLD_ACCOUNT_SHARE_CHANGED with the new visibility once the share-visibility write succeeds', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      // shared -> hidden
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockTrackEvent).toHaveBeenCalledWith(
+          ANALYTICS_EVENTS.HOUSEHOLD_ACCOUNT_SHARE_CHANGED,
+          { visibility: 'hidden' }
+        )
+      })
+    })
+
+    it('does not fire HOUSEHOLD_ACCOUNT_SHARE_CHANGED when the share-visibility write fails', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+      mockSetHouseholdShareVisibilityMutateAsync.mockRejectedValueOnce(new Error('network error'))
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.click(screen.getByRole('switch', { name: /household/i }))
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalled()
+      })
+      expect(mockTrackEvent).not.toHaveBeenCalled()
+    })
+
+    it('does not fire HOUSEHOLD_ACCOUNT_SHARE_CHANGED when the switch is left untouched (appearance-only save)', async () => {
+      const user = userEvent.setup()
+      mockInHousehold()
+      mockShares([{ user_account_id: 'ua-123', visibility: 'shared' }])
+
+      renderModal(
+        <AccountCustomizationModal
+          account={householdAccount}
+          open={true}
+          onOpenChange={mockOnOpenChange}
+          onSave={mockOnSave}
+        />
+      )
+
+      await user.type(screen.getByLabelText('Nickname'), 'New Name')
+      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+      await waitFor(() => {
+        expect(mockOnOpenChange).toHaveBeenCalledWith(false)
+      })
+      expect(mockSetHouseholdShareVisibilityMutateAsync).not.toHaveBeenCalled()
+      expect(mockTrackEvent).not.toHaveBeenCalled()
     })
   })
 })

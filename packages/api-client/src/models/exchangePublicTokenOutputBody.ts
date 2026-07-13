@@ -35,6 +35,9 @@ export interface ExchangePublicTokenOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   accounts_linked: number;
+  /** The Plaid provider's item id — NOT the same as any account's linked_item_id */
   item_id: string;
+  /** The internal linked item id — matches an account's linked_item_id field */
+  linked_item_id: string;
   success: boolean;
 }

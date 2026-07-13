@@ -9,7 +9,7 @@ import { registerWidget } from './registry'
 import { WidgetEmptyState } from './WidgetEmptyState'
 
 function NetWorthWidget() {
-  const { filters } = useDashboardContext()
+  const { filters, scope } = useDashboardContext()
   const [showSparkline, setShowSparkline] = useState(false)
 
   const dashboardFilters = useMemo(
@@ -17,8 +17,9 @@ function NetWorthWidget() {
       startDate: filters.startDate,
       endDate: filters.endDate,
       accountTypes: filters.accountTypes,
+      scope,
     }),
-    [filters.startDate, filters.endDate, filters.accountTypes]
+    [filters.startDate, filters.endDate, filters.accountTypes, scope]
   )
 
   const { summary, history, loading, error } = useNetWorthData(dashboardFilters)

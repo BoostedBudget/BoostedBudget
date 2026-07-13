@@ -228,6 +228,13 @@ func TestExchangePublicToken_Success(t *testing.T) {
 	require.NotNil(t, output)
 	assert.True(t, output.Body.Success)
 	assert.Equal(t, "plaid-item-123", output.Body.ItemID)
+	// Issue #1370 Task 9: the frontend needs the INTERNAL linked_item id
+	// (matches `accounts.linked_item_id`, set from `linkedItem.ID` in
+	// account_service.go's convertPlaidAccount call) to identify which
+	// accounts were just linked after a refetch — `ItemID` above is the
+	// Plaid PROVIDER's item id and is a different value entirely, so it
+	// cannot be used for that lookup.
+	assert.Equal(t, "item-123", output.Body.LinkedItemID)
 	assert.Equal(t, 1, output.Body.Accounts)
 }
 

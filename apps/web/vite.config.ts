@@ -181,6 +181,13 @@ export default defineConfig({
               test: /\/apps\/web\/src\/features\/investments\//,
               priority: 5,
             },
+            // Issue #1370: Household frontend (Phase 6) — invite accept page,
+            // household hooks/components
+            {
+              name: 'household',
+              test: /\/apps\/web\/src\/features\/household\//,
+              priority: 5,
+            },
           ],
         },
       },

@@ -52,10 +52,20 @@ for f in \
     GROUP_A_PRELOAD_ARGS+=(--preload "$f")
 done
 
-# Group B: With registry/dashboard-context preloads (DashboardGrid, WidgetCatalog)
+# Group B: With registry/dashboard-context preloads (DashboardGrid, WidgetCatalog,
+# ScopeSegmentedControl). ScopeSegmentedControl.test.tsx (Issue #1370) joins this group
+# for the same reason as DashboardGrid/WidgetCatalog: DashboardPage.test.tsx inline-mocks
+# './ScopeSegmentedControl' (relative path, same resolved module id as this file's own
+# import), and bun's mock.module() is process-global — running both in the same process
+# means DashboardPage.test.tsx's stub leaks into this file's "real component" tests.
+# household-api.ts and track-event.ts are added here (beyond DashboardGrid/WidgetCatalog's
+# original needs) because ScopeSegmentedControl calls the real useHousehold() (needs
+# useGetMyHousehold/useGetHouseholdEntitlement mocked) and fires a PostHog analytics
+# event via useTrackEvent() on selection.
 GROUP_B_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/widgets/WidgetCatalog.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/components/ScopeSegmentedControl.test.tsx"
 )
 GROUP_B_PRELOAD_ARGS=()
 for f in \
@@ -63,8 +73,10 @@ for f in \
     "$FRONTEND_DIR/src/test/testing-library.ts" \
     "$FRONTEND_DIR/src/test/mocks/clerk.tsx" \
     "$FRONTEND_DIR/src/test/mocks/registry.ts" \
+    "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
     "$FRONTEND_DIR/src/test/mocks/dashboard-context.ts" \
-    "$FRONTEND_DIR/src/test/mocks/dashboard-wrapper-hooks.ts"; do
+    "$FRONTEND_DIR/src/test/mocks/dashboard-wrapper-hooks.ts" \
+    "$FRONTEND_DIR/src/test/mocks/household-api.ts"; do
     GROUP_B_PRELOAD_ARGS+=(--preload "$f")
 done
 
@@ -99,6 +111,7 @@ done
 # Group D: Real-implementation hook tests
 GROUP_D_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardData.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/hooks/useNetWorthData.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardLayout.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useDashboardOnboarding.test.ts"
     "$FRONTEND_DIR/src/features/dashboard/hooks/useGettingStarted.test.ts"
