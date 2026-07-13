@@ -206,6 +206,34 @@ describe('AccountCardsWidget', () => {
         })
       )
     })
+
+    it('should pass scope: personal from dashboard context by default (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'personal',
+      })
+      setMockDataState({ summary: mockSummary })
+
+      render(<AccountCardsWidget {...defaultProps} />)
+
+      expect(mockUseDashboardData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'personal' })
+      )
+    })
+
+    it('should pass scope: household from dashboard context to useDashboardData (Issue #1370)', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...defaultContextState,
+        scope: 'household',
+      })
+      setMockDataState({ summary: mockSummary })
+
+      render(<AccountCardsWidget {...defaultProps} />)
+
+      expect(mockUseDashboardData).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: 'household' })
+      )
+    })
   })
 
   describe('Widget Wrapper Styling - Issue #420', () => {

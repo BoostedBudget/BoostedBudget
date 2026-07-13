@@ -38,6 +38,14 @@ import {
 } from '@/test/mocks/privacy-api'
 import { mockUseAuth } from '@/test/mocks/clerk.tsx'
 import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
+import {
+  mockUseGetMyHousehold,
+  mockUseGetHouseholdEntitlement,
+  mockRefetchMyHousehold,
+  mockRefetchHouseholdEntitlement,
+} from '@/test/mocks/household-api'
+import type { Household, HouseholdEntitlementSummary } from '@/features/household'
+import type { GetMyHouseholdResponseBody } from '@boostedbudget/api-client/models'
 
 // Test wrapper with React Router and QueryClient
 function renderWithProviders(ui: React.ReactElement, { initialUrl = '/profile' } = {}) {
@@ -89,6 +97,10 @@ describe('ProfilePage', () => {
     mockUseAuth.mockClear()
     mockToastSuccess.mockClear()
     mockToastError.mockClear()
+    mockUseGetMyHousehold.mockClear()
+    mockUseGetHouseholdEntitlement.mockClear()
+    mockRefetchMyHousehold.mockClear()
+    mockRefetchHouseholdEntitlement.mockClear()
 
     // Reset isPending state
     setMockUpdateUserProfileIsPending(false)
@@ -116,6 +128,28 @@ describe('ProfilePage', () => {
       isLoading: false,
       error: null,
       refetch: mockRefetchUserProfile,
+    })
+
+    // Configure household mocks - default: solo user, no household, non-household tier
+    // (users_included: 1), matching the ineligible/gate-hidden default state.
+    mockUseGetMyHousehold.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: { response: { status: 404 } },
+      refetch: mockRefetchMyHousehold,
+    })
+    mockUseGetHouseholdEntitlement.mockReturnValue({
+      data: {
+        is_owner: false,
+        seats_active: 0,
+        seats_pending: 0,
+        source: 'individual',
+        tier: 'premium',
+        users_included: 1,
+      } satisfies HouseholdEntitlementSummary,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchHouseholdEntitlement,
     })
 
     // Configure deletion mock
@@ -545,6 +579,150 @@ describe('ProfilePage', () => {
       })
 
       expect(screen.getByRole('heading', { name: 'Privacy Settings' })).toBeInTheDocument()
+    })
+  })
+
+  describe('Household tab', () => {
+    const mockHousehold: Household = {
+      id: 'household-1',
+      name: 'The Smiths',
+      owner_user_id: '123e4567-e89b-12d3-a456-426614174000',
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-01T00:00:00Z',
+    }
+
+    const mockEntitlement: HouseholdEntitlementSummary = {
+      is_owner: true,
+      seats_active: 2,
+      seats_pending: 1,
+      source: 'household',
+      tier: 'household_3',
+      users_included: 3,
+    }
+
+    function configureIneligibleSolo() {
+      mockUseGetMyHousehold.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: { response: { status: 404 } },
+        refetch: mockRefetchMyHousehold,
+      })
+      mockUseGetHouseholdEntitlement.mockReturnValue({
+        data: {
+          is_owner: false,
+          seats_active: 0,
+          seats_pending: 0,
+          source: 'individual',
+          tier: 'premium',
+          users_included: 1,
+        } satisfies HouseholdEntitlementSummary,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchHouseholdEntitlement,
+      })
+    }
+
+    function configureEligibleNoHousehold() {
+      mockUseGetMyHousehold.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: { response: { status: 404 } },
+        refetch: mockRefetchMyHousehold,
+      })
+      mockUseGetHouseholdEntitlement.mockReturnValue({
+        data: mockEntitlement,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchHouseholdEntitlement,
+      })
+    }
+
+    function configureInHousehold() {
+      const responseBody: GetMyHouseholdResponseBody = {
+        household: mockHousehold,
+        summary: mockEntitlement,
+      }
+      mockUseGetMyHousehold.mockReturnValue({
+        data: responseBody,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchMyHousehold,
+      })
+      mockUseGetHouseholdEntitlement.mockReturnValue({
+        data: mockEntitlement,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchHouseholdEntitlement,
+      })
+    }
+
+    it('hides the Household tab button for a solo user on a non-household tier', async () => {
+      configureIneligibleSolo()
+      renderWithProviders(<ProfilePage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      expect(screen.queryByRole('button', { name: 'Household' })).not.toBeInTheDocument()
+    })
+
+    it('shows the Household tab button when seatsTotal > 1 even with no household yet', async () => {
+      configureEligibleNoHousehold()
+      renderWithProviders(<ProfilePage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      expect(screen.getByRole('button', { name: 'Household' })).toBeInTheDocument()
+    })
+
+    it('shows the Household tab button for a user actively in a household', async () => {
+      configureInHousehold()
+      renderWithProviders(<ProfilePage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      expect(screen.getByRole('button', { name: 'Household' })).toBeInTheDocument()
+    })
+
+    it('renders HouseholdTab content when the Household tab is clicked', async () => {
+      configureEligibleNoHousehold()
+      renderWithProviders(<ProfilePage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      const user = userEvent.setup({ delay: null })
+      const householdTabButton = screen.getByRole('button', { name: 'Household' })
+      await user.click(householdTabButton)
+
+      await waitFor(() => {
+        expect(householdTabButton).toHaveClass('active')
+      })
+
+      // Not in a household yet -> HouseholdTab renders CreateHouseholdForm.
+      expect(screen.getByText('Create a household')).toBeInTheDocument()
+    })
+
+    it('does not leak the Household panel for a stale ?tab=household URL on an ineligible user', async () => {
+      configureIneligibleSolo()
+      renderWithProviders(<ProfilePage />, { initialUrl: '/profile?tab=household' })
+
+      await waitFor(() => {
+        expect(screen.getByText('test@example.com')).toBeInTheDocument()
+      })
+
+      // Falls back to the Profile tab instead of leaking household content.
+      const profileTabButton = screen.getByRole('button', { name: /^Profile$/i })
+      expect(profileTabButton).toHaveClass('active')
+      expect(screen.getByText('Account Information')).toBeInTheDocument()
+      expect(screen.queryByText('Create a household')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Household' })).not.toBeInTheDocument()
     })
   })
 })
