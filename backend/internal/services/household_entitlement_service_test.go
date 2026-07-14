@@ -151,8 +151,9 @@ func (m *mockHouseholdRepo) DeleteRemovedMember(ctx context.Context, membershipI
 
 // SetOverCapacity, ClearOverCapacity, MarkOverCapacityStartNoticeSent,
 // MarkOverCapacityWarn3dSent, ListHouseholdsWithMembers, GetRemovedMemberForUpdate,
-// and RestoreMember (#1371 — Phase 7, Task 1) are not exercised by these Phase 2
-// resolver tests; stubbed to satisfy the expanded HouseholdRepository interface.
+// RestoreMember (#1371 — Phase 7, Task 1), and ListMembershipsPastPurgeWindow
+// (#1371 — Phase 7, Task 2) are not exercised by these Phase 2 resolver tests;
+// stubbed to satisfy the expanded HouseholdRepository interface.
 func (m *mockHouseholdRepo) SetOverCapacity(ctx context.Context, householdID string, since time.Time) error {
 	args := m.Called(ctx, householdID, since)
 	return args.Error(0)
@@ -192,6 +193,14 @@ func (m *mockHouseholdRepo) GetRemovedMemberForUpdate(ctx context.Context, house
 func (m *mockHouseholdRepo) RestoreMember(ctx context.Context, membershipID string) error {
 	args := m.Called(ctx, membershipID)
 	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) ListMembershipsPastPurgeWindow(ctx context.Context, purgeAfterDays int) ([]*domain.HouseholdMember, error) {
+	args := m.Called(ctx, purgeAfterDays)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.HouseholdMember), args.Error(1)
 }
 
 func TestResolveEffectiveEntitlement_NoRow_FallsBackToOwn(t *testing.T) {
