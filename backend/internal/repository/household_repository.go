@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -101,6 +102,57 @@ type HouseholdRepository interface {
 	// domain.ErrMemberNotFound if no such removed row exists (already purged, still
 	// active, or unknown id). #1371 — Phase 7 foundation (purge-after-30-days worker).
 	DeleteRemovedMember(ctx context.Context, membershipID string) (householdID, userID string, err error)
+
+	// SetOverCapacity idempotently starts the over-capacity grace clock: sets
+	// over_capacity_since = since, but ONLY if it is not already set. A second
+	// call while grace is already active is a silent no-op (0 rows affected, not
+	// an error) — the original grace deadline must never be reset. Does not
+	// touch the notice-sent columns. #1371 — Phase 7 (Task 1; consumed by the
+	// Task 6 grace worker).
+	SetOverCapacity(ctx context.Context, householdID string, since time.Time) error
+
+	// ClearOverCapacity nulls all three over-capacity columns (grace anchor +
+	// both notice-sent markers), ending the current grace period. Idempotent —
+	// safe to call on a household not currently in grace. #1371 — Phase 7.
+	ClearOverCapacity(ctx context.Context, householdID string) error
+
+	// MarkOverCapacityStartNoticeSent records that the "you're over capacity"
+	// warning email has been sent for the current grace period, so the Task 6
+	// worker never sends it twice. #1371 — Phase 7.
+	MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error
+
+	// MarkOverCapacityWarn3dSent records that the "3 days left" warning email
+	// has been sent for the current grace period, so the Task 6 worker never
+	// sends it twice. #1371 — Phase 7.
+	MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error
+
+	// ListHouseholdsWithMembers returns every household that currently has at
+	// least one active member, regardless of over-capacity state. This is the
+	// Task 6 daily backstop-worker's scan target — it must see every household
+	// with members (not just ones already flagged over-capacity) so the worker
+	// can detect over-capacity even if an earlier detection step was missed.
+	// #1371 — Phase 7.
+	ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error)
+
+	// GetRemovedMemberForUpdate looks up a household_members row for (householdID,
+	// userID) with status='removed', taking a FOR UPDATE row lock. If more than one
+	// historical removed row exists for the pair, returns the most recently removed
+	// one (ORDER BY removed_at DESC, created_at DESC). Returns domain.ErrMemberNotFound
+	// if no such removed row exists. Used by the Task 4 re-invite flow to safely
+	// restore a removed member within the 30-day window. #1371 — Phase 7 (Task 1
+	// foundation).
+	GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error)
+
+	// RestoreMember reactivates a removed household_members row identified by its
+	// own id: sets status='active', removed_at=NULL, updated_at=now(). Only
+	// affects rows currently status='removed' (guarded by WHERE status='removed',
+	// mirroring DeleteRemovedMember) — returns domain.ErrMemberNotFound if the row
+	// is missing or not currently removed. Returns domain.ErrAlreadyInHousehold if
+	// the user has since become active elsewhere (uq_household_members_active_user
+	// is global, not household-scoped) or domain.ErrAlreadyOwnsHousehold on the
+	// analogous owner-row conflict — same mapping InsertMember uses. #1371 — Phase 7
+	// (Task 1 foundation; consumed by Task 4's re-invite flow).
+	RestoreMember(ctx context.Context, membershipID string) error
 }
 
 type householdRepository struct {
@@ -116,12 +168,12 @@ func (r *householdRepository) GetHouseholdForUser(ctx context.Context, userID st
 	var h domain.Household
 	var role string
 	err := r.db.QueryRow(ctx, `
-		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at, hm.role
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at, h.over_capacity_since, h.over_capacity_start_notice_sent_at, h.over_capacity_warn3d_sent_at, hm.role
 		FROM household_members hm
 		JOIN households h ON h.id = hm.household_id
 		WHERE hm.user_id = $1 AND hm.status = 'active'
 		LIMIT 1
-	`, userID).Scan(&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt, &role)
+	`, userID).Scan(append(householdScanArgs(&h), &role)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, false, nil
 	}
@@ -134,12 +186,12 @@ func (r *householdRepository) GetHouseholdForUser(ctx context.Context, userID st
 func (r *householdRepository) LockActiveMembershipForUser(ctx context.Context, userID string) (*domain.Household, error) {
 	var h domain.Household
 	err := r.db.QueryRow(ctx, `
-		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at, h.over_capacity_since, h.over_capacity_start_notice_sent_at, h.over_capacity_warn3d_sent_at
 		FROM household_members hm
 		JOIN households h ON h.id = hm.household_id
 		WHERE hm.user_id = $1 AND hm.status = 'active'
 		FOR UPDATE OF hm
-	`, userID).Scan(&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt)
+	`, userID).Scan(householdScanArgs(&h)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrHouseholdNotFound
 	}
@@ -244,8 +296,7 @@ func (r *householdRepository) ListMembers(ctx context.Context, householdID strin
 	var members []domain.HouseholdMember
 	for rows.Next() {
 		var m domain.HouseholdMember
-		if err := rows.Scan(&m.ID, &m.HouseholdID, &m.UserID, &m.Role, &m.Status, &m.JoinedAt, &m.RemovedAt,
-			&m.PriorSubscriptionTier, &m.PriorSubscriptionStatus, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		if err := rows.Scan(householdMemberScanArgs(&m)...); err != nil {
 			return nil, err
 		}
 		members = append(members, m)
@@ -258,8 +309,7 @@ func (r *householdRepository) GetActiveMember(ctx context.Context, householdID, 
 	err := r.db.QueryRow(ctx, `
 		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
 		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'active'
-	`, householdID, userID).Scan(&m.ID, &m.HouseholdID, &m.UserID, &m.Role, &m.Status, &m.JoinedAt, &m.RemovedAt,
-		&m.PriorSubscriptionTier, &m.PriorSubscriptionStatus, &m.CreatedAt, &m.UpdatedAt)
+	`, householdID, userID).Scan(householdMemberScanArgs(&m)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrMemberNotFound
 	}
@@ -286,9 +336,9 @@ func (r *householdRepository) RemoveMember(ctx context.Context, householdID, use
 func (r *householdRepository) LockHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
 	var h domain.Household
 	err := r.db.QueryRow(ctx, `
-		SELECT id, owner_user_id, name, created_at, updated_at
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
 		FROM households WHERE id = $1 FOR UPDATE
-	`, householdID).Scan(&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt)
+	`, householdID).Scan(householdScanArgs(&h)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrHouseholdNotFound
 	}
@@ -313,10 +363,133 @@ func (r *householdRepository) DeleteRemovedMember(ctx context.Context, membershi
 	return householdID, userID, nil
 }
 
+func (r *householdRepository) SetOverCapacity(ctx context.Context, householdID string, since time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE households SET over_capacity_since = $2 WHERE id = $1 AND over_capacity_since IS NULL
+	`, householdID, since)
+	return err
+}
+
+func (r *householdRepository) ClearOverCapacity(ctx context.Context, householdID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL WHERE id = $1
+	`, householdID)
+	return err
+}
+
+func (r *householdRepository) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1
+	`, householdID, sentAt)
+	return err
+}
+
+func (r *householdRepository) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1
+	`, householdID, sentAt)
+	return err
+}
+
+func (r *householdRepository) ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households h
+		WHERE EXISTS (SELECT 1 FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var households []*domain.Household
+	for rows.Next() {
+		var h domain.Household
+		if err := rows.Scan(householdScanArgs(&h)...); err != nil {
+			return nil, err
+		}
+		households = append(households, &h)
+	}
+	return households, rows.Err()
+}
+
+func (r *householdRepository) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error) {
+	var m domain.HouseholdMember
+	// ORDER BY + LIMIT 1: a (household_id, user_id) pair can have multiple
+	// historical removed rows (removed rows aren't covered by the partial unique
+	// active-user index), so without an explicit order this lookup would be
+	// nondeterministic. Prefer the most recently removed row — the one a re-invite
+	// within the 30-day window is meant to restore (Codex review, #1371 Task 1).
+	err := r.db.QueryRow(ctx, `
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed'
+		ORDER BY removed_at DESC, created_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`, householdID, userID).Scan(householdMemberScanArgs(&m)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrMemberNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func (r *householdRepository) RestoreMember(ctx context.Context, membershipID string) error {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+	`, membershipID)
+	switch {
+	case isUniqueViolation(err, constraintHouseholdMembersActive):
+		// The restored user has since become active in another household (or
+		// rejoined this one under a different row) — that index is global on
+		// user_id, not scoped to household_id (migration 000107). Mirrors
+		// InsertMember's mapping so Task 4's re-invite flow gets the same error
+		// contract as every other write path (Codex review, #1371 Task 1).
+		return domain.ErrAlreadyInHousehold
+	case isUniqueViolation(err, constraintHouseholdMembersOwnerOnce):
+		return domain.ErrAlreadyOwnsHousehold
+	case err != nil:
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrMemberNotFound
+	}
+	return nil
+}
+
 // isUniqueViolation reports whether err is a Postgres 23505 unique_violation on the
 // named constraint/index. Used to translate constraint failures into domain sentinels
 // so callers (and the error mapper) never see a raw pgconn.PgError.
 func isUniqueViolation(err error, constraintName string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraintName
+}
+
+// householdScanArgs returns the Scan() destination pointers for a single households
+// row, in the exact column order shared by every household SELECT in this file
+// (with or without the "h." join alias): id, owner_user_id, name, created_at,
+// updated_at, over_capacity_since, over_capacity_start_notice_sent_at,
+// over_capacity_warn3d_sent_at. Centralizing this avoids the 8-column Scan() list
+// drifting between the four call sites that read a full households row.
+// #1371 — Phase 7.
+func householdScanArgs(h *domain.Household) []any {
+	return []any{
+		&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt,
+		&h.OverCapacitySince, &h.OverCapacityStartNoticeSentAt, &h.OverCapacityWarn3dSentAt,
+	}
+}
+
+// householdMemberScanArgs returns the Scan() destination pointers for a single
+// household_members row, in the exact column order shared by every membership
+// SELECT in this file: id, household_id, user_id, role, status, joined_at,
+// removed_at, prior_subscription_tier, prior_subscription_status, created_at,
+// updated_at. Centralizing this avoids the 11-column Scan() list drifting between
+// the call sites that read a full household_members row. #1371 — Phase 7.
+func householdMemberScanArgs(m *domain.HouseholdMember) []any {
+	return []any{
+		&m.ID, &m.HouseholdID, &m.UserID, &m.Role, &m.Status, &m.JoinedAt, &m.RemovedAt,
+		&m.PriorSubscriptionTier, &m.PriorSubscriptionStatus, &m.CreatedAt, &m.UpdatedAt,
+	}
 }

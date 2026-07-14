@@ -77,6 +77,42 @@ func TestHouseholdRepository_GetHouseholdForUser(t *testing.T) {
 	}
 }
 
+// TestHouseholdRepository_GetHouseholdForUser_OverCapacityFields proves the new
+// over-capacity columns (added by migration 000113) are actually projected and
+// scanned onto the returned struct, not just present in the schema. #1371 Task 1.
+func TestHouseholdRepository_GetHouseholdForUser_OverCapacityFields(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("initial lookup: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince != nil || h.OverCapacityStartNoticeSentAt != nil || h.OverCapacityWarn3dSentAt != nil {
+		t.Fatalf("expected all over-capacity fields nil by default, got: %+v", h)
+	}
+
+	since := time.Now().Add(-2 * 24 * time.Hour).Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, `UPDATE households SET over_capacity_since = $1 WHERE id = $2`, since, householdID); err != nil {
+		t.Fatalf("set over_capacity_since: %v", err)
+	}
+
+	h, _, found, err = repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("second lookup: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince == nil || !h.OverCapacitySince.Equal(since) {
+		t.Fatalf("expected over_capacity_since=%v, got %v", since, h.OverCapacitySince)
+	}
+	if h.OverCapacityStartNoticeSentAt != nil || h.OverCapacityWarn3dSentAt != nil {
+		t.Fatalf("expected notice-sent fields to remain nil, got: %+v", h)
+	}
+}
+
 func TestHouseholdRepository_CountActiveMembers(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -167,5 +203,286 @@ func TestHouseholdRepository_DeleteRemovedMember_Integration(t *testing.T) {
 	}
 	if activeStillPresent != 1 {
 		t.Fatalf("unrelated active row was affected, count=%d", activeStillPresent)
+	}
+}
+
+// ─── SetOverCapacity / ClearOverCapacity (#1371 — Task 1) ────────────────────
+
+// TestHouseholdRepository_SetOverCapacity_Idempotent_Integration proves the
+// idempotency guard (`WHERE over_capacity_since IS NULL`) actually holds against
+// a real schema: a second call with a later timestamp must NOT reset the original
+// grace deadline. pgxmock can prove the query shape, but not that the predicate
+// really protects the first-set value across two live calls.
+func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	first := time.Now().Add(-3 * 24 * time.Hour).Truncate(time.Microsecond)
+	if err := repo.SetOverCapacity(ctx, householdID, first); err != nil {
+		t.Fatalf("first SetOverCapacity: %v", err)
+	}
+
+	second := time.Now().Truncate(time.Microsecond)
+	if err := repo.SetOverCapacity(ctx, householdID, second); err != nil {
+		t.Fatalf("second SetOverCapacity (should be a no-op, not an error): %v", err)
+	}
+
+	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("lookup after two SetOverCapacity calls: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince == nil || !h.OverCapacitySince.Equal(first) {
+		t.Fatalf("expected over_capacity_since to remain the FIRST timestamp %v, got %v", first, h.OverCapacitySince)
+	}
+}
+
+// TestHouseholdRepository_ClearOverCapacity_Integration proves ClearOverCapacity
+// nulls all three over-capacity columns against a real schema.
+func TestHouseholdRepository_ClearOverCapacity_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	since := time.Now().Truncate(time.Microsecond)
+	if err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
+		t.Fatalf("SetOverCapacity: %v", err)
+	}
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
+		t.Fatalf("MarkOverCapacityStartNoticeSent: %v", err)
+	}
+	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, since); err != nil {
+		t.Fatalf("MarkOverCapacityWarn3dSent: %v", err)
+	}
+
+	// Sanity: all three columns are actually set before clearing.
+	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("pre-clear lookup: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince == nil || h.OverCapacityStartNoticeSentAt == nil || h.OverCapacityWarn3dSentAt == nil {
+		t.Fatalf("expected all three over-capacity columns set before clearing, got: %+v", h)
+	}
+
+	if err := repo.ClearOverCapacity(ctx, householdID); err != nil {
+		t.Fatalf("ClearOverCapacity: %v", err)
+	}
+
+	h, _, found, err = repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("post-clear lookup: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince != nil || h.OverCapacityStartNoticeSentAt != nil || h.OverCapacityWarn3dSentAt != nil {
+		t.Fatalf("expected all three over-capacity columns nulled after ClearOverCapacity, got: %+v", h)
+	}
+
+	// Idempotent: calling it again (household not in grace) must not error.
+	if err := repo.ClearOverCapacity(ctx, householdID); err != nil {
+		t.Fatalf("second ClearOverCapacity (should be a no-op, not an error): %v", err)
+	}
+}
+
+// ─── ListHouseholdsWithMembers (#1371 — Task 1) ──────────────────────────────
+
+// TestHouseholdRepository_ListHouseholdsWithMembers_Integration proves the EXISTS
+// predicate against a real schema: a household with an active member is included,
+// a household with only a removed member (or no members at all) is excluded —
+// regardless of over-capacity state.
+func TestHouseholdRepository_ListHouseholdsWithMembers_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	// Household A: has an active (owner) member — must be included.
+	ownerA := insertTestUser(t, pool)
+	householdA := insertTestHousehold(t, pool, ownerA)
+	insertTestHouseholdMember(t, pool, householdA, ownerA, "owner")
+
+	// Household B: over-capacity, but its only member row has been removed —
+	// must be EXCLUDED (no active member left).
+	ownerB := insertTestUser(t, pool)
+	householdB := insertTestHousehold(t, pool, ownerB)
+	removedRowB := insertTestHouseholdMember(t, pool, householdB, ownerB, "owner")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() WHERE id = $1`, removedRowB); err != nil {
+		t.Fatalf("transition household B owner to removed: %v", err)
+	}
+	if err := repo.SetOverCapacity(ctx, householdB, time.Now()); err != nil {
+		t.Fatalf("SetOverCapacity on household B: %v", err)
+	}
+
+	households, err := repo.ListHouseholdsWithMembers(ctx)
+	if err != nil {
+		t.Fatalf("ListHouseholdsWithMembers: %v", err)
+	}
+
+	found := map[string]bool{}
+	for _, h := range households {
+		found[h.ID] = true
+	}
+	if !found[householdA] {
+		t.Fatalf("expected household A (has active member) to be included, got: %v", found)
+	}
+	if found[householdB] {
+		t.Fatalf("expected household B (no active members, only removed) to be EXCLUDED, got: %v", found)
+	}
+}
+
+// ─── RestoreMember guard (#1371 — Task 1) ────────────────────────────────────
+
+// TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration proves the
+// `WHERE status = 'removed'` guard on RestoreMember has real teeth against a live
+// schema. Per the Task 0 review lesson (never weaken production code to force a
+// RED run), this test does NOT touch RestoreMember's SQL. Instead it executes a
+// raw UPDATE that simulates what a *broken* guard (one missing the status
+// predicate) would do to an active row, and shows that outcome is NOT what
+// RestoreMember itself produces when correctly guarded — i.e. RestoreMember only
+// ever affects genuinely-removed rows, matching the DeleteRemovedMember pattern.
+func TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerID := insertTestUser(t, pool)
+	activeMemberID := insertTestUser(t, pool)
+	removedMemberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+	activeRowID := insertTestHouseholdMember(t, pool, householdID, activeMemberID, "member")
+	removedRowID := insertTestHouseholdMember(t, pool, householdID, removedMemberID, "member")
+
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() WHERE id = $1`, removedRowID); err != nil {
+		t.Fatalf("transition to removed: %v", err)
+	}
+
+	// The guard must refuse to affect an ACTIVE row: RestoreMember is a no-op
+	// (returns ErrMemberNotFound) targeting the active row, and must not touch it.
+	if err := repo.RestoreMember(ctx, activeRowID); !errors.Is(err, domain.ErrMemberNotFound) {
+		t.Fatalf("expected ErrMemberNotFound when targeting an active row, got: %v", err)
+	}
+	var activeStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM household_members WHERE id = $1`, activeRowID).Scan(&activeStatus); err != nil {
+		t.Fatalf("query active row status: %v", err)
+	}
+	if activeStatus != "active" {
+		t.Fatalf("guard failed: active row's status was changed to %q", activeStatus)
+	}
+
+	// Sanity check that a naive UPDATE lacking the guard WOULD have silently
+	// "succeeded" against an active row — proving the guard is doing real work,
+	// not merely reflecting a query that could never match anyway. This does not
+	// touch production code; it directly simulates the broken variant.
+	tag, err := pool.Exec(ctx, `UPDATE household_members SET removed_at = NULL WHERE id = $1 AND status = 'active'`, activeRowID)
+	if err != nil {
+		t.Fatalf("simulated broken-guard update: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("expected the naive predicate to match the active row (proving RestoreMember's stricter guard is necessary), got %d rows", tag.RowsAffected())
+	}
+
+	// The guard must actually restore a genuinely-removed row.
+	if err := repo.RestoreMember(ctx, removedRowID); err != nil {
+		t.Fatalf("RestoreMember on a removed row: %v", err)
+	}
+	var restoredStatus string
+	var restoredRemovedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT status, removed_at FROM household_members WHERE id = $1`, removedRowID).Scan(&restoredStatus, &restoredRemovedAt); err != nil {
+		t.Fatalf("query restored row: %v", err)
+	}
+	if restoredStatus != "active" {
+		t.Fatalf("expected restored row status='active', got %q", restoredStatus)
+	}
+	if restoredRemovedAt != nil {
+		t.Fatalf("expected restored row removed_at=NULL, got %v", restoredRemovedAt)
+	}
+
+	// Calling RestoreMember again on the now-active row must be a no-op error
+	// (ErrMemberNotFound), never a silent double-restore.
+	if err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrMemberNotFound) {
+		t.Fatalf("expected ErrMemberNotFound restoring an already-active row, got: %v", err)
+	}
+}
+
+// TestHouseholdRepository_GetRemovedMemberForUpdate_PicksMostRecent_Integration proves
+// the ORDER BY removed_at DESC, created_at DESC really disambiguates against a real
+// schema when a (household_id, user_id) pair has multiple historical removed rows —
+// a scenario the partial unique active-user index does not prevent (Codex review,
+// #1371 Task 1).
+func TestHouseholdRepository_GetRemovedMemberForUpdate_PicksMostRecent_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerID := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	// First membership epoch: joins, then removed.
+	oldRowID := insertTestHouseholdMember(t, pool, householdID, memberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() - interval '10 days' WHERE id = $1`, oldRowID); err != nil {
+		t.Fatalf("transition old row to removed: %v", err)
+	}
+
+	// Second membership epoch for the SAME (household, user): rejoins under a new
+	// row, then removed again more recently. The partial unique active-user index
+	// only constrains 'active' rows, so both removed rows coexist.
+	newRowID := insertTestHouseholdMember(t, pool, householdID, memberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() WHERE id = $1`, newRowID); err != nil {
+		t.Fatalf("transition new row to removed: %v", err)
+	}
+
+	m, err := repo.GetRemovedMemberForUpdate(ctx, householdID, memberID)
+	if err != nil {
+		t.Fatalf("GetRemovedMemberForUpdate: %v", err)
+	}
+	if m.ID != newRowID {
+		t.Fatalf("expected the MOST RECENTLY removed row %q, got %q (old row was %q)", newRowID, m.ID, oldRowID)
+	}
+}
+
+// TestHouseholdRepository_RestoreMember_ConflictWithActiveElsewhere_Integration proves
+// RestoreMember maps the real uq_household_members_active_user constraint violation to
+// domain.ErrAlreadyInHousehold against a live schema, rather than leaking a raw
+// pgconn.PgError, when the user has since become active in a different household
+// (Codex review, #1371 Task 1).
+func TestHouseholdRepository_RestoreMember_ConflictWithActiveElsewhere_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerA := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdA := insertTestHousehold(t, pool, ownerA)
+	insertTestHouseholdMember(t, pool, householdA, ownerA, "owner")
+
+	removedRowID := insertTestHouseholdMember(t, pool, householdA, memberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() WHERE id = $1`, removedRowID); err != nil {
+		t.Fatalf("transition to removed: %v", err)
+	}
+
+	// The same user joins a SECOND household and is currently active there.
+	ownerB := insertTestUser(t, pool)
+	householdB := insertTestHousehold(t, pool, ownerB)
+	insertTestHouseholdMember(t, pool, householdB, ownerB, "owner")
+	insertTestHouseholdMember(t, pool, householdB, memberID, "member")
+
+	if err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrAlreadyInHousehold) {
+		t.Fatalf("expected ErrAlreadyInHousehold restoring a member active elsewhere, got: %v", err)
+	}
+
+	// The old row must remain untouched (still removed) — the failed restore
+	// must not have partially applied.
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM household_members WHERE id = $1`, removedRowID).Scan(&status); err != nil {
+		t.Fatalf("query old row status: %v", err)
+	}
+	if status != "removed" {
+		t.Fatalf("expected old row to remain 'removed' after failed restore, got %q", status)
 	}
 }
