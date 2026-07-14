@@ -125,6 +125,47 @@ func TestHouseholdInviteEmailTemplates_ContainInviteLink(t *testing.T) {
 	assert.Contains(t, text, "The Smiths")
 }
 
+// ─── SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) ────────────────────
+
+func TestSendHouseholdMemberRemoved_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdMemberRemoved_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "not-an-email", "The Smiths", time.Now().Add(30*24*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestMemberRemovedEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate)
+	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Purge date formatted in a human-readable way in both.
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Preserved-data messaging present in both.
+	assert.Contains(t, html, "preserved")
+	assert.Contains(t, text, "preserved")
+}
+
 // TestSendNotificationEmail_Success tests successful notification email sending (stub)
 // Issue #257: Item Error Handler - User Notifications
 func TestSendNotificationEmail_Success(t *testing.T) {

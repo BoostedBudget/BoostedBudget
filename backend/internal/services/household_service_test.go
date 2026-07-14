@@ -565,7 +565,10 @@ func TestHouseholdService_RemoveMember_SelfLeave_Success(t *testing.T) {
 	userRepo := &mockUserLoader{}
 	userRepo.On("GetUserByID", mock.Anything, "member-1").
 		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
-	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
 
 	pool.ExpectBegin()
@@ -584,6 +587,7 @@ func TestHouseholdService_RemoveMember_SelfLeave_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pool.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
 }
 
 func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
@@ -591,7 +595,10 @@ func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 	userRepo := &mockUserLoader{}
 	userRepo.On("GetUserByID", mock.Anything, "member-1").
 		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
-	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
 
 	pool.ExpectBegin()
@@ -610,6 +617,40 @@ func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pool.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_Success_EmailSendFails_StillReturnsNoError proves
+// the post-commit email dispatch is best-effort: RemoveMember has already committed the
+// removal by the time SendHouseholdMemberRemoved is called, so a failed send must never
+// be surfaced as a removal error. #1371 — Task 3.
+func TestHouseholdService_RemoveMember_Success_EmailSendFails_StillReturnsNoError(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(errors.New("sendgrid unavailable"))
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("member-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "member-1", "member-1")
+	require.NoError(t, err, "a failed best-effort email send must not surface as a removal error")
+	require.NoError(t, pool.ExpectationsWereMet())
+	emailSvc.AssertExpectations(t)
 }
 
 func TestHouseholdService_RemoveMember_NonOwnerCannotRemoveOther_RollsBack(t *testing.T) {
@@ -680,7 +721,10 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
 	userRepo.On("GetUserByID", mock.Anything, "member-2").
 		Return(&domain.User{ID: "member-2", Email: "member2@example.com"}, nil)
-	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
 
 	joinedOwner := time.Now().Add(-72 * time.Hour)
@@ -715,6 +759,55 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 	assert.WithinDuration(t, time.Now().Add(30*24*time.Hour), queued[0].PurgeDate, time.Minute)
 	require.NoError(t, pool.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoError proves
+// the post-commit email dispatch is best-effort: the removal is already committed by
+// the time SendHouseholdMemberRemoved runs, so a failed send must never be surfaced as
+// an OffboardExcessMembers error, and the queued result is still returned. #1371 — Task 3.
+func TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoError(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+	userRepo.On("GetUserByID", mock.Anything, "member-2").
+		Return(&domain.User{ID: "member-2", Email: "member2@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(errors.New("sendgrid unavailable"))
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	joinedOwner := time.Now().Add(-72 * time.Hour)
+	joined1 := time.Now().Add(-48 * time.Hour)
+	joined2 := time.Now().Add(-24 * time.Hour)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, nil, nil, nil))
+	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+		}).
+			AddRow("mem-owner", "hh-1", "owner-1", "owner", "active", joinedOwner, nil, nil, nil, joinedOwner, joinedOwner).
+			AddRow("mem-1", "hh-1", "member-1", "member", "active", joined1, nil, nil, nil, joined1, joined1).
+			AddRow("mem-2", "hh-1", "member-2", "member", "active", joined2, nil, nil, nil, joined2, joined2))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	require.NoError(t, err, "a failed best-effort email send must not surface as an OffboardExcessMembers error")
+	require.Len(t, queued, 1, "the queued result is unaffected by send failure")
+	require.NoError(t, pool.ExpectationsWereMet())
+	emailSvc.AssertExpectations(t)
 }
 
 func TestHouseholdService_OffboardExcessMembers_HouseholdNotFound_RollsBack(t *testing.T) {
@@ -809,7 +902,12 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 		Return(&domain.User{ID: "member-1", Email: "m1@example.com"}, nil)
 	userRepo.On("GetUserByID", mock.Anything, "member-2").
 		Return(&domain.User{ID: "member-2", Email: "m2@example.com"}, nil)
-	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m1@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(nil)
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
 	now := time.Now()
 
@@ -850,6 +948,7 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 	require.Len(t, queued, 2)
 	require.NoError(t, pool.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
 }
 
 func TestHouseholdService_ForceDisband_OwnerAlone_EquivalentToNormalDisband(t *testing.T) {

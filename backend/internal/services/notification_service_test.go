@@ -128,6 +128,13 @@ func (m *mockEmailSvc) SendHouseholdInvite(ctx context.Context, toEmail, inviter
 	return args.Error(0)
 }
 
+// SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) is not exercised by these
+// notification tests; stubbed to satisfy the expanded EmailService interface.
+func (m *mockEmailSvc) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, purgeDate)
+	return args.Error(0)
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================

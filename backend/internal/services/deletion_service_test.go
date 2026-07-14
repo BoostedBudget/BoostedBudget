@@ -205,6 +205,13 @@ func (m *MockEmailService) SendHouseholdInvite(ctx context.Context, toEmail, inv
 	return args.Error(0)
 }
 
+// SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) is not exercised by these
+// deletion tests; stubbed to satisfy the expanded EmailService interface.
+func (m *MockEmailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, purgeDate)
+	return args.Error(0)
+}
+
 // MockClerkService for testing
 type MockClerkService struct {
 	mock.Mock
