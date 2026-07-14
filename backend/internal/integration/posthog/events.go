@@ -79,6 +79,11 @@ const (
 	EventHouseholdAccountShared = "household_account_shared"
 	EventHouseholdAccountHidden = "household_account_hidden"
 
+	// Household offboarding & lifecycle events (Issue #1371 — Phase 7)
+	EventHouseholdMemberAutoOffboarded = "household_member_auto_offboarded"
+	EventHouseholdMembershipPurged     = "household_membership_purged"
+	EventHouseholdForceDisbanded       = "household_force_disbanded"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

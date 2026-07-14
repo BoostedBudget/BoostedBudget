@@ -83,6 +83,24 @@ type HouseholdRepository interface {
 	// domain.ErrMemberNotFound, same as any other not-found case, to avoid an
 	// owner-vs-missing oracle). Never touches Plaid Items.
 	RemoveMember(ctx context.Context, householdID, userID string) error
+
+	// LockHouseholdByID takes a row lock (FOR UPDATE) on the household and returns its
+	// full record, keyed directly by householdID rather than by a caller's own active
+	// membership (GetHouseholdForUser) or bare owner ID (LockHouseholdForUpdate). Used
+	// by household-scoped write paths that start from a householdID with no calling
+	// user in context (e.g. a background worker auto-offboarding excess members).
+	// Returns domain.ErrHouseholdNotFound if no such household exists. #1371 — Phase 7
+	// foundation.
+	LockHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error)
+
+	// DeleteRemovedMember permanently deletes a household_members row identified by its
+	// own id, but ONLY if its status is 'removed' — it will never delete an 'active' row,
+	// which would bypass RemoveMember's authorization/owner-protection checks. Returns
+	// the household_id and user_id the deleted row belonged to, so the caller can clean
+	// up dependent household_account_shares/subscription_entitlements rows. Returns
+	// domain.ErrMemberNotFound if no such removed row exists (already purged, still
+	// active, or unknown id). #1371 — Phase 7 foundation (purge-after-30-days worker).
+	DeleteRemovedMember(ctx context.Context, membershipID string) (householdID, userID string, err error)
 }
 
 type householdRepository struct {
@@ -263,6 +281,36 @@ func (r *householdRepository) RemoveMember(ctx context.Context, householdID, use
 		return domain.ErrMemberNotFound
 	}
 	return nil
+}
+
+func (r *householdRepository) LockHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
+	var h domain.Household
+	err := r.db.QueryRow(ctx, `
+		SELECT id, owner_user_id, name, created_at, updated_at
+		FROM households WHERE id = $1 FOR UPDATE
+	`, householdID).Scan(&h.ID, &h.OwnerUserID, &h.Name, &h.CreatedAt, &h.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrHouseholdNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+func (r *householdRepository) DeleteRemovedMember(ctx context.Context, membershipID string) (string, string, error) {
+	var householdID, userID string
+	err := r.db.QueryRow(ctx, `
+		DELETE FROM household_members WHERE id = $1 AND status = 'removed'
+		RETURNING household_id, user_id
+	`, membershipID).Scan(&householdID, &userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", domain.ErrMemberNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return householdID, userID, nil
 }
 
 // isUniqueViolation reports whether err is a Postgres 23505 unique_violation on the

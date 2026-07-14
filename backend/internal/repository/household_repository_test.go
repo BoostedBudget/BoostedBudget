@@ -310,3 +310,80 @@ func TestHouseholdRepository_InsertMember_OtherDBError(t *testing.T) {
 	assert.NotErrorIs(t, err, domain.ErrAlreadyInHousehold)
 	assert.NotErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 }
+
+// ─── LockHouseholdByID (#1371 — Phase 7 foundation) ──────────────────────────
+
+func TestHouseholdRepository_LockHouseholdByID_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at
+		FROM households WHERE id = $1 FOR UPDATE
+	`)).
+		WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+
+	h, err := repo.LockHouseholdByID(context.Background(), "hh-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", h.ID)
+	assert.Equal(t, "owner-1", h.OwnerUserID)
+	assert.Equal(t, "The Smiths", h.Name)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_LockHouseholdByID_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at
+		FROM households WHERE id = $1 FOR UPDATE
+	`)).
+		WithArgs("hh-missing").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.LockHouseholdByID(context.Background(), "hh-missing")
+	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
+}
+
+// ─── DeleteRemovedMember (#1371 — Phase 7 foundation) ────────────────────────
+
+func TestHouseholdRepository_DeleteRemovedMember_Success(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		DELETE FROM household_members WHERE id = $1 AND status = 'removed'
+		RETURNING household_id, user_id
+	`)).
+		WithArgs("member-row-1").
+		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
+
+	householdID, userID, err := repo.DeleteRemovedMember(context.Background(), "member-row-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", householdID)
+	assert.Equal(t, "member-1", userID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_DeleteRemovedMember_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		DELETE FROM household_members WHERE id = $1 AND status = 'removed'
+		RETURNING household_id, user_id
+	`)).
+		WithArgs("member-row-active").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, _, err := repo.DeleteRemovedMember(context.Background(), "member-row-active")
+	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
+}
