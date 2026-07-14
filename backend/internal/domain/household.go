@@ -58,6 +58,23 @@ type Household struct {
 	Name        string    `json:"name" db:"name"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+
+	// OverCapacitySince is the grace-period anchor timestamp. When set, the
+	// household currently has more active members than its plan's seat limit
+	// allows, and a 14-day grace clock is running before a background worker
+	// auto-offboards the most-recently-joined excess members. Nil when the
+	// household is within its seat limit. #1371 — Phase 7.
+	OverCapacitySince *time.Time `json:"over_capacity_since,omitempty" db:"over_capacity_since"`
+
+	// OverCapacityStartNoticeSentAt is an idempotency marker: non-nil once the
+	// "you're over capacity" warning email has been sent for the current grace
+	// period. #1371 — Phase 7.
+	OverCapacityStartNoticeSentAt *time.Time `json:"over_capacity_start_notice_sent_at,omitempty" db:"over_capacity_start_notice_sent_at"`
+
+	// OverCapacityWarn3dSentAt is an idempotency marker: non-nil once the
+	// "3 days left" warning email has been sent for the current grace period.
+	// #1371 — Phase 7.
+	OverCapacityWarn3dSentAt *time.Time `json:"over_capacity_warn3d_sent_at,omitempty" db:"over_capacity_warn3d_sent_at"`
 }
 
 // Validate checks that the Household has all required fields and valid values.

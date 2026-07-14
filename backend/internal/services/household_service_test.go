@@ -523,8 +523,8 @@ func TestHouseholdService_DeleteHousehold_Success(t *testing.T) {
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").
 		WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
@@ -547,8 +547,8 @@ func TestHouseholdService_DeleteHousehold_HasActiveMembers_RollsBack(t *testing.
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
@@ -570,8 +570,8 @@ func TestHouseholdService_RemoveMember_SelfLeave_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -596,8 +596,8 @@ func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -619,8 +619,8 @@ func TestHouseholdService_RemoveMember_NonOwnerCannotRemoveOther_RollsBack(t *te
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
 	pool.ExpectRollback()
 
 	err := svc.RemoveMember(context.Background(), "member-1", "member-2")
@@ -634,8 +634,8 @@ func TestHouseholdService_RemoveMember_OwnerCannotRemoveSelf_RollsBack(t *testin
 	defer pool.Close()
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectRollback()
 
 	err := svc.RemoveMember(context.Background(), "owner-1", "owner-1")
@@ -656,8 +656,8 @@ func TestHouseholdService_OffboardExcessMembers_NoExcess_NoOp(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
@@ -689,8 +689,8 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, nil, nil, nil))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
@@ -815,8 +815,8 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
@@ -860,8 +860,8 @@ func TestHouseholdService_ForceDisband_OwnerAlone_EquivalentToNormalDisband(t *t
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
@@ -889,8 +889,8 @@ func TestHouseholdService_ForceDisband_NotOwner_RollsBack(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
 	pool.ExpectRollback()
 
 	_, err := svc.ForceDisband(context.Background(), "member-1")
@@ -912,8 +912,8 @@ func TestHouseholdService_CreateInvite_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT.*household_members").WithArgs("hh-1").
@@ -944,8 +944,8 @@ func TestHouseholdService_CreateInvite_SeatsFull_RollsBack(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT.*household_members").WithArgs("hh-1").
@@ -983,8 +983,8 @@ func TestHouseholdService_CreateInvite_NotOwner_RollsBack(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
 	pool.ExpectRollback()
 
 	_, err := svc.CreateInvite(context.Background(), "member-1", "friend@example.com", "https://app.example.com")

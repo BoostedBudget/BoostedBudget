@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -146,6 +147,51 @@ func (m *mockHouseholdRepo) LockHouseholdByID(ctx context.Context, householdID s
 func (m *mockHouseholdRepo) DeleteRemovedMember(ctx context.Context, membershipID string) (string, string, error) {
 	args := m.Called(ctx, membershipID)
 	return args.String(0), args.String(1), args.Error(2)
+}
+
+// SetOverCapacity, ClearOverCapacity, MarkOverCapacityStartNoticeSent,
+// MarkOverCapacityWarn3dSent, ListHouseholdsWithMembers, GetRemovedMemberForUpdate,
+// and RestoreMember (#1371 — Phase 7, Task 1) are not exercised by these Phase 2
+// resolver tests; stubbed to satisfy the expanded HouseholdRepository interface.
+func (m *mockHouseholdRepo) SetOverCapacity(ctx context.Context, householdID string, since time.Time) error {
+	args := m.Called(ctx, householdID, since)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) ClearOverCapacity(ctx context.Context, householdID string) error {
+	args := m.Called(ctx, householdID)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error {
+	args := m.Called(ctx, householdID, sentAt)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error {
+	args := m.Called(ctx, householdID, sentAt)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Household), args.Error(1)
+}
+
+func (m *mockHouseholdRepo) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error) {
+	args := m.Called(ctx, householdID, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.HouseholdMember), args.Error(1)
+}
+
+func (m *mockHouseholdRepo) RestoreMember(ctx context.Context, membershipID string) error {
+	args := m.Called(ctx, membershipID)
+	return args.Error(0)
 }
 
 func TestResolveEffectiveEntitlement_NoRow_FallsBackToOwn(t *testing.T) {
