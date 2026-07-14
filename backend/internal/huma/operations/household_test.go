@@ -110,6 +110,30 @@ func (m *mockHouseholdService) ResolveScope(ctx context.Context, requestingUserI
 	return args.Get(0).(*domain.HouseholdScope), args.Error(1)
 }
 
+// OffboardExcessMembers, PurgeRemovedMembership, and ForceDisband (#1371 — Phase 7
+// foundation) are not exercised by these operation-layer tests (no HTTP endpoint wires
+// to them yet); stubbed to satisfy the expanded HouseholdService interface.
+func (m *mockHouseholdService) OffboardExcessMembers(ctx context.Context, householdID string) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, householdID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
+}
+
+func (m *mockHouseholdService) PurgeRemovedMembership(ctx context.Context, membershipID string) error {
+	args := m.Called(ctx, membershipID)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdService) ForceDisband(ctx context.Context, ownerUserID string) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, ownerUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
+}
+
 func TestCreateHousehold_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
 	h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}

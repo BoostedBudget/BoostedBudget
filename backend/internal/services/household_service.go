@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -56,6 +57,25 @@ type HouseholdMemberView struct {
 	DisplayName string                       `json:"display_name,omitempty"`
 	AvatarURL   string                       `json:"avatar_url,omitempty"`
 }
+
+// QueuedRemovalEmail is a "you've been removed from a household" notification collected
+// during a removal transaction (removeMemberTx) for the caller to send AFTER that
+// transaction commits — never inside it. The actual send method
+// (EmailService.SendHouseholdMemberRemoved) doesn't exist yet (#1371 — Task 3); until
+// then, callers collect and discard/log these. PurgeDate is now+30d, matching the
+// purge-window messaging ("your data will be permanently removed on <date>").
+type QueuedRemovalEmail struct {
+	ToEmail       string
+	HouseholdName string
+	PurgeDate     time.Time
+}
+
+// removalPurgeWindow is how long a removed member's membership/shares/entitlement
+// linger before PurgeRemovedMembership permanently deletes them — the window
+// communicated in QueuedRemovalEmail.PurgeDate. Not specified by #1371 Task 0; chosen
+// to match the task description's "now + 30 days" default. Revisit if product
+// requirements narrow this once Task 2 (the purge worker) schedules real purge jobs.
+const removalPurgeWindow = 30 * 24 * time.Hour
 
 // MemberProfileResolver resolves a household member's display name + avatar. Optional
 // (nil-safe) — when HouseholdService.SetMemberProfileResolver is never called,
@@ -139,6 +159,33 @@ type HouseholdService interface {
 
 	ListMembers(ctx context.Context, userID string) ([]HouseholdMemberView, error)
 	RemoveMember(ctx context.Context, actorUserID, targetUserID string) error
+
+	// OffboardExcessMembers brings householdID back into compliance with its owner's
+	// current effective seat count by removing the most-recently-joined active
+	// non-owner members (LIFO) one at a time, until active count <= allowed seats, all
+	// inside one transaction. A no-op (empty slice, nil error) if the household is
+	// already within its seat count. Safe for a background worker to call — never
+	// nests a transaction. Returns the removal emails to send after commit. #1371 —
+	// Phase 7 foundation; the decision of WHEN/how-many to call this with (grace
+	// periods, over_capacity_since bookkeeping) is Task 6's responsibility, not this
+	// method's.
+	OffboardExcessMembers(ctx context.Context, householdID string) ([]QueuedRemovalEmail, error)
+
+	// PurgeRemovedMembership permanently deletes a household_members row (identified by
+	// its own id) that is already status='removed', along with that member's
+	// household_account_shares rows for the household and their household-scoped
+	// entitlement, all inside one transaction. Does NOT touch the member's own
+	// accounts/transactions/budgets. Returns domain.ErrMemberNotFound if no such removed
+	// row exists. #1371 — Phase 7 foundation (run ~30 days after removal).
+	PurgeRemovedMembership(ctx context.Context, membershipID string) error
+
+	// ForceDisband removes every active non-owner member of ownerUserID's household,
+	// then dissolves the household exactly like DeleteHousehold does — all inside one
+	// transaction (unlike the public DeleteHousehold, which refuses to disband while
+	// active non-owner members remain). Returns domain.ErrNotHouseholdOwner if
+	// ownerUserID does not own a household. Returns the removal emails to send after
+	// commit. #1371 — Phase 7 foundation.
+	ForceDisband(ctx context.Context, ownerUserID string) ([]QueuedRemovalEmail, error)
 
 	CreateInvite(ctx context.Context, ownerUserID, inviteeEmail, frontendURL string) (*HouseholdCreateInviteResult, error)
 	ListInvites(ctx context.Context, ownerUserID string) ([]domain.HouseholdInvite, error)
@@ -450,10 +497,8 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
-	entRepo := repository.NewEntitlementRepository(tx)
-	shareRepo := repository.NewHouseholdShareRepository(tx)
 
-	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, actorUserID)
+	household, _, found, cerr := hhRepo.GetHouseholdForUser(ctx, actorUserID)
 	if cerr != nil {
 		return cerr
 	}
@@ -461,38 +506,246 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		cerr = domain.ErrMemberNotFound
 		return cerr
 	}
-	isSelfLeave := actorUserID == targetUserID
-	if !isSelfLeave && !isOwner {
-		cerr = domain.ErrNotHouseholdOwner
-		return cerr
-	}
-	if targetUserID == household.OwnerUserID {
-		// Reject removing the owner via this path (self-leave or owner-remove) — owner
-		// exit only via DeleteHousehold. Prevents an ownerless-but-active household
-		// (Codex #1367 review, High finding 4).
-		cerr = domain.ErrCannotRemoveOwner
-		return cerr
-	}
 
-	if cerr = hhRepo.RemoveMember(ctx, household.ID, targetUserID); cerr != nil {
-		return cerr
-	}
-	if cerr = entRepo.ExpireActiveEntitlement(ctx, targetUserID); cerr != nil {
-		return cerr
-	}
-	if cerr = shareRepo.RevokeSharesForUser(ctx, household.ID, targetUserID); cerr != nil {
+	if _, cerr = s.removeMemberTx(ctx, tx, household, actorUserID, targetUserID); cerr != nil {
 		return cerr
 	}
 
 	if cerr = tx.Commit(ctx); cerr != nil {
 		return cerr
 	}
-	if isSelfLeave {
+	if actorUserID == targetUserID {
 		s.capture(targetUserID, phclient.EventHouseholdMemberLeft)
 	} else {
 		s.capture(actorUserID, phclient.EventHouseholdMemberRemoved)
 	}
 	return nil
+}
+
+// removeMemberTx contains the actual soft-remove + expire-entitlement + revoke-shares
+// sequence, scoped to the caller-owned transaction tx — it never Begins/Commits/
+// Rollbacks. Extracted from RemoveMember (#1371 — Phase 7 foundation) so
+// OffboardExcessMembers and ForceDisband can call it multiple times within ONE shared
+// transaction, and so a future force-disband endpoint never has to nest a transaction.
+// household must already be resolved/locked by the caller (GetHouseholdForUser,
+// LockHouseholdByID, etc.) — this never looks it up itself, so it stays reusable across
+// every caller's own resolution strategy (by actor's membership, by householdID, ...).
+//
+// Authorization (unchanged from the original RemoveMember): the owner can remove any
+// non-owner member; any member can self-leave; the owner can never be removed via this
+// path (owner exit is DeleteHousehold/ForceDisband only — Codex #1367 review, High
+// finding 4).
+func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, household *domain.Household, actorUserID, targetUserID string) (*QueuedRemovalEmail, error) {
+	isSelfLeave := actorUserID == targetUserID
+	isOwner := actorUserID == household.OwnerUserID
+	if !isSelfLeave && !isOwner {
+		return nil, domain.ErrNotHouseholdOwner
+	}
+	if targetUserID == household.OwnerUserID {
+		return nil, domain.ErrCannotRemoveOwner
+	}
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+	shareRepo := repository.NewHouseholdShareRepository(tx)
+
+	if err := hhRepo.RemoveMember(ctx, household.ID, targetUserID); err != nil {
+		return nil, err
+	}
+	if err := entRepo.ExpireActiveEntitlement(ctx, targetUserID); err != nil {
+		return nil, err
+	}
+	if err := shareRepo.RevokeSharesForUser(ctx, household.ID, targetUserID); err != nil {
+		return nil, err
+	}
+
+	// Collect (never send) the removal notification for the caller to fire after commit
+	// — SendHouseholdMemberRemoved doesn't exist yet (#1371 — Task 3).
+	target, err := s.userRepo.GetUserByID(ctx, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	return &QueuedRemovalEmail{
+		ToEmail:       target.Email,
+		HouseholdName: household.Name,
+		PurgeDate:     time.Now().Add(removalPurgeWindow),
+	}, nil
+}
+
+// OffboardExcessMembers implements the HouseholdService method of the same name — see
+// the interface doc comment for the full contract.
+func (s *householdService) OffboardExcessMembers(ctx context.Context, householdID string) ([]QueuedRemovalEmail, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see AcceptInvite/DeleteHousehold).
+	household, cerr := hhRepo.LockHouseholdByID(ctx, householdID)
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	owner, cerr := s.userRepo.GetUserByID(ctx, household.OwnerUserID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	members, cerr := hhRepo.ListMembers(ctx, householdID) // active members, joined_at ASC, incl. owner
+	if cerr != nil {
+		return nil, cerr
+	}
+	nonOwner := nonOwnerMembers(members, household.OwnerUserID)
+
+	excess := len(members) - ownerTier.Pricing.UsersIncluded
+	var queued []QueuedRemovalEmail
+	// Walk nonOwner from the tail (most-recently-joined, since it's ASC by joined_at) —
+	// LIFO auto-offboarding per #1371.
+	for i := len(nonOwner) - 1; i >= 0 && excess > 0; i-- {
+		email, err := s.removeMemberTx(ctx, tx, household, household.OwnerUserID, nonOwner[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+		if email != nil {
+			queued = append(queued, *email)
+		}
+		excess--
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return nil, cerr
+	}
+	for range queued {
+		s.capture(household.OwnerUserID, phclient.EventHouseholdMemberAutoOffboarded)
+	}
+	return queued, nil
+}
+
+// PurgeRemovedMembership implements the HouseholdService method of the same name — see
+// the interface doc comment for the full contract.
+func (s *householdService) PurgeRemovedMembership(ctx context.Context, membershipID string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	shareRepo := repository.NewHouseholdShareRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+
+	householdID, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
+	if cerr != nil {
+		return cerr
+	}
+
+	// Guard against a rejoin race (Codex review finding): the deleted row only tells us
+	// WHO the stale removal belonged to, not whether they're still gone. If the user has
+	// since rejoined this same household (a new active membership row exists — from a
+	// fresh AcceptInvite, with its own fresh shares/entitlement), the shares/entitlement
+	// we're about to touch belong to that CURRENT membership, not the stale one just
+	// deleted. Blindly cleaning up by (household_id, user_id) alone would wipe the
+	// rejoined member's live data. Deleting the stale historical row above is always
+	// safe regardless — only the destructive cleanup below needs this check.
+	if _, cerr = hhRepo.GetActiveMember(ctx, householdID, userID); cerr == nil {
+		return tx.Commit(ctx)
+	}
+	if !errors.Is(cerr, domain.ErrMemberNotFound) {
+		return cerr
+	}
+
+	if cerr = shareRepo.DeleteSharesForUser(ctx, householdID, userID); cerr != nil {
+		return cerr
+	}
+	// Scoped (not the broad ExpireActiveEntitlement) — a removed member may have since
+	// started their own subscription; the scoped method can't accidentally close it out.
+	if cerr = entRepo.ExpireActiveHouseholdEntitlement(ctx, userID, householdID); cerr != nil {
+		return cerr
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return cerr
+	}
+	s.capture(userID, phclient.EventHouseholdMembershipPurged)
+	return nil
+}
+
+// ForceDisband implements the HouseholdService method of the same name — see the
+// interface doc comment for the full contract.
+func (s *householdService) ForceDisband(ctx context.Context, ownerUserID string) ([]QueuedRemovalEmail, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+
+	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, ownerUserID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if !found || !isOwner {
+		cerr = domain.ErrNotHouseholdOwner
+		return nil, cerr
+	}
+	// Household-row lock first, matching DeleteHousehold/AcceptInvite lock ordering.
+	if _, cerr = hhRepo.LockHouseholdForUpdate(ctx, household.ID); cerr != nil {
+		return nil, cerr
+	}
+
+	members, cerr := hhRepo.ListMembers(ctx, household.ID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	var queued []QueuedRemovalEmail
+	for _, m := range nonOwnerMembers(members, household.OwnerUserID) {
+		email, err := s.removeMemberTx(ctx, tx, household, ownerUserID, m.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if email != nil {
+			queued = append(queued, *email)
+		}
+	}
+
+	// Dissolve exactly like DeleteHousehold — composed directly (not via the public
+	// DeleteHousehold method, which opens its own transaction and rejects disbanding
+	// while active non-owner members remain) since every member was just force-removed
+	// above within this same transaction.
+	if cerr = hhRepo.DeleteHousehold(ctx, household.ID, ownerUserID); cerr != nil {
+		return nil, cerr
+	}
+	if cerr = entRepo.ExpireActiveEntitlement(ctx, ownerUserID); cerr != nil {
+		return nil, cerr
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return nil, cerr
+	}
+	s.capture(ownerUserID, phclient.EventHouseholdForceDisbanded)
+	return queued, nil
 }
 
 // ─── Invite lifecycle ──────────────────────────────────────────────────────────
@@ -899,6 +1152,19 @@ func callerHasLivePaddleSubscription(u *domain.User) bool {
 	default:
 		return false
 	}
+}
+
+// nonOwnerMembers filters members down to non-owner rows, preserving order. Shared by
+// OffboardExcessMembers (which needs the filtered slice for LIFO reverse iteration) and
+// ForceDisband (which just ranges over it) — #1371 Phase 7 foundation.
+func nonOwnerMembers(members []domain.HouseholdMember, ownerUserID string) []domain.HouseholdMember {
+	nonOwner := make([]domain.HouseholdMember, 0, len(members))
+	for _, m := range members {
+		if m.UserID != ownerUserID {
+			nonOwner = append(nonOwner, m)
+		}
+	}
+	return nonOwner
 }
 
 // splitBySet partitions fingerprints into shared/hidden account-ID lists for the

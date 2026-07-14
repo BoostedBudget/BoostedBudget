@@ -37,6 +37,13 @@ type HouseholdShareRepository interface {
 	// member's data stops appearing in the household aggregate (GDPR revocability).
 	RevokeSharesForUser(ctx context.Context, householdID, userID string) error
 
+	// DeleteSharesForUser permanently deletes (hard delete, not revoke) every
+	// household_account_shares row for userID's accounts within householdID. Unlike
+	// RevokeSharesForUser (soft-revoke at removal time), this runs at purge time — 30
+	// days after removal — via PurgeRemovedMembership, once the share grants no longer
+	// need to be retained. #1371 — Phase 7 foundation.
+	DeleteSharesForUser(ctx context.Context, householdID, userID string) error
+
 	// SetShareVisibility upserts the single active grant row (revoked_at IS NULL) for
 	// (householdID, userAccountID) to the given visibility. It NEVER writes revoked_at —
 	// revocation is reserved for RevokeSharesForUser (member removal). Hiding an account
@@ -108,6 +115,15 @@ func (r *householdShareRepository) RevokeSharesForUser(ctx context.Context, hous
 	_, err := r.db.Exec(ctx, `
 		UPDATE household_account_shares SET revoked_at = now(), updated_at = now()
 		WHERE household_id = $1 AND revoked_at IS NULL
+		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
+	`, householdID, userID)
+	return err
+}
+
+func (r *householdShareRepository) DeleteSharesForUser(ctx context.Context, householdID, userID string) error {
+	_, err := r.db.Exec(ctx, `
+		DELETE FROM household_account_shares
+		WHERE household_id = $1
 		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
 	`, householdID, userID)
 	return err

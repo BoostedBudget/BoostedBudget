@@ -35,6 +35,14 @@ func (m *mockEntitlementRepo) ExpireActiveEntitlement(ctx context.Context, userI
 	return args.Error(0)
 }
 
+// ExpireActiveHouseholdEntitlement (#1371 — Phase 7 foundation) is not exercised by
+// these Phase 2 resolver tests; stubbed to satisfy the expanded EntitlementRepository
+// interface.
+func (m *mockEntitlementRepo) ExpireActiveHouseholdEntitlement(ctx context.Context, userID, householdID string) error {
+	args := m.Called(ctx, userID, householdID)
+	return args.Error(0)
+}
+
 type mockUserLoader struct{ mock.Mock }
 
 func (m *mockUserLoader) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
@@ -122,6 +130,22 @@ func (m *mockHouseholdRepo) GetActiveMember(ctx context.Context, householdID, us
 func (m *mockHouseholdRepo) RemoveMember(ctx context.Context, householdID, userID string) error {
 	args := m.Called(ctx, householdID, userID)
 	return args.Error(0)
+}
+
+// LockHouseholdByID and DeleteRemovedMember (#1371 — Phase 7 foundation) are not
+// exercised by these Phase 2 resolver tests; stubbed to satisfy the expanded
+// HouseholdRepository interface.
+func (m *mockHouseholdRepo) LockHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
+	args := m.Called(ctx, householdID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Household), args.Error(1)
+}
+
+func (m *mockHouseholdRepo) DeleteRemovedMember(ctx context.Context, membershipID string) (string, string, error) {
+	args := m.Called(ctx, membershipID)
+	return args.String(0), args.String(1), args.Error(2)
 }
 
 func TestResolveEffectiveEntitlement_NoRow_FallsBackToOwn(t *testing.T) {

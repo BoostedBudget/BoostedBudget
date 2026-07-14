@@ -189,3 +189,26 @@ func TestHouseholdShareRepository_RevokeSharesForUser(t *testing.T) {
 	err := repo.RevokeSharesForUser(context.Background(), "hh-1", "user-1")
 	require.NoError(t, err)
 }
+
+// ─── DeleteSharesForUser (#1371 — Phase 7 foundation) ────────────────────────
+//
+// Unlike RevokeSharesForUser (soft-revoke, sets revoked_at, run at removal time),
+// DeleteSharesForUser is a hard delete run at purge time (30 days later) by
+// PurgeRemovedMembership, permanently removing the already-revoked share rows.
+
+func TestHouseholdShareRepository_DeleteSharesForUser(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdShareMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		DELETE FROM household_account_shares
+		WHERE household_id = $1
+		  AND user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)
+	`)).
+		WithArgs("hh-1", "user-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+
+	err := repo.DeleteSharesForUser(context.Background(), "hh-1", "user-1")
+	require.NoError(t, err)
+}
