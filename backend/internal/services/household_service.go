@@ -60,10 +60,11 @@ type HouseholdMemberView struct {
 
 // QueuedRemovalEmail is a "you've been removed from a household" notification collected
 // during a removal transaction (removeMemberTx) for the caller to send AFTER that
-// transaction commits — never inside it. The actual send method
-// (EmailService.SendHouseholdMemberRemoved) doesn't exist yet (#1371 — Task 3); until
-// then, callers collect and discard/log these. PurgeDate is now+30d, matching the
-// purge-window messaging ("your data will be permanently removed on <date>").
+// transaction commits — never inside it. RemoveMember/OffboardExcessMembers/
+// ForceDisband each send these via sendRemovalEmails (EmailService.
+// SendHouseholdMemberRemoved) immediately after their own tx.Commit succeeds (#1371 —
+// Task 3). PurgeDate is now+30d, matching the purge-window messaging ("your data will
+// be permanently removed on <date>").
 type QueuedRemovalEmail struct {
 	ToEmail       string
 	HouseholdName string
@@ -507,7 +508,8 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		return cerr
 	}
 
-	if _, cerr = s.removeMemberTx(ctx, tx, household, actorUserID, targetUserID); cerr != nil {
+	email, cerr := s.removeMemberTx(ctx, tx, household, actorUserID, targetUserID)
+	if cerr != nil {
 		return cerr
 	}
 
@@ -518,6 +520,9 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		s.capture(targetUserID, phclient.EventHouseholdMemberLeft)
 	} else {
 		s.capture(actorUserID, phclient.EventHouseholdMemberRemoved)
+	}
+	if email != nil {
+		s.sendRemovalEmails(ctx, []QueuedRemovalEmail{*email})
 	}
 	return nil
 }
@@ -560,7 +565,7 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 	}
 
 	// Collect (never send) the removal notification for the caller to fire after commit
-	// — SendHouseholdMemberRemoved doesn't exist yet (#1371 — Task 3).
+	// — see sendRemovalEmails (#1371 — Task 3).
 	target, err := s.userRepo.GetUserByID(ctx, targetUserID)
 	if err != nil {
 		return nil, err
@@ -570,6 +575,25 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		HouseholdName: household.Name,
 		PurgeDate:     time.Now().Add(removalPurgeWindow),
 	}, nil
+}
+
+// sendRemovalEmails is the best-effort, log-and-continue notification step called by
+// RemoveMember/OffboardExcessMembers/ForceDisband immediately AFTER their own
+// tx.Commit succeeds — never before. By the time this runs, the removal is already
+// durable, so a failed send must never be surfaced as (or cause a rollback of) the
+// caller's removal error; it is only ever logged. Nil-safe: no-ops if no EmailService
+// was injected, matching this codebase's analytics/email nil-safe convention (see
+// CLAUDE.md "No-op safe"). #1371 — Task 3.
+func (s *householdService) sendRemovalEmails(ctx context.Context, queued []QueuedRemovalEmail) {
+	if s.emailService == nil {
+		return
+	}
+	for _, q := range queued {
+		if err := s.emailService.SendHouseholdMemberRemoved(ctx, q.ToEmail, q.HouseholdName, q.PurgeDate); err != nil {
+			slog.Default().Warn("household: failed to send member-removed email; removal already committed",
+				"email", q.ToEmail, "household_name", q.HouseholdName, "error", err)
+		}
+	}
 }
 
 // OffboardExcessMembers implements the HouseholdService method of the same name — see
@@ -630,6 +654,7 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	for range queued {
 		s.capture(household.OwnerUserID, phclient.EventHouseholdMemberAutoOffboarded)
 	}
+	s.sendRemovalEmails(ctx, queued)
 	return queued, nil
 }
 
@@ -745,6 +770,7 @@ func (s *householdService) ForceDisband(ctx context.Context, ownerUserID string)
 		return nil, cerr
 	}
 	s.capture(ownerUserID, phclient.EventHouseholdForceDisbanded)
+	s.sendRemovalEmails(ctx, queued)
 	return queued, nil
 }
 

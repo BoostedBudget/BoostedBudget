@@ -37,6 +37,14 @@ type EmailService interface {
 	// create response also returns the raw-token link so an owner can share it
 	// manually if transactional email isn't fully configured (see #1026).
 	SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error
+
+	// SendHouseholdMemberRemoved sends a "you've been removed from a household" email:
+	// the recipient's own data is fully preserved, and the historical membership record
+	// will be purged automatically on purgeDate if no action is taken. Callers should
+	// treat delivery as best-effort — the removal itself is already committed by the
+	// time this is called, so a failed send must never be surfaced as a removal error.
+	// #1371 — Phase 7 (Task 3).
+	SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error
 }
 
 // emailService implements EmailService using SendGrid
@@ -185,6 +193,35 @@ func (s *emailService) SendHouseholdInvite(ctx context.Context, toEmail, inviter
 	return nil
 }
 
+// SendHouseholdMemberRemoved sends a "you've been removed from a household" email.
+// Best-effort — see interface doc.
+func (s *emailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error {
+	if !isValidEmail(toEmail) {
+		return fmt.Errorf("invalid email address: %s", toEmail)
+	}
+
+	subject := fmt.Sprintf("You've been removed from %s on BoostedBudget", householdName)
+	htmlContent := s.buildMemberRemovedEmailHTML(householdName, purgeDate)
+	plainTextContent := s.buildMemberRemovedEmailPlainText(householdName, purgeDate)
+
+	from := mail.NewEmail(s.fromName, s.fromEmail)
+	to := mail.NewEmail("", toEmail)
+	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
+
+	if s.mockMode {
+		return nil
+	}
+
+	response, err := s.client.SendWithContext(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SendGrid: %w", err)
+	}
+	if response.StatusCode >= 400 {
+		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
+	}
+	return nil
+}
+
 // buildHouseholdInviteEmailHTML creates the HTML email template for a household invite.
 func (s *emailService) buildHouseholdInviteEmailHTML(inviterName, householdName, inviteURL, formattedExpiry string) string {
 	return fmt.Sprintf(`
@@ -241,6 +278,59 @@ View the invitation:
 
 This invitation expires on %s. If you weren't expecting it, you can safely ignore this email.
 `, householdName, inviterName, householdName, inviteURL, formattedExpiry)
+}
+
+// buildMemberRemovedEmailHTML creates the HTML email template for a household
+// member-removed notification.
+func (s *emailService) buildMemberRemovedEmailHTML(householdName string, purgeDate time.Time) string {
+	formattedPurgeDate := purgeDate.Format("January 2, 2006")
+	return fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Removed from Household</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background-color: #f8f9fa; border-radius: 8px; padding: 30px; border: 1px solid #dee2e6;">
+        <h1 style="color: #2563eb; margin-top: 0;">You've been removed from %s</h1>
+
+        <p>You are no longer a member of the household <strong>%s</strong> on BoostedBudget.</p>
+
+        <div style="background-color: #d1ecf1; border-left: 4px solid #0c5460; padding: 15px; margin: 20px 0;">
+            <strong>Your data is safe.</strong> Your own accounts, transactions, budgets, and automation
+            rules are fully preserved and untouched — only your household membership link is affected.
+            You can continue using BoostedBudget with your own independent account.
+        </div>
+
+        <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
+            If you take no action, the historical membership record will be cleaned up automatically
+            after the preservation window, on %s.
+        </p>
+    </div>
+</body>
+</html>
+`, householdName, householdName, formattedPurgeDate)
+}
+
+// buildMemberRemovedEmailPlainText creates the plain text email template for a
+// household member-removed notification.
+func (s *emailService) buildMemberRemovedEmailPlainText(householdName string, purgeDate time.Time) string {
+	formattedPurgeDate := purgeDate.Format("January 2, 2006")
+	return fmt.Sprintf(`
+YOU'VE BEEN REMOVED FROM %s
+
+You are no longer a member of the household %s on BoostedBudget.
+
+YOUR DATA IS SAFE
+
+Your own accounts, transactions, budgets, and automation rules are fully preserved and
+untouched — only your household membership link is affected. You can continue using
+BoostedBudget with your own independent account.
+
+If you take no action, the historical membership record will be cleaned up automatically
+after the preservation window, on %s.
+`, householdName, householdName, formattedPurgeDate)
 }
 
 // buildDeletionEmailHTML creates HTML email template for deletion confirmation
