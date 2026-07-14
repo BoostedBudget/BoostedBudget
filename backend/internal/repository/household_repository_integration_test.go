@@ -486,3 +486,65 @@ func TestHouseholdRepository_RestoreMember_ConflictWithActiveElsewhere_Integrati
 		t.Fatalf("expected old row to remain 'removed' after failed restore, got %q", status)
 	}
 }
+
+// ─── ListMembershipsPastPurgeWindow (#1371 — Task 2) ─────────────────────────
+
+// TestHouseholdRepository_ListMembershipsPastPurgeWindow_Integration proves the
+// `removed_at < now() - $1::interval` predicate actually discriminates against a real
+// schema: a row removed well past the 30-day window must be returned, but a row removed
+// just inside the window must NOT — pgxmock's regex match on the query text alone
+// cannot prove the interval comparison is doing real work (#1371 Task 2, mirroring the
+// Task 0/1 review lesson for DeleteRemovedMember/SetOverCapacity).
+func TestHouseholdRepository_ListMembershipsPastPurgeWindow_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerID := insertTestUser(t, pool)
+	pastWindowMemberID := insertTestUser(t, pool)
+	withinWindowMemberID := insertTestUser(t, pool)
+	activeMemberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	pastWindowRowID := insertTestHouseholdMember(t, pool, householdID, pastWindowMemberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() - interval '31 days' WHERE id = $1`, pastWindowRowID); err != nil {
+		t.Fatalf("transition past-window row to removed: %v", err)
+	}
+
+	withinWindowRowID := insertTestHouseholdMember(t, pool, householdID, withinWindowMemberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() - interval '29 days' WHERE id = $1`, withinWindowRowID); err != nil {
+		t.Fatalf("transition within-window row to removed: %v", err)
+	}
+
+	// An ACTIVE row must never be returned regardless of age.
+	activeRowID := insertTestHouseholdMember(t, pool, householdID, activeMemberID, "member")
+
+	candidates, err := repo.ListMembershipsPastPurgeWindow(ctx, 30)
+	if err != nil {
+		t.Fatalf("ListMembershipsPastPurgeWindow: %v", err)
+	}
+
+	var gotIDs []string
+	for _, c := range candidates {
+		gotIDs = append(gotIDs, c.ID)
+	}
+	if !containsID(gotIDs, pastWindowRowID) {
+		t.Fatalf("expected past-window row %q in results, got %v", pastWindowRowID, gotIDs)
+	}
+	if containsID(gotIDs, withinWindowRowID) {
+		t.Fatalf("within-window row %q must NOT be returned, got %v", withinWindowRowID, gotIDs)
+	}
+	if containsID(gotIDs, activeRowID) {
+		t.Fatalf("active row %q must NOT be returned, got %v", activeRowID, gotIDs)
+	}
+}
+
+func containsID(ids []string, target string) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}

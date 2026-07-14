@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -153,6 +155,13 @@ type HouseholdRepository interface {
 	// analogous owner-row conflict — same mapping InsertMember uses. #1371 — Phase 7
 	// (Task 1 foundation; consumed by Task 4's re-invite flow).
 	RestoreMember(ctx context.Context, membershipID string) error
+
+	// ListMembershipsPastPurgeWindow returns every household_members row with
+	// status='removed' whose removed_at is older than purgeAfterDays days ago,
+	// ordered oldest-removed-first. This is the Task 2 daily purge-worker's scan
+	// target; each candidate is expected to be passed to
+	// HouseholdService.PurgeRemovedMembership by the caller. #1371 — Phase 7 (Task 2).
+	ListMembershipsPastPurgeWindow(ctx context.Context, purgeAfterDays int) ([]*domain.HouseholdMember, error)
 }
 
 type householdRepository struct {
@@ -457,6 +466,29 @@ func (r *householdRepository) RestoreMember(ctx context.Context, membershipID st
 		return domain.ErrMemberNotFound
 	}
 	return nil
+}
+
+func (r *householdRepository) ListMembershipsPastPurgeWindow(ctx context.Context, purgeAfterDays int) ([]*domain.HouseholdMember, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members
+		WHERE status = 'removed' AND removed_at < now() - $1::interval
+		ORDER BY removed_at ASC
+	`, strings.TrimSpace(fmt.Sprintf("%d days", purgeAfterDays)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []*domain.HouseholdMember
+	for rows.Next() {
+		var m domain.HouseholdMember
+		if err := rows.Scan(householdMemberScanArgs(&m)...); err != nil {
+			return nil, err
+		}
+		members = append(members, &m)
+	}
+	return members, rows.Err()
 }
 
 // isUniqueViolation reports whether err is a Postgres 23505 unique_violation on the

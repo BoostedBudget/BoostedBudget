@@ -242,6 +242,12 @@ func main() {
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
+	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
+	// (purges household_members rows removed 30+ days ago). Constructed once
+	// householdService is available (below); not gated on DELETION_TOKEN_SECRET like
+	// retention's worker, since it depends on householdService, not deletionService.
+	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
+
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
@@ -528,6 +534,35 @@ func main() {
 			emailService = services.NewEmailServiceMock("", "", cfg.FrontendURL)
 			appLogger.Warn("Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
 		}
+
+		// Construct the household service here (rather than near route registration
+		// further down) so it is available to the Task 2 household member cleanup
+		// worker below, as well as the deletion-service owner guard a few lines down —
+		// both need it well before the dashboard/analytics handlers that also resolve
+		// `scope=household` requests (Issue #1369 — Phase 5). Route registration for
+		// the household/household-share endpoints themselves still happens further
+		// down, reusing this same householdService instance. #1371 — Phase 7 (Task 2).
+		householdService := services.NewHouseholdService(
+			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
+			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
+		)
+		householdService.SetAnalytics(phClient)
+		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
+		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
+		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
+		// (clerk.SetKey is already called there, well before the server accepts requests).
+		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+
+		// Issue #1371 — Phase 7 (Task 2): Create household member cleanup check worker.
+		// Unlike retention's worker (gated on DELETION_TOKEN_SECRET, since it calls
+		// deletionService), this worker delegates to householdService.PurgeRemovedMembership,
+		// which is always constructed above — so this worker is always non-nil too.
+		householdMemberCleanupCheckWorker = jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{
+			Repo:     householdRepo,
+			PurgeSvc: householdService,
+			Logger:   appLogger,
+		})
+		appLogger.Info("Household member cleanup check worker created (River)")
 
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
@@ -1134,6 +1169,22 @@ func main() {
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
+			if householdMemberCleanupCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.HouseholdMemberCleanupCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Household member cleanup check periodic job configured (daily)")
+			}
+
 			// Issue #633: DLQ cleanup check (daily)
 			if dlqCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
@@ -1268,6 +1319,12 @@ func main() {
 			if retentionCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
 				appLogger.Info("Retention cleanup check worker registered with River")
+			}
+			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check worker
+			// (constructed above, always non-nil here)
+			if householdMemberCleanupCheckWorker != nil {
+				river.AddWorker(riverWorkers, householdMemberCleanupCheckWorker)
+				appLogger.Info("Household member cleanup check worker registered with River")
 			}
 			if dlqCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
@@ -1535,20 +1592,11 @@ func main() {
 		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
 		boostExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
-		// Construct the household service ahead of the dashboard/analytics handlers below —
-		// both need it to resolve `scope=household` requests (Issue #1369 — Phase 5).
-		// Route registration for the household/household-share endpoints themselves still
-		// happens further down, reusing this same householdService instance.
-		householdService := services.NewHouseholdService(
-			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
-			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
-		)
-		householdService.SetAnalytics(phClient)
-		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
-		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
-		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
-		// (clerk.SetKey is already called there, well before the server accepts requests).
-		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+		// householdService was already constructed earlier (right after emailService,
+		// before the deletion-service block) so the Task 2 household member cleanup
+		// worker and the deletion-service owner guard could both use it. Route
+		// registration for the household/household-share endpoints themselves still
+		// happens here, reusing that same instance. #1371 — Phase 7 (Task 2).
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService, householdService)

@@ -654,3 +654,50 @@ func TestHouseholdRepository_RestoreMember_DuplicateOwnerRow(t *testing.T) {
 	err := repo.RestoreMember(context.Background(), "mem-1")
 	assert.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 }
+
+// ─── ListMembershipsPastPurgeWindow (#1371 — Task 2) ─────────────────────────
+
+func TestHouseholdRepository_ListMembershipsPastPurgeWindow(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	removedAt := now.Add(-31 * 24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members
+		WHERE status = 'removed' AND removed_at < now() - $1::interval
+		ORDER BY removed_at ASC
+	`)).
+		WithArgs("30 days").
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
+			AddRow("mem-1", "hh-1", "user-1", "member", "removed", now, &removedAt, nil, nil, now, now))
+
+	members, err := repo.ListMembershipsPastPurgeWindow(context.Background(), 30)
+	require.NoError(t, err)
+	require.Len(t, members, 1)
+	assert.Equal(t, "mem-1", members[0].ID)
+	assert.Equal(t, domain.HouseholdMemberStatusRemoved, members[0].Status)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_ListMembershipsPastPurgeWindow_Empty(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members
+		WHERE status = 'removed' AND removed_at < now() - $1::interval
+		ORDER BY removed_at ASC
+	`)).
+		WithArgs("30 days").
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames))
+
+	members, err := repo.ListMembershipsPastPurgeWindow(context.Background(), 30)
+	require.NoError(t, err)
+	assert.Empty(t, members)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
