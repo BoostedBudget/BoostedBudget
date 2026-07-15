@@ -1198,6 +1198,16 @@ func expectLockCallerRow(pool pgxmock.PgxPoolIface, callerUserID string) {
 	pool.ExpectExec("SELECT 1 FROM users").WithArgs(callerUserID).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 }
 
+// expectNoRemovedMember appends the pgxmock expectation for AcceptInvite's Task 4
+// (#1371) re-invite-within-window lookup, GetRemovedMemberForUpdate, returning "no
+// removed row" — i.e. the caller has never been a member of this household before (or
+// their prior removed row was already purged), so AcceptInvite falls through to the
+// original fresh-insert path unchanged.
+func expectNoRemovedMember(pool pgxmock.PgxPoolIface, householdID, callerUserID string) {
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs(householdID, callerUserID).
+		WillReturnError(pgx.ErrNoRows)
+}
+
 // expectHouseholdIDLookupAndLock appends the pgxmock expectations for the two
 // household-first lock-acquisition steps every AcceptInvite call now takes BEFORE the
 // invite-row lock (#1367 Gap Analysis Round 4B, GT-6): a non-locking household_id lookup
@@ -1231,6 +1241,7 @@ func TestHouseholdService_AcceptInvite_Success(t *testing.T) {
 	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	expectNoRemovedMember(pool, "hh-1", "caller-1")
 	pool.ExpectQuery("INSERT INTO household_members").
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
@@ -1505,6 +1516,7 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	expectNoRemovedMember(pool, "hh-1", "caller-1")
 	pool.ExpectQuery("INSERT INTO household_members").
 		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
@@ -1514,6 +1526,112 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, []string{"someone-elses-account"})
 	require.ErrorIs(t, err, domain.ErrInvalidConsent)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// ─── AcceptInvite — re-invite-within-window restore path (#1371 Task 4) ──────
+
+// removedMemberRow builds the pgxmock row set GetRemovedMemberForUpdate returns for a
+// pre-existing 'removed' household_members row, matching the column order
+// householdMemberScanArgs expects (id, household_id, user_id, role, status, joined_at,
+// removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at).
+func removedMemberRow(id, householdID, userID string, removedAt time.Time) *pgxmock.Rows {
+	joinedAt := removedAt.Add(-24 * time.Hour)
+	return pgxmock.NewRows([]string{
+		"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+		"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+	}).AddRow(id, householdID, userID, domain.HouseholdRoleMember, domain.HouseholdMemberStatusRemoved,
+		joinedAt, &removedAt, (*string)(nil), (*string)(nil), joinedAt, removedAt)
+}
+
+// TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success proves the Task 4
+// orchestration: when GetRemovedMemberForUpdate finds an existing 'removed' row for this
+// exact (household, user) pair, AcceptInvite calls RestoreMember on that row's ID instead
+// of InsertMember — no "INSERT INTO household_members" query is issued at all (pgxmock
+// would fail the test on an unexpected query), and the returned Member reflects the
+// restored, now-active row.
+func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	caller := &domain.User{ID: "caller-1", Email: "friend@example.com", EmailVerified: true, SubscriptionTier: "premium", SubscriptionStatus: "cancelled"}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	userRepo.On("GetUserByID", mock.Anything, "caller-1").Return(caller, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+
+	removedAt := time.Now().Add(-5 * 24 * time.Hour) // removed 5 days ago — well within the 30-day window
+	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
+	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
+	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1")
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
+		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
+	pool.ExpectExec("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
+	pool.ExpectQuery("INSERT INTO household_share_consents").
+		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
+	pool.ExpectExec("INSERT INTO household_account_shares").
+		WithArgs("hh-1", "acct-1", pgxmock.AnyArg(), domain.ShareVisibilityShared).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements SET effective_until").WithArgs("caller-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	pool.ExpectExec("INSERT INTO subscription_entitlements").
+		WithArgs("caller-1", "household_2", "active", "owner-1", "hh-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("UPDATE household_invites SET status = 'accepted'").WithArgs("caller-1", "inv-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	result, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
+	require.NoError(t, err)
+	require.Equal(t, "hh-1", result.Household.ID)
+	require.Equal(t, "mem-1", result.Member.ID, "the restored row's own id must be reused, not a fresh one")
+	require.Equal(t, domain.HouseholdMemberStatusActive, result.Member.Status)
+	require.Nil(t, result.Member.RemovedAt, "removed_at must be cleared on restore")
+	require.NoError(t, pool.ExpectationsWereMet(), "no INSERT INTO household_members should have been issued")
+}
+
+// TestHouseholdService_AcceptInvite_RestoreConflict_RollsBack proves the conflict case:
+// the caller has a removed row for THIS household, but has since become active in a
+// DIFFERENT household — RestoreMember's existing unique-constraint mapping must surface
+// as domain.ErrAlreadyInHousehold, not be swallowed or panic.
+func TestHouseholdService_AcceptInvite_RestoreConflict_RollsBack(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	caller := &domain.User{ID: "caller-1", Email: "friend@example.com", EmailVerified: true, SubscriptionTier: "premium", SubscriptionStatus: "cancelled"}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	userRepo.On("GetUserByID", mock.Anything, "caller-1").Return(caller, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+
+	removedAt := time.Now().Add(-5 * 24 * time.Hour)
+	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
+	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
+	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1")
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
+		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
+	pool.ExpectExec("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
+		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
+	pool.ExpectRollback()
+
+	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
+	require.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
