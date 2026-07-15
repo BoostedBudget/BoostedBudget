@@ -1207,6 +1207,60 @@ func TestHandleUpdateSubscription_ManualOverrideKeepsEffectiveTierHigher_Allowed
 	householdRepo.AssertExpectations(t)
 }
 
+// TestHandleUpdateSubscription_ExpiredManualOverride_DoesNotBypassGuard is the inverse of
+// the above: an EXPIRED manual_tier_override must NOT keep the owner on the higher tier.
+// ComputeEffectiveTier() falls back to the raw requested tier once ManualTierEndsAt is in
+// the past, so this proves the guard genuinely respects override expiry — not just
+// override presence. A buggy implementation that only checked "ManualTierOverride != nil"
+// (ignoring ManualTierEndsAt) would incorrectly allow this through; this test would catch
+// that regression.
+func TestHandleUpdateSubscription_ExpiredManualOverride_DoesNotBypassGuard(t *testing.T) {
+	handler, _, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	override := "household_5"
+	expiredAt := time.Now().Add(-24 * time.Hour) // expired yesterday
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_2",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &expiredAt, // expired — must NOT resolve to household_5
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "premium" // raw requested target: 1 seat — does NOT fit 4 members
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	// 4 active members: does NOT fit premium's 1 seat. The expired override must not
+	// resurrect household_5's 5 seats — ComputeEffectiveTier() falls back to the raw
+	// requested tier ("premium") once ManualTierEndsAt has passed.
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(4, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(0, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err, "expired manual_tier_override must not bypass the seat guard")
+	assert.Nil(t, output)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+	// 4 active + 0 pending = 4 members, premium has 1 seat => shortfall of 3.
+	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "before downgrading")
+
+	mockRepo.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+}
+
 // TestHandleUpdateSubscription_PendingInviteCountsTowardShortfall tests that an owner at
 // exactly-active-capacity with 1 pending invite is still blocked when downgrading to a
 // tier that would fit the active members alone but not the pending invite too.
