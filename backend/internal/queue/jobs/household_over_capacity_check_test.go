@@ -253,26 +253,63 @@ func TestHouseholdOverCapacityCheck_AlreadyResolved_NoOp(t *testing.T) {
 
 // --- Case 3: over capacity, not yet flagged (webhook-missed case) ---
 
-func TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_SetsOverCapacity(t *testing.T) {
+// TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_SetsOverCapacityAndSendsStartNoticeSameRun
+// proves the fix for the Codex review finding: a household newly detected as
+// over-capacity (Case 3) must ALSO receive the owner-facing start notice in the SAME
+// worker run — not require a second daily invocation to notice OverCapacitySince is now
+// set. Previously this test asserted the OPPOSITE (no notice sent on first detection),
+// which was the buggy behavior: a household could go up to ~24h into its 14-day grace
+// period before the owner heard anything, since this worker only runs once per day.
+func TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_SetsOverCapacityAndSendsStartNoticeSameRun(t *testing.T) {
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
 
-	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
-	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
 
 	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
 	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
 	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
 	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(nil)
 
 	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
 	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
-	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_NoticeSendFails_StillSetsFlag
+// proves the send-then-stamp tradeoff still holds on the Case-3-into-Case-5 fall-through
+// path: if the immediate start-notice send fails, SetOverCapacity has already
+// committed (so the household is correctly in grace), but MarkOverCapacityStartNoticeSent
+// must NOT be called — the notice is retried on the next daily run instead of being
+// silently skipped forever.
+func TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_NoticeSendFails_StillSetsFlag(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).
+		Return(errors.New("sendgrid unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a failed best-effort notice send must not fail the job")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // --- Case 4: in-grace, past deadline → auto-offboard ---

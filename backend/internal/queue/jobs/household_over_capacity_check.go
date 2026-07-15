@@ -255,16 +255,24 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 
 	// Case 3: over capacity, not yet flagged — the webhook fast path missed this one.
 	if h.OverCapacitySince == nil {
-		if err := w.repo.SetOverCapacity(ctx, h.ID, time.Now()); err != nil {
+		since := time.Now()
+		if err := w.repo.SetOverCapacity(ctx, h.ID, since); err != nil {
 			return fmt.Errorf("failed to set over-capacity for household %s: %w", h.ID, err)
 		}
-		return nil
+		// Reflect the just-set flag into the in-memory struct and fall through to the
+		// grace-window branching below, instead of returning early — so the owner
+		// receives the start notice in THIS SAME run rather than waiting up to ~24h
+		// for tomorrow's daily worker run to notice OverCapacitySince is now set (this
+		// in-memory struct was loaded at the top of scanHouseholds/processHousehold,
+		// before SetOverCapacity ran, so it would otherwise still read nil here).
+		// Codex review finding — #1371.
+		h.OverCapacitySince = &since
 	}
 
-	// Already in grace — branch on where `now` falls relative to the grace window.
-	// These three cases are mutually exclusive: a household exactly AT the deadline
-	// auto-offboards (case ordering below checks the deadline FIRST), never a
-	// redundant warning.
+	// In grace — either already, or just entered via Case 3 above. Branch on where
+	// `now` falls relative to the grace window. These three cases are mutually
+	// exclusive: a household exactly AT the deadline auto-offboards (case ordering
+	// below checks the deadline FIRST), never a redundant warning.
 	deadline := h.OverCapacitySince.Add(householdOverCapacityGraceDays * 24 * time.Hour)
 	warnAt := deadline.Add(-householdOverCapacityWarnBeforeDays * 24 * time.Hour)
 	now := time.Now()
