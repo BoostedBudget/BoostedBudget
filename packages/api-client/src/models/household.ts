@@ -37,6 +37,9 @@ export interface Household {
   created_at: string;
   id: string;
   name: string;
+  over_capacity_since?: string;
+  over_capacity_start_notice_sent_at?: string;
+  over_capacity_warn3d_sent_at?: string;
   owner_user_id: string;
   updated_at: string;
 }
