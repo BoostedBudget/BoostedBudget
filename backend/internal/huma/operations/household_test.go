@@ -229,6 +229,105 @@ func TestDeleteHousehold_MapsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestDeleteHousehold_NoForce_CallsDeleteHousehold pins down the unchanged (#1367) "soft"
+// behavior when force is explicitly false: the handler must still call the old
+// DeleteHousehold path, not ForceDisband.
+func TestDeleteHousehold_NoForce_CallsDeleteHousehold(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("DeleteHousehold", mock.Anything, "user-1").Return(nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Force:              false,
+	})
+	require.NoError(t, err)
+	svc.AssertExpectations(t)
+	svc.AssertNotCalled(t, "ForceDisband", mock.Anything, mock.Anything)
+}
+
+// TestDeleteHousehold_Force_Success covers #1371 Task 7: force=true must delegate to
+// ForceDisband (not DeleteHousehold), even when active non-owner members exist —
+// ForceDisband itself already force-removes them in one transaction (Task 0).
+func TestDeleteHousehold_Force_Success(t *testing.T) {
+	svc := &mockHouseholdService{}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return(queued, nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	out, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+	svc.AssertExpectations(t)
+	svc.AssertNotCalled(t, "DeleteHousehold", mock.Anything, mock.Anything)
+}
+
+// TestDeleteHousehold_Force_NoOtherMembers_Success covers the owner-alone case: force=true
+// on a household with no active non-owner members must still succeed (ForceDisband
+// already handles this per Task 0 — an empty removal slice is not an error).
+func TestDeleteHousehold_Force_NoOtherMembers_Success(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return([]services.QueuedRemovalEmail{}, nil)
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+}
+
+// TestDeleteHousehold_Force_NonOwner_MapsError confirms force=true is rejected for a
+// non-owner exactly like the existing non-force path — ForceDisband itself returns
+// domain.ErrNotHouseholdOwner (same authorization pattern as DeleteHousehold), and the
+// handler must propagate it, not silently succeed.
+func TestDeleteHousehold_Force_NonOwner_MapsError(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("ForceDisband", mock.Anything, "member-1").Return(nil, domain.ErrNotHouseholdOwner)
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "member-1"},
+		Force:              true,
+	})
+	require.Error(t, err)
+}
+
+// TestDeleteHousehold_Force_DoesNotResendRemovalEmails is the explicit regression test
+// for the known Task 6 double-send bug shape (see #1371 history: OffboardExcessMembers's
+// caller re-sent emails from the returned slice on top of the service's own internal
+// send). ForceDisband already calls sendRemovalEmails internally right after its own
+// tx.Commit — the handler must treat the returned []QueuedRemovalEmail as
+// caller-bookkeeping ONLY and must never re-send from it. mockHouseholdService only
+// stubs ForceDisband (Once()); HouseholdHandler holds no EmailService/notifier of its
+// own, so there is no second send path available to it — if a future change added one
+// and used it, this mock would either fail the Once() cardinality check (if it called
+// ForceDisband again) or panic on an unexpected call to any other unstubbed method.
+func TestDeleteHousehold_Force_DoesNotResendRemovalEmails(t *testing.T) {
+	svc := &mockHouseholdService{}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member1@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return(queued, nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+
+	// Once() above already enforces ForceDisband was called exactly one time; asserting
+	// expectations here re-confirms no other stubbed/unstubbed interaction occurred.
+	svc.AssertExpectations(t)
+}
+
 func TestListMembers_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
 	members := []services.HouseholdMemberView{
