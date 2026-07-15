@@ -698,6 +698,129 @@ func TestHouseholdService_RemoveMember_OwnerCannotRemoveSelf_RollsBack(t *testin
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
+// ─── removeMemberTx grace-clear on in-app removal (#1371 — Phase 7, Task 6, Part D) ──
+
+// TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity proves an owner
+// manually removing a member during over-capacity grace gets immediate credit — the
+// household is re-counted POST-removal, and since it's now within the owner's current
+// seat count, ClearOverCapacity fires in the SAME transaction as the removal.
+func TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").
+		Return(&domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}, nil) // 2 seats
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Grace-clear: post-removal count is back within the owner's 2-seat plan.
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_DoesNotClearGrace_WhenStillOverCapacity proves the
+// grace flag is left alone when the household is STILL over capacity after the removal
+// — ClearOverCapacity must not be called at all.
+func TestHouseholdService_RemoveMember_DoesNotClearGrace_WhenStillOverCapacity(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").
+		Return(&domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}, nil) // 2 seats
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Grace-clear check: post-removal count is STILL over the owner's 2-seat plan —
+	// no ExpectExec for ClearOverCapacity should follow.
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(), "ClearOverCapacity must not be called while still over capacity")
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_NotInGrace_NoOverCapacityChecks proves removeMemberTx
+// doesn't even CHECK over-capacity state when the household isn't currently in grace —
+// no CountActiveMembers/ClearOverCapacity calls, and no extra owner lookup beyond the
+// baseline removal flow.
+func TestHouseholdService_RemoveMember_NotInGrace_NoOverCapacityChecks(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner")) // not in grace
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// No SELECT COUNT, no ClearOverCapacity/SetOverCapacity — over-capacity state is
+	// never even inspected when the household isn't in grace.
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(), "over-capacity state must not be checked at all when not in grace")
+	// Only the target's own GetUserByID (for the removal email) should have been called
+	// — no extra owner lookup, since the grace-check branch is never entered.
+	userRepo.AssertExpectations(t)
+	userRepo.AssertNumberOfCalls(t, "GetUserByID", 1)
+	emailSvc.AssertExpectations(t)
+}
+
 // ─── OffboardExcessMembers (#1371 — Phase 7 foundation) ──────────────────────
 
 func TestHouseholdService_OffboardExcessMembers_NoExcess_NoOp(t *testing.T) {
