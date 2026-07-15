@@ -288,6 +288,58 @@ func TestHouseholdRepository_ClearOverCapacity_Integration(t *testing.T) {
 	}
 }
 
+// TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integration proves
+// MarkOverCapacityStartNoticeSent/MarkOverCapacityWarn3dSent are guarded by
+// `over_capacity_since IS NOT NULL`: once a household's grace has been cleared (e.g. by
+// a concurrent read-only-owner clear racing the daily backstop worker), a stale notice
+// stamp must NOT be written. Round 5 Gap Analysis fix (#1371) — pgxmock can prove the
+// query shape, but not that the predicate really protects a live, already-cleared row.
+func TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	since := time.Now().Truncate(time.Microsecond)
+
+	// Sanity: while genuinely in grace, marking DOES stamp the notice.
+	if err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
+		t.Fatalf("SetOverCapacity: %v", err)
+	}
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
+		t.Fatalf("MarkOverCapacityStartNoticeSent (in grace): %v", err)
+	}
+	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("lookup after in-grace mark: found=%v err=%v", found, err)
+	}
+	if h.OverCapacityStartNoticeSentAt == nil {
+		t.Fatalf("expected start-notice stamp to be set while in grace, got nil")
+	}
+
+	// Clear grace (simulating a concurrent read-only-owner clear), then attempt both
+	// marks again — neither must write a stamp onto a household that is no longer flagged.
+	if err := repo.ClearOverCapacity(ctx, householdID); err != nil {
+		t.Fatalf("ClearOverCapacity: %v", err)
+	}
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, time.Now()); err != nil {
+		t.Fatalf("MarkOverCapacityStartNoticeSent (not in grace, should be a no-op, not an error): %v", err)
+	}
+	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, time.Now()); err != nil {
+		t.Fatalf("MarkOverCapacityWarn3dSent (not in grace, should be a no-op, not an error): %v", err)
+	}
+
+	h, _, found, err = repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("post-clear lookup: found=%v err=%v", found, err)
+	}
+	if h.OverCapacitySince != nil || h.OverCapacityStartNoticeSentAt != nil || h.OverCapacityWarn3dSentAt != nil {
+		t.Fatalf("expected all three over-capacity columns to remain nil (marks must no-op when not in grace), got: %+v", h)
+	}
+}
+
 // ─── ListHouseholdsWithMembers (#1371 — Task 1) ──────────────────────────────
 
 // TestHouseholdRepository_ListHouseholdsWithMembers_Integration proves the EXISTS
