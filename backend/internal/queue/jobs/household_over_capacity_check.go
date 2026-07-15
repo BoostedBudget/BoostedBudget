@@ -253,6 +253,27 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
+	// Fresh read-only re-check: the top-of-function owner read (Case 1) can be stale by
+	// the time we're about to WRITE over-capacity state below — a concurrent read-only
+	// transition (e.g. the subscription webhook's fast-path clear) can land in the gap
+	// between that read and here. Re-fetch the owner immediately before any write and
+	// bail out (clearing grace if flagged) if now read-only, rather than flagging/
+	// re-flagging/notifying a household whose grace is already moot. Mirrors the
+	// identical re-check added to HouseholdService.OffboardExcessMembers in Round 3.
+	// Round 5 Gap Analysis fix (#1371).
+	freshOwner, err := w.userRepo.GetUserByID(ctx, h.OwnerUserID)
+	if err != nil {
+		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
+	}
+	if domain.SubscriptionStatus(freshOwner.SubscriptionStatus).IsReadOnlySubscription() {
+		if h.OverCapacitySince != nil {
+			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
+				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
+			}
+		}
+		return nil
+	}
+
 	// Case 3: over capacity, not yet flagged — the webhook fast path missed this one.
 	if h.OverCapacitySince == nil {
 		since := time.Now()
