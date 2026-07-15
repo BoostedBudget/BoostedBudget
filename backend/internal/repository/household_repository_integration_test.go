@@ -388,13 +388,26 @@ func TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration(t *testing.
 	// The guard must actually restore a genuinely-removed row, and RETURN the
 	// freshly-written updated_at (Codex review, #1371 Task 4) — verified against
 	// real Postgres here since pgxmock can't catch a missing RETURNING clause.
+	//
+	// Freshness is checked with a generous tolerance window rather than a strict
+	// beforeRestore.Before(restoredUpdatedAt) comparison: beforeRestore is captured on
+	// the Go test process's wall clock, while restoredUpdatedAt comes from Postgres's
+	// own now() — a different clock domain/process/container. A zero-tolerance
+	// cross-process clock comparison is inherently racy under clock skew (this
+	// failed in CI with a ~441µs mismatch despite passing locally — gap-analysis
+	// round, #1371). The real freshness/correctness proof is the DB-re-read
+	// comparison below (restoredUpdatedAt vs. dbUpdatedAt), which stays entirely
+	// within Postgres's clock domain and has no such race; this tolerance window
+	// only needs to catch a grossly wrong value (e.g. a stale/zero timestamp), not
+	// prove microsecond-level freshness.
+	const clockSkewTolerance = 5 * time.Second
 	beforeRestore := time.Now()
 	restoredUpdatedAt, err := repo.RestoreMember(ctx, removedRowID)
 	if err != nil {
 		t.Fatalf("RestoreMember on a removed row: %v", err)
 	}
-	if restoredUpdatedAt.Before(beforeRestore) {
-		t.Fatalf("expected RestoreMember to return a freshly-written updated_at (>= %v), got %v", beforeRestore, restoredUpdatedAt)
+	if restoredUpdatedAt.Before(beforeRestore.Add(-clockSkewTolerance)) {
+		t.Fatalf("expected RestoreMember to return a freshly-written updated_at (within %v of %v), got %v", clockSkewTolerance, beforeRestore, restoredUpdatedAt)
 	}
 	var restoredStatus string
 	var restoredRemovedAt *time.Time
