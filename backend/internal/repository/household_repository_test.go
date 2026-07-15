@@ -484,7 +484,7 @@ func TestHouseholdRepository_MarkOverCapacityStartNoticeSent(t *testing.T) {
 	defer mock.Close()
 
 	sentAt := time.Now()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1`)).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL`)).
 		WithArgs("hh-1", sentAt).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
@@ -499,7 +499,7 @@ func TestHouseholdRepository_MarkOverCapacityWarn3dSent(t *testing.T) {
 	defer mock.Close()
 
 	sentAt := time.Now()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1`)).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL`)).
 		WithArgs("hh-1", sentAt).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 

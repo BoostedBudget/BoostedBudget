@@ -400,16 +400,25 @@ func (r *householdRepository) ClearOverCapacity(ctx context.Context, householdID
 	return err
 }
 
+// MarkOverCapacityStartNoticeSent stamps the initial grace notice as sent. Guarded by
+// `over_capacity_since IS NOT NULL` — Round 5 Gap Analysis fix (#1371): the daily
+// backstop worker can race a concurrent read-only-owner ClearOverCapacity (webhook fast
+// path or the worker's own next run), and without this guard a stale notice-sent stamp
+// could be written onto a household that's no longer in grace. A 0-row UPDATE is not an
+// error, preserving the existing nil-on-success contract.
 func (r *householdRepository) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1
+		UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL
 	`, householdID, sentAt)
 	return err
 }
 
+// MarkOverCapacityWarn3dSent stamps the "3 days left" warning as sent. Guarded by
+// `over_capacity_since IS NOT NULL` — see MarkOverCapacityStartNoticeSent's doc comment
+// for why. Round 5 Gap Analysis fix (#1371).
 func (r *householdRepository) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1
+		UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL
 	`, householdID, sentAt)
 	return err
 }
