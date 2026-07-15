@@ -212,6 +212,18 @@ func (m *MockEmailService) SendHouseholdMemberRemoved(ctx context.Context, toEma
 	return args.Error(0)
 }
 
+// SendHouseholdOverCapacityNotice/Warning (#1371 — Phase 7, Task 6) are not exercised
+// by these deletion tests; stubbed to satisfy the expanded EmailService interface.
+func (m *MockEmailService) SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
+func (m *MockEmailService) SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
 // MockClerkService for testing
 type MockClerkService struct {
 	mock.Mock
