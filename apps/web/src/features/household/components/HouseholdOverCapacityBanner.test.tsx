@@ -189,6 +189,37 @@ describe('HouseholdOverCapacityBanner', () => {
     expect(container.firstChild).toBeNull()
   })
 
+  it('renders null while the entitlement query is still loading, even with over-capacity data queued up', () => {
+    // Household query has already resolved with over-capacity data (isOwner + overCapacitySince
+    // truthy), but the entitlement query — which seatsUsed/seatsTotal come from — is still
+    // loading. useHousehold().isLoading aggregates both queries, so the banner must stay
+    // hidden rather than briefly rendering "Remove 0 members" with stale/default seat counts.
+    configureOverCapacityOwner()
+    mockUseGetHouseholdEntitlement.mockReturnValue({
+      data: makeEntitlement(),
+      isLoading: true,
+      error: null,
+      refetch: mockRefetchHouseholdEntitlement,
+    })
+    const { container } = renderBanner()
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('renders null while the household query is still loading, even with over-capacity data queued up', () => {
+    configureOverCapacityOwner()
+    mockUseGetMyHousehold.mockReturnValue({
+      data: {
+        household: { ...baseHousehold, over_capacity_since: '2026-07-01T00:00:00Z' },
+        summary: makeEntitlement(),
+      },
+      isLoading: true,
+      error: null,
+      refetch: mockRefetchMyHousehold,
+    })
+    const { container } = renderBanner()
+    expect(container.firstChild).toBeNull()
+  })
+
   it('fires HOUSEHOLD_OVER_CAPACITY_BANNER_VIEWED on mount', () => {
     configureOverCapacityOwner()
     renderBanner()
