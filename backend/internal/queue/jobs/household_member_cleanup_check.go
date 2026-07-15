@@ -49,8 +49,9 @@ type HouseholdMemberCleanupRepository interface {
 // contains no SQL of its own beyond the scan query above.
 type HouseholdMemberPurgeService interface {
 	// PurgeRemovedMembership permanently deletes a removed household_members row
-	// (identified by its own id), along with its shares and entitlement.
-	PurgeRemovedMembership(ctx context.Context, membershipID string) error
+	// (identified by its own id), along with its shares and entitlement. householdID
+	// is used to lock the household row first (lock-ordering convention).
+	PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error
 }
 
 // HouseholdMemberCleanupCheckWorker processes household member cleanup check jobs.
@@ -145,7 +146,7 @@ func (w *HouseholdMemberCleanupCheckWorker) purgeExpiredMemberships(ctx context.
 
 	var purgedCount, errorCount int
 	for _, member := range candidates {
-		if purgeErr := w.purgeSvc.PurgeRemovedMembership(ctx, member.ID); purgeErr != nil {
+		if purgeErr := w.purgeSvc.PurgeRemovedMembership(ctx, member.HouseholdID, member.ID); purgeErr != nil {
 			w.logger.Error("failed to purge household membership",
 				"job_id", jobID, "membership_id", member.ID, "error", purgeErr)
 			errorCount++

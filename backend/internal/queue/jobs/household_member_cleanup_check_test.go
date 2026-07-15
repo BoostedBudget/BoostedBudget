@@ -36,8 +36,8 @@ type MockHouseholdMemberPurgeService struct {
 	mock.Mock
 }
 
-func (m *MockHouseholdMemberPurgeService) PurgeRemovedMembership(ctx context.Context, membershipID string) error {
-	args := m.Called(ctx, membershipID)
+func (m *MockHouseholdMemberPurgeService) PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error {
+	args := m.Called(ctx, householdID, membershipID)
 	return args.Error(0)
 }
 
@@ -82,7 +82,7 @@ func TestHouseholdMemberCleanupCheck_CandidateFound_PurgesByID(t *testing.T) {
 	mockPurge := new(MockHouseholdMemberPurgeService)
 
 	mockRepo.On("ListMembershipsPastPurgeWindow", ctx, 30).Return(candidates, nil)
-	mockPurge.On("PurgeRemovedMembership", ctx, "member-1").Return(nil)
+	mockPurge.On("PurgeRemovedMembership", ctx, "hh-1", "member-1").Return(nil)
 
 	worker := newTestHouseholdMemberCleanupWorker(mockRepo, mockPurge)
 	job := newTestHouseholdMemberCleanupJob(HouseholdMemberCleanupCheckArgs{TriggerSource: "periodic"})
@@ -125,8 +125,8 @@ func TestHouseholdMemberCleanupCheck_PurgeError_ContinuesProcessing(t *testing.T
 	mockPurge := new(MockHouseholdMemberPurgeService)
 
 	mockRepo.On("ListMembershipsPastPurgeWindow", ctx, 30).Return(candidates, nil)
-	mockPurge.On("PurgeRemovedMembership", ctx, "member-fail").Return(errors.New("purge failed"))
-	mockPurge.On("PurgeRemovedMembership", ctx, "member-ok").Return(nil)
+	mockPurge.On("PurgeRemovedMembership", ctx, "hh-1", "member-fail").Return(errors.New("purge failed"))
+	mockPurge.On("PurgeRemovedMembership", ctx, "hh-2", "member-ok").Return(nil)
 
 	worker := newTestHouseholdMemberCleanupWorker(mockRepo, mockPurge)
 	job := newTestHouseholdMemberCleanupJob(HouseholdMemberCleanupCheckArgs{TriggerSource: "periodic"})
@@ -156,7 +156,7 @@ func TestHouseholdMemberCleanupCheck_NoMultiTableSQL(t *testing.T) {
 	mockPurge := new(MockHouseholdMemberPurgeService)
 
 	mockRepo.On("ListMembershipsPastPurgeWindow", ctx, 30).Return(candidates, nil)
-	mockPurge.On("PurgeRemovedMembership", ctx, "member-1").Return(nil)
+	mockPurge.On("PurgeRemovedMembership", ctx, "hh-1", "member-1").Return(nil)
 
 	worker := newTestHouseholdMemberCleanupWorker(mockRepo, mockPurge)
 	job := newTestHouseholdMemberCleanupJob(HouseholdMemberCleanupCheckArgs{TriggerSource: "periodic"})
