@@ -201,8 +201,9 @@ func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, user
 	return args.Error(0)
 }
 
-// setupTestCheckoutHandler creates a handler with mock dependencies
-func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
+// setupTestCheckoutHandlerBase creates a handler with mock dependencies and optional household repo.
+// Used by both setupTestCheckoutHandler and setupTestCheckoutHandlerWithHouseholdRepo.
+func setupTestCheckoutHandlerBase(t *testing.T, householdRepo checkoutHouseholdSeatReader) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
 	t.Helper()
 
 	mockService := new(mockPaddleCheckoutService)
@@ -226,9 +227,16 @@ func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddle
 		Config:        cfg,
 		TierConfig:    tierConfig,
 		Logger:        logger,
+		HouseholdRepo: householdRepo,
 	})
 
 	return handler, mockService, mockRepo
+}
+
+// setupTestCheckoutHandler creates a handler with mock dependencies (no household repo)
+func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
+	t.Helper()
+	return setupTestCheckoutHandlerBase(t, nil)
 }
 
 // Helper to create context with user_id using the correct typed context key
@@ -902,6 +910,344 @@ func TestHandleUpdateSubscription_NoActiveSubscription(t *testing.T) {
 	assert.Contains(t, err.Error(), "No active subscription")
 
 	mockRepo.AssertExpectations(t)
+}
+
+// ─── In-app downgrade seat guard (#1371 Task 5) ─────────────────────────────
+//
+// Blocks a household owner from downgrading their subscription tier in-app if the
+// new EFFECTIVE tier (honoring an active manual_tier_override) doesn't have enough
+// seats for their current active+pending household. Independent of Task 6's
+// webhook-driven over-capacity grace mechanism.
+
+// mockHouseholdSeatRepoForCheckout is a mock implementation of the narrow
+// checkoutHouseholdSeatReader capability the downgrade guard needs.
+type mockHouseholdSeatRepoForCheckout struct{ mock.Mock }
+
+func (m *mockHouseholdSeatRepoForCheckout) GetHouseholdForUser(ctx context.Context, userID string) (*domain.Household, bool, bool, error) {
+	args := m.Called(ctx, userID)
+	var household *domain.Household
+	if args.Get(0) != nil {
+		household = args.Get(0).(*domain.Household)
+	}
+	return household, args.Bool(1), args.Bool(2), args.Error(3)
+}
+
+func (m *mockHouseholdSeatRepoForCheckout) CountActiveMembers(ctx context.Context, householdID string) (int, error) {
+	args := m.Called(ctx, householdID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *mockHouseholdSeatRepoForCheckout) CountPendingInvites(ctx context.Context, householdID string) (int, error) {
+	args := m.Called(ctx, householdID)
+	return args.Int(0), args.Error(1)
+}
+
+// setupTestCheckoutHandlerWithHouseholdRepo builds a handler wired with a household seat
+// reader, for tests that exercise the downgrade guard directly.
+func setupTestCheckoutHandlerWithHouseholdRepo(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo, *mockHouseholdSeatRepoForCheckout) {
+	t.Helper()
+
+	householdRepo := &mockHouseholdSeatRepoForCheckout{}
+	handler, mockService, mockRepo := setupTestCheckoutHandlerBase(t, householdRepo)
+	return handler, mockService, mockRepo, householdRepo
+}
+
+// TestHandleUpdateSubscription_DowngradeBlockedBySeats tests that an owner downgrading
+// to a tier with fewer seats than their current active+pending household is blocked
+// with a 409 whose message includes the shortfall count.
+func TestHandleUpdateSubscription_DowngradeBlockedBySeats(t *testing.T) {
+	handler, _, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_4",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "premium" // 1 seat
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(3, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(1, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+	// 3 active + 1 pending = 4 members, premium has 1 seat => shortfall of 3.
+	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "before downgrading")
+
+	mockRepo.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_DowngradeAllowedWhenSeatsFit tests that a downgrade to a
+// tier that still has enough seats for the current household proceeds unchanged.
+func TestHandleUpdateSubscription_DowngradeAllowedWhenSeatsFit(t *testing.T) {
+	handler, mockService, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_5",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "household_3" // 3 seats
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(2, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(0, nil)
+
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_NoHousehold_Unaffected tests that a user who does not own
+// a household (the common case) is unaffected by the guard, whether or not they belong to
+// one as a member.
+func TestHandleUpdateSubscription_NoHousehold_Unaffected(t *testing.T) {
+	handler, mockService, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("member_1")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "member_1",
+		Email:                "member@example.com",
+		SubscriptionTier:     "household_4",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "member_1"
+	input.Body.NewTier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "member_1").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "member_1").Return(user, nil).Once()
+
+	// found=true but isOwner=false: this caller is a household MEMBER, not the owner —
+	// seats are an owner concept, so the guard must not engage even though found=true.
+	household := &domain.Household{ID: "household_1", OwnerUserID: "someone_else"}
+	householdRepo.On("GetHouseholdForUser", ctx, "member_1").Return(household, false, true, nil)
+
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+	// CountActiveMembers/CountPendingInvites must never be called for a non-owner.
+	householdRepo.AssertNotCalled(t, "CountActiveMembers", mock.Anything, mock.Anything)
+	householdRepo.AssertNotCalled(t, "CountPendingInvites", mock.Anything, mock.Anything)
+}
+
+// TestHandleUpdateSubscription_SoloUser_Unaffected tests the common case: a solo user with
+// no household at all (found=false) sails through unchanged, even when downgrading to the
+// smallest tier.
+func TestHandleUpdateSubscription_SoloUser_Unaffected(t *testing.T) {
+	handler, mockService, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("solo_1")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "solo_1",
+		Email:                "solo@example.com",
+		SubscriptionTier:     "household_5",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "solo_1"
+	input.Body.NewTier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "solo_1").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "solo_1").Return(user, nil).Once()
+
+	// found=false: no household row at all for this user — the common case.
+	householdRepo.On("GetHouseholdForUser", ctx, "solo_1").Return(nil, false, false, nil)
+
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+	householdRepo.AssertNotCalled(t, "CountActiveMembers", mock.Anything, mock.Anything)
+	householdRepo.AssertNotCalled(t, "CountPendingInvites", mock.Anything, mock.Anything)
+}
+
+// TestHandleUpdateSubscription_NoHouseholdRepoConfigured_StillWorks tests backward
+// compatibility: handlers constructed without HouseholdRepo (nil) must keep working —
+// the guard is skipped entirely, not a panic. Mirrors the EntitlementRepo nil-safety
+// pattern from #1367.
+func TestHandleUpdateSubscription_NoHouseholdRepoConfigured_StillWorks(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "household_5",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+}
+
+// TestHandleUpdateSubscription_ManualOverrideKeepsEffectiveTierHigher_Allowed is the
+// trickiest case: the owner's raw requested target tier ("premium", 1 seat) would not fit
+// their 4-member household, but an active manual_tier_override ("household_5", 5 seats)
+// means they are NOT actually downgrading in EFFECTIVE terms. The guard must simulate
+// ComputeEffectiveTier() with the hypothetical post-change SubscriptionTier (not just
+// compare the raw requested tier's seat count) to correctly allow this through.
+func TestHandleUpdateSubscription_ManualOverrideKeepsEffectiveTierHigher_Allowed(t *testing.T) {
+	handler, mockService, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	override := "household_5"
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_2",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+		ManualTierOverride:   &override, // active, no expiry — comped to household_5
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "premium" // raw requested target: 1 seat — would NOT fit 4 members
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	// 4 active members: would NOT fit premium's 1 seat, but DOES fit household_5's 5 seats
+	// (the override-resolved effective tier) — proving effective-tier, not raw-tier, gates.
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(4, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(0, nil)
+
+	mockService.On("UpdateSubscription", ctx, subscriptionID, mock.AnythingOfType("string"), "prorated_immediately").
+		Return(&paddle.Subscription{ID: subscriptionID, Status: paddle.SubscriptionStatusActive}, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.NoError(t, err, "manual override keeps effective tier at household_5, which fits 4 members — must not be blocked")
+	require.NotNil(t, output)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_PendingInviteCountsTowardShortfall tests that an owner at
+// exactly-active-capacity with 1 pending invite is still blocked when downgrading to a
+// tier that would fit the active members alone but not the pending invite too.
+func TestHandleUpdateSubscription_PendingInviteCountsTowardShortfall(t *testing.T) {
+	handler, _, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_3",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "household_2" // 2 seats — fits the 2 active members alone
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(2, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(1, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+	// 2 active + 1 pending = 3 members, household_2 has 2 seats => shortfall of 1.
+	assert.Contains(t, err.Error(), "1")
+	assert.Contains(t, err.Error(), "before downgrading")
+
+	mockRepo.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
 }
 
 // --- HandleCancelSubscription Tests ---
