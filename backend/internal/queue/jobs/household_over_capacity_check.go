@@ -80,13 +80,17 @@ type HouseholdOverCapacityOffboardService interface {
 }
 
 // HouseholdOverCapacityEmailService defines the email methods needed by this worker:
-// the two owner-facing grace notices (Task 6, Part A) plus the existing member-removed
-// notification (Task 3), fired directly by this worker after an auto-offboard since
-// OffboardExcessMembers itself only returns the queued emails, never sends them.
+// only the two owner-facing grace notices (Task 6, Part A). The member-removed email
+// after an auto-offboard is NOT sent from here — HouseholdService.OffboardExcessMembers
+// unconditionally sends it internally (via its own sendRemovalEmails, Task 3) right
+// after its own tx.Commit, every time it's called, regardless of caller. The
+// []QueuedRemovalEmail it returns exists purely so a caller (this worker included) can
+// inspect what happened — e.g. for logging len(queued) — never so a caller can re-send
+// from it; doing so would double-email every auto-offboarded member (a real bug caught
+// in review).
 type HouseholdOverCapacityEmailService interface {
 	SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error
 	SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error
-	SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error
 }
 
 // HouseholdOverCapacityCheckWorker processes household over-capacity check jobs. It is
@@ -281,9 +285,13 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 
 // autoOffboard delegates the LIFO excess-member removal to HouseholdService (Task 0),
 // then clears the over-capacity flag (which OffboardExcessMembers itself doesn't know
-// about — it's a Task 0 method, kept unaware of over-capacity by design), then fires
-// the returned removal emails directly, since this worker (not HouseholdService) is the
-// caller here.
+// about — it's a Task 0 method, kept unaware of over-capacity by design). It does NOT
+// send the removal emails itself: OffboardExcessMembers already sends
+// SendHouseholdMemberRemoved internally (via HouseholdService.sendRemovalEmails)
+// immediately after its own tx.Commit succeeds — see household_service.go. Sending
+// again here from the returned queue would double-email every auto-offboarded member
+// (caught in review; ForceDisband, Task 7, has the identical internally-sends-AND-
+// returns-a-queue shape, so any future caller there must not repeat this mistake).
 func (w *HouseholdOverCapacityCheckWorker) autoOffboard(ctx context.Context, jobID int64, h *domain.Household, activeCount, seatLimit int) error {
 	queued, err := w.offboardSvc.OffboardExcessMembers(ctx, h.ID)
 	if err != nil {
@@ -292,28 +300,10 @@ func (w *HouseholdOverCapacityCheckWorker) autoOffboard(ctx context.Context, job
 	if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 		return fmt.Errorf("failed to clear over-capacity after auto-offboard for household %s: %w", h.ID, err)
 	}
-	w.sendRemovalEmails(ctx, jobID, h.ID, queued)
 	w.logger.Info("household auto-offboarded excess members after grace deadline",
 		"job_id", jobID, "household_id", h.ID, "removed_count", len(queued),
 		"active_count", activeCount, "seat_limit", seatLimit)
 	return nil
-}
-
-// sendRemovalEmails fires the queued "you've been removed" emails after an
-// auto-offboard. Best-effort, log-and-continue — matches sendRemovalEmails' contract
-// in household_service.go (Task 3), except invoked from the worker directly since
-// OffboardExcessMembers only RETURNS the queued emails, it doesn't send them itself
-// when this caller is a background worker rather than HouseholdService.
-func (w *HouseholdOverCapacityCheckWorker) sendRemovalEmails(ctx context.Context, jobID int64, householdID string, queued []services.QueuedRemovalEmail) {
-	if w.emailService == nil {
-		return
-	}
-	for _, q := range queued {
-		if err := w.emailService.SendHouseholdMemberRemoved(ctx, q.ToEmail, q.HouseholdName, q.PurgeDate); err != nil {
-			w.logger.Warn("failed to send member-removed email after auto-offboard",
-				"job_id", jobID, "household_id", householdID, "email", q.ToEmail, "error", err)
-		}
-	}
 }
 
 // sendStartNotice sends the initial "you're over capacity" email and stamps it as sent

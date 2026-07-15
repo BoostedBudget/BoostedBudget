@@ -93,11 +93,6 @@ func (m *mockHouseholdOverCapacityEmailService) SendHouseholdOverCapacityWarning
 	return args.Error(0)
 }
 
-func (m *mockHouseholdOverCapacityEmailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error {
-	args := m.Called(ctx, toEmail, householdName, purgeDate)
-	return args.Error(0)
-}
-
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 func newTestHouseholdOverCapacityCheckJob(args HouseholdOverCapacityCheckArgs) *river.Job[HouseholdOverCapacityCheckArgs] {
@@ -253,7 +248,7 @@ func TestHouseholdOverCapacityCheck_AlreadyResolved_NoOp(t *testing.T) {
 	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
-	mockEmailSvc.AssertNotCalled(t, "SendHouseholdMemberRemoved")
+	assert.Empty(t, mockEmailSvc.Calls)
 }
 
 // --- Case 3: over capacity, not yet flagged (webhook-missed case) ---
@@ -299,7 +294,6 @@ func TestHouseholdOverCapacityCheck_InGrace_PastDeadline_AutoOffboards(t *testin
 	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
 	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1").Return(queued, nil)
 	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
-	mockEmailSvc.On("SendHouseholdMemberRemoved", ctx, "member2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).Return(nil)
 
 	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
 	err := worker.Work(ctx, job)
@@ -307,10 +301,47 @@ func TestHouseholdOverCapacityCheck_InGrace_PastDeadline_AutoOffboards(t *testin
 	require.NoError(t, err)
 	mockRepo.AssertExpectations(t)
 	mockOffboardSvc.AssertExpectations(t)
-	mockEmailSvc.AssertExpectations(t)
 	// Deadline reached — must NOT also send a redundant start/warning notice.
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	// Regression guard (real bug caught in review): OffboardExcessMembers already sends
+	// the "you've been removed" email to every queued member internally, immediately
+	// after its own tx.Commit (Task 3, household_service.go's sendRemovalEmails) —
+	// sending again from the returned queue here would double-email every
+	// auto-offboarded member. emailService must be COMPLETELY untouched by autoOffboard.
+	assert.Empty(t, mockEmailSvc.Calls)
+}
+
+// TestHouseholdOverCapacityCheck_AutoOffboard_DoesNotSendEmailsDirectly is a dedicated
+// regression test for the same bug: the worker's autoOffboard path must call ONLY
+// OffboardExcessMembers + ClearOverCapacity, never any email-sending method itself —
+// HouseholdOverCapacityEmailService doesn't even declare SendHouseholdMemberRemoved
+// (compile-time enforcement), and this proves emailService sees zero calls at runtime.
+func TestHouseholdOverCapacityCheck_AutoOffboard_DoesNotSendEmailsDirectly(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+		{ToEmail: "member3@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1").Return(queued, nil)
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	assert.Empty(t, mockEmailSvc.Calls, "autoOffboard must not call any email method directly — OffboardExcessMembers already sent the removal emails internally")
 }
 
 // TestHouseholdOverCapacityCheck_InGrace_ExactlyAtDeadline_AutoOffboards proves a
