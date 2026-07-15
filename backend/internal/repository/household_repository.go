@@ -74,7 +74,8 @@ type HouseholdRepository interface {
 	// active owner row for the household.
 	InsertMember(ctx context.Context, m *domain.HouseholdMember) error
 
-	// ListMembers returns all active members of a household, ordered by joined_at.
+	// ListMembers returns all active members of a household, ordered by joined_at ASC
+	// with a deterministic id ASC tie-breaker (Gap Analysis Round 3, GT-4).
 	ListMembers(ctx context.Context, householdID string) ([]domain.HouseholdMember, error)
 
 	// GetActiveMember returns the caller's active membership row in householdID.
@@ -301,9 +302,14 @@ func (r *householdRepository) InsertMember(ctx context.Context, m *domain.Househ
 }
 
 func (r *householdRepository) ListMembers(ctx context.Context, householdID string) ([]domain.HouseholdMember, error) {
+	// id ASC is a deterministic tie-breaker (Gap Analysis Round 3, GT-4): without it, two
+	// members sharing an identical joined_at timestamp would make OffboardExcessMembers's
+	// LIFO (most-recently-joined-first) removal nondeterministic. Mirrors the same
+	// "<primary> ASC, id ASC" tie-breaker convention already used by
+	// user_account_repository.go.
 	rows, err := r.db.Query(ctx, `
 		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC
+		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC, id ASC
 	`, householdID)
 	if err != nil {
 		return nil, err

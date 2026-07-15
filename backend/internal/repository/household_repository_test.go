@@ -237,6 +237,12 @@ func TestHouseholdRepository_InsertMember_DuplicateOwnerRow(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 }
 
+// TestHouseholdRepository_ListMembers proves ListMembers orders by joined_at ASC with a
+// deterministic id ASC tie-breaker (Gap Analysis Round 3, GT-4): without the tie-breaker,
+// OffboardExcessMembers's LIFO (most-recently-joined-first) removal would be
+// nondeterministic if two members shared an identical joined_at timestamp. Mirrors the
+// same "created_at ASC, id ASC" tie-breaker convention already used by
+// user_account_repository.go.
 func TestHouseholdRepository_ListMembers(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdMockDB(t)
@@ -244,7 +250,7 @@ func TestHouseholdRepository_ListMembers(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC`)).
+		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC, id ASC`)).
 		WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
 			AddRow("mem-1", "hh-1", "owner-1", "owner", "active", now, nil, nil, nil, now, now))
