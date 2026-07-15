@@ -1039,6 +1039,44 @@ func TestHouseholdService_OffboardExcessMembers_HouseholdNotFound_RollsBack(t *t
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
+// TestHouseholdService_OffboardExcessMembers_OwnerFreshlyReadOnly_NoRemovals proves the
+// Gap Analysis Round 3, GT-2 fix: household_over_capacity_check.go's processHousehold
+// reads the owner's subscription status ONCE at the top of a run, then may call
+// OffboardExcessMembers (via autoOffboard) some time later in that SAME run. If the
+// owner's subscription lapses via a concurrent Paddle webhook in that window, the
+// caller's cached owner read would be stale. OffboardExcessMembers already re-fetches the
+// owner fresh under its own LockHouseholdByID lock for its tier computation — this test
+// proves that fresh read is ALSO used to skip removal entirely (no ListMembers call, no
+// removeMemberTx, no seat-limit computation) when the freshly-fetched owner is read-only:
+// grace is moot once the owner is read-only, since members already fall back to their own
+// tier via the entitlement resolver's owner-read-only branch, so there's nothing to
+// LIFO-remove. Returns an empty queue and no error — a legitimate no-op, not a failure.
+func TestHouseholdService_OffboardExcessMembers_OwnerFreshlyReadOnly_NoRemovals(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	readOnlyOwner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "cancelled"}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(readOnlyOwner, nil)
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+	now := time.Now()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+	// No ListMembers query, no removal mutations, no tier lookup consequence — the
+	// read-only check short-circuits before any of that. If the implementation
+	// regressed to computing a seat limit and removing members anyway, pgxmock would
+	// see an unexpected ListMembers/UPDATE query here and fail.
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	require.NoError(t, err)
+	assert.Empty(t, queued, "a freshly read-only owner means grace is moot — nothing should be removed")
+	require.NoError(t, pool.ExpectationsWereMet(), "no ListMembers/removal query should have been issued for a read-only owner")
+	userRepo.AssertExpectations(t)
+}
+
 // ─── PurgeRemovedMembership (#1371 — Phase 7 foundation) ─────────────────────
 
 // householdLockRow returns a pgxmock rows result satisfying LockHouseholdByID's
