@@ -893,3 +893,218 @@ func TestHouseholdServiceIntegration_SetAccountShareVisibility_CrossMemberIsolat
 	require.Contains(t, memberIDs, memberAcctID)
 	require.NotContains(t, memberIDs, ownerAcctID, "member's account list must never leak the owner's account")
 }
+
+// ─── AcceptInvite — re-invite-within-window restore path (#1371 Task 4) ──────
+
+// TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWindow proves
+// the core Task 4 behavior against real Postgres: a member who was removed less than the
+// 30-day purge window ago, then re-invited, gets their EXACT SAME household_members row
+// reactivated on accept — not a second, duplicate row — with a fresh household
+// entitlement and their seat counted as active again.
+func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWindow(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household (restore)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// First join.
+	inviteResult1, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken1 := inviteResult1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptResult1, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken1, true, nil)
+	require.NoError(t, err)
+	originalMemberID := acceptResult1.Member.ID
+
+	// Owner removes them — soft-remove leaves a status='removed' historical row (this is
+	// exactly the state Task 2's purge worker would later sweep after 30 days).
+	require.NoError(t, f.svc.RemoveMember(ctx, owner.ID, invitee.ID))
+
+	var removedAt *time.Time
+	err = f.pool.QueryRow(ctx, `SELECT removed_at FROM household_members WHERE id = $1`, originalMemberID).Scan(&removedAt)
+	require.NoError(t, err)
+	require.NotNil(t, removedAt, "the original row must be soft-removed, not deleted")
+
+	// Owner re-invites the same email within the 30-day window.
+	inviteResult2, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken2 := inviteResult2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	acceptResult2, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken2, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, originalMemberID, acceptResult2.Member.ID, "the SAME row must be restored, not a new one inserted")
+	require.Equal(t, domain.HouseholdMemberStatusActive, acceptResult2.Member.Status)
+	require.Nil(t, acceptResult2.Member.RemovedAt)
+
+	// Exactly ONE household_members row for this (household, user) pair — never two.
+	var rowCount int
+	err = f.pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_members WHERE household_id = $1 AND user_id = $2`,
+		household.ID, invitee.ID).Scan(&rowCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, rowCount, "restore must reuse the existing row, never leave a duplicate historical row behind")
+
+	// The restored row itself is active with removed_at cleared.
+	member, err := hhRepo.GetActiveMember(ctx, household.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, originalMemberID, member.ID)
+	require.Nil(t, member.RemovedAt)
+
+	// A fresh household entitlement exists for the restored member.
+	entRepo := repository.NewEntitlementRepository(f.pool)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
+	require.Equal(t, owner.ID, *entitlement.PayerUserID)
+
+	// Seat count reflects them as active again (owner + restored invitee = 2).
+	activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, activeCount)
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_SeatLimitBlocksRestore proves the restore
+// path does NOT bypass the seat check: if the household is already at capacity by the
+// time the re-invited member accepts, they are blocked with ErrHouseholdSeatsFull exactly
+// like a fresh join would be, and their removed row is left untouched (not restored).
+func TestHouseholdServiceIntegration_AcceptInvite_SeatLimitBlocksRestore(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	// Owner starts on household_3 (3 seats) so memberB's re-invite can be issued (and
+	// remain pending) alongside memberC's, before the owner's plan is downgraded to
+	// household_2 — mirrors the established downgrade-race technique used by
+	// TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_SeatCapEnforced.
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_3", "active")
+	memberB := insertIntegrationTestUser(t, f.profileRepo, "member-b-"+t.Name()+"@example.com", "premium", "trial")
+	memberC := insertIntegrationTestUser(t, f.profileRepo, "member-c-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, memberB.ID, memberC.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household (seat limit restore)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// memberB joins, then is removed — leaving a removed row and freeing a seat.
+	inviteB1, err := f.svc.CreateInvite(ctx, owner.ID, memberB.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB1 := inviteB1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptB1, err := f.svc.AcceptInvite(ctx, memberB.ID, tokenB1, true, nil)
+	require.NoError(t, err)
+	removedMemberID := acceptB1.Member.ID
+	require.NoError(t, f.svc.RemoveMember(ctx, owner.ID, memberB.ID))
+
+	// Owner re-invites memberB (this invite is still pending when memberB attempts to
+	// accept it, below) BEFORE memberC takes the freed seat.
+	inviteB2, err := f.svc.CreateInvite(ctx, owner.ID, memberB.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB2 := inviteB2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	// memberC now fills the freed seat (owner + memberC = 2 active, still under the
+	// household_3 cap of 3).
+	inviteC, err := f.svc.CreateInvite(ctx, owner.ID, memberC.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenC := inviteC.InviteLink[len("https://app.example.com/households/invites/"):]
+	_, err = f.svc.AcceptInvite(ctx, memberC.ID, tokenC, true, nil)
+	require.NoError(t, err)
+
+	// Owner's plan is downgraded to household_2 (2 seats) — the household is now exactly
+	// at capacity (owner + memberC), simulating a Paddle downgrade race.
+	_, err = f.pool.Exec(ctx, `UPDATE users SET subscription_tier = 'household_2' WHERE id = $1`, owner.ID)
+	require.NoError(t, err)
+
+	// memberB — who still holds a valid pending invite AND has a removed row for this
+	// household — tries to accept. The seat check must block this exactly like it would a
+	// fresh join, even though a removed row exists to restore.
+	_, err = f.svc.AcceptInvite(ctx, memberB.ID, tokenB2, true, nil)
+	require.ErrorIs(t, err, domain.ErrHouseholdSeatsFull)
+
+	// The removed row must be left completely untouched — still removed, not restored.
+	member, err := hhRepo.GetRemovedMemberForUpdate(ctx, household.ID, memberB.ID)
+	require.NoError(t, err)
+	require.Equal(t, removedMemberID, member.ID)
+	require.Equal(t, domain.HouseholdMemberStatusRemoved, member.Status)
+	require.NotNil(t, member.RemovedAt)
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_RestoreConflict_UserActiveElsewhere proves
+// the conflict case: a caller has a removed row for household A, but has SINCE joined a
+// DIFFERENT household B as an active member. Re-accepting a stale invite to household A
+// must surface RestoreMember's existing conflict mapping (ErrAlreadyInHousehold) rather
+// than silently succeeding or leaving two active rows for the same user — the global
+// uq_household_members_active_user partial unique index (migration 000107) is what
+// RestoreMember's UPDATE collides against here.
+func TestHouseholdServiceIntegration_AcceptInvite_RestoreConflict_UserActiveElsewhere(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	ownerA := insertIntegrationTestUser(t, f.profileRepo, "owner-a-"+t.Name()+"@example.com", "household_2", "active")
+	ownerB := insertIntegrationTestUser(t, f.profileRepo, "owner-b-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{ownerA.ID, ownerB.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	householdA, err := f.svc.CreateHousehold(ctx, ownerA.ID, "Household A (conflict test)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, householdA.ID) //nolint:errcheck
+	})
+	householdB, err := f.svc.CreateHousehold(ctx, ownerB.ID, "Household B (conflict test)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, householdB.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// Invitee joins household A, then is removed — leaving a removed row in A.
+	inviteA1, err := f.svc.CreateInvite(ctx, ownerA.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenA1 := inviteA1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptA1, err := f.svc.AcceptInvite(ctx, invitee.ID, tokenA1, true, nil)
+	require.NoError(t, err)
+	removedMemberID := acceptA1.Member.ID
+	require.NoError(t, f.svc.RemoveMember(ctx, ownerA.ID, invitee.ID))
+
+	// Invitee joins household B as an active member — a DIFFERENT household entirely.
+	inviteB, err := f.svc.CreateInvite(ctx, ownerB.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB := inviteB.InviteLink[len("https://app.example.com/households/invites/"):]
+	_, err = f.svc.AcceptInvite(ctx, invitee.ID, tokenB, true, nil)
+	require.NoError(t, err)
+
+	// Owner A re-invites the same email — invitee still has a removed row in A.
+	inviteA2, err := f.svc.CreateInvite(ctx, ownerA.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenA2 := inviteA2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	_, err = f.svc.AcceptInvite(ctx, invitee.ID, tokenA2, true, nil)
+	require.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
+
+	// The stale removed row in A must remain untouched (still removed).
+	memberA, err := hhRepo.GetRemovedMemberForUpdate(ctx, householdA.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, removedMemberID, memberA.ID)
+	require.Equal(t, domain.HouseholdMemberStatusRemoved, memberA.Status)
+
+	// The active row in B must remain untouched (still active).
+	memberB, err := hhRepo.GetActiveMember(ctx, householdB.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.HouseholdMemberStatusActive, memberB.Status)
+}

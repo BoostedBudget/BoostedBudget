@@ -1041,18 +1041,46 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		return nil, cerr
 	}
 
-	// (5) Insert membership, snapshotting the caller's prior tier/status for Phase 7 restore.
-	priorTier := caller.ComputeEffectiveTier()
-	priorStatus := caller.SubscriptionStatus
-	member := &domain.HouseholdMember{
-		HouseholdID:             inv.HouseholdID,
-		UserID:                  callerUserID,
-		Role:                    domain.HouseholdRoleMember,
-		Status:                  domain.HouseholdMemberStatusActive,
-		PriorSubscriptionTier:   &priorTier,
-		PriorSubscriptionStatus: &priorStatus,
-	}
-	if cerr = hhRepo.InsertMember(ctx, member); cerr != nil {
+	// (5) Restore-or-insert membership (#1371 Task 4 — re-invite within the 30-day
+	// preservation window). If the caller has a 'removed' household_members row for THIS
+	// household — they were removed less than purgeAfterDays ago and are now being
+	// re-invited before Task 2's purge worker sweeps that row — reactivate the SAME row
+	// instead of inserting a duplicate historical one: GetRemovedMemberForUpdate locks
+	// the most recent removed row FOR UPDATE, then RestoreMember flips it back to
+	// status='active'. If no removed row exists (first-ever join, or the purge worker
+	// already deleted it), fall through to the original fresh-insert path, unchanged.
+	// Either branch is still gated by the seat check above — a restored member counts as
+	// a new active member against the seat cap exactly like a fresh join does.
+	var member *domain.HouseholdMember
+	removedMember, cerr := hhRepo.GetRemovedMemberForUpdate(ctx, inv.HouseholdID, callerUserID)
+	switch {
+	case cerr == nil:
+		// Restore path: reactivate the existing row rather than inserting a new one.
+		// RestoreMember already maps a since-joined-elsewhere conflict to
+		// ErrAlreadyInHousehold/ErrAlreadyOwnsHousehold (same contract InsertMember
+		// uses below) — surface it as-is rather than swallowing it.
+		if cerr = hhRepo.RestoreMember(ctx, removedMember.ID); cerr != nil {
+			return nil, cerr
+		}
+		removedMember.Status = domain.HouseholdMemberStatusActive
+		removedMember.RemovedAt = nil
+		member = removedMember
+	case errors.Is(cerr, domain.ErrMemberNotFound):
+		// Fresh-insert path: unchanged from before Task 4.
+		priorTier := caller.ComputeEffectiveTier()
+		priorStatus := caller.SubscriptionStatus
+		member = &domain.HouseholdMember{
+			HouseholdID:             inv.HouseholdID,
+			UserID:                  callerUserID,
+			Role:                    domain.HouseholdRoleMember,
+			Status:                  domain.HouseholdMemberStatusActive,
+			PriorSubscriptionTier:   &priorTier,
+			PriorSubscriptionStatus: &priorStatus,
+		}
+		if cerr = hhRepo.InsertMember(ctx, member); cerr != nil {
+			return nil, cerr
+		}
+	default:
 		return nil, cerr
 	}
 
