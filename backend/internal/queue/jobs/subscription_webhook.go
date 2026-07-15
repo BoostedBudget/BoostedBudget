@@ -770,7 +770,6 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	return nil
 }
 
-
 // processSubscriptionPastDue handles subscription.past_due events.
 // Issues #747 #748: Notifies user of overdue payment and syncs Clerk.
 // #898: Only transitions from active/trialing — does not overwrite cancelled/inactive/past_due.
