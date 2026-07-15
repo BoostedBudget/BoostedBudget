@@ -248,6 +248,13 @@ func main() {
 	// retention's worker, since it depends on householdService, not deletionService.
 	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
 
+	// Issue #1371 — Phase 7 (Task 6): Declare household over-capacity check worker
+	// (authoritative daily backstop for the over-capacity grace lifecycle — flags/
+	// clears grace, sends owner notices, auto-offboards at the 14-day deadline).
+	// Constructed once householdService is available (below), same ordering
+	// constraint as Task 2's worker since it also needs householdService.OffboardExcessMembers.
+	var householdOverCapacityCheckWorker *jobs.HouseholdOverCapacityCheckWorker
+
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
 
@@ -564,6 +571,20 @@ func main() {
 		})
 		appLogger.Info("Household member cleanup check worker created (River)")
 
+		// Issue #1371 — Phase 7 (Task 6): Create household over-capacity check worker
+		// (authoritative daily backstop). Same non-nil-by-construction reasoning as
+		// Task 2's worker above: it delegates auto-offboard to householdService.
+		// OffboardExcessMembers, which is always constructed above.
+		householdOverCapacityCheckWorker = jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{
+			Repo:         householdRepo,
+			UserRepo:     profileRepo,
+			OffboardSvc:  householdService,
+			EmailService: emailService,
+			TierConfig:   tierConfig,
+			Logger:       appLogger,
+		})
+		appLogger.Info("Household over-capacity check worker created (River)")
+
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
@@ -690,7 +711,12 @@ func main() {
 					NotificationRepo:      notificationRepo,
 					PaddleTransactionRepo: paddleTransactionRepo,
 					TierConfig:            tierConfig,
-					Logger:                logger,
+					// Issue #1371 Task 6 (Part B): best-effort fast-path household
+					// over-capacity reconcile after tier-change/cancellation/past-due
+					// webhooks. householdRepo/db are already constructed above.
+					HouseholdRepo: householdRepo,
+					DB:            db,
+					Logger:        logger,
 				})
 				subscriptionWebhookWorker.SetAnalytics(phClient)
 				appLogger.Info("Subscription webhook worker created (River)")
@@ -1189,6 +1215,22 @@ func main() {
 				appLogger.Info("Household member cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check (daily)
+			if householdOverCapacityCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.HouseholdOverCapacityCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Household over-capacity check periodic job configured (daily)")
+			}
+
 			// Issue #633: DLQ cleanup check (daily)
 			if dlqCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
@@ -1329,6 +1371,12 @@ func main() {
 			if householdMemberCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, householdMemberCleanupCheckWorker)
 				appLogger.Info("Household member cleanup check worker registered with River")
+			}
+			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check worker
+			// (constructed above, always non-nil here)
+			if householdOverCapacityCheckWorker != nil {
+				river.AddWorker(riverWorkers, householdOverCapacityCheckWorker)
+				appLogger.Info("Household over-capacity check worker registered with River")
 			}
 			if dlqCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
