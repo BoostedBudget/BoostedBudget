@@ -79,6 +79,11 @@ export const ANALYTICS_EVENTS = {
   // rather than using two separate event names.
   HOUSEHOLD_NEW_ACCOUNTS_SHARE_SAVED: 'household_new_accounts_share_saved',
 
+  // Issue #1371 Task 10: Household over-capacity owner banner
+  HOUSEHOLD_OVER_CAPACITY_BANNER_VIEWED: 'household_over_capacity_banner_viewed',
+  HOUSEHOLD_OVER_CAPACITY_BANNER_CTA_CLICKED: 'household_over_capacity_banner_cta_clicked',
+  HOUSEHOLD_OVER_CAPACITY_BANNER_DISMISSED: 'household_over_capacity_banner_dismissed',
+
   // Billing
   CHECKOUT_STARTED: 'checkout_started',
   CHECKOUT_COMPLETED: 'checkout_completed',

@@ -35,6 +35,9 @@ export {
   type ShareNewAccountsDialogProps,
 } from './components/ShareNewAccountsDialog'
 
+// Owner-facing over-capacity banner (Issue #1371 Task 10)
+export { HouseholdOverCapacityBanner } from './components/HouseholdOverCapacityBanner'
+
 // Hooks (Task 3: ProfilePage integration)
 export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
 export { useAcceptInvite, type UseAcceptInviteResult, type AcceptInviteErrorKind } from './hooks/useAcceptInvite'
