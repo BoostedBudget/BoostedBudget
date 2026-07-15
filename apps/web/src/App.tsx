@@ -16,6 +16,7 @@ import { ProtectedRoute } from './auth'
 import { PremiumRoute } from './auth/PremiumRoute'
 import { Header, AppFooter } from './components/layout'
 import { SubscriptionStatusBanner } from './features/billing/components/SubscriptionStatusBanner'
+import { HouseholdOverCapacityBanner } from './features/household/components/HouseholdOverCapacityBanner'
 import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
 import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
@@ -231,6 +232,7 @@ function App() {
     <div className={`w-full${isLandingPage ? ' landing-page' : ''}`}>
       {!isLandingPage && <Header />}
       {isAuthenticated && !isLandingPage && <SubscriptionStatusBanner />}
+      {isAuthenticated && !isLandingPage && <HouseholdOverCapacityBanner />}
 
       {isLandingPage ? (
         <Routes>
