@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"regexp"
 	"time"
@@ -301,8 +302,11 @@ func (s *emailService) SendHouseholdOverCapacityWarning(ctx context.Context, toE
 }
 
 // buildOverCapacityNoticeEmailHTML creates the HTML email template for the initial
-// over-capacity grace notice.
+// over-capacity grace notice. householdName is owner-controlled free text (only
+// length-validated by Household.Validate), so it's HTML-escaped before interpolation to
+// prevent markup/link injection into the rendered email — Round 5 Gap Analysis fix (#1371).
 func (s *emailService) buildOverCapacityNoticeEmailHTML(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	householdName = html.EscapeString(householdName)
 	formattedDeadline := deadline.Format("January 2, 2006")
 	return fmt.Sprintf(`
 <!DOCTYPE html>
@@ -349,8 +353,10 @@ members to bring your household back within its seat limit.
 }
 
 // buildOverCapacityWarningEmailHTML creates the HTML email template for the "3 days
-// left" follow-up warning.
+// left" follow-up warning. householdName is HTML-escaped — see
+// buildOverCapacityNoticeEmailHTML's doc comment for why. Round 5 Gap Analysis fix (#1371).
 func (s *emailService) buildOverCapacityWarningEmailHTML(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	householdName = html.EscapeString(householdName)
 	formattedDeadline := deadline.Format("January 2, 2006")
 	return fmt.Sprintf(`
 <!DOCTYPE html>
@@ -392,7 +398,12 @@ most-recently-joined members to bring your household back within its seat limit.
 }
 
 // buildHouseholdInviteEmailHTML creates the HTML email template for a household invite.
+// inviterName and householdName are both owner/inviter-controlled free text, so both are
+// HTML-escaped before interpolation — see buildOverCapacityNoticeEmailHTML's doc comment
+// for why. Round 5 Gap Analysis fix (#1371).
 func (s *emailService) buildHouseholdInviteEmailHTML(inviterName, householdName, inviteURL, formattedExpiry string) string {
+	inviterName = html.EscapeString(inviterName)
+	householdName = html.EscapeString(householdName)
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -452,7 +463,10 @@ This invitation expires on %s. If you weren't expecting it, you can safely ignor
 // buildMemberRemovedEmailHTML creates the HTML email template for a household
 // member-removed notification. When disbanded is true (ForceDisband), the footer drops
 // the future-cleanup reference — see SendHouseholdMemberRemoved's interface doc for why.
+// householdName is HTML-escaped before interpolation — see
+// buildOverCapacityNoticeEmailHTML's doc comment for why. Round 5 Gap Analysis fix (#1371).
 func (s *emailService) buildMemberRemovedEmailHTML(householdName string, purgeDate time.Time, disbanded bool) string {
+	householdName = html.EscapeString(householdName)
 	footer := fmt.Sprintf(`If you take no action, the historical membership record will be cleaned up automatically
             after the preservation window, on %s.`, purgeDate.Format("January 2, 2006"))
 	if disbanded {
