@@ -16,6 +16,7 @@ import { useHousehold } from '../hooks/useHousehold'
 import { useSessionDismiss } from '@/shared/hooks/useSessionDismiss'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { bannerVariants, bannerCtaVariants } from '@/shared/components/bannerVariants'
 
 // Distinct dismiss key from SubscriptionStatusBanner's ('status' values like
 // 'past_due') so the two banners are dismissed independently in the same
@@ -54,7 +55,7 @@ export function HouseholdOverCapacityBanner() {
   return (
     <div
       role="alert"
-      className="border-b px-4 py-3 flex items-center justify-between gap-4 bg-warning/10 border-warning/30 text-warning-foreground"
+      className={bannerVariants({ variant: 'warning' })}
     >
       <div className="flex items-center gap-2 text-sm">
         <span>
@@ -65,7 +66,7 @@ export function HouseholdOverCapacityBanner() {
         <a
           href="/profile?tab=household"
           onClick={handleCtaClick}
-          className="shrink-0 px-3 py-1.5 text-sm font-medium bg-warning text-warning-foreground hover:bg-warning/90 rounded-lg transition-colors"
+          className={bannerCtaVariants({ variant: 'warning' })}
         >
           Manage household
         </a>

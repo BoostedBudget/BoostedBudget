@@ -1,29 +1,10 @@
 import { useEffect } from 'react'
-import { cva } from 'class-variance-authority'
 import { useProfile } from '@/features/profile/hooks/useProfile'
 import { useGetBillingPortalUrl } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { useSessionDismiss } from '@/shared/hooks/useSessionDismiss'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
-
-// CVA variant map — mirrors components/ui/alert.tsx pattern with semantic design tokens.
-// No raw color literals (tailwind consolidation policy).
-const bannerVariants = cva(
-  'border-b px-4 py-3 flex items-center justify-between gap-4',
-  {
-    variants: {
-      variant: {
-        warning: 'bg-warning/10 border-warning/30 text-warning-foreground',
-        destructive: 'bg-destructive/10 border-destructive/30 text-destructive-foreground',
-        // text-foreground instead of text-info: bg-info/10 yields ~3.1:1 with text-info (WCAG AA requires 4.5:1)
-        info: 'bg-info/10 border-info/30 text-foreground',
-      },
-    },
-    defaultVariants: {
-      variant: 'info',
-    },
-  }
-)
+import { bannerVariants, bannerCtaVariants } from '@/shared/components/bannerVariants'
 
 type BannerVariant = 'warning' | 'destructive' | 'info'
 
@@ -95,7 +76,7 @@ export function SubscriptionStatusBanner() {
             target="_blank"
             rel="noreferrer"
             onClick={handleCtaClick}
-            className="shrink-0 px-3 py-1.5 text-sm font-medium bg-warning text-warning-foreground hover:bg-warning/90 rounded-lg transition-colors"
+            className={bannerCtaVariants({ variant: 'warning' })}
           >
             Update payment method
           </a>
