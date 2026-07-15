@@ -190,9 +190,9 @@ func (m *mockHouseholdRepo) GetRemovedMemberForUpdate(ctx context.Context, house
 	return args.Get(0).(*domain.HouseholdMember), args.Error(1)
 }
 
-func (m *mockHouseholdRepo) RestoreMember(ctx context.Context, membershipID string) error {
+func (m *mockHouseholdRepo) RestoreMember(ctx context.Context, membershipID string) (time.Time, error) {
 	args := m.Called(ctx, membershipID)
-	return args.Error(0)
+	return args.Get(0).(time.Time), args.Error(1)
 }
 
 func (m *mockHouseholdRepo) ListMembershipsPastPurgeWindow(ctx context.Context, purgeAfterDays int) ([]*domain.HouseholdMember, error) {

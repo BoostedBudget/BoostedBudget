@@ -926,6 +926,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWin
 	acceptResult1, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken1, true, nil)
 	require.NoError(t, err)
 	originalMemberID := acceptResult1.Member.ID
+	originalUpdatedAt := acceptResult1.Member.UpdatedAt
 
 	// Owner removes them — soft-remove leaves a status='removed' historical row (this is
 	// exactly the state Task 2's purge worker would later sweep after 30 days).
@@ -946,6 +947,8 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWin
 	require.Equal(t, originalMemberID, acceptResult2.Member.ID, "the SAME row must be restored, not a new one inserted")
 	require.Equal(t, domain.HouseholdMemberStatusActive, acceptResult2.Member.Status)
 	require.Nil(t, acceptResult2.Member.RemovedAt)
+	require.True(t, acceptResult2.Member.UpdatedAt.After(originalUpdatedAt),
+		"Member.UpdatedAt returned from the restore path must be fresh (RestoreMember's RETURNING updated_at), not the stale pre-restore value — #1371 Task 4 Codex finding")
 
 	// Exactly ONE household_members row for this (household, user) pair — never two.
 	var rowCount int
@@ -954,11 +957,14 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWin
 	require.NoError(t, err)
 	require.Equal(t, 1, rowCount, "restore must reuse the existing row, never leave a duplicate historical row behind")
 
-	// The restored row itself is active with removed_at cleared.
+	// The restored row itself is active with removed_at cleared, and the in-memory
+	// UpdatedAt AcceptInvite returned must match what was actually persisted.
 	member, err := hhRepo.GetActiveMember(ctx, household.ID, invitee.ID)
 	require.NoError(t, err)
 	require.Equal(t, originalMemberID, member.ID)
 	require.Nil(t, member.RemovedAt)
+	require.True(t, acceptResult2.Member.UpdatedAt.Equal(member.UpdatedAt),
+		"the returned Member.UpdatedAt must match the row actually persisted in the database")
 
 	// A fresh household entitlement exists for the restored member.
 	entRepo := repository.NewEntitlementRepository(f.pool)

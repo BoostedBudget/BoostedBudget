@@ -1058,12 +1058,17 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		// Restore path: reactivate the existing row rather than inserting a new one.
 		// RestoreMember already maps a since-joined-elsewhere conflict to
 		// ErrAlreadyInHousehold/ErrAlreadyOwnsHousehold (same contract InsertMember
-		// uses below) — surface it as-is rather than swallowing it.
-		if cerr = hhRepo.RestoreMember(ctx, removedMember.ID); cerr != nil {
+		// uses below) — surface it as-is rather than swallowing it. It also RETURNs
+		// the freshly-written updated_at (Codex review, #1371 Task 4) so the
+		// in-memory struct we return to the caller never leaks the pre-restore,
+		// stale updated_at into the API response.
+		updatedAt, cerr := hhRepo.RestoreMember(ctx, removedMember.ID)
+		if cerr != nil {
 			return nil, cerr
 		}
 		removedMember.Status = domain.HouseholdMemberStatusActive
 		removedMember.RemovedAt = nil
+		removedMember.UpdatedAt = updatedAt
 		member = removedMember
 	case errors.Is(cerr, domain.ErrMemberNotFound):
 		// Fresh-insert path: unchanged from before Task 4.
