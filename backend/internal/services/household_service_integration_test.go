@@ -1041,7 +1041,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_SeatLimitBlocksRestore(t *test
 	require.ErrorIs(t, err, domain.ErrHouseholdSeatsFull)
 
 	// The removed row must be left completely untouched — still removed, not restored.
-	member, err := hhRepo.GetRemovedMemberForUpdate(ctx, household.ID, memberB.ID)
+	member, err := hhRepo.GetRemovedMemberForUpdate(ctx, household.ID, memberB.ID, removalPurgeWindowDays)
 	require.NoError(t, err)
 	require.Equal(t, removedMemberID, member.ID)
 	require.Equal(t, domain.HouseholdMemberStatusRemoved, member.Status)
@@ -1104,7 +1104,7 @@ func TestHouseholdServiceIntegration_AcceptInvite_RestoreConflict_UserActiveElse
 	require.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
 
 	// The stale removed row in A must remain untouched (still removed).
-	memberA, err := hhRepo.GetRemovedMemberForUpdate(ctx, householdA.ID, invitee.ID)
+	memberA, err := hhRepo.GetRemovedMemberForUpdate(ctx, householdA.ID, invitee.ID, removalPurgeWindowDays)
 	require.NoError(t, err)
 	require.Equal(t, removedMemberID, memberA.ID)
 	require.Equal(t, domain.HouseholdMemberStatusRemoved, memberA.Status)

@@ -182,8 +182,8 @@ func (m *mockHouseholdRepo) ListHouseholdsWithMembers(ctx context.Context) ([]*d
 	return args.Get(0).([]*domain.Household), args.Error(1)
 }
 
-func (m *mockHouseholdRepo) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error) {
-	args := m.Called(ctx, householdID, userID)
+func (m *mockHouseholdRepo) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string, withinDays int) (*domain.HouseholdMember, error) {
+	args := m.Called(ctx, householdID, userID, withinDays)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

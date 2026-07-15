@@ -560,16 +560,16 @@ func TestHouseholdRepository_GetRemovedMemberForUpdate_Found(t *testing.T) {
 	removedAt := now
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed'
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed' AND removed_at >= now() - $3::interval
 		ORDER BY removed_at DESC, created_at DESC
 		LIMIT 1
 		FOR UPDATE
 	`)).
-		WithArgs("hh-1", "user-1").
+		WithArgs("hh-1", "user-1", "30 days").
 		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
 			AddRow("mem-1", "hh-1", "user-1", "member", "removed", now, &removedAt, nil, nil, now, now))
 
-	m, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-1")
+	m, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-1", 30)
 	require.NoError(t, err)
 	assert.Equal(t, "mem-1", m.ID)
 	assert.Equal(t, domain.HouseholdMemberStatusRemoved, m.Status)
@@ -583,15 +583,15 @@ func TestHouseholdRepository_GetRemovedMemberForUpdate_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed'
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed' AND removed_at >= now() - $3::interval
 		ORDER BY removed_at DESC, created_at DESC
 		LIMIT 1
 		FOR UPDATE
 	`)).
-		WithArgs("hh-1", "user-2").
+		WithArgs("hh-1", "user-2", "30 days").
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-2")
+	_, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-2", 30)
 	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
 }
 

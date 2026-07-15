@@ -461,12 +461,68 @@ func TestHouseholdRepository_GetRemovedMemberForUpdate_PicksMostRecent_Integrati
 		t.Fatalf("transition new row to removed: %v", err)
 	}
 
-	m, err := repo.GetRemovedMemberForUpdate(ctx, householdID, memberID)
+	m, err := repo.GetRemovedMemberForUpdate(ctx, householdID, memberID, 30)
 	if err != nil {
 		t.Fatalf("GetRemovedMemberForUpdate: %v", err)
 	}
 	if m.ID != newRowID {
 		t.Fatalf("expected the MOST RECENTLY removed row %q, got %q (old row was %q)", newRowID, m.ID, oldRowID)
+	}
+}
+
+// TestHouseholdRepository_GetRemovedMemberForUpdate_WithinWindow_Integration proves the
+// withinDays window enforcement (Gap Analysis Round 3, GT-3) does NOT reject a row
+// removed well within the window — a row removed 29 days ago must still be found and
+// restorable, exactly as before this fix.
+func TestHouseholdRepository_GetRemovedMemberForUpdate_WithinWindow_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerID := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	rowID := insertTestHouseholdMember(t, pool, householdID, memberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() - interval '29 days' WHERE id = $1`, rowID); err != nil {
+		t.Fatalf("transition row to removed 29 days ago: %v", err)
+	}
+
+	m, err := repo.GetRemovedMemberForUpdate(ctx, householdID, memberID, 30)
+	if err != nil {
+		t.Fatalf("expected a row removed 29 days ago to be found within a 30-day window, got: %v", err)
+	}
+	if m.ID != rowID {
+		t.Fatalf("expected row %q, got %q", rowID, m.ID)
+	}
+}
+
+// TestHouseholdRepository_GetRemovedMemberForUpdate_OutsideWindow_Integration proves the
+// Gap Analysis Round 3, GT-3 fix against a real schema: GetRemovedMemberForUpdate's own
+// doc comment promises a 30-day restore window, but before this fix the query never
+// filtered on removed_at age at all. A row removed 31 days ago must now be treated
+// exactly like "no removed row exists" (ErrMemberNotFound), not silently returned as
+// restorable — closing the gap that would otherwise let a re-invite restore an
+// arbitrarily stale removal if the Task 2 purge worker were ever delayed or paused.
+func TestHouseholdRepository_GetRemovedMemberForUpdate_OutsideWindow_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+
+	ownerID := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	rowID := insertTestHouseholdMember(t, pool, householdID, memberID, "member")
+	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() - interval '31 days' WHERE id = $1`, rowID); err != nil {
+		t.Fatalf("transition row to removed 31 days ago: %v", err)
+	}
+
+	_, err := repo.GetRemovedMemberForUpdate(ctx, householdID, memberID, 30)
+	if !errors.Is(err, domain.ErrMemberNotFound) {
+		t.Fatalf("expected ErrMemberNotFound for a row removed outside the 30-day window, got: %v", err)
 	}
 }
 

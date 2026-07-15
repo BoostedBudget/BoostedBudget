@@ -1513,7 +1513,7 @@ func expectLockCallerRow(pool pgxmock.PgxPoolIface, callerUserID string) {
 // their prior removed row was already purged), so AcceptInvite falls through to the
 // original fresh-insert path unchanged.
 func expectNoRemovedMember(pool pgxmock.PgxPoolIface, householdID, callerUserID string) {
-	pool.ExpectQuery("household_members WHERE household_id").WithArgs(householdID, callerUserID).
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs(householdID, callerUserID, "30 days").
 		WillReturnError(pgx.ErrNoRows)
 }
 
@@ -1879,7 +1879,7 @@ func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.
 	expectLockCallerRow(pool, "owner-1")
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1", "30 days").
 		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
 	freshUpdatedAt := time.Now()
 	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
@@ -1936,7 +1936,7 @@ func TestHouseholdService_AcceptInvite_RestoreConflict_RollsBack(t *testing.T) {
 	expectLockCallerRow(pool, "owner-1")
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
+	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1", "30 days").
 		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
 	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
 		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
