@@ -125,6 +125,28 @@ func TestHouseholdInviteEmailTemplates_ContainInviteLink(t *testing.T) {
 	assert.Contains(t, text, "The Smiths")
 }
 
+// TestHouseholdInviteEmailTemplates_EscapesHTMLInNames proves a household name or
+// inviter name containing HTML metacharacters is escaped in the HTML email body (never
+// rendered as live markup), while the plain text body is left untouched. Round 5 Gap
+// Analysis fix (#1371) — a malicious/careless owner could otherwise inject arbitrary
+// markup (fake links, content spoofing) into invite emails sent to invitees.
+func TestHouseholdInviteEmailTemplates_EscapesHTMLInNames(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	inviteURL := "https://boostedbudget.com/households/invites/rawtoken123"
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildHouseholdInviteEmailHTML(maliciousName, maliciousName, inviteURL, "March 3, 2026")
+	text := s.buildHouseholdInviteEmailPlainText(maliciousName, maliciousName, inviteURL, "March 3, 2026")
+
+	assert.NotContains(t, html, "<script>")
+	assert.NotContains(t, html, "<b>me</b>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+
+	// Plain text is never rendered as HTML, so it must be left raw/unescaped.
+	assert.Contains(t, text, maliciousName)
+}
+
 // ─── SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) ────────────────────
 
 func TestSendHouseholdMemberRemoved_Success(t *testing.T) {
@@ -213,6 +235,23 @@ func TestMemberRemovedEmailTemplates_Disbanded_DoesNotContainCleanupLanguage(t *
 	assert.NotContains(t, text, "January 15, 2026")
 }
 
+// TestMemberRemovedEmailTemplates_EscapesHTMLInHouseholdName proves a household name
+// containing HTML metacharacters is escaped in the HTML body but left raw in plain text.
+// Round 5 Gap Analysis fix (#1371).
+func TestMemberRemovedEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildMemberRemovedEmailHTML(maliciousName, purgeDate, false)
+	text := s.buildMemberRemovedEmailPlainText(maliciousName, purgeDate, false)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
+}
+
 // ─── SendHouseholdOverCapacityNotice / Warning (#1371 — Phase 7, Task 6) ─────
 
 func TestSendHouseholdOverCapacityNotice_Success(t *testing.T) {
@@ -260,6 +299,23 @@ func TestOverCapacityNoticeEmailTemplates_ContainRequiredContent(t *testing.T) {
 	assert.Contains(t, text, "automatically")
 }
 
+// TestOverCapacityNoticeEmailTemplates_EscapesHTMLInHouseholdName proves a household
+// name containing HTML metacharacters is escaped in the HTML body but left raw in plain
+// text. Round 5 Gap Analysis fix (#1371).
+func TestOverCapacityNoticeEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildOverCapacityNoticeEmailHTML(maliciousName, 4, 2, deadline)
+	text := s.buildOverCapacityNoticeEmailPlainText(maliciousName, 4, 2, deadline)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
+}
+
 func TestSendHouseholdOverCapacityWarning_Success(t *testing.T) {
 	ctx := context.Background()
 	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
@@ -297,6 +353,23 @@ func TestOverCapacityWarningEmailTemplates_ContainRequiredContent(t *testing.T) 
 	// Urgency messaging ("3 days left") present in both.
 	assert.Contains(t, html, "3 days")
 	assert.Contains(t, text, "3 days")
+}
+
+// TestOverCapacityWarningEmailTemplates_EscapesHTMLInHouseholdName proves a household
+// name containing HTML metacharacters is escaped in the HTML body but left raw in plain
+// text. Round 5 Gap Analysis fix (#1371).
+func TestOverCapacityWarningEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildOverCapacityWarningEmailHTML(maliciousName, 4, 2, deadline)
+	text := s.buildOverCapacityWarningEmailPlainText(maliciousName, 4, 2, deadline)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
 }
 
 // TestSendNotificationEmail_Success tests successful notification email sending (stub)
