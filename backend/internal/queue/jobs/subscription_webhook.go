@@ -71,6 +71,20 @@ type PlaidItemCleanupForWebhook interface {
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
 
+// HouseholdOverCapacityRepository defines the single, non-transactional household
+// lookup the webhook worker's best-effort over-capacity reconcile step
+// (reconcileOverCapacity/clearOverCapacityIfOwner) needs to cheaply determine whether a
+// user owns a household at all, on every tier-change/cancellation/past-due webhook.
+// Deliberately narrower than repository.HouseholdRepository — mirrors this file's
+// existing narrow-interface convention (SubscriptionProfileRepository, etc.). Once a
+// household IS found and owned, the reconcile step upgrades to the full
+// repository.HouseholdRepository (via repository.NewHouseholdRepository(tx)) inside its
+// own short-lived transaction, rather than widening this interface. #1371 — Phase 7
+// (Task 6, Part B).
+type HouseholdOverCapacityRepository interface {
+	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
+}
+
 // SubscriptionWebhookWorker processes Paddle subscription webhook events from the queue.
 type SubscriptionWebhookWorker struct {
 	river.WorkerDefaults[SubscriptionWebhookArgs]
@@ -84,7 +98,13 @@ type SubscriptionWebhookWorker struct {
 	analytics             phclient.Analytics // Optional PostHog analytics client
 	tierConfig            *config.TierConfig
 	retentionMonths       int // #930: Months before auto-deletion after cancellation
-	logger                *slog.Logger
+	// householdRepo + db back the best-effort household over-capacity reconcile step
+	// (#1371 — Task 6, Part B). Both nil-safe: reconcileOverCapacity/
+	// clearOverCapacityIfOwner no-op when householdRepo is nil, matching this
+	// codebase's analytics/email nil-safe convention.
+	householdRepo HouseholdOverCapacityRepository
+	db            repository.DB
+	logger        *slog.Logger
 }
 
 // SubscriptionWebhookWorkerDeps contains the dependencies for SubscriptionWebhookWorker.
@@ -96,7 +116,11 @@ type SubscriptionWebhookWorkerDeps struct {
 	PaddleTransactionRepo SubscriptionPaddleTransactionRepository
 	TierConfig            *config.TierConfig
 	RetentionMonths       int // #930: Months before auto-deletion after cancellation (default 6)
-	Logger                *slog.Logger
+	// HouseholdRepo + DB wire the best-effort household over-capacity reconcile step
+	// (#1371 — Task 6, Part B). Optional — leave both nil to disable (no-op).
+	HouseholdRepo HouseholdOverCapacityRepository
+	DB            repository.DB
+	Logger        *slog.Logger
 }
 
 // NewSubscriptionWebhookWorker creates a new subscription webhook processing worker.
@@ -117,6 +141,8 @@ func NewSubscriptionWebhookWorker(deps SubscriptionWebhookWorkerDeps) *Subscript
 		paddleTransactionRepo: deps.PaddleTransactionRepo,
 		tierConfig:            deps.TierConfig,
 		retentionMonths:       retentionMonths,
+		householdRepo:         deps.HouseholdRepo,
+		db:                    deps.DB,
 		logger:                logger,
 	}
 }
@@ -186,6 +212,115 @@ func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userI
 		"subscription_status": status,
 	}); err != nil {
 		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
+	}
+}
+
+// reconcileOverCapacity is the fast-path, best-effort household over-capacity check.
+// Callers invoke this AFTER a tier-change webhook has already durably written the
+// user's new subscription_tier/subscription_status (processSubscriptionUpdated/
+// Activated) — this method only OBSERVES that already-committed state; it never runs
+// inside the same transaction as the tier write, and there is no "prior tier" to diff
+// against, because this feature stores no tier snapshot (see
+// household_entitlement_service.go — the resolver is deliberately unchanged by #1371).
+//
+// No-op (nil error) when householdRepo isn't wired, or when ownerUserID doesn't own a
+// household. Otherwise locks the household row, recomputes the owner's CURRENT
+// effective-tier seat count (same technique as paddle_checkout.go's
+// checkDowngradeSeatCapacity — Task 5), and either starts or clears the
+// over_capacity_since grace clock via the idempotent SetOverCapacity/ClearOverCapacity
+// repository methods (Task 1). Every write here is safe to call twice —
+// SetOverCapacity is a WHERE over_capacity_since IS NULL no-op once grace is already
+// running, and ClearOverCapacity is a plain idempotent null-out.
+//
+// The daily household_over_capacity_check worker (Task 6, Part C) is the AUTHORITATIVE
+// backstop for anything this fast path misses or races against — callers must log
+// (never propagate) any error this returns; see the call sites below.
+func (w *SubscriptionWebhookWorker) reconcileOverCapacity(ctx context.Context, ownerUserID string) error {
+	if w.householdRepo == nil {
+		return nil
+	}
+	household, isOwner, found, err := w.householdRepo.GetHouseholdForUser(ctx, ownerUserID)
+	if err != nil {
+		return fmt.Errorf("failed to look up household for user %s: %w", ownerUserID, err)
+	}
+	if !found || !isOwner {
+		return nil
+	}
+	if w.db == nil {
+		return fmt.Errorf("household over-capacity reconcile: DB not configured (household_id=%s)", household.ID)
+	}
+
+	owner, err := w.profileRepo.GetUserByID(ctx, ownerUserID)
+	if err != nil {
+		return fmt.Errorf("failed to get owner user %s: %w", ownerUserID, err)
+	}
+	tier, err := w.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	if err != nil {
+		return fmt.Errorf("failed to resolve tier for owner %s: %w", ownerUserID, err)
+	}
+	seatLimit := tier.Pricing.UsersIncluded
+
+	tx, err := w.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin over-capacity reconcile transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	locked, err := hhRepo.LockHouseholdByID(ctx, household.ID)
+	if err != nil {
+		return fmt.Errorf("failed to lock household %s: %w", household.ID, err)
+	}
+	activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+	if err != nil {
+		return fmt.Errorf("failed to count active members for household %s: %w", household.ID, err)
+	}
+
+	switch {
+	case activeCount > seatLimit && locked.OverCapacitySince == nil:
+		if err := hhRepo.SetOverCapacity(ctx, household.ID, time.Now()); err != nil {
+			return fmt.Errorf("failed to set over-capacity for household %s: %w", household.ID, err)
+		}
+		if w.analytics != nil {
+			w.analytics.Capture(ownerUserID, phclient.EventHouseholdOverCapacityEntered, map[string]interface{}{
+				"household_id": household.ID,
+				"active_count": activeCount,
+				"seat_limit":   seatLimit,
+			})
+		}
+	case activeCount <= seatLimit && locked.OverCapacitySince != nil:
+		if err := hhRepo.ClearOverCapacity(ctx, household.ID); err != nil {
+			return fmt.Errorf("failed to clear over-capacity for household %s: %w", household.ID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// clearOverCapacityIfOwner clears a lingering over-capacity grace flag when
+// ownerUserID loses active coverage entirely (cancellation/past-due) — grace is moot
+// once members fall back to their own tier via the resolver's owner-read-only branch,
+// unchanged by this task. Best-effort: logs and swallows its own errors, matching
+// every other nice-to-have side effect in this file (Clerk sync, notifications,
+// retention clock). No transaction/lock needed — ClearOverCapacity is a single
+// idempotent UPDATE with no read-then-decide step. #1371 — Phase 7 (Task 6, Part B).
+func (w *SubscriptionWebhookWorker) clearOverCapacityIfOwner(ctx context.Context, ownerUserID string) {
+	if w.householdRepo == nil || w.db == nil {
+		return
+	}
+	household, isOwner, found, err := w.householdRepo.GetHouseholdForUser(ctx, ownerUserID)
+	if err != nil {
+		w.logger.Warn("failed to look up household while clearing over-capacity", "user_id", ownerUserID, "error", err)
+		return
+	}
+	if !found || !isOwner {
+		return
+	}
+	hhRepo := repository.NewHouseholdRepository(w.db)
+	if err := hhRepo.ClearOverCapacity(ctx, household.ID); err != nil {
+		w.logger.Warn("failed to clear over-capacity on subscription loss", "household_id", household.ID, "error", err)
 	}
 }
 
@@ -508,6 +643,13 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 	}
 	w.syncClerkMetadata(ctx, userID, string(tier), status)
 
+	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
+	// tier write above has already landed. Logged, never propagated — see
+	// reconcileOverCapacity's doc comment.
+	if err := w.reconcileOverCapacity(ctx, userID); err != nil {
+		w.logger.Warn("failed to reconcile household over-capacity after subscription activation", "user_id", userID, "error", err)
+	}
+
 	return nil
 }
 
@@ -556,6 +698,13 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 		if clearErr := w.profileRepo.ClearPastDueStartedAt(ctx, userID); clearErr != nil {
 			w.logger.Warn("failed to clear past_due_started_at on subscription updated", "user_id", userID, "error", clearErr)
 		}
+	}
+
+	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
+	// tier write above has already landed. Logged, never propagated — see
+	// reconcileOverCapacity's doc comment.
+	if err := w.reconcileOverCapacity(ctx, userID); err != nil {
+		w.logger.Warn("failed to reconcile household over-capacity after subscription update", "user_id", userID, "error", err)
 	}
 
 	return nil
@@ -613,6 +762,11 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		w.analytics.Capture(userID, phclient.EventSubscriptionCancelled, nil)
 	}
 
+	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — the owner
+	// just lost active coverage entirely, so grace is moot (members already fall back
+	// to their own tier via the resolver's unchanged owner-read-only branch).
+	w.clearOverCapacityIfOwner(ctx, userID)
+
 	return nil
 }
 
@@ -664,6 +818,11 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		interactionPattern: "action_required",
 	})
 	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
+
+	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — past_due
+	// is a read-only status, so grace is moot (members already fall back to their own
+	// tier via the resolver's unchanged owner-read-only branch).
+	w.clearOverCapacityIfOwner(ctx, userID)
 
 	return nil
 }

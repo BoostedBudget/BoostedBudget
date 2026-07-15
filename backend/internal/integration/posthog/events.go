@@ -83,6 +83,11 @@ const (
 	EventHouseholdMemberAutoOffboarded = "household_member_auto_offboarded"
 	EventHouseholdMembershipPurged     = "household_membership_purged"
 	EventHouseholdForceDisbanded       = "household_force_disbanded"
+	// EventHouseholdOverCapacityEntered fires the first time a household's active
+	// member count exceeds its owner's current plan seat count (Task 6, Part B: the
+	// webhook fast-path detection; also fired by the Task 6 daily backstop worker when
+	// it catches a case the webhook missed).
+	EventHouseholdOverCapacityEntered = "household_over_capacity_entered"
 
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
