@@ -71,12 +71,20 @@ type QueuedRemovalEmail struct {
 	PurgeDate     time.Time
 }
 
+// removalPurgeWindowDays is removalPurgeWindow expressed as a day-count — the single
+// source of truth both for the time.Duration below and for the int day-count
+// GetRemovedMemberForUpdate uses to enforce the same 30-day re-invite restore window
+// (Gap Analysis Round 3, GT-3: without this enforcement, a delayed/paused Task 2 purge
+// worker could let a 60+ day stale removal be silently restored via re-invite). Do not
+// hardcode 30 anywhere else — reference this constant instead.
+const removalPurgeWindowDays = 30
+
 // removalPurgeWindow is how long a removed member's membership/shares/entitlement
 // linger before PurgeRemovedMembership permanently deletes them — the window
 // communicated in QueuedRemovalEmail.PurgeDate. Not specified by #1371 Task 0; chosen
 // to match the task description's "now + 30 days" default. Revisit if product
 // requirements narrow this once Task 2 (the purge worker) schedules real purge jobs.
-const removalPurgeWindow = 30 * 24 * time.Hour
+const removalPurgeWindow = time.Duration(removalPurgeWindowDays) * 24 * time.Hour
 
 // MemberProfileResolver resolves a household member's display name + avatar. Optional
 // (nil-safe) — when HouseholdService.SetMemberProfileResolver is never called,
@@ -1139,7 +1147,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	// Either branch is still gated by the seat check above — a restored member counts as
 	// a new active member against the seat cap exactly like a fresh join does.
 	var member *domain.HouseholdMember
-	removedMember, cerr := hhRepo.GetRemovedMemberForUpdate(ctx, inv.HouseholdID, callerUserID)
+	removedMember, cerr := hhRepo.GetRemovedMemberForUpdate(ctx, inv.HouseholdID, callerUserID, removalPurgeWindowDays)
 	switch {
 	case cerr == nil:
 		// Restore path: reactivate the existing row rather than inserting a new one.

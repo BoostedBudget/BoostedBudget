@@ -137,13 +137,17 @@ type HouseholdRepository interface {
 	ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error)
 
 	// GetRemovedMemberForUpdate looks up a household_members row for (householdID,
-	// userID) with status='removed', taking a FOR UPDATE row lock. If more than one
-	// historical removed row exists for the pair, returns the most recently removed
-	// one (ORDER BY removed_at DESC, created_at DESC). Returns domain.ErrMemberNotFound
-	// if no such removed row exists. Used by the Task 4 re-invite flow to safely
-	// restore a removed member within the 30-day window. #1371 — Phase 7 (Task 1
-	// foundation).
-	GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error)
+	// userID) with status='removed' AND removed_at within the last withinDays days,
+	// taking a FOR UPDATE row lock. If more than one historical removed row exists for
+	// the pair (within the window), returns the most recently removed one (ORDER BY
+	// removed_at DESC, created_at DESC). Returns domain.ErrMemberNotFound if no such
+	// removed row exists within the window — including when a removed row DOES exist
+	// but is older than withinDays (Gap Analysis Round 3, GT-3: enforces this method's
+	// own documented 30-day promise instead of silently restoring an arbitrarily stale
+	// removal if the Task 2 purge worker is ever delayed/paused). Used by the Task 4
+	// re-invite flow to safely restore a removed member within the 30-day window.
+	// #1371 — Phase 7 (Task 1 foundation).
+	GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string, withinDays int) (*domain.HouseholdMember, error)
 
 	// RestoreMember reactivates a removed household_members row identified by its
 	// own id: sets status='active', removed_at=NULL, updated_at=now(), returning the
@@ -426,20 +430,24 @@ func (r *householdRepository) ListHouseholdsWithMembers(ctx context.Context) ([]
 	return households, rows.Err()
 }
 
-func (r *householdRepository) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error) {
+func (r *householdRepository) GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string, withinDays int) (*domain.HouseholdMember, error) {
 	var m domain.HouseholdMember
 	// ORDER BY + LIMIT 1: a (household_id, user_id) pair can have multiple
 	// historical removed rows (removed rows aren't covered by the partial unique
 	// active-user index), so without an explicit order this lookup would be
 	// nondeterministic. Prefer the most recently removed row — the one a re-invite
 	// within the 30-day window is meant to restore (Codex review, #1371 Task 1).
+	// removed_at >= now() - withinDays enforces this method's own documented window
+	// (Gap Analysis Round 3, GT-3) — a row removed longer ago than withinDays is treated
+	// exactly like "no removed row exists at all" (ErrMemberNotFound), mirroring the
+	// interval-parameterization idiom ListMembershipsPastPurgeWindow already uses below.
 	err := r.db.QueryRow(ctx, `
 		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed'
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed' AND removed_at >= now() - $3::interval
 		ORDER BY removed_at DESC, created_at DESC
 		LIMIT 1
 		FOR UPDATE
-	`, householdID, userID).Scan(householdMemberScanArgs(&m)...)
+	`, householdID, userID, strings.TrimSpace(fmt.Sprintf("%d days", withinDays))).Scan(householdMemberScanArgs(&m)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrMemberNotFound
 	}
