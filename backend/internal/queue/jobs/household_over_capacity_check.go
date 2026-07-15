@@ -253,14 +253,19 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
-	// Fresh read-only re-check: the top-of-function owner read (Case 1) can be stale by
-	// the time we're about to WRITE over-capacity state below — a concurrent read-only
-	// transition (e.g. the subscription webhook's fast-path clear) can land in the gap
-	// between that read and here. Re-fetch the owner immediately before any write and
-	// bail out (clearing grace if flagged) if now read-only, rather than flagging/
-	// re-flagging/notifying a household whose grace is already moot. Mirrors the
-	// identical re-check added to HouseholdService.OffboardExcessMembers in Round 3.
-	// Round 5 Gap Analysis fix (#1371).
+	// Fresh re-check: the top-of-function owner read (Case 1) — and the tier/seatLimit
+	// derived from it — can both be stale by the time we're about to WRITE over-capacity
+	// state below. Two concurrent transitions can land in the gap between that read and
+	// here: (a) the owner goes read-only (e.g. the subscription webhook's fast-path
+	// clear) — grace is moot; or (b) the owner upgrades tier, gaining enough seats —
+	// the household is no longer actually over capacity. Re-fetch the owner and
+	// recompute both before any write, bailing out (clearing grace if flagged) in either
+	// case rather than flagging/re-flagging/notifying a household that no longer
+	// warrants it. Mirrors the identical re-check added to
+	// HouseholdService.OffboardExcessMembers in Round 3. This narrows the race window
+	// but does not eliminate it (no lock is taken) — an intentional trade-off, since any
+	// residual gap here self-heals on the next daily run. #1371 — Round 5 Gap Analysis
+	// fix, extended per Codex's stale-seat-limit follow-up finding.
 	freshOwner, err := w.userRepo.GetUserByID(ctx, h.OwnerUserID)
 	if err != nil {
 		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
@@ -269,6 +274,19 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
+			}
+		}
+		return nil
+	}
+	freshTier, err := w.tierConfig.GetTier(domain.TierName(freshOwner.ComputeEffectiveTier()))
+	if err != nil {
+		return fmt.Errorf("failed to resolve fresh tier for owner %s: %w", h.OwnerUserID, err)
+	}
+	seatLimit = freshTier.Pricing.UsersIncluded
+	if activeCount <= seatLimit {
+		if h.OverCapacitySince != nil {
+			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
+				return fmt.Errorf("failed to clear over-capacity for household %s (fresh re-check): %w", h.ID, err)
 			}
 		}
 		return nil
