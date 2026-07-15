@@ -39,12 +39,20 @@ type EmailService interface {
 	SendHouseholdInvite(ctx context.Context, toEmail, inviterName, householdName, inviteURL string, expiresAt time.Time) error
 
 	// SendHouseholdMemberRemoved sends a "you've been removed from a household" email:
-	// the recipient's own data is fully preserved, and the historical membership record
-	// will be purged automatically on purgeDate if no action is taken. Callers should
-	// treat delivery as best-effort — the removal itself is already committed by the
-	// time this is called, so a failed send must never be surfaced as a removal error.
-	// #1371 — Phase 7 (Task 3).
-	SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error
+	// the recipient's own data is fully preserved. Callers should treat delivery as
+	// best-effort — the removal itself is already committed by the time this is called,
+	// so a failed send must never be surfaced as a removal error.
+	//
+	// When disbanded is false (individual removal via RemoveMember, or LIFO
+	// auto-offboard via OffboardExcessMembers), the historical membership record
+	// genuinely persists as status='removed' until the 30-day purge worker deletes it —
+	// purgeDate is referenced in the copy. When disbanded is true (ForceDisband), the
+	// entire household row (and its cascaded household_members rows, migration 000107
+	// ON DELETE CASCADE) is already deleted in the SAME transaction as the removals, so
+	// there is no lingering row for a purge worker to ever find; purgeDate is ignored and
+	// the copy does not reference a future cleanup step. #1371 — Phase 7 (Task 3; Round 4
+	// Gap Analysis fix for the disbanded case).
+	SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time, disbanded bool) error
 
 	// SendHouseholdOverCapacityNotice sends the OWNER-facing "you're over capacity"
 	// email the first time a household enters over-capacity grace (activeCount exceeds
@@ -207,14 +215,14 @@ func (s *emailService) SendHouseholdInvite(ctx context.Context, toEmail, inviter
 
 // SendHouseholdMemberRemoved sends a "you've been removed from a household" email.
 // Best-effort — see interface doc.
-func (s *emailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error {
+func (s *emailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time, disbanded bool) error {
 	if !isValidEmail(toEmail) {
 		return fmt.Errorf("invalid email address: %s", toEmail)
 	}
 
 	subject := fmt.Sprintf("You've been removed from %s on BoostedBudget", householdName)
-	htmlContent := s.buildMemberRemovedEmailHTML(householdName, purgeDate)
-	plainTextContent := s.buildMemberRemovedEmailPlainText(householdName, purgeDate)
+	htmlContent := s.buildMemberRemovedEmailHTML(householdName, purgeDate, disbanded)
+	plainTextContent := s.buildMemberRemovedEmailPlainText(householdName, purgeDate, disbanded)
 
 	from := mail.NewEmail(s.fromName, s.fromEmail)
 	to := mail.NewEmail("", toEmail)
@@ -442,9 +450,15 @@ This invitation expires on %s. If you weren't expecting it, you can safely ignor
 }
 
 // buildMemberRemovedEmailHTML creates the HTML email template for a household
-// member-removed notification.
-func (s *emailService) buildMemberRemovedEmailHTML(householdName string, purgeDate time.Time) string {
-	formattedPurgeDate := purgeDate.Format("January 2, 2006")
+// member-removed notification. When disbanded is true (ForceDisband), the footer drops
+// the future-cleanup reference — see SendHouseholdMemberRemoved's interface doc for why.
+func (s *emailService) buildMemberRemovedEmailHTML(householdName string, purgeDate time.Time, disbanded bool) string {
+	footer := fmt.Sprintf(`If you take no action, the historical membership record will be cleaned up automatically
+            after the preservation window, on %s.`, purgeDate.Format("January 2, 2006"))
+	if disbanded {
+		footer = `Your household has been disbanded. There is no membership record left to clean up —
+            nothing further is needed on your end.`
+	}
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html>
@@ -465,19 +479,25 @@ func (s *emailService) buildMemberRemovedEmailHTML(householdName string, purgeDa
         </div>
 
         <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
-            If you take no action, the historical membership record will be cleaned up automatically
-            after the preservation window, on %s.
+            %s
         </p>
     </div>
 </body>
 </html>
-`, householdName, householdName, formattedPurgeDate)
+`, householdName, householdName, footer)
 }
 
 // buildMemberRemovedEmailPlainText creates the plain text email template for a
-// household member-removed notification.
-func (s *emailService) buildMemberRemovedEmailPlainText(householdName string, purgeDate time.Time) string {
-	formattedPurgeDate := purgeDate.Format("January 2, 2006")
+// household member-removed notification. When disbanded is true (ForceDisband), the
+// footer drops the future-cleanup reference — see SendHouseholdMemberRemoved's interface
+// doc for why.
+func (s *emailService) buildMemberRemovedEmailPlainText(householdName string, purgeDate time.Time, disbanded bool) string {
+	footer := fmt.Sprintf(`If you take no action, the historical membership record will be cleaned up automatically
+after the preservation window, on %s.`, purgeDate.Format("January 2, 2006"))
+	if disbanded {
+		footer = `Your household has been disbanded. There is no membership record left to clean up —
+nothing further is needed on your end.`
+	}
 	return fmt.Sprintf(`
 YOU'VE BEEN REMOVED FROM %s
 
@@ -489,9 +509,8 @@ Your own accounts, transactions, budgets, and automation rules are fully preserv
 untouched — only your household membership link is affected. You can continue using
 BoostedBudget with your own independent account.
 
-If you take no action, the historical membership record will be cleaned up automatically
-after the preservation window, on %s.
-`, householdName, householdName, formattedPurgeDate)
+%s
+`, householdName, householdName, footer)
 }
 
 // buildDeletionEmailHTML creates HTML email template for deletion confirmation
