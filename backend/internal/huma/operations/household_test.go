@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -180,6 +181,60 @@ func TestGetMyHousehold_Found(t *testing.T) {
 	assert.Equal(t, 2, out.Body.Summary.UsersIncluded)
 	assert.Equal(t, 1, out.Body.Summary.SeatsActive)
 	assert.Equal(t, 1, out.Body.Summary.SeatsPending)
+}
+
+// TestGetMyHousehold_OverCapacitySince_RoundTrips proves GET /api/v1/households/me
+// surfaces the #1371 Task 1 over_capacity_since grace-period anchor: omitted from the
+// JSON response when the household is within its seat limit (nil), and present with the
+// correct RFC3339 timestamp when a grace period is running. GetMyHousehold passes
+// domain.Household straight through with no field-by-field DTO mapping, so this pins
+// down the JSON wire contract the frontend (Task 10) will read, not just Go struct
+// equality. #1371 — Phase 7 Task 9.
+func TestGetMyHousehold_OverCapacitySince_RoundTrips(t *testing.T) {
+	summary := domain.HouseholdEntitlementSummary{Tier: "household_2", UsersIncluded: 2, IsOwner: true, SeatsActive: 3, SeatsPending: 0}
+
+	t.Run("nil when not over capacity", func(t *testing.T) {
+		svc := &mockHouseholdService{}
+		h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}
+		svc.On("GetMyHousehold", mock.Anything, "user-1").Return(h, summary, true, nil)
+
+		handler := NewHouseholdHandler(svc, "https://app.example.com")
+		out, err := handler.GetMyHousehold(context.Background(), &GetMyHouseholdInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		})
+		require.NoError(t, err)
+		assert.Nil(t, out.Body.Household.OverCapacitySince)
+
+		raw, err := json.Marshal(out.Body)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "over_capacity_since", "omitempty must drop the field entirely when nil")
+	})
+
+	t.Run("set with correct timestamp when over capacity", func(t *testing.T) {
+		since := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+		svc := &mockHouseholdService{}
+		h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths", OverCapacitySince: &since}
+		svc.On("GetMyHousehold", mock.Anything, "user-1").Return(h, summary, true, nil)
+
+		handler := NewHouseholdHandler(svc, "https://app.example.com")
+		out, err := handler.GetMyHousehold(context.Background(), &GetMyHouseholdInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, out.Body.Household.OverCapacitySince)
+		assert.True(t, since.Equal(*out.Body.Household.OverCapacitySince))
+
+		raw, err := json.Marshal(out.Body)
+		require.NoError(t, err)
+		var decoded struct {
+			Household struct {
+				OverCapacitySince *time.Time `json:"over_capacity_since"`
+			} `json:"household"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		require.NotNil(t, decoded.Household.OverCapacitySince)
+		assert.True(t, since.Equal(*decoded.Household.OverCapacitySince))
+	})
 }
 
 func TestGetMyHousehold_NotFound(t *testing.T) {
