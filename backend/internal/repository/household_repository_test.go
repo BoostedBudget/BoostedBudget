@@ -600,12 +600,15 @@ func TestHouseholdRepository_RestoreMember(t *testing.T) {
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'`)).
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
 		WithArgs("mem-1").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(now))
 
-	err := repo.RestoreMember(context.Background(), "mem-1")
+	updatedAt, err := repo.RestoreMember(context.Background(), "mem-1")
 	require.NoError(t, err)
+	assert.Equal(t, now, updatedAt, "the freshly-written updated_at must be returned so callers can keep their in-memory struct authoritative (#1371 Task 4)")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -614,11 +617,12 @@ func TestHouseholdRepository_RestoreMember_NotRemoved(t *testing.T) {
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
 		WithArgs("mem-active").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		WillReturnError(pgx.ErrNoRows)
 
-	err := repo.RestoreMember(context.Background(), "mem-active")
+	_, err := repo.RestoreMember(context.Background(), "mem-active")
 	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
 }
 
@@ -634,11 +638,12 @@ func TestHouseholdRepository_RestoreMember_UserActiveElsewhere(t *testing.T) {
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
 		WithArgs("mem-1").
 		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
 
-	err := repo.RestoreMember(context.Background(), "mem-1")
+	_, err := repo.RestoreMember(context.Background(), "mem-1")
 	assert.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
 }
 
@@ -647,11 +652,12 @@ func TestHouseholdRepository_RestoreMember_DuplicateOwnerRow(t *testing.T) {
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
 		WithArgs("mem-1").
 		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_owner"})
 
-	err := repo.RestoreMember(context.Background(), "mem-1")
+	_, err := repo.RestoreMember(context.Background(), "mem-1")
 	assert.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 }
 

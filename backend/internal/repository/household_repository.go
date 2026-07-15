@@ -146,7 +146,11 @@ type HouseholdRepository interface {
 	GetRemovedMemberForUpdate(ctx context.Context, householdID, userID string) (*domain.HouseholdMember, error)
 
 	// RestoreMember reactivates a removed household_members row identified by its
-	// own id: sets status='active', removed_at=NULL, updated_at=now(). Only
+	// own id: sets status='active', removed_at=NULL, updated_at=now(), returning the
+	// freshly-written updated_at so callers can keep an in-memory domain.HouseholdMember
+	// authoritative after the write (mirroring InsertMember's RETURNING pattern — Codex
+	// review, #1371 Task 4: without this, a caller that manually syncs Status/RemovedAt
+	// on its in-memory struct would leak a stale updated_at into an API response). Only
 	// affects rows currently status='removed' (guarded by WHERE status='removed',
 	// mirroring DeleteRemovedMember) — returns domain.ErrMemberNotFound if the row
 	// is missing or not currently removed. Returns domain.ErrAlreadyInHousehold if
@@ -154,7 +158,7 @@ type HouseholdRepository interface {
 	// is global, not household-scoped) or domain.ErrAlreadyOwnsHousehold on the
 	// analogous owner-row conflict — same mapping InsertMember uses. #1371 — Phase 7
 	// (Task 1 foundation; consumed by Task 4's re-invite flow).
-	RestoreMember(ctx context.Context, membershipID string) error
+	RestoreMember(ctx context.Context, membershipID string) (time.Time, error)
 
 	// ListMembershipsPastPurgeWindow returns every household_members row with
 	// status='removed' whose removed_at is older than purgeAfterDays days ago,
@@ -445,10 +449,12 @@ func (r *householdRepository) GetRemovedMemberForUpdate(ctx context.Context, hou
 	return &m, nil
 }
 
-func (r *householdRepository) RestoreMember(ctx context.Context, membershipID string) error {
-	tag, err := r.db.Exec(ctx, `
+func (r *householdRepository) RestoreMember(ctx context.Context, membershipID string) (time.Time, error) {
+	var updatedAt time.Time
+	err := r.db.QueryRow(ctx, `
 		UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
-	`, membershipID)
+		RETURNING updated_at
+	`, membershipID).Scan(&updatedAt)
 	switch {
 	case isUniqueViolation(err, constraintHouseholdMembersActive):
 		// The restored user has since become active in another household (or
@@ -456,16 +462,15 @@ func (r *householdRepository) RestoreMember(ctx context.Context, membershipID st
 		// user_id, not scoped to household_id (migration 000107). Mirrors
 		// InsertMember's mapping so Task 4's re-invite flow gets the same error
 		// contract as every other write path (Codex review, #1371 Task 1).
-		return domain.ErrAlreadyInHousehold
+		return time.Time{}, domain.ErrAlreadyInHousehold
 	case isUniqueViolation(err, constraintHouseholdMembersOwnerOnce):
-		return domain.ErrAlreadyOwnsHousehold
+		return time.Time{}, domain.ErrAlreadyOwnsHousehold
+	case errors.Is(err, pgx.ErrNoRows):
+		return time.Time{}, domain.ErrMemberNotFound
 	case err != nil:
-		return err
+		return time.Time{}, err
 	}
-	if tag.RowsAffected() == 0 {
-		return domain.ErrMemberNotFound
-	}
-	return nil
+	return updatedAt, nil
 }
 
 func (r *householdRepository) ListMembershipsPastPurgeWindow(ctx context.Context, purgeAfterDays int) ([]*domain.HouseholdMember, error) {

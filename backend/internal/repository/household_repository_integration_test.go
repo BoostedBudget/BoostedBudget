@@ -362,7 +362,7 @@ func TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration(t *testing.
 
 	// The guard must refuse to affect an ACTIVE row: RestoreMember is a no-op
 	// (returns ErrMemberNotFound) targeting the active row, and must not touch it.
-	if err := repo.RestoreMember(ctx, activeRowID); !errors.Is(err, domain.ErrMemberNotFound) {
+	if _, err := repo.RestoreMember(ctx, activeRowID); !errors.Is(err, domain.ErrMemberNotFound) {
 		t.Fatalf("expected ErrMemberNotFound when targeting an active row, got: %v", err)
 	}
 	var activeStatus string
@@ -385,13 +385,21 @@ func TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration(t *testing.
 		t.Fatalf("expected the naive predicate to match the active row (proving RestoreMember's stricter guard is necessary), got %d rows", tag.RowsAffected())
 	}
 
-	// The guard must actually restore a genuinely-removed row.
-	if err := repo.RestoreMember(ctx, removedRowID); err != nil {
+	// The guard must actually restore a genuinely-removed row, and RETURN the
+	// freshly-written updated_at (Codex review, #1371 Task 4) — verified against
+	// real Postgres here since pgxmock can't catch a missing RETURNING clause.
+	beforeRestore := time.Now()
+	restoredUpdatedAt, err := repo.RestoreMember(ctx, removedRowID)
+	if err != nil {
 		t.Fatalf("RestoreMember on a removed row: %v", err)
+	}
+	if restoredUpdatedAt.Before(beforeRestore) {
+		t.Fatalf("expected RestoreMember to return a freshly-written updated_at (>= %v), got %v", beforeRestore, restoredUpdatedAt)
 	}
 	var restoredStatus string
 	var restoredRemovedAt *time.Time
-	if err := pool.QueryRow(ctx, `SELECT status, removed_at FROM household_members WHERE id = $1`, removedRowID).Scan(&restoredStatus, &restoredRemovedAt); err != nil {
+	var dbUpdatedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT status, removed_at, updated_at FROM household_members WHERE id = $1`, removedRowID).Scan(&restoredStatus, &restoredRemovedAt, &dbUpdatedAt); err != nil {
 		t.Fatalf("query restored row: %v", err)
 	}
 	if restoredStatus != "active" {
@@ -400,10 +408,13 @@ func TestHouseholdRepository_RestoreMember_GuardHasTeeth_Integration(t *testing.
 	if restoredRemovedAt != nil {
 		t.Fatalf("expected restored row removed_at=NULL, got %v", restoredRemovedAt)
 	}
+	if !restoredUpdatedAt.Equal(dbUpdatedAt) {
+		t.Fatalf("RestoreMember's returned updated_at (%v) must match the row actually persisted (%v)", restoredUpdatedAt, dbUpdatedAt)
+	}
 
 	// Calling RestoreMember again on the now-active row must be a no-op error
 	// (ErrMemberNotFound), never a silent double-restore.
-	if err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrMemberNotFound) {
+	if _, err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrMemberNotFound) {
 		t.Fatalf("expected ErrMemberNotFound restoring an already-active row, got: %v", err)
 	}
 }
@@ -472,7 +483,7 @@ func TestHouseholdRepository_RestoreMember_ConflictWithActiveElsewhere_Integrati
 	insertTestHouseholdMember(t, pool, householdB, ownerB, "owner")
 	insertTestHouseholdMember(t, pool, householdB, memberID, "member")
 
-	if err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrAlreadyInHousehold) {
+	if _, err := repo.RestoreMember(ctx, removedRowID); !errors.Is(err, domain.ErrAlreadyInHousehold) {
 		t.Fatalf("expected ErrAlreadyInHousehold restoring a member active elsewhere, got: %v", err)
 	}
 

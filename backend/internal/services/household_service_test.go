@@ -1572,8 +1572,9 @@ func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
 		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
-	pool.ExpectExec("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	freshUpdatedAt := time.Now()
+	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
+		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(freshUpdatedAt))
 	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).AddRow("acct-1", "inst-1", nil))
 	pool.ExpectQuery("INSERT INTO household_share_consents").
@@ -1597,6 +1598,8 @@ func TestHouseholdService_AcceptInvite_RestoresRemovedMember_Success(t *testing.
 	require.Equal(t, "mem-1", result.Member.ID, "the restored row's own id must be reused, not a fresh one")
 	require.Equal(t, domain.HouseholdMemberStatusActive, result.Member.Status)
 	require.Nil(t, result.Member.RemovedAt, "removed_at must be cleared on restore")
+	require.True(t, result.Member.UpdatedAt.Equal(freshUpdatedAt),
+		"UpdatedAt must be the freshly-written value RestoreMember RETURNs, not the stale pre-restore removedMemberRow value (#1371 Task 4 Codex finding)")
 	require.NoError(t, pool.ExpectationsWereMet(), "no INSERT INTO household_members should have been issued")
 }
 
@@ -1626,7 +1629,7 @@ func TestHouseholdService_AcceptInvite_RestoreConflict_RollsBack(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	pool.ExpectQuery("household_members WHERE household_id").WithArgs("hh-1", "caller-1").
 		WillReturnRows(removedMemberRow("mem-1", "hh-1", "caller-1", removedAt))
-	pool.ExpectExec("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
+	pool.ExpectQuery("UPDATE household_members SET status = 'active'").WithArgs("mem-1").
 		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
 	pool.ExpectRollback()
 
