@@ -589,6 +589,9 @@ func TestHouseholdService_RemoveMember_SelfLeave_Success(t *testing.T) {
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -619,6 +622,9 @@ func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -653,6 +659,9 @@ func TestHouseholdService_RemoveMember_Success_EmailSendFails_StillReturnsNoErro
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -676,6 +685,11 @@ func TestHouseholdService_RemoveMember_NonOwnerCannotRemoveOther_RollsBack(t *te
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
+	// Household-row lock is taken before the auth check inside removeMemberTx runs —
+	// authorization failures roll back AFTER the lock, not before it.
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
 	pool.ExpectRollback()
 
 	err := svc.RemoveMember(context.Background(), "member-1", "member-2")
@@ -691,6 +705,9 @@ func TestHouseholdService_RemoveMember_OwnerCannotRemoveSelf_RollsBack(t *testin
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
 	pool.ExpectRollback()
 
 	err := svc.RemoveMember(context.Background(), "owner-1", "owner-1")
@@ -722,6 +739,9 @@ func TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity(t *tes
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -763,6 +783,9 @@ func TestHouseholdService_RemoveMember_DoesNotClearGrace_WhenStillOverCapacity(t
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil))
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -801,6 +824,9 @@ func TestHouseholdService_RemoveMember_NotInGrace_NoOverCapacityChecks(t *testin
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
 			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner")) // not in grace
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil)) // not in grace
 	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
@@ -818,6 +844,57 @@ func TestHouseholdService_RemoveMember_NotInGrace_NoOverCapacityChecks(t *testin
 	// — no extra owner lookup, since the grace-check branch is never entered.
 	userRepo.AssertExpectations(t)
 	userRepo.AssertNumberOfCalls(t, "GetUserByID", 1)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_LocksHouseholdBeforeMutations is a dedicated
+// lock-ordering regression test (Gap Analysis Round 3, GT-1): RemoveMember must take the
+// household-row FOR UPDATE lock (via LockHouseholdByID) BEFORE issuing any
+// household_members/subscription_entitlements/household_account_shares mutation —
+// matching the "household-row lock always taken first" convention already established by
+// OffboardExcessMembers/ForceDisband/PurgeRemovedMembership. Without this, an owner
+// manually removing a member (which touches household_members first, then LATER wants the
+// households lock for the grace-clear) can circular-wait against the daily
+// OffboardExcessMembers worker (which locks households FIRST, then household_members for
+// the same member) — a real deadlock risk. pgxmock enforces expectations in declaration
+// order by default, so declaring the households-row lock query here, between the
+// non-locking GetHouseholdForUser resolution and the first mutation, makes this test FAIL
+// against the pre-fix implementation (which never issues that query at all) and PASS once
+// RemoveMember acquires the lock in the right place.
+func TestHouseholdService_RemoveMember_LocksHouseholdBeforeMutations(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	// (1) Non-locking resolution of which household actorUserID belongs to.
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
+	// (2) Household-row lock — must come BEFORE any household_members/entitlements/shares
+	// mutation below. If the implementation regressed to never locking (or locked after
+	// mutating), this expectation would go unmet/mismatched and the test would fail.
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(), "household-row lock must be acquired before any household_members/entitlements/shares mutation")
+	userRepo.AssertExpectations(t)
 	emailSvc.AssertExpectations(t)
 }
 

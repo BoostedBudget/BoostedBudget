@@ -513,6 +513,24 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		return cerr
 	}
 
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see OffboardExcessMembers/ForceDisband/PurgeRemovedMembership) — Gap
+	// Analysis Round 3, GT-1: without this, RemoveMember mutates household_members before
+	// ever locking households (the grace-clear branch inside removeMemberTx below only
+	// takes that lock conditionally, and only AFTER the member row is already updated),
+	// which inverts the lock order every sibling method uses and creates a real deadlock
+	// risk against a concurrent OffboardExcessMembers run (locks households first, then
+	// the same member's household_members row). GetHouseholdForUser above is only a
+	// non-locking lookup used to resolve which household actorUserID belongs to; this
+	// re-fetch under FOR UPDATE is the authoritative, locked household struct used for
+	// everything downstream. If the household was concurrently deleted between the two
+	// reads (e.g. a racing ForceDisband), this surfaces as a legitimate
+	// domain.ErrHouseholdNotFound rather than proceeding against a stale reference.
+	household, cerr = hhRepo.LockHouseholdByID(ctx, household.ID)
+	if cerr != nil {
+		return cerr
+	}
+
 	email, cerr := s.removeMemberTx(ctx, tx, household, actorUserID, targetUserID)
 	if cerr != nil {
 		return cerr
