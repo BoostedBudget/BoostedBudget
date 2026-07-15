@@ -964,12 +964,28 @@ func TestHouseholdService_OffboardExcessMembers_HouseholdNotFound_RollsBack(t *t
 
 // ─── PurgeRemovedMembership (#1371 — Phase 7 foundation) ─────────────────────
 
+// householdLockRow returns a pgxmock rows result satisfying LockHouseholdByID's
+// SELECT ... FOR UPDATE column shape (id, owner_user_id, name, created_at, updated_at,
+// over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at).
+func householdLockRow(householdID, ownerUserID string) *pgxmock.Rows {
+	now := time.Now()
+	return pgxmock.NewRows([]string{
+		"id", "owner_user_id", "name", "created_at", "updated_at",
+		"over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at",
+	}).AddRow(householdID, ownerUserID, "The Smiths", now, now, nil, nil, nil)
+}
+
 func TestHouseholdService_PurgeRemovedMembership_Success(t *testing.T) {
 	t.Parallel()
 	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	// Household-row lock must be taken FIRST, per this codebase's lock-ordering
+	// convention — pgxmock enforces expectation order, so declaring this query before
+	// the DELETE below proves the lock precedes it.
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(householdLockRow("hh-1", "owner-1"))
 	pool.ExpectQuery("DELETE FROM household_members").WithArgs("member-row-1").
 		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
 	// Not currently re-active in this household -> safe to clean up shares/entitlement.
@@ -981,8 +997,40 @@ func TestHouseholdService_PurgeRemovedMembership_Success(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
 
-	err := svc.PurgeRemovedMembership(context.Background(), "member-row-1")
+	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-1")
 	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestHouseholdService_PurgeRemovedMembership_LocksHouseholdBeforeDelete is a dedicated
+// lock-ordering regression test: proves the household row is locked (FOR UPDATE)
+// BEFORE the removed-member row is deleted, matching OffboardExcessMembers/ForceDisband's
+// documented "household-row lock always taken first" convention. pgxmock enforces
+// expectations in declaration order by default, so reversing the two ExpectQuery calls
+// below would make this test fail if the implementation's ordering regressed.
+func TestHouseholdService_PurgeRemovedMembership_LocksHouseholdBeforeDelete(t *testing.T) {
+	t.Parallel()
+	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(householdLockRow("hh-1", "owner-1"))
+	pool.ExpectQuery("DELETE FROM household_members").WithArgs("member-row-1").
+		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
+	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
+		WillReturnError(pgx.ErrNoRows)
+	pool.ExpectExec("DELETE FROM household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 2))
+	pool.ExpectExec("source = 'household'").WithArgs("member-1", "hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-1")
+	require.NoError(t, err)
+	// If the implementation locked AFTER deleting (or not at all), the queued
+	// expectations above would be consumed out of order and pgxmock would report an
+	// unmet/mismatched expectation here.
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
@@ -992,12 +1040,33 @@ func TestHouseholdService_PurgeRemovedMembership_NotFound_RollsBack(t *testing.T
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(householdLockRow("hh-1", "owner-1"))
 	pool.ExpectQuery("DELETE FROM household_members").WithArgs("member-row-x").
 		WillReturnError(pgx.ErrNoRows)
 	pool.ExpectRollback()
 
-	err := svc.PurgeRemovedMembership(context.Background(), "member-row-x")
+	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-x")
 	require.ErrorIs(t, err, domain.ErrMemberNotFound)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestHouseholdService_PurgeRemovedMembership_HouseholdLockNotFound_RollsBack proves
+// that if the household row itself can't be locked (e.g. a data-integrity edge case
+// where the household no longer exists), the method fails fast on the lock step and
+// never reaches the delete — the delete-by-membership-ID call is never made.
+func TestHouseholdService_PurgeRemovedMembership_HouseholdLockNotFound_RollsBack(t *testing.T) {
+	t.Parallel()
+	pool, svc := newTxTestService(t, &mockUserLoader{}, &MockEmailService{})
+	defer pool.Close()
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-missing").
+		WillReturnError(pgx.ErrNoRows)
+	pool.ExpectRollback()
+
+	err := svc.PurgeRemovedMembership(context.Background(), "hh-missing", "member-row-1")
+	require.ErrorIs(t, err, domain.ErrHouseholdNotFound)
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
@@ -1015,6 +1084,8 @@ func TestHouseholdService_PurgeRemovedMembership_UserRejoined_SkipsShareAndEntit
 	defer pool.Close()
 
 	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(householdLockRow("hh-1", "owner-1"))
 	pool.ExpectQuery("DELETE FROM household_members").WithArgs("member-row-old").
 		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
 	pool.ExpectQuery("status = 'active'").WithArgs("hh-1", "member-1").
@@ -1025,7 +1096,7 @@ func TestHouseholdService_PurgeRemovedMembership_UserRejoined_SkipsShareAndEntit
 	// No DELETE FROM household_account_shares, no entitlement UPDATE — must not run.
 	pool.ExpectCommit()
 
-	err := svc.PurgeRemovedMembership(context.Background(), "member-row-old")
+	err := svc.PurgeRemovedMembership(context.Background(), "hh-1", "member-row-old")
 	require.NoError(t, err)
 	require.NoError(t, pool.ExpectationsWereMet())
 }

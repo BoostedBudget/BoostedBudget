@@ -175,10 +175,15 @@ type HouseholdService interface {
 	// PurgeRemovedMembership permanently deletes a household_members row (identified by
 	// its own id) that is already status='removed', along with that member's
 	// household_account_shares rows for the household and their household-scoped
-	// entitlement, all inside one transaction. Does NOT touch the member's own
-	// accounts/transactions/budgets. Returns domain.ErrMemberNotFound if no such removed
-	// row exists. #1371 — Phase 7 foundation (run ~30 days after removal).
-	PurgeRemovedMembership(ctx context.Context, membershipID string) error
+	// entitlement, all inside one transaction. householdID is the row's own household —
+	// the caller (the daily purge worker) already knows it from its scan, and it's used
+	// to take the household-row lock FIRST, per this codebase's lock-ordering convention
+	// (see AcceptInvite/DeleteHousehold/OffboardExcessMembers/ForceDisband). Does NOT
+	// touch the member's own accounts/transactions/budgets. Returns
+	// domain.ErrHouseholdNotFound if the household row can't be locked, or
+	// domain.ErrMemberNotFound if no such removed row exists. #1371 — Phase 7 foundation
+	// (run ~30 days after removal).
+	PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error
 
 	// ForceDisband removes every active non-owner member of ownerUserID's household,
 	// then dissolves the household exactly like DeleteHousehold does — all inside one
@@ -688,7 +693,7 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 
 // PurgeRemovedMembership implements the HouseholdService method of the same name — see
 // the interface doc comment for the full contract.
-func (s *householdService) PurgeRemovedMembership(ctx context.Context, membershipID string) error {
+func (s *householdService) PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -703,7 +708,20 @@ func (s *householdService) PurgeRemovedMembership(ctx context.Context, membershi
 	shareRepo := repository.NewHouseholdShareRepository(tx)
 	entRepo := repository.NewEntitlementRepository(tx)
 
-	householdID, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see AcceptInvite/DeleteHousehold/OffboardExcessMembers/ForceDisband).
+	// This is the daily purge worker's sibling to AcceptInvite's re-invite-restore path
+	// (which also locks the household first, then does its own row-level
+	// GetRemovedMemberForUpdate before flipping status back to 'active') — taking the
+	// same household lock here adds a real layer of defense-in-depth against the two
+	// transactions racing, even though the row-level guards below (WHERE status='removed'
+	// on the delete, plus the rejoin-race check) already prevent actual data corruption
+	// either way.
+	if _, cerr = hhRepo.LockHouseholdByID(ctx, householdID); cerr != nil {
+		return cerr
+	}
+
+	_, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
 	if cerr != nil {
 		return cerr
 	}

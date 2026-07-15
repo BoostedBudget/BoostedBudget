@@ -122,8 +122,8 @@ func (m *mockHouseholdService) OffboardExcessMembers(ctx context.Context, househ
 	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
 }
 
-func (m *mockHouseholdService) PurgeRemovedMembership(ctx context.Context, membershipID string) error {
-	args := m.Called(ctx, membershipID)
+func (m *mockHouseholdService) PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error {
+	args := m.Called(ctx, householdID, membershipID)
 	return args.Error(0)
 }
 
