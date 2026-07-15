@@ -64,11 +64,19 @@ type HouseholdMemberView struct {
 // ForceDisband each send these via sendRemovalEmails (EmailService.
 // SendHouseholdMemberRemoved) immediately after their own tx.Commit succeeds (#1371 —
 // Task 3). PurgeDate is now+30d, matching the purge-window messaging ("your data will
-// be permanently removed on <date>").
+// be permanently removed on <date>") — meaningful for RemoveMember/OffboardExcessMembers,
+// where the status='removed' row genuinely lingers until the purge worker deletes it.
+//
+// Disbanded is false for removeMemberTx's own zero-value default (RemoveMember/
+// OffboardExcessMembers); ForceDisband flips it to true on every queued email it sends,
+// since it deletes the entire household row (cascading household_members away
+// immediately) in the SAME transaction as the removals — there is no lingering row left
+// for PurgeDate to ever apply to. Round 4 Gap Analysis fix (#1371).
 type QueuedRemovalEmail struct {
 	ToEmail       string
 	HouseholdName string
 	PurgeDate     time.Time
+	Disbanded     bool
 }
 
 // removalPurgeWindowDays is removalPurgeWindow expressed as a day-count — the single
@@ -651,7 +659,7 @@ func (s *householdService) sendRemovalEmails(ctx context.Context, queued []Queue
 		return
 	}
 	for _, q := range queued {
-		if err := s.emailService.SendHouseholdMemberRemoved(ctx, q.ToEmail, q.HouseholdName, q.PurgeDate); err != nil {
+		if err := s.emailService.SendHouseholdMemberRemoved(ctx, q.ToEmail, q.HouseholdName, q.PurgeDate, q.Disbanded); err != nil {
 			slog.Default().Warn("household: failed to send member-removed email; removal already committed",
 				"email", q.ToEmail, "household_name", q.HouseholdName, "error", err)
 		}
@@ -865,6 +873,14 @@ func (s *householdService) ForceDisband(ctx context.Context, ownerUserID string)
 		return nil, cerr
 	}
 	s.capture(ownerUserID, phclient.EventHouseholdForceDisbanded)
+	// Round 4 Gap Analysis fix: the household row (and its cascaded household_members
+	// rows) is already gone by this point — mark every queued email as disbanded so
+	// sendRemovalEmails sends the corrected copy (no future-cleanup reference) instead of
+	// the individual-removal/auto-offboard copy's "cleaned up after 30 days" language,
+	// which is factually wrong here.
+	for i := range queued {
+		queued[i].Disbanded = true
+	}
 	s.sendRemovalEmails(ctx, queued)
 	return queued, nil
 }

@@ -131,7 +131,7 @@ func TestSendHouseholdMemberRemoved_Success(t *testing.T) {
 	ctx := context.Background()
 	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
 
-	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour))
+	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour), false)
 
 	assert.NoError(t, err)
 }
@@ -140,18 +140,30 @@ func TestSendHouseholdMemberRemoved_InvalidEmail(t *testing.T) {
 	ctx := context.Background()
 	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
 
-	err := service.SendHouseholdMemberRemoved(ctx, "not-an-email", "The Smiths", time.Now().Add(30*24*time.Hour))
+	err := service.SendHouseholdMemberRemoved(ctx, "not-an-email", "The Smiths", time.Now().Add(30*24*time.Hour), false)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid email")
+}
+
+// TestSendHouseholdMemberRemoved_Disbanded_Success proves the disbanded=true variant
+// (used by ForceDisband) sends successfully through the same code path as the
+// individual-removal variant. Round 4 Gap Analysis fix (#1371).
+func TestSendHouseholdMemberRemoved_Disbanded_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour), true)
+
+	assert.NoError(t, err)
 }
 
 func TestMemberRemovedEmailTemplates_ContainRequiredContent(t *testing.T) {
 	s := &emailService{fromName: "BoostedBudget"}
 	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
 
-	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate)
-	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate)
+	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate, false)
+	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate, false)
 
 	// Household name present in both.
 	assert.Contains(t, html, "The Smiths")
@@ -164,6 +176,41 @@ func TestMemberRemovedEmailTemplates_ContainRequiredContent(t *testing.T) {
 	// Preserved-data messaging present in both.
 	assert.Contains(t, html, "preserved")
 	assert.Contains(t, text, "preserved")
+
+	// The individual-removal/auto-offboard copy DOES reference the future cleanup step —
+	// this is accurate for those cases (the status='removed' row genuinely persists until
+	// the 30-day purge worker deletes it). Regression guard for the disbanded test below.
+	assert.Contains(t, html, "cleaned up automatically")
+	assert.Contains(t, text, "cleaned up automatically")
+}
+
+// TestMemberRemovedEmailTemplates_Disbanded_DoesNotContainCleanupLanguage proves the
+// Round 4 Gap Analysis fix: ForceDisband deletes the entire households row in the SAME
+// transaction as the member removals, which CASCADEs household_members rows away
+// IMMEDIATELY (migration 000107, ON DELETE CASCADE) — there is no lingering
+// status='removed' row left for the 30-day purge worker to find, so the disbanded
+// variant must NOT reference a future cleanup step/preservation window. #1371.
+func TestMemberRemovedEmailTemplates_Disbanded_DoesNotContainCleanupLanguage(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate, true)
+	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate, true)
+
+	// Household name and data-safety messaging still present.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+	assert.Contains(t, html, "preserved")
+	assert.Contains(t, text, "preserved")
+
+	// The inaccurate "will be purged later" language must be gone.
+	assert.NotContains(t, html, "cleaned up automatically")
+	assert.NotContains(t, text, "cleaned up automatically")
+	assert.NotContains(t, html, "preservation window")
+	assert.NotContains(t, text, "preservation window")
+	// The purge date itself must not be referenced either — there's nothing left to purge.
+	assert.NotContains(t, html, "January 15, 2026")
+	assert.NotContains(t, text, "January 15, 2026")
 }
 
 // ─── SendHouseholdOverCapacityNotice / Warning (#1371 — Phase 7, Task 6) ─────
