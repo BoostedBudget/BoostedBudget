@@ -165,8 +165,11 @@ type HouseholdService interface {
 	// current effective seat count by removing the most-recently-joined active
 	// non-owner members (LIFO) one at a time, until active count <= allowed seats, all
 	// inside one transaction. A no-op (empty slice, nil error) if the household is
-	// already within its seat count. Safe for a background worker to call — never
-	// nests a transaction. Returns the removal emails to send after commit. #1371 —
+	// already within its seat count, OR if the owner's subscription status — re-read
+	// fresh under this method's own household-row lock — is read-only (Gap Analysis
+	// Round 3, GT-2: closes a TOCTOU window where a caller's own owner read could be
+	// stale by the time it calls this method). Safe for a background worker to call —
+	// never nests a transaction. Returns the removal emails to send after commit. #1371 —
 	// Phase 7 foundation; the decision of WHEN/how-many to call this with (grace
 	// periods, over_capacity_since bookkeeping) is Task 6's responsibility, not this
 	// method's.
@@ -673,6 +676,26 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	if cerr != nil {
 		return nil, cerr
 	}
+
+	// Gap Analysis Round 3, GT-2: re-check the owner's subscription status FRESH, under
+	// this method's own household-row lock, rather than trusting a caller's possibly-stale
+	// read. household_over_capacity_check.go's processHousehold reads the owner once at
+	// the top of a run, then may call this method (via autoOffboard) some time later in
+	// that SAME run — if the owner's subscription lapses via a concurrent Paddle webhook
+	// in that window, the caller's cached owner would still look active. A read-only owner
+	// means the over-capacity grace is moot: members already fall back to their own tier
+	// via the (unchanged) entitlement resolver's owner-read-only branch, so there's
+	// nothing to LIFO-remove — skip straight to a normal commit instead of computing a
+	// seat limit and removing anyone. This is a legitimate "nothing to do" outcome, not an
+	// error; the caller (the daily worker's autoOffboard) already clears the over-capacity
+	// flag unconditionally after any successful call here, regardless of queue length.
+	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+		if cerr = tx.Commit(ctx); cerr != nil {
+			return nil, cerr
+		}
+		return []QueuedRemovalEmail{}, nil
+	}
+
 	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
 	if cerr != nil {
 		return nil, cerr

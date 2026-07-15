@@ -410,6 +410,47 @@ func TestHouseholdOverCapacityCheck_InGrace_ExactlyAtDeadline_AutoOffboards(t *t
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
 }
 
+// TestHouseholdOverCapacityCheck_AutoOffboard_ReadOnlyOwnerSkipsRemoval_StillClearsFlag
+// proves the worker side of the #1371 Gap Analysis Round 3, GT-2 fix: when
+// OffboardExcessMembers's own fresh, lock-guarded owner re-check finds the owner has gone
+// read-only (a TOCTOU race — the owner looked active when THIS worker run started, but a
+// concurrent Paddle webhook flipped their subscription before the deadline branch reached
+// OffboardExcessMembers) and returns an empty queue with no error, the over-capacity flag
+// must still be cleared — not left dangling — since grace is moot once the owner is
+// read-only (members already fall back to their own tier via the entitlement resolver's
+// owner-read-only branch). autoOffboard's ClearOverCapacity call is unconditional on
+// OffboardExcessMembers succeeding, regardless of how many (if any) members were actually
+// removed; this test uses AssertExpectations (not just a permissive .On registration) to
+// actually prove that call happens, rather than merely allowing it.
+func TestHouseholdOverCapacityCheck_AutoOffboard_ReadOnlyOwnerSkipsRemoval_StillClearsFlag(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour) // past the 14-day deadline
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	// The worker's OWN top-of-run owner read still shows active — the race is that
+	// OffboardExcessMembers's independent, fresher re-read (simulated here via its mocked
+	// return value) finds the owner has since gone read-only.
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	// Empty queue, nil error — OffboardExcessMembers's fresh owner re-check found a
+	// read-only owner and skipped removal entirely (the scenario this fix addresses).
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1").Return([]services.QueuedRemovalEmail{}, nil)
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t) // proves ClearOverCapacity was actually invoked, not just permitted
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
 func TestHouseholdOverCapacityCheck_AutoOffboard_OffboardServiceError_ReturnsError(t *testing.T) {
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, _ := setupOverCapacityCheckWorkerTest(t)
