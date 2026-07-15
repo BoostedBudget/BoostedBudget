@@ -166,6 +166,92 @@ func TestMemberRemovedEmailTemplates_ContainRequiredContent(t *testing.T) {
 	assert.Contains(t, text, "preserved")
 }
 
+// ─── SendHouseholdOverCapacityNotice / Warning (#1371 — Phase 7, Task 6) ─────
+
+func TestSendHouseholdOverCapacityNotice_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityNotice(ctx, "owner@example.com", "The Smiths", 4, 2, time.Now().Add(14*24*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdOverCapacityNotice_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityNotice(ctx, "not-an-email", "The Smiths", 4, 2, time.Now().Add(14*24*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestOverCapacityNoticeEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildOverCapacityNoticeEmailHTML("The Smiths", 4, 2, deadline)
+	text := s.buildOverCapacityNoticeEmailPlainText("The Smiths", 4, 2, deadline)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Deadline formatted in a human-readable way in both (matches Task 3's convention).
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Active/seat counts present in both.
+	assert.Contains(t, html, "4")
+	assert.Contains(t, html, "2")
+	assert.Contains(t, text, "4")
+	assert.Contains(t, text, "2")
+
+	// Auto-removal consequence messaging present in both.
+	assert.Contains(t, html, "automatically")
+	assert.Contains(t, text, "automatically")
+}
+
+func TestSendHouseholdOverCapacityWarning_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityWarning(ctx, "owner@example.com", "The Smiths", 4, 2, time.Now().Add(3*24*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdOverCapacityWarning_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityWarning(ctx, "not-an-email", "The Smiths", 4, 2, time.Now().Add(3*24*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestOverCapacityWarningEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildOverCapacityWarningEmailHTML("The Smiths", 4, 2, deadline)
+	text := s.buildOverCapacityWarningEmailPlainText("The Smiths", 4, 2, deadline)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Deadline formatted in a human-readable way in both.
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Urgency messaging ("3 days left") present in both.
+	assert.Contains(t, html, "3 days")
+	assert.Contains(t, text, "3 days")
+}
+
 // TestSendNotificationEmail_Success tests successful notification email sending (stub)
 // Issue #257: Item Error Handler - User Notifications
 func TestSendNotificationEmail_Success(t *testing.T) {

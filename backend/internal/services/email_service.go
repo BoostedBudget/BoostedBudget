@@ -45,6 +45,18 @@ type EmailService interface {
 	// time this is called, so a failed send must never be surfaced as a removal error.
 	// #1371 — Phase 7 (Task 3).
 	SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time) error
+
+	// SendHouseholdOverCapacityNotice sends the OWNER-facing "you're over capacity"
+	// email the first time a household enters over-capacity grace (activeCount exceeds
+	// seatLimit): remove members or upgrade before deadline (~14 days out), or the
+	// system will automatically remove the most-recently-joined excess members.
+	// Callers should treat delivery as best-effort. #1371 — Phase 7 (Task 6).
+	SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error
+
+	// SendHouseholdOverCapacityWarning sends the OWNER-facing "3 days left" follow-up
+	// email when a household is still over capacity as its grace deadline approaches.
+	// Callers should treat delivery as best-effort. #1371 — Phase 7 (Task 6).
+	SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error
 }
 
 // emailService implements EmailService using SendGrid
@@ -220,6 +232,155 @@ func (s *emailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, 
 		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
 	}
 	return nil
+}
+
+// SendHouseholdOverCapacityNotice sends the owner-facing "you're over capacity" email.
+// Best-effort — see interface doc.
+func (s *emailService) SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	if !isValidEmail(toEmail) {
+		return fmt.Errorf("invalid email address: %s", toEmail)
+	}
+
+	subject := fmt.Sprintf("Action needed: %s is over its seat limit", householdName)
+	htmlContent := s.buildOverCapacityNoticeEmailHTML(householdName, activeCount, seatLimit, deadline)
+	plainTextContent := s.buildOverCapacityNoticeEmailPlainText(householdName, activeCount, seatLimit, deadline)
+
+	from := mail.NewEmail(s.fromName, s.fromEmail)
+	to := mail.NewEmail("", toEmail)
+	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
+
+	if s.mockMode {
+		return nil
+	}
+
+	response, err := s.client.SendWithContext(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SendGrid: %w", err)
+	}
+	if response.StatusCode >= 400 {
+		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
+	}
+	return nil
+}
+
+// SendHouseholdOverCapacityWarning sends the owner-facing "3 days left" follow-up email.
+// Best-effort — see interface doc.
+func (s *emailService) SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	if !isValidEmail(toEmail) {
+		return fmt.Errorf("invalid email address: %s", toEmail)
+	}
+
+	subject := fmt.Sprintf("3 days left: %s is still over its seat limit", householdName)
+	htmlContent := s.buildOverCapacityWarningEmailHTML(householdName, activeCount, seatLimit, deadline)
+	plainTextContent := s.buildOverCapacityWarningEmailPlainText(householdName, activeCount, seatLimit, deadline)
+
+	from := mail.NewEmail(s.fromName, s.fromEmail)
+	to := mail.NewEmail("", toEmail)
+	message := mail.NewSingleEmail(from, subject, to, plainTextContent, htmlContent)
+
+	if s.mockMode {
+		return nil
+	}
+
+	response, err := s.client.SendWithContext(ctx, message)
+	if err != nil {
+		return fmt.Errorf("failed to send email via SendGrid: %w", err)
+	}
+	if response.StatusCode >= 400 {
+		return fmt.Errorf("SendGrid API error (status %d): %s", response.StatusCode, response.Body)
+	}
+	return nil
+}
+
+// buildOverCapacityNoticeEmailHTML creates the HTML email template for the initial
+// over-capacity grace notice.
+func (s *emailService) buildOverCapacityNoticeEmailHTML(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	formattedDeadline := deadline.Format("January 2, 2006")
+	return fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Household Over Seat Limit</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background-color: #f8f9fa; border-radius: 8px; padding: 30px; border: 1px solid #dee2e6;">
+        <h1 style="color: #dc3545; margin-top: 0;">%s is over its seat limit</h1>
+
+        <p>Your household <strong>%s</strong> currently has <strong>%d active members</strong>, but your
+        plan only includes <strong>%d seats</strong>.</p>
+
+        <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+            <strong>You have until %s</strong> to remove members or upgrade to a plan with enough seats.
+        </div>
+
+        <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
+            If no action is taken by then, the system will automatically remove the most-recently-joined
+            members to bring your household back within its seat limit.
+        </p>
+    </div>
+</body>
+</html>
+`, householdName, householdName, activeCount, seatLimit, formattedDeadline)
+}
+
+// buildOverCapacityNoticeEmailPlainText creates the plain text email template for the
+// initial over-capacity grace notice.
+func (s *emailService) buildOverCapacityNoticeEmailPlainText(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	formattedDeadline := deadline.Format("January 2, 2006")
+	return fmt.Sprintf(`
+%s IS OVER ITS SEAT LIMIT
+
+Your household %s currently has %d active members, but your plan only includes %d seats.
+
+YOU HAVE UNTIL %s to remove members or upgrade to a plan with enough seats.
+
+If no action is taken by then, the system will automatically remove the most-recently-joined
+members to bring your household back within its seat limit.
+`, householdName, householdName, activeCount, seatLimit, formattedDeadline)
+}
+
+// buildOverCapacityWarningEmailHTML creates the HTML email template for the "3 days
+// left" follow-up warning.
+func (s *emailService) buildOverCapacityWarningEmailHTML(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	formattedDeadline := deadline.Format("January 2, 2006")
+	return fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>3 Days Left: Household Over Seat Limit</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background-color: #f8f9fa; border-radius: 8px; padding: 30px; border: 1px solid #dee2e6;">
+        <h1 style="color: #dc3545; margin-top: 0;">3 days left to fix %s's seat limit</h1>
+
+        <p>Your household <strong>%s</strong> still has <strong>%d active members</strong> against a
+        <strong>%d-seat</strong> plan, and your grace period ends on <strong>%s</strong> — just 3 days away.</p>
+
+        <div style="background-color: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin: 20px 0;">
+            <strong>Act now.</strong> Remove members or upgrade before %s, or the system will automatically
+            remove the most-recently-joined members to bring your household back within its seat limit.
+        </div>
+    </div>
+</body>
+</html>
+`, householdName, householdName, activeCount, seatLimit, formattedDeadline, formattedDeadline)
+}
+
+// buildOverCapacityWarningEmailPlainText creates the plain text email template for the
+// "3 days left" follow-up warning.
+func (s *emailService) buildOverCapacityWarningEmailPlainText(householdName string, activeCount, seatLimit int, deadline time.Time) string {
+	formattedDeadline := deadline.Format("January 2, 2006")
+	return fmt.Sprintf(`
+3 DAYS LEFT TO FIX %s'S SEAT LIMIT
+
+Your household %s still has %d active members against a %d-seat plan, and your grace period ends
+on %s — just 3 days away.
+
+ACT NOW. Remove members or upgrade before %s, or the system will automatically remove the
+most-recently-joined members to bring your household back within its seat limit.
+`, householdName, householdName, activeCount, seatLimit, formattedDeadline, formattedDeadline)
 }
 
 // buildHouseholdInviteEmailHTML creates the HTML email template for a household invite.
