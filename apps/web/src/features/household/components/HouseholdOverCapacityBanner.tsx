@@ -25,7 +25,7 @@ const DISMISS_KEY = 'household_over_capacity'
 
 export function HouseholdOverCapacityBanner() {
   const { user } = useProfile()
-  const { isOwner, overCapacitySince, seatsUsed, seatsTotal } = useHousehold()
+  const { isOwner, overCapacitySince, seatsUsed, seatsTotal, isLoading } = useHousehold()
   const track = useTrackEvent()
 
   const isApplicable = isOwner && !!overCapacitySince
@@ -41,7 +41,7 @@ export function HouseholdOverCapacityBanner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isApplicable])
 
-  if (!user || !isApplicable || isDismissed) return null
+  if (!user || isLoading || !isApplicable || isDismissed) return null
 
   const handleCtaClick = () => {
     track(ANALYTICS_EVENTS.HOUSEHOLD_OVER_CAPACITY_BANNER_CTA_CLICKED, { overage })
