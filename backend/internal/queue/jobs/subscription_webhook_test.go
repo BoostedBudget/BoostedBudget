@@ -2172,6 +2172,132 @@ func TestWorker_SubscriptionPastDue_ClearsOverCapacity(t *testing.T) {
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
+// TestWorker_SubscriptionUpdated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile
+// proves the Round 4 Gap Analysis fix: when subscription.updated resolves to a
+// read-only status (e.g. a scheduled downgrade landing the subscription in past_due via
+// this generic event rather than the dedicated subscription.past_due event),
+// processSubscriptionUpdated must call clearOverCapacityIfOwner — NOT
+// reconcileOverCapacity's seat-count path — mirroring processSubscriptionPastDue/
+// processSubscriptionCanceled's existing convention. Proven by expecting ONLY the
+// direct ClearOverCapacity exec (no ExpectBegin/Commit, no CountActiveMembers SELECT
+// COUNT, no SetOverCapacity) — pgxmock would fail on any unexpected call.
+func TestWorker_SubscriptionUpdated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	pastDuePayload := `{
+		"event_id": "evt_updated_pastdue_123",
+		"event_type": "subscription.updated",
+		"data": {
+			"id": "sub_01h1234567890abcdef",
+			"status": "past_due",
+			"customer_id": "ctm_01h1234567890abcdef",
+			"custom_data": {"user_id": "user_2abc123def456"},
+			"items": [{"price": {"id": "pri_premium_monthly"}}]
+		}
+	}`
+
+	webhook := &domain.PaddleWebhookEvent{
+		ID:             "test-webhook-id-updated-pastdue",
+		EventID:        "evt_updated_pastdue_123",
+		EventType:      "subscription.updated",
+		Payload:        json.RawMessage(pastDuePayload),
+		SignatureValid: true,
+	}
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-updated-pastdue",
+		EventID:   "evt_updated_pastdue_123",
+		EventType: "subscription.updated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-updated-pastdue").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "past_due", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	// #930 guard (unchanged): ClearRetentionDates/ClearPastDueStartedAt must NOT be
+	// called for a read-only status update.
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-updated-pastdue").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	mockProfileRepo.AssertNotCalled(t, "ClearPastDueStartedAt")
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "a read-only new status must clear over-capacity directly, not reconcile via the seat-count transaction")
+}
+
+// TestWorker_SubscriptionActivated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile
+// is the defensive twin of the Updated test above: an "activated" event carrying a
+// read-only status isn't expected from Paddle in practice (activation implies real
+// coverage), but processSubscriptionActivated must not blindly run the seat-count
+// reconcile path if it ever does — for consistency with every other call site.
+func TestWorker_SubscriptionActivated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	pastDuePayload := `{
+		"event_id": "evt_activated_pastdue_123",
+		"event_type": "subscription.activated",
+		"data": {
+			"id": "sub_01h1234567890abcdef",
+			"status": "past_due",
+			"customer_id": "ctm_01h1234567890abcdef",
+			"custom_data": {"user_id": "user_2abc123def456"},
+			"items": [{"price": {"id": "pri_premium_monthly"}}]
+		}
+	}`
+
+	webhook := &domain.PaddleWebhookEvent{
+		ID:             "test-webhook-id-activated-pastdue",
+		EventID:        "evt_activated_pastdue_123",
+		EventType:      "subscription.activated",
+		Payload:        json.RawMessage(pastDuePayload),
+		SignatureValid: true,
+	}
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-activated-pastdue",
+		EventID:   "evt_activated_pastdue_123",
+		EventType: "subscription.activated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-activated-pastdue").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "past_due", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	// #930/#933 guard (unchanged): the "Welcome aboard!" notification, ClearRetentionDates,
+	// and ClearPastDueStartedAt must NOT fire for a non-active status.
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-activated-pastdue").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	mockProfileRepo.AssertNotCalled(t, "ClearPastDueStartedAt")
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "a read-only new status must clear over-capacity directly, not reconcile via the seat-count transaction")
+}
+
 // TestWorker_SubscriptionCanceled_NonOwner_NoOp proves clearOverCapacityIfOwner is a
 // true no-op (no transaction opened at all) for a user who isn't a household owner.
 func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {

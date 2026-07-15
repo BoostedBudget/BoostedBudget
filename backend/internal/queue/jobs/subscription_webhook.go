@@ -645,8 +645,14 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 
 	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
 	// tier write above has already landed. Logged, never propagated — see
-	// reconcileOverCapacity's doc comment.
-	if err := w.reconcileOverCapacity(ctx, userID); err != nil {
+	// reconcileOverCapacity's doc comment. Round 4 Gap Analysis fix: if the new status is
+	// read-only, grace is moot (an "activated" event carrying a read-only status isn't
+	// expected from Paddle in practice, but this stays defensive/consistent with
+	// processSubscriptionUpdated below) — clear instead of reconcile, matching
+	// processSubscriptionPastDue/processSubscriptionCanceled's existing convention.
+	if domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+		w.clearOverCapacityIfOwner(ctx, userID)
+	} else if err := w.reconcileOverCapacity(ctx, userID); err != nil {
 		w.logger.Warn("failed to reconcile household over-capacity after subscription activation", "user_id", userID, "error", err)
 	}
 
@@ -702,8 +708,15 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 
 	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
 	// tier write above has already landed. Logged, never propagated — see
-	// reconcileOverCapacity's doc comment.
-	if err := w.reconcileOverCapacity(ctx, userID); err != nil {
+	// reconcileOverCapacity's doc comment. Round 4 Gap Analysis fix: if the new status is
+	// read-only (e.g. a scheduled downgrade lands the subscription in past_due via THIS
+	// generic event rather than the dedicated subscription.past_due event), grace is moot
+	// — clear instead of reconcile, matching processSubscriptionPastDue/
+	// processSubscriptionCanceled's existing convention (same IsReadOnlySubscription()
+	// check used just above for the retention-clock guard).
+	if domain.SubscriptionStatus(status).IsReadOnlySubscription() {
+		w.clearOverCapacityIfOwner(ctx, userID)
+	} else if err := w.reconcileOverCapacity(ctx, userID); err != nil {
 		w.logger.Warn("failed to reconcile household over-capacity after subscription update", "user_id", userID, "error", err)
 	}
 
