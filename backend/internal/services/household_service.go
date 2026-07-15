@@ -564,6 +564,34 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		return nil, err
 	}
 
+	// #1371 — Task 6, Part D: grace-clear on in-app member removal. Only checked (and
+	// only EVER checked) when the household is currently in over-capacity grace —
+	// households never in grace skip this entirely, no extra queries. Re-counts
+	// activeCount POST-removal (the removal above already committed within this same
+	// tx) against the owner's CURRENT effective-tier seat count (same technique as
+	// paddle_checkout.go's checkDowngradeSeatCapacity — Task 5), so an owner manually
+	// removing members during grace gets immediate credit without waiting for the next
+	// daily household_over_capacity_check worker run (Task 6, Part C).
+	if household.OverCapacitySince != nil {
+		owner, err := s.userRepo.GetUserByID(ctx, household.OwnerUserID)
+		if err != nil {
+			return nil, err
+		}
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+		if err != nil {
+			return nil, err
+		}
+		activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+		if err != nil {
+			return nil, err
+		}
+		if activeCount <= ownerTier.Pricing.UsersIncluded {
+			if err := hhRepo.ClearOverCapacity(ctx, household.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Collect (never send) the removal notification for the caller to fire after commit
 	// — see sendRemovalEmails (#1371 — Task 3).
 	target, err := s.userRepo.GetUserByID(ctx, targetUserID)
