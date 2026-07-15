@@ -145,6 +145,20 @@ func testTierConfig(t *testing.T) *config.TierConfig {
 	return tc
 }
 
+// purgeDateWithin30Days is a mock.MatchedBy predicate for the purgeDate argument passed
+// to EmailService.SendHouseholdMemberRemoved. Unlike mock.AnythingOfType("time.Time")
+// (which accepts ANY time.Time, including a wrong or zero one), this actually proves the
+// value reaching the mock is ~30 days out — matching removalPurgeWindow — the same
+// tolerance (1 minute) used by the existing assert.WithinDuration checks on
+// QueuedRemovalEmail.PurgeDate. #1371 — Task 3 (Codex review follow-up).
+func purgeDateWithin30Days(t time.Time) bool {
+	diff := time.Until(t) - removalPurgeWindow
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < time.Minute
+}
+
 // ─── Non-transactional methods (plain mocked repos) ──────────────────────────
 
 func TestHouseholdService_GetMyHousehold_NotFound(t *testing.T) {
@@ -566,7 +580,7 @@ func TestHouseholdService_RemoveMember_SelfLeave_Success(t *testing.T) {
 	userRepo.On("GetUserByID", mock.Anything, "member-1").
 		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(nil)
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -596,7 +610,7 @@ func TestHouseholdService_RemoveMember_OwnerRemovesOther_Success(t *testing.T) {
 	userRepo.On("GetUserByID", mock.Anything, "member-1").
 		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(nil)
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -630,7 +644,7 @@ func TestHouseholdService_RemoveMember_Success_EmailSendFails_StillReturnsNoErro
 	userRepo.On("GetUserByID", mock.Anything, "member-1").
 		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(errors.New("sendgrid unavailable"))
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -722,7 +736,7 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 	userRepo.On("GetUserByID", mock.Anything, "member-2").
 		Return(&domain.User{ID: "member-2", Email: "member2@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(nil)
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -774,7 +788,7 @@ func TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoErr
 	userRepo.On("GetUserByID", mock.Anything, "member-2").
 		Return(&domain.User{ID: "member-2", Email: "member2@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(errors.New("sendgrid unavailable"))
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -903,9 +917,9 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 	userRepo.On("GetUserByID", mock.Anything, "member-2").
 		Return(&domain.User{ID: "member-2", Email: "m2@example.com"}, nil)
 	emailSvc := &MockEmailService{}
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m1@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m1@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(nil)
-	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m2@example.com", "The Smiths", mock.AnythingOfType("time.Time")).
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m2@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days)).
 		Return(nil)
 	pool, svc := newTxTestService(t, userRepo, emailSvc)
 	defer pool.Close()
@@ -946,6 +960,12 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 	queued, err := svc.ForceDisband(context.Background(), "owner-1")
 	require.NoError(t, err)
 	require.Len(t, queued, 2)
+	assert.Equal(t, "m1@example.com", queued[0].ToEmail)
+	assert.Equal(t, "The Smiths", queued[0].HouseholdName)
+	assert.WithinDuration(t, time.Now().Add(30*24*time.Hour), queued[0].PurgeDate, time.Minute)
+	assert.Equal(t, "m2@example.com", queued[1].ToEmail)
+	assert.Equal(t, "The Smiths", queued[1].HouseholdName)
+	assert.WithinDuration(t, time.Now().Add(30*24*time.Hour), queued[1].PurgeDate, time.Minute)
 	require.NoError(t, pool.ExpectationsWereMet())
 	userRepo.AssertExpectations(t)
 	emailSvc.AssertExpectations(t)
