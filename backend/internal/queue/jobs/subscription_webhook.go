@@ -229,8 +229,9 @@ func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userI
 // checkDowngradeSeatCapacity — Task 5), and either starts or clears the
 // over_capacity_since grace clock via the idempotent SetOverCapacity/ClearOverCapacity
 // repository methods (Task 1). Every write here is safe to call twice —
-// SetOverCapacity is a WHERE over_capacity_since IS NULL no-op once grace is already
-// running, and ClearOverCapacity is a plain idempotent null-out.
+// SetOverCapacity's COALESCE-based UPDATE is a no-op once grace is already running
+// (returning the already-set value rather than overwriting it), and ClearOverCapacity
+// is a plain idempotent null-out.
 //
 // The daily household_over_capacity_check worker (Task 6, Part C) is the AUTHORITATIVE
 // backstop for anything this fast path misses or races against — callers must log
@@ -280,7 +281,10 @@ func (w *SubscriptionWebhookWorker) reconcileOverCapacity(ctx context.Context, o
 
 	switch {
 	case activeCount > seatLimit && locked.OverCapacitySince == nil:
-		if err := hhRepo.SetOverCapacity(ctx, household.ID, time.Now()); err != nil {
+		// This call site already holds a row lock on the household via
+		// LockHouseholdByID above, so it cannot lose a race against a concurrent
+		// writer — the returned effective timestamp is discarded on purpose.
+		if _, err := hhRepo.SetOverCapacity(ctx, household.ID, time.Now()); err != nil {
 			return fmt.Errorf("failed to set over-capacity for household %s: %w", household.ID, err)
 		}
 		if w.analytics != nil {

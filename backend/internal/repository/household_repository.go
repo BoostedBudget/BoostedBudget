@@ -108,11 +108,17 @@ type HouseholdRepository interface {
 
 	// SetOverCapacity idempotently starts the over-capacity grace clock: sets
 	// over_capacity_since = since, but ONLY if it is not already set. A second
-	// call while grace is already active is a silent no-op (0 rows affected, not
-	// an error) — the original grace deadline must never be reset. Does not
-	// touch the notice-sent columns. #1371 — Phase 7 (Task 1; consumed by the
-	// Task 6 grace worker).
-	SetOverCapacity(ctx context.Context, householdID string, since time.Time) error
+	// call while grace is already active is a no-op that leaves the original
+	// grace deadline untouched — but, unlike a bare no-op, ALWAYS returns the
+	// true effective over_capacity_since (via COALESCE+RETURNING in one
+	// round-trip), whichever writer got there first. This lets a caller that
+	// lost a race against a concurrent writer (e.g. the subscription-webhook
+	// fast path) detect it and use the real, earlier timestamp instead of
+	// blindly trusting its own local `since` — which would otherwise let a
+	// fabricated, too-late grace deadline reach the owner in a notice email.
+	// Does not touch the notice-sent columns. #1371 — Phase 7 (Task 1;
+	// consumed by the Task 6 grace worker).
+	SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error)
 
 	// ClearOverCapacity nulls all three over-capacity columns (grace anchor +
 	// both notice-sent markers), ending the current grace period. Idempotent —
@@ -386,11 +392,13 @@ func (r *householdRepository) DeleteRemovedMember(ctx context.Context, membershi
 	return householdID, userID, nil
 }
 
-func (r *householdRepository) SetOverCapacity(ctx context.Context, householdID string, since time.Time) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE households SET over_capacity_since = $2 WHERE id = $1 AND over_capacity_since IS NULL
-	`, householdID, since)
-	return err
+func (r *householdRepository) SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error) {
+	var effectiveSince time.Time
+	err := r.db.QueryRow(ctx, `
+		UPDATE households SET over_capacity_since = COALESCE(over_capacity_since, $2) WHERE id = $1
+		RETURNING over_capacity_since
+	`, householdID, since).Scan(&effectiveSince)
+	return effectiveSince, err
 }
 
 func (r *householdRepository) ClearOverCapacity(ctx context.Context, householdID string) error {

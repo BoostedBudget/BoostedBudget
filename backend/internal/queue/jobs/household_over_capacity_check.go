@@ -54,8 +54,12 @@ type HouseholdOverCapacityCheckRepository interface {
 	ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error)
 	// CountActiveMembers returns the number of active members for a household.
 	CountActiveMembers(ctx context.Context, householdID string) (int, error)
-	// SetOverCapacity idempotently starts the grace clock (Task 1).
-	SetOverCapacity(ctx context.Context, householdID string, since time.Time) error
+	// SetOverCapacity idempotently starts the grace clock (Task 1). Always returns
+	// the true effective over_capacity_since — which may be EARLIER than the
+	// `since` passed in, if a concurrent writer (e.g. the subscription-webhook
+	// fast path) already set it first — so callers must use the returned value,
+	// never their own local `since`, to compute anything owner-facing.
+	SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error)
 	// ClearOverCapacity ends the current grace period (Task 1).
 	ClearOverCapacity(ctx context.Context, householdID string) error
 	// MarkOverCapacityStartNoticeSent records the initial grace notice was sent (Task 1).
@@ -295,7 +299,8 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	// Case 3: over capacity, not yet flagged — the webhook fast path missed this one.
 	if h.OverCapacitySince == nil {
 		since := time.Now()
-		if err := w.repo.SetOverCapacity(ctx, h.ID, since); err != nil {
+		effectiveSince, err := w.repo.SetOverCapacity(ctx, h.ID, since)
+		if err != nil {
 			return fmt.Errorf("failed to set over-capacity for household %s: %w", h.ID, err)
 		}
 		// Reflect the just-set flag into the in-memory struct and fall through to the
@@ -305,7 +310,17 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		// in-memory struct was loaded at the top of scanHouseholds/processHousehold,
 		// before SetOverCapacity ran, so it would otherwise still read nil here).
 		// Codex review finding — #1371.
-		h.OverCapacitySince = &since
+		//
+		// Use effectiveSince — SetOverCapacity's COALESCE+RETURNING value — rather than
+		// the locally-computed `since`: this worker can lose a race against a
+		// concurrent writer (e.g. the subscription-webhook fast path, which holds a
+		// household row lock via LockHouseholdByID) that already set an EARLIER
+		// over_capacity_since between this worker's read of h and this write. If that
+		// happens, `since` is NOT the true grace anchor — trusting it here would
+		// compute a grace deadline (below) LATER than what the database will actually
+		// enforce, and email the owner a fabricated, incorrect deadline. effectiveSince
+		// is always the true value, whichever writer got there first.
+		h.OverCapacitySince = &effectiveSince
 	}
 
 	// In grace — either already, or just entered via Case 3 above. Branch on where
@@ -322,10 +337,10 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return w.autoOffboard(ctx, jobID, h, activeCount, seatLimit)
 	case h.OverCapacityStartNoticeSentAt == nil:
 		// Case 5: still within the grace window, initial notice not yet sent.
-		return w.sendStartNotice(ctx, jobID, owner, h, activeCount, seatLimit, deadline)
+		return w.sendStartNotice(ctx, jobID, freshOwner, h, activeCount, seatLimit, deadline)
 	case !now.Before(warnAt) && h.OverCapacityWarn3dSentAt == nil:
 		// Case 6: within 3 days of the deadline, warning not yet sent.
-		return w.send3dWarning(ctx, jobID, owner, h, activeCount, seatLimit, deadline)
+		return w.send3dWarning(ctx, jobID, freshOwner, h, activeCount, seatLimit, deadline)
 	}
 	return nil
 }
