@@ -1870,7 +1870,7 @@ func TestReconcileOverCapacity_ExceedsSeats_SetsOverCapacity(t *testing.T) {
 			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3)) // 3 active > 2 seats
-	pool.ExpectQuery(`over_capacity_since = COALESCE`).WithArgs("hh-1", pgxmock.AnyArg()).
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
 	pool.ExpectCommit()
 
@@ -2016,7 +2016,7 @@ func TestWorker_SubscriptionUpdated_ReconcilesOverCapacity_SetsOverCapacity(t *t
 			AddRow("hh-1", "user_2abc123def456", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
-	pool.ExpectQuery(`over_capacity_since = COALESCE`).WithArgs("hh-1", pgxmock.AnyArg()).
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
 	pool.ExpectCommit()
 
@@ -2093,7 +2093,7 @@ func TestWorker_SubscriptionActivated_ReconcilesOverCapacity_SetsOverCapacity(t 
 			AddRow("hh-1", "user_2abc123def456", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
-	pool.ExpectQuery(`over_capacity_since = COALESCE`).WithArgs("hh-1", pgxmock.AnyArg()).
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
 	pool.ExpectCommit()
 

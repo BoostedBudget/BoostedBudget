@@ -110,14 +110,16 @@ type HouseholdRepository interface {
 	// over_capacity_since = since, but ONLY if it is not already set. A second
 	// call while grace is already active is a no-op that leaves the original
 	// grace deadline untouched — but, unlike a bare no-op, ALWAYS returns the
-	// true effective over_capacity_since (via COALESCE+RETURNING in one
-	// round-trip), whichever writer got there first. This lets a caller that
-	// lost a race against a concurrent writer (e.g. the subscription-webhook
-	// fast path) detect it and use the real, earlier timestamp instead of
-	// blindly trusting its own local `since` — which would otherwise let a
-	// fabricated, too-late grace deadline reach the owner in a notice email.
-	// Does not touch the notice-sent columns. #1371 — Phase 7 (Task 1;
-	// consumed by the Task 6 grace worker).
+	// true effective over_capacity_since in one round-trip (via a CTE that only
+	// executes the UPDATE on a real NULL-to-value transition; see the
+	// implementation's doc comment for why — households' BEFORE UPDATE trigger
+	// would otherwise bump updated_at on every no-op call), whichever writer got
+	// there first. This lets a caller that lost a race against a concurrent
+	// writer (e.g. the subscription-webhook fast path) detect it and use the
+	// real, earlier timestamp instead of blindly trusting its own local `since`
+	// — which would otherwise let a fabricated, too-late grace deadline reach
+	// the owner in a notice email. Does not touch the notice-sent columns.
+	// #1371 — Phase 7 (Task 1; consumed by the Task 6 grace worker).
 	SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error)
 
 	// ClearOverCapacity nulls all three over-capacity columns (grace anchor +
@@ -392,11 +394,58 @@ func (r *householdRepository) DeleteRemovedMember(ctx context.Context, membershi
 	return householdID, userID, nil
 }
 
+// SetOverCapacity uses a CTE rather than a plain `UPDATE ... SET x = COALESCE(x,
+// $2)` so that a race-losing call (grace already active) never issues an UPDATE
+// against the row at all. households has a BEFORE UPDATE trigger
+// (update_households_updated_at / update_updated_at_column) that unconditionally
+// sets NEW.updated_at = NOW() on ANY UPDATE statement matching the row, with no
+// `OLD IS DISTINCT FROM NEW` guard — so a plain COALESCE-based UPDATE always fires
+// it, even when the COALESCE left the value unchanged. That's purely cosmetic
+// metadata churn (the returned/effective over_capacity_since is still correct
+// either way), but it's needless: the `upd` CTE's UPDATE only matches when
+// over_capacity_since IS NULL (a real state transition), so the trigger only ever
+// fires on a genuine change.
+//
+// The fallback read (`locked_read`) MUST use `FOR UPDATE`, not a plain SELECT —
+// this was a real, empirically-confirmed bug in an earlier version of this
+// method (Codex review finding, Round 7 follow-up): under READ COMMITTED, a
+// bare SELECT sharing the same statement as a data-modifying CTE is bound to
+// the statement's ORIGINAL snapshot, even after the CTE's own UPDATE blocks on
+// a concurrent writer's row lock and re-checks against the LATEST committed
+// row. So when this call loses the race (another transaction committed
+// over_capacity_since first, in between this statement's snapshot and its
+// UPDATE's post-wait re-check), a plain fallback SELECT can still see the
+// PRE-race snapshot — i.e. over_capacity_since still NULL — causing a NULL
+// scan into effectiveSince instead of the real, committed value. `FOR UPDATE`
+// forces this read through the same wait-then-see-latest-committed-version
+// machinery the embedded UPDATE itself relies on, so it's guaranteed to
+// observe the true effective value. Verified directly against real Postgres
+// with two concurrent sessions racing on the same row (see PR discussion) —
+// the plain-SELECT version reliably returned NULL for the race loser; this
+// FOR UPDATE version reliably returns the winner's committed value.
+//
+// `NOT EXISTS (SELECT 1 FROM upd)` makes the two SELECT branches mutually
+// exclusive, so — combined with households.id being the primary key — the
+// whole statement returns at most one row: the CTE's RETURNING value on a
+// real transition, or a FOR-UPDATE-locked read of the current value on a
+// no-op. If the household doesn't exist, both branches return zero rows and
+// Scan gets pgx.ErrNoRows, matching the not-found signal a plain UPDATE would
+// give.
 func (r *householdRepository) SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error) {
 	var effectiveSince time.Time
 	err := r.db.QueryRow(ctx, `
-		UPDATE households SET over_capacity_since = COALESCE(over_capacity_since, $2) WHERE id = $1
-		RETURNING over_capacity_since
+		WITH upd AS (
+			UPDATE households SET over_capacity_since = $2
+			WHERE id = $1 AND over_capacity_since IS NULL
+			RETURNING over_capacity_since
+		), locked_read AS (
+			SELECT over_capacity_since FROM households
+			WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM upd)
+			FOR UPDATE
+		)
+		SELECT over_capacity_since FROM upd
+		UNION ALL
+		SELECT over_capacity_since FROM locked_read
 	`, householdID, since).Scan(&effectiveSince)
 	return effectiveSince, err
 }

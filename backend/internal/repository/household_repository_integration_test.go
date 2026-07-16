@@ -209,12 +209,19 @@ func TestHouseholdRepository_DeleteRemovedMember_Integration(t *testing.T) {
 // ─── SetOverCapacity / ClearOverCapacity (#1371 — Task 1) ────────────────────
 
 // TestHouseholdRepository_SetOverCapacity_Idempotent_Integration proves the
-// idempotency guard (`COALESCE(over_capacity_since, $2)`) actually holds against a
-// real schema: a second call with a later timestamp must NOT reset the original
-// grace deadline — and must return that original, FIRST timestamp directly via
-// RETURNING, so a caller can detect a lost race without a follow-up read. pgxmock
-// can prove the query shape, but not that the predicate really protects the
-// first-set value across two live calls.
+// idempotency guard actually holds against a real schema: a second call with a
+// later timestamp must NOT reset the original grace deadline — and must return
+// that original, FIRST timestamp directly, so a caller can detect a lost race
+// without a follow-up read. pgxmock can prove the query shape, but not that the
+// predicate really protects the first-set value across two live calls.
+//
+// It also proves the trigger-avoidance half of the fix (#1371 SetOverCapacity SQL
+// rewrite): the `households` table has a BEFORE UPDATE trigger
+// (update_households_updated_at) that unconditionally bumps `updated_at` on ANY
+// UPDATE statement matching the row, with no OLD-IS-DISTINCT-FROM-NEW guard. A
+// second, race-losing SetOverCapacity call (grace already active) must not issue
+// an UPDATE against that row at all — so `updated_at` must be BYTE-FOR-BYTE
+// unchanged across the second call, not just "close enough."
 func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -232,16 +239,43 @@ func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T
 		t.Fatalf("first SetOverCapacity should return the value it just set: expected %v, got %v", first, firstEffective)
 	}
 
+	// Capture updated_at immediately after the first (real, state-changing) call —
+	// this is the baseline the second (no-op-for-the-anchor-column) call must not
+	// disturb.
+	hAfterFirst, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("lookup after first SetOverCapacity: found=%v err=%v", found, err)
+	}
+	updatedAtAfterFirst := hAfterFirst.UpdatedAt
+
+	// Sleep past typical clock/timer granularity so that, if the trigger DID fire
+	// on the second call, the resulting updated_at would be measurably later —
+	// otherwise a false-negative pass (trigger fired but landed in the same tick)
+	// would prove nothing.
+	time.Sleep(10 * time.Millisecond)
+
 	second := time.Now().Truncate(time.Microsecond)
 	secondEffective, err := repo.SetOverCapacity(ctx, householdID, second)
 	if err != nil {
 		t.Fatalf("second SetOverCapacity (should be a no-op, not an error): %v", err)
 	}
 	// The core assertion: the SECOND call's return value must equal the FIRST
-	// timestamp (not the second) — proving COALESCE correctly preserves and returns
-	// the earliest-set value, directly, with no follow-up read required.
+	// timestamp (not the second) — proving the guard correctly preserves and
+	// returns the earliest-set value, directly, with no follow-up read required.
 	if !secondEffective.Equal(first) {
 		t.Fatalf("expected second SetOverCapacity to return the FIRST timestamp %v, got %v", first, secondEffective)
+	}
+
+	// The trigger-avoidance assertion: the race-losing second call must not have
+	// touched updated_at AT ALL — proving the second call never issued an UPDATE
+	// against the row (and thus never fired the BEFORE UPDATE trigger), unlike the
+	// old COALESCE-only UPDATE which always executes and always fires the trigger.
+	hAfterSecond, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
+	if err != nil || !found {
+		t.Fatalf("lookup after second SetOverCapacity: found=%v err=%v", found, err)
+	}
+	if !hAfterSecond.UpdatedAt.Equal(updatedAtAfterFirst) {
+		t.Fatalf("expected updated_at to be UNCHANGED by the race-losing second SetOverCapacity call (BEFORE UPDATE trigger must not fire on a no-op): before=%v, after=%v", updatedAtAfterFirst, hAfterSecond.UpdatedAt)
 	}
 
 	// Secondary check: confirm the persisted row itself agrees.
@@ -251,6 +285,113 @@ func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T
 	}
 	if h.OverCapacitySince == nil || !h.OverCapacitySince.Equal(first) {
 		t.Fatalf("expected over_capacity_since to remain the FIRST timestamp %v, got %v", first, h.OverCapacitySince)
+	}
+}
+
+// TestHouseholdRepository_SetOverCapacity_ConcurrentRaceLoser_ReturnsWinnersValue_Integration
+// proves the fix for a REAL concurrency bug found via manual two-session Postgres
+// testing during Round 7 review (Codex finding, independently reproduced): an
+// earlier version of SetOverCapacity's CTE used a bare `SELECT` for its
+// already-active fallback branch. Under READ COMMITTED, that bare SELECT is bound
+// to the STATEMENT'S ORIGINAL snapshot — even after the CTE's own embedded UPDATE
+// blocks on a concurrent writer's row lock and correctly re-checks against the
+// LATEST committed row to decide whether to write. So a genuinely concurrent
+// race-loser could see the PRE-race snapshot (over_capacity_since still NULL)
+// through the fallback SELECT, scanning NULL into a non-nullable time.Time and
+// returning a scan error — precisely in the scenario this whole fix exists to
+// handle correctly. The fix changes the fallback to `SELECT ... FOR UPDATE`,
+// which is *guaranteed* to wait for a conflicting lock and then observe the
+// latest committed row, exactly like the embedded UPDATE does.
+//
+// This cannot be proven by pgxmock (no real MVCC/locking semantics) or by the
+// sequential idempotency test above (no genuine concurrency) — it requires two
+// truly overlapping transactions racing on the SAME row, which only a live
+// Postgres instance can provide.
+func TestHouseholdRepository_SetOverCapacity_ConcurrentRaceLoser_ReturnsWinnersValue_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
+
+	winnerSince := time.Now().Add(-3 * 24 * time.Hour).Truncate(time.Microsecond)
+	loserAttemptedSince := time.Now().Truncate(time.Microsecond)
+
+	// "Winner" transaction: runs the exact same UPDATE this row would receive from
+	// a real caller, then holds the row lock open for a while (simulating a slow
+	// commit, e.g. the subscription-webhook fast path doing other work in the same
+	// tx after locking the household) before committing — giving the "loser" a
+	// real window in which to block on this held lock.
+	winnerTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin winner tx: %v", err)
+	}
+	defer winnerTx.Rollback(ctx) //nolint:errcheck
+	if _, err := winnerTx.Exec(ctx, `UPDATE households SET over_capacity_since = $2 WHERE id = $1 AND over_capacity_since IS NULL`, householdID, winnerSince); err != nil {
+		t.Fatalf("winner tx update: %v", err)
+	}
+
+	// Start the "loser" call — the REAL production SetOverCapacity method under
+	// test — on a separate goroutine. It should block on the winner tx's row lock.
+	loserDone := make(chan struct {
+		effective time.Time
+		err       error
+	}, 1)
+	go func() {
+		effective, err := repo.SetOverCapacity(ctx, householdID, loserAttemptedSince)
+		loserDone <- struct {
+			effective time.Time
+			err       error
+		}{effective, err}
+	}()
+
+	// Wait for genuine proof the loser's query has reached Postgres and is
+	// actually blocked on the winner's held lock — a fixed sleep here (Codex
+	// review finding, Round 7 follow-up) is only a generous-margin heuristic, not
+	// a hard guarantee: if the loser goroutine were ever slow to be scheduled, the
+	// winner could commit first, the loser would then see the already-committed
+	// row via a perfectly ordinary (non-raced) fresh snapshot, and the test would
+	// pass even against the OLD, broken bare-SELECT code — a false negative that
+	// would silently stop testing what it claims to test. Poll pg_locks for an
+	// actual waiting lock request on the households relation instead, so the test
+	// only proceeds once real contention is confirmed.
+	// Note: a concurrent UPDATE waiting on another transaction's uncommitted row
+	// change shows up as a `transactionid`-type lock wait (waiting for the OTHER
+	// transaction's XID to finish), not a `relation`-type wait — RowExclusiveLock
+	// on the table itself is compatible across concurrent transactions, so the
+	// table-level lock is granted to both immediately. pg_stat_activity's
+	// wait_event_type is the simplest reliable signal for "this backend is
+	// blocked on a lock," regardless of which lock type it's waiting on.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waitingBackends int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND pid != pg_backend_pid()`).Scan(&waitingBackends); err != nil {
+			t.Fatalf("polling pg_stat_activity for the loser's blocked backend: %v", err)
+		}
+		if waitingBackends > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the loser's SetOverCapacity call to become blocked — it may not have reached Postgres in time")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if err := winnerTx.Commit(ctx); err != nil {
+		t.Fatalf("winner tx commit: %v", err)
+	}
+
+	select {
+	case result := <-loserDone:
+		if result.err != nil {
+			t.Fatalf("loser SetOverCapacity call returned an error instead of the winner's value: %v", result.err)
+		}
+		if !result.effective.Equal(winnerSince) {
+			t.Fatalf("expected the race-losing call to return the WINNER's committed value %v, got %v (attempted was %v)", winnerSince, result.effective, loserAttemptedSince)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("loser SetOverCapacity call never returned — deadlock or hang")
 	}
 }
 

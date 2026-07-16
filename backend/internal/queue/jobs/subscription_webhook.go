@@ -229,9 +229,9 @@ func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userI
 // checkDowngradeSeatCapacity — Task 5), and either starts or clears the
 // over_capacity_since grace clock via the idempotent SetOverCapacity/ClearOverCapacity
 // repository methods (Task 1). Every write here is safe to call twice —
-// SetOverCapacity's COALESCE-based UPDATE is a no-op once grace is already running
-// (returning the already-set value rather than overwriting it), and ClearOverCapacity
-// is a plain idempotent null-out.
+// SetOverCapacity's CTE only executes the UPDATE on a real NULL-to-value transition,
+// so a no-op once grace is already running returns the already-set value without
+// overwriting it, and ClearOverCapacity is a plain idempotent null-out.
 //
 // The daily household_over_capacity_check worker (Task 6, Part C) is the AUTHORITATIVE
 // backstop for anything this fast path misses or races against — callers must log
