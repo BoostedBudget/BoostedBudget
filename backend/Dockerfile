@@ -43,7 +43,7 @@ RUN CGO_ENABLED=0 GOOS=linux go install \
     github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 
 # Stage 2: Runtime (Debian Bookworm Slim - Minimal but stable)
-FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 # Install runtime dependencies
 RUN echo "Installing runtime dependencies..." && \
