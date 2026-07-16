@@ -311,8 +311,8 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		// before SetOverCapacity ran, so it would otherwise still read nil here).
 		// Codex review finding — #1371.
 		//
-		// Use effectiveSince — SetOverCapacity's COALESCE+RETURNING value — rather than
-		// the locally-computed `since`: this worker can lose a race against a
+		// Use effectiveSince — SetOverCapacity's true effective return value — rather
+		// than the locally-computed `since`: this worker can lose a race against a
 		// concurrent writer (e.g. the subscription-webhook fast path, which holds a
 		// household row lock via LockHouseholdByID) that already set an EARLIER
 		// over_capacity_since between this worker's read of h and this write. If that

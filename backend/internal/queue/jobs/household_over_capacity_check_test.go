@@ -303,7 +303,8 @@ func TestHouseholdOverCapacityCheck_OverCapacity_LostRaceAgainstConcurrentWriter
 	// A concurrent writer (e.g. the webhook fast path) already set over_capacity_since to
 	// this EARLIER timestamp before this worker's own SetOverCapacity call landed. The
 	// mock's `since` argument (this worker's own time.Now()) is deliberately NOT what gets
-	// returned — simulating SetOverCapacity's COALESCE preserving the earlier writer's value.
+	// returned — simulating SetOverCapacity's idempotency guard preserving the earlier
+	// writer's value.
 	earlierSince := time.Now().Add(-5 * 24 * time.Hour)
 	expectedDeadline := earlierSince.Add(householdOverCapacityGraceDays * 24 * time.Hour)
 

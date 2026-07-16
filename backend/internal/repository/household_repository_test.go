@@ -422,8 +422,18 @@ func TestHouseholdRepository_SetOverCapacity(t *testing.T) {
 	defer mock.Close()
 
 	since := time.Now()
-	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = COALESCE(over_capacity_since, $2) WHERE id = $1
-		RETURNING over_capacity_since`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH upd AS (
+			UPDATE households SET over_capacity_since = $2
+			WHERE id = $1 AND over_capacity_since IS NULL
+			RETURNING over_capacity_since
+		), locked_read AS (
+			SELECT over_capacity_since FROM households
+			WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM upd)
+			FOR UPDATE
+		)
+		SELECT over_capacity_since FROM upd
+		UNION ALL
+		SELECT over_capacity_since FROM locked_read`)).
 		WithArgs("hh-1", since).
 		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(since))
 
@@ -435,7 +445,7 @@ func TestHouseholdRepository_SetOverCapacity(t *testing.T) {
 
 // SetOverCapacity must be a no-op (not an error) when grace is already active — the
 // original deadline is never reset by a second call — but it must still return the
-// TRUE effective over_capacity_since (the original, earlier value COALESCE preserved),
+// TRUE effective over_capacity_since (the original, earlier value),
 // not the `since` this call attempted to set. This is what lets a caller that loses a
 // race against a concurrent writer detect the real grace anchor instead of trusting
 // its own local timestamp (#1371 fabricated-deadline fix).
@@ -446,8 +456,18 @@ func TestHouseholdRepository_SetOverCapacity_AlreadyActive_NoOp(t *testing.T) {
 
 	originalSince := time.Now().Add(-3 * 24 * time.Hour)
 	attemptedSince := time.Now()
-	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = COALESCE(over_capacity_since, $2) WHERE id = $1
-		RETURNING over_capacity_since`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH upd AS (
+			UPDATE households SET over_capacity_since = $2
+			WHERE id = $1 AND over_capacity_since IS NULL
+			RETURNING over_capacity_since
+		), locked_read AS (
+			SELECT over_capacity_since FROM households
+			WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM upd)
+			FOR UPDATE
+		)
+		SELECT over_capacity_since FROM upd
+		UNION ALL
+		SELECT over_capacity_since FROM locked_read`)).
 		WithArgs("hh-1", attemptedSince).
 		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(originalSince))
 
