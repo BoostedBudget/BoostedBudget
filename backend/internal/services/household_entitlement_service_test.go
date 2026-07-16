@@ -154,9 +154,12 @@ func (m *mockHouseholdRepo) DeleteRemovedMember(ctx context.Context, membershipI
 // RestoreMember (#1371 — Phase 7, Task 1), and ListMembershipsPastPurgeWindow
 // (#1371 — Phase 7, Task 2) are not exercised by these Phase 2 resolver tests;
 // stubbed to satisfy the expanded HouseholdRepository interface.
-func (m *mockHouseholdRepo) SetOverCapacity(ctx context.Context, householdID string, since time.Time) error {
+func (m *mockHouseholdRepo) SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error) {
 	args := m.Called(ctx, householdID, since)
-	return args.Error(0)
+	if args.Get(0) == nil {
+		return time.Time{}, args.Error(1)
+	}
+	return args.Get(0).(time.Time), args.Error(1)
 }
 
 func (m *mockHouseholdRepo) ClearOverCapacity(ctx context.Context, householdID string) error {

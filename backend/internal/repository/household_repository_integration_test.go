@@ -209,10 +209,12 @@ func TestHouseholdRepository_DeleteRemovedMember_Integration(t *testing.T) {
 // ─── SetOverCapacity / ClearOverCapacity (#1371 — Task 1) ────────────────────
 
 // TestHouseholdRepository_SetOverCapacity_Idempotent_Integration proves the
-// idempotency guard (`WHERE over_capacity_since IS NULL`) actually holds against
-// a real schema: a second call with a later timestamp must NOT reset the original
-// grace deadline. pgxmock can prove the query shape, but not that the predicate
-// really protects the first-set value across two live calls.
+// idempotency guard (`COALESCE(over_capacity_since, $2)`) actually holds against a
+// real schema: a second call with a later timestamp must NOT reset the original
+// grace deadline — and must return that original, FIRST timestamp directly via
+// RETURNING, so a caller can detect a lost race without a follow-up read. pgxmock
+// can prove the query shape, but not that the predicate really protects the
+// first-set value across two live calls.
 func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
@@ -222,15 +224,27 @@ func TestHouseholdRepository_SetOverCapacity_Idempotent_Integration(t *testing.T
 	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
 
 	first := time.Now().Add(-3 * 24 * time.Hour).Truncate(time.Microsecond)
-	if err := repo.SetOverCapacity(ctx, householdID, first); err != nil {
+	firstEffective, err := repo.SetOverCapacity(ctx, householdID, first)
+	if err != nil {
 		t.Fatalf("first SetOverCapacity: %v", err)
+	}
+	if !firstEffective.Equal(first) {
+		t.Fatalf("first SetOverCapacity should return the value it just set: expected %v, got %v", first, firstEffective)
 	}
 
 	second := time.Now().Truncate(time.Microsecond)
-	if err := repo.SetOverCapacity(ctx, householdID, second); err != nil {
+	secondEffective, err := repo.SetOverCapacity(ctx, householdID, second)
+	if err != nil {
 		t.Fatalf("second SetOverCapacity (should be a no-op, not an error): %v", err)
 	}
+	// The core assertion: the SECOND call's return value must equal the FIRST
+	// timestamp (not the second) — proving COALESCE correctly preserves and returns
+	// the earliest-set value, directly, with no follow-up read required.
+	if !secondEffective.Equal(first) {
+		t.Fatalf("expected second SetOverCapacity to return the FIRST timestamp %v, got %v", first, secondEffective)
+	}
 
+	// Secondary check: confirm the persisted row itself agrees.
 	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
 	if err != nil || !found {
 		t.Fatalf("lookup after two SetOverCapacity calls: found=%v err=%v", found, err)
@@ -251,7 +265,7 @@ func TestHouseholdRepository_ClearOverCapacity_Integration(t *testing.T) {
 	insertTestHouseholdMember(t, pool, householdID, ownerID, "owner")
 
 	since := time.Now().Truncate(time.Microsecond)
-	if err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
+	if _, err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
 		t.Fatalf("SetOverCapacity: %v", err)
 	}
 	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
@@ -305,7 +319,7 @@ func TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integrat
 	since := time.Now().Truncate(time.Microsecond)
 
 	// Sanity: while genuinely in grace, marking DOES stamp the notice.
-	if err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
+	if _, err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
 		t.Fatalf("SetOverCapacity: %v", err)
 	}
 	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
@@ -364,7 +378,7 @@ func TestHouseholdRepository_ListHouseholdsWithMembers_Integration(t *testing.T)
 	if _, err := pool.Exec(ctx, `UPDATE household_members SET status = 'removed', removed_at = now() WHERE id = $1`, removedRowB); err != nil {
 		t.Fatalf("transition household B owner to removed: %v", err)
 	}
-	if err := repo.SetOverCapacity(ctx, householdB, time.Now()); err != nil {
+	if _, err := repo.SetOverCapacity(ctx, householdB, time.Now()); err != nil {
 		t.Fatalf("SetOverCapacity on household B: %v", err)
 	}
 
