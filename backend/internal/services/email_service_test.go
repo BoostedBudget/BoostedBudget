@@ -125,6 +125,253 @@ func TestHouseholdInviteEmailTemplates_ContainInviteLink(t *testing.T) {
 	assert.Contains(t, text, "The Smiths")
 }
 
+// TestHouseholdInviteEmailTemplates_EscapesHTMLInNames proves a household name or
+// inviter name containing HTML metacharacters is escaped in the HTML email body (never
+// rendered as live markup), while the plain text body is left untouched. Round 5 Gap
+// Analysis fix (#1371) — a malicious/careless owner could otherwise inject arbitrary
+// markup (fake links, content spoofing) into invite emails sent to invitees.
+func TestHouseholdInviteEmailTemplates_EscapesHTMLInNames(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	inviteURL := "https://boostedbudget.com/households/invites/rawtoken123"
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildHouseholdInviteEmailHTML(maliciousName, maliciousName, inviteURL, "March 3, 2026")
+	text := s.buildHouseholdInviteEmailPlainText(maliciousName, maliciousName, inviteURL, "March 3, 2026")
+
+	assert.NotContains(t, html, "<script>")
+	assert.NotContains(t, html, "<b>me</b>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+
+	// Plain text is never rendered as HTML, so it must be left raw/unescaped.
+	assert.Contains(t, text, maliciousName)
+}
+
+// ─── SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) ────────────────────
+
+func TestSendHouseholdMemberRemoved_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour), false)
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdMemberRemoved_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "not-an-email", "The Smiths", time.Now().Add(30*24*time.Hour), false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+// TestSendHouseholdMemberRemoved_Disbanded_Success proves the disbanded=true variant
+// (used by ForceDisband) sends successfully through the same code path as the
+// individual-removal variant. Round 4 Gap Analysis fix (#1371).
+func TestSendHouseholdMemberRemoved_Disbanded_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdMemberRemoved(ctx, "removed@example.com", "The Smiths", time.Now().Add(30*24*time.Hour), true)
+
+	assert.NoError(t, err)
+}
+
+func TestMemberRemovedEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate, false)
+	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate, false)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Purge date formatted in a human-readable way in both.
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Preserved-data messaging present in both.
+	assert.Contains(t, html, "preserved")
+	assert.Contains(t, text, "preserved")
+
+	// The individual-removal/auto-offboard copy DOES reference the future cleanup step —
+	// this is accurate for those cases (the status='removed' row genuinely persists until
+	// the 30-day purge worker deletes it). Regression guard for the disbanded test below.
+	assert.Contains(t, html, "cleaned up automatically")
+	assert.Contains(t, text, "cleaned up automatically")
+}
+
+// TestMemberRemovedEmailTemplates_Disbanded_DoesNotContainCleanupLanguage proves the
+// Round 4 Gap Analysis fix: ForceDisband deletes the entire households row in the SAME
+// transaction as the member removals, which CASCADEs household_members rows away
+// IMMEDIATELY (migration 000107, ON DELETE CASCADE) — there is no lingering
+// status='removed' row left for the 30-day purge worker to find, so the disbanded
+// variant must NOT reference a future cleanup step/preservation window. #1371.
+func TestMemberRemovedEmailTemplates_Disbanded_DoesNotContainCleanupLanguage(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildMemberRemovedEmailHTML("The Smiths", purgeDate, true)
+	text := s.buildMemberRemovedEmailPlainText("The Smiths", purgeDate, true)
+
+	// Household name and data-safety messaging still present.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+	assert.Contains(t, html, "preserved")
+	assert.Contains(t, text, "preserved")
+
+	// The inaccurate "will be purged later" language must be gone.
+	assert.NotContains(t, html, "cleaned up automatically")
+	assert.NotContains(t, text, "cleaned up automatically")
+	assert.NotContains(t, html, "preservation window")
+	assert.NotContains(t, text, "preservation window")
+	// The purge date itself must not be referenced either — there's nothing left to purge.
+	assert.NotContains(t, html, "January 15, 2026")
+	assert.NotContains(t, text, "January 15, 2026")
+}
+
+// TestMemberRemovedEmailTemplates_EscapesHTMLInHouseholdName proves a household name
+// containing HTML metacharacters is escaped in the HTML body but left raw in plain text.
+// Round 5 Gap Analysis fix (#1371).
+func TestMemberRemovedEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	purgeDate := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildMemberRemovedEmailHTML(maliciousName, purgeDate, false)
+	text := s.buildMemberRemovedEmailPlainText(maliciousName, purgeDate, false)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
+}
+
+// ─── SendHouseholdOverCapacityNotice / Warning (#1371 — Phase 7, Task 6) ─────
+
+func TestSendHouseholdOverCapacityNotice_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityNotice(ctx, "owner@example.com", "The Smiths", 4, 2, time.Now().Add(14*24*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdOverCapacityNotice_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityNotice(ctx, "not-an-email", "The Smiths", 4, 2, time.Now().Add(14*24*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestOverCapacityNoticeEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildOverCapacityNoticeEmailHTML("The Smiths", 4, 2, deadline)
+	text := s.buildOverCapacityNoticeEmailPlainText("The Smiths", 4, 2, deadline)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Deadline formatted in a human-readable way in both (matches Task 3's convention).
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Active/seat counts present in both.
+	assert.Contains(t, html, "4")
+	assert.Contains(t, html, "2")
+	assert.Contains(t, text, "4")
+	assert.Contains(t, text, "2")
+
+	// Auto-removal consequence messaging present in both.
+	assert.Contains(t, html, "automatically")
+	assert.Contains(t, text, "automatically")
+}
+
+// TestOverCapacityNoticeEmailTemplates_EscapesHTMLInHouseholdName proves a household
+// name containing HTML metacharacters is escaped in the HTML body but left raw in plain
+// text. Round 5 Gap Analysis fix (#1371).
+func TestOverCapacityNoticeEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildOverCapacityNoticeEmailHTML(maliciousName, 4, 2, deadline)
+	text := s.buildOverCapacityNoticeEmailPlainText(maliciousName, 4, 2, deadline)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
+}
+
+func TestSendHouseholdOverCapacityWarning_Success(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityWarning(ctx, "owner@example.com", "The Smiths", 4, 2, time.Now().Add(3*24*time.Hour))
+
+	assert.NoError(t, err)
+}
+
+func TestSendHouseholdOverCapacityWarning_InvalidEmail(t *testing.T) {
+	ctx := context.Background()
+	service := NewEmailServiceMock("test-api-key", "test@boostedbudget.com", "https://boostedbudget.com")
+
+	err := service.SendHouseholdOverCapacityWarning(ctx, "not-an-email", "The Smiths", 4, 2, time.Now().Add(3*24*time.Hour))
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid email")
+}
+
+func TestOverCapacityWarningEmailTemplates_ContainRequiredContent(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+
+	html := s.buildOverCapacityWarningEmailHTML("The Smiths", 4, 2, deadline)
+	text := s.buildOverCapacityWarningEmailPlainText("The Smiths", 4, 2, deadline)
+
+	// Household name present in both.
+	assert.Contains(t, html, "The Smiths")
+	assert.Contains(t, text, "The Smiths")
+
+	// Deadline formatted in a human-readable way in both.
+	assert.Contains(t, html, "January 15, 2026")
+	assert.Contains(t, text, "January 15, 2026")
+
+	// Urgency messaging ("3 days left") present in both.
+	assert.Contains(t, html, "3 days")
+	assert.Contains(t, text, "3 days")
+}
+
+// TestOverCapacityWarningEmailTemplates_EscapesHTMLInHouseholdName proves a household
+// name containing HTML metacharacters is escaped in the HTML body but left raw in plain
+// text. Round 5 Gap Analysis fix (#1371).
+func TestOverCapacityWarningEmailTemplates_EscapesHTMLInHouseholdName(t *testing.T) {
+	s := &emailService{fromName: "BoostedBudget"}
+	deadline := time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC)
+	maliciousName := `Ac<b>me</b> & <script>alert(1)</script>`
+
+	html := s.buildOverCapacityWarningEmailHTML(maliciousName, 4, 2, deadline)
+	text := s.buildOverCapacityWarningEmailPlainText(maliciousName, 4, 2, deadline)
+
+	assert.NotContains(t, html, "<script>")
+	assert.Contains(t, html, "&lt;script&gt;")
+	assert.Contains(t, html, "&amp;")
+	assert.Contains(t, text, maliciousName)
+}
+
 // TestSendNotificationEmail_Success tests successful notification email sending (stub)
 // Issue #257: Item Error Handler - User Notifications
 func TestSendNotificationEmail_Success(t *testing.T) {

@@ -3353,6 +3353,15 @@ components:
           type: string
         name:
           type: string
+        over_capacity_since:
+          format: date-time
+          type: string
+        over_capacity_start_notice_sent_at:
+          format: date-time
+          type: string
+        over_capacity_warn3d_sent_at:
+          format: date-time
+          type: string
         owner_user_id:
           type: string
         updated_at:
@@ -11028,8 +11037,16 @@ paths:
         - Household
   /api/v1/households/me:
     delete:
-      description: Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability.
+      description: Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.
       operationId: deleteHousehold
+      parameters:
+        - description: "Force-disband: remove all active non-owner members before dissolving the household, instead of failing while members remain (default false)"
+          explode: false
+          in: query
+          name: force
+          schema:
+            description: "Force-disband: remove all active non-owner members before dissolving the household, instead of failing while members remain (default false)"
+            type: boolean
       responses:
         "204":
           description: No Content
