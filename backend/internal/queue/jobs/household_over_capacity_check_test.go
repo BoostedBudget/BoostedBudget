@@ -1,0 +1,1338 @@
+// Package jobs contains River job definitions and workers for async processing.
+// Issue #1371 — Phase 7: Household over-capacity daily backstop check job tests.
+package jobs
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"testing"
+	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+// ─── Mocks ────────────────────────────────────────────────────────────────────
+
+// mockHouseholdOverCapacityCheckRepository mocks HouseholdOverCapacityCheckRepository.
+type mockHouseholdOverCapacityCheckRepository struct{ mock.Mock }
+
+func (m *mockHouseholdOverCapacityCheckRepository) ListHouseholdsWithMembers(ctx context.Context) ([]*domain.Household, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Household), args.Error(1)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) CountActiveMembers(ctx context.Context, householdID string) (int, error) {
+	args := m.Called(ctx, householdID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error) {
+	args := m.Called(ctx, householdID, since)
+	return args.Get(0).(time.Time), args.Error(1)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) ClearOverCapacity(ctx context.Context, householdID string) error {
+	args := m.Called(ctx, householdID)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) ClearOverCapacityIfAnchorMatches(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, expectedOverCapacitySince)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, sentAt, expectedOverCapacitySince)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, sentAt, expectedOverCapacitySince)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdOverCapacityCheckRepository) GetHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
+	args := m.Called(ctx, householdID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Household), args.Error(1)
+}
+
+// mockHouseholdOverCapacityUserRepository mocks HouseholdOverCapacityUserRepository.
+type mockHouseholdOverCapacityUserRepository struct{ mock.Mock }
+
+func (m *mockHouseholdOverCapacityUserRepository) GetUserByID(ctx context.Context, id string) (*domain.User, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+// mockHouseholdOverCapacityOffboardService mocks HouseholdOverCapacityOffboardService.
+type mockHouseholdOverCapacityOffboardService struct{ mock.Mock }
+
+func (m *mockHouseholdOverCapacityOffboardService) OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, householdID, expectedOverCapacitySince)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
+}
+
+// mockHouseholdOverCapacityEmailService mocks HouseholdOverCapacityEmailService.
+type mockHouseholdOverCapacityEmailService struct{ mock.Mock }
+
+func (m *mockHouseholdOverCapacityEmailService) SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdOverCapacityEmailService) SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
+// ─── Test helpers ─────────────────────────────────────────────────────────────
+
+func newTestHouseholdOverCapacityCheckJob(args HouseholdOverCapacityCheckArgs) *river.Job[HouseholdOverCapacityCheckArgs] {
+	return &river.Job[HouseholdOverCapacityCheckArgs]{
+		JobRow: &rivertype.JobRow{
+			ID:      1,
+			Attempt: 1,
+		},
+		Args: args,
+	}
+}
+
+func setupOverCapacityCheckWorkerTest(t *testing.T) (
+	*HouseholdOverCapacityCheckWorker,
+	*mockHouseholdOverCapacityCheckRepository,
+	*mockHouseholdOverCapacityUserRepository,
+	*mockHouseholdOverCapacityOffboardService,
+	*mockHouseholdOverCapacityEmailService,
+) {
+	t.Helper()
+	mockRepo := new(mockHouseholdOverCapacityCheckRepository)
+	mockUserRepo := new(mockHouseholdOverCapacityUserRepository)
+	mockOffboardSvc := new(mockHouseholdOverCapacityOffboardService)
+	mockEmailSvc := new(mockHouseholdOverCapacityEmailService)
+
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	worker := NewHouseholdOverCapacityCheckWorker(HouseholdOverCapacityCheckWorkerDeps{
+		Repo:         mockRepo,
+		UserRepo:     mockUserRepo,
+		OffboardSvc:  mockOffboardSvc,
+		EmailService: mockEmailSvc,
+		TierConfig:   tierConfig,
+		Logger:       slog.Default(),
+	})
+	return worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc
+}
+
+// --- Kind ---
+
+func TestHouseholdOverCapacityCheckArgs_Kind(t *testing.T) {
+	args := HouseholdOverCapacityCheckArgs{}
+	assert.Equal(t, "household_over_capacity_check", args.Kind())
+}
+
+// --- No households / empty scan ---
+
+func TestHouseholdOverCapacityCheck_NoHouseholds_NoOp(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, _, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{}, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// --- Case 1: read-only owner ---
+
+func TestHouseholdOverCapacityCheck_ReadOnlyOwner_InGrace_Cleared(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "cancelled"} // read-only
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	// Read-only owner short-circuits before any seat-count computation or emails.
+	mockRepo.AssertNotCalled(t, "CountActiveMembers", mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+func TestHouseholdOverCapacityCheck_ReadOnlyOwner_NotInGrace_NoOp(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, _ := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // OverCapacitySince nil
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "past_due"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// --- Case 2: within capacity ---
+
+func TestHouseholdOverCapacityCheck_WithinCapacity_InGrace_Cleared(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_5", SubscriptionStatus: "active"} // 5 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(3, nil) // within 5 seats
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_AlreadyResolved_NoOp proves a household that's
+// neither over capacity nor in grace triggers NO repository writes and NO emails at
+// all — the empirical "proves exactly what it claims" test for the no-op path.
+func TestHouseholdOverCapacityCheck_AlreadyResolved_NoOp(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not in grace
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_5", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(2, nil) // within 5 seats
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	assert.Empty(t, mockEmailSvc.Calls)
+}
+
+// --- Case 3: over capacity, not yet flagged (webhook-missed case) ---
+
+// TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_SetsOverCapacityAndSendsStartNoticeSameRun
+// proves the fix for the Codex review finding: a household newly detected as
+// over-capacity (Case 3) must ALSO receive the owner-facing start notice in the SAME
+// worker run — not require a second daily invocation to notice OverCapacitySince is now
+// set. Previously this test asserted the OPPOSITE (no notice sent on first detection),
+// which was the buggy behavior: a household could go up to ~24h into its 14-day grace
+// period before the owner heard anything, since this worker only runs once per day.
+func TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_SetsOverCapacityAndSendsStartNoticeSameRun(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OverCapacity_LostRaceAgainstConcurrentWriter_UsesEffectiveSince
+// proves the fix for the fabricated-deadline bug: when this worker's own SetOverCapacity
+// call loses a race against a concurrent writer (e.g. the subscription-webhook fast path,
+// which holds a household row lock via LockHouseholdByID and may have already set an
+// EARLIER over_capacity_since), the worker must use the returned EFFECTIVE timestamp — not
+// its own locally-computed `since` — when deciding what to reflect into h.OverCapacitySince
+// and, downstream, what grace deadline to email the owner. Before the fix, the worker
+// blindly trusted its own `since`, which could produce a grace deadline LATER than what the
+// database will actually enforce — a fabricated, incorrect customer-facing promise.
+func TestHouseholdOverCapacityCheck_OverCapacity_LostRaceAgainstConcurrentWriter_UsesEffectiveSince(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	// A concurrent writer (e.g. the webhook fast path) already set over_capacity_since to
+	// this EARLIER timestamp before this worker's own SetOverCapacity call landed. The
+	// mock's `since` argument (this worker's own time.Now()) is deliberately NOT what gets
+	// returned — simulating SetOverCapacity's idempotency guard preserving the earlier
+	// writer's value.
+	earlierSince := time.Now().Add(-5 * 24 * time.Hour)
+	expectedDeadline := earlierSince.Add(householdOverCapacityGraceDays * 24 * time.Hour)
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(earlierSince, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, expectedDeadline).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), earlierSince).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	// The strongest assertion: the notice's deadline must be derived from the EARLIER
+	// returned timestamp, never from this worker's own locally-computed `since`.
+	mockEmailSvc.AssertCalled(t, "SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, expectedDeadline)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_NoticeSendFails_StillSetsFlag
+// proves the send-then-stamp tradeoff still holds on the Case-3-into-Case-5 fall-through
+// path: if the immediate start-notice send fails, SetOverCapacity has already
+// committed (so the household is correctly in grace), but MarkOverCapacityStartNoticeSent
+// must NOT be called — the notice is retried on the next daily run instead of being
+// silently skipped forever.
+func TestHouseholdOverCapacityCheck_OverCapacity_NotYetFlagged_NoticeSendFails_StillSetsFlag(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).
+		Return(errors.New("sendgrid unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a failed best-effort notice send must not fail the job")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_OwnerGoesReadOnlyBetweenChecks_NotYetFlagged_SkipsSetOverCapacity
+// proves the Round 5 Gap Analysis fix for the daily-worker TOCTOU race Codex found: the
+// TOP-of-function owner read (Case 1) can be stale by the time the worker is about to
+// WRITE over-capacity state, if a concurrent read-only-owner transition (e.g. the
+// webhook fast path's new clear branch) lands in between. A fresh re-check immediately
+// before Case 3's SetOverCapacity must catch this and bail out WITHOUT flagging the
+// household — never leaving a now-read-only owner's household stuck in grace.
+func TestHouseholdOverCapacityCheck_OwnerGoesReadOnlyBetweenChecks_NotYetFlagged_SkipsSetOverCapacity(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	activeOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	nowReadOnlyOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "past_due"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	// First read (Case 1 check) sees the owner as still active; second, fresh read
+	// (immediately before the write path) sees the owner has since gone read-only.
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(activeOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(nowReadOnlyOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	// Never flag a household whose owner has just gone read-only — grace is moot.
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	// Never flagged in the first place, so nothing to clear either.
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OwnerGoesReadOnlyBetweenChecks_AlreadyFlagged_ClearsGrace
+// proves the same fresh re-check clears an ALREADY-flagged household's grace (rather
+// than sending a spurious notice/warning or auto-offboarding) when the owner has gone
+// read-only since the top-of-function check.
+func TestHouseholdOverCapacityCheck_OwnerGoesReadOnlyBetweenChecks_AlreadyFlagged_ClearsGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour) // well within grace, notice not yet sent
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	activeOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	nowReadOnlyOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "cancelled"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(activeOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(nowReadOnlyOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_NotYetFlagged_SkipsSetOverCapacity
+// proves the Round 5 Gap Analysis follow-up fix (Codex Medium finding on the initial
+// fresh re-check): the re-check must recompute seat limit from the FRESH owner read,
+// not just re-check read-only status. If the owner upgrades tier (gaining enough seats)
+// in the gap between the top-of-function read and the write path, the worker must
+// recognize the household is now within capacity — not flag it using a stale,
+// since-outdated seat limit.
+func TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_NotYetFlagged_SkipsSetOverCapacity(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	staleOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}   // 2 seats
+	upgradedOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_5", SubscriptionStatus: "active"} // 5 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(staleOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(upgradedOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 (stale) but <= 5 (fresh)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything) // never flagged, nothing to clear
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_AlreadyFlagged_ClearsGrace
+// proves the same fresh seat-limit recompute clears an ALREADY-flagged household's grace
+// when the owner has upgraded tier (now within capacity) since the top-of-function check.
+func TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_AlreadyFlagged_ClearsGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour) // well within grace, notice not yet sent
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	staleOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	upgradedOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_5", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(staleOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(upgradedOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_NotYetFlagged_SkipsSetOverCapacity
+// proves the fresh re-check block must ALSO re-count active members, not just re-check
+// owner read-only status and seat limit. The top-of-function CountActiveMembers read (4,
+// over the 2-seat tier) can be just as stale as the owner/tier reads it sits alongside —
+// e.g. the owner removes members in the gap between that read and the write path below.
+// A fresh CountActiveMembers call immediately before Case 3's SetOverCapacity must catch
+// this and bail out WITHOUT flagging a household that's already back within capacity by
+// the time the write would happen.
+func TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_NotYetFlagged_SkipsSetOverCapacity(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	// First read (top-of-function) sees 4 active members — over the 2-seat limit; second,
+	// fresh read (immediately before the write path) sees the owner has since removed
+	// members, bringing the household back to exactly the 2-seat limit.
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(2, nil).Once()
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	// Never flag a household that's already back within capacity by the fresh read.
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	// Never flagged in the first place, so nothing to clear either.
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_AlreadyFlagged_ClearsGrace
+// proves the same fresh active-member recount clears an ALREADY-flagged household's grace
+// (rather than sending a spurious notice/warning or auto-offboarding) when members were
+// removed in the gap between the top-of-function count and the fresh re-check.
+func TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_AlreadyFlagged_ClearsGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour) // well within grace, notice not yet sent
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(2, nil).Once()
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_ActiveCountChangesButStillOverCapacity_NoticeUsesFreshCount
+// proves that when the fresh re-check's recount is STILL over capacity (just a different
+// number than the stale top-of-function count), the FRESH count — not the stale one —
+// must be what flows downstream: into the notice email's "X active members" content. The
+// household starts unflagged, so this drives Case 3 (SetOverCapacity) and falls through
+// to Case 5 (start notice) in the same run.
+func TestHouseholdOverCapacityCheck_ActiveCountChangesButStillOverCapacity_NoticeUsesFreshCount(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	// Stale count (6) and fresh count (5) are BOTH over the 2-seat limit, but differ from
+	// each other — the notice must reflect the fresh count, not the stale one.
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(6, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(5, nil).Once()
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 5, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	// The strongest assertion: the notice's active-member count must be the FRESH count,
+	// never the stale top-of-function count.
+	mockEmailSvc.AssertCalled(t, "SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 5, 2, mock.AnythingOfType("time.Time"))
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 6, 2, mock.AnythingOfType("time.Time"))
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// --- Round 9 Gap Analysis fix: fresh over-capacity anchor + notice-sent re-check ---
+
+// TestHouseholdOverCapacityCheck_StaleAnchorFromScan_UsesFreshGraceDeadline_NotStaleOne
+// proves the Round 9 fix for the worst TOCTOU bug found in this file yet: prior rounds'
+// fresh re-checks (owner/tier/activeCount) never re-read h.OverCapacitySince or the two
+// notice-sent markers themselves. ClearOverCapacity nulls all three columns together, so a
+// real "clear, then re-flag" sequence (owner briefly back within capacity, then over again
+// shortly after) produces a genuinely FRESH triple in the database — but if this
+// household's scan-time snapshot (h) still holds an OLD, already-past-deadline
+// OverCapacitySince sitting unprocessed in the scan loop, computing the deadline from that
+// stale anchor has already passed, triggering an IMMEDIATE incorrect auto-offboard (real
+// member removal) even though the database's TRUE grace period just started today with 14
+// days left. The fix re-reads OverCapacitySince + both notice-sent markers via
+// GetHouseholdByID immediately before the deadline computation, so the worker correctly
+// takes Case 5 (send the FRESH grace period's start notice) instead of Case 4 (auto-offboard
+// on the fabricated stale deadline).
+func TestHouseholdOverCapacityCheck_StaleAnchorFromScan_UsesFreshGraceDeadline_NotStaleOne(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	// Stale scan-time snapshot: OverCapacitySince 20 days ago (already past the 14-day
+	// deadline) with a stale notice-sent stamp from the OLD, now-superseded grace period.
+	staleSince := time.Now().Add(-20 * 24 * time.Hour)
+	staleNoticeSent := time.Now().Add(-19 * 24 * time.Hour)
+	hh := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &staleSince, OverCapacityStartNoticeSentAt: &staleNoticeSent,
+	}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	// FRESH database row: a real clear-then-re-flag cycle completed since the scan read h
+	// — over_capacity_since is TODAY, and ClearOverCapacity's null-all-three-columns
+	// behavior means BOTH notice-sent markers are back to nil for this new grace period.
+	freshSince := time.Now()
+	freshHousehold := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &freshSince, OverCapacityStartNoticeSentAt: nil, OverCapacityWarn3dSentAt: nil,
+	}
+
+	// The deadline the email MUST reflect: 14 days from the FRESH anchor, not the stale one
+	// (which would have already been in the past — the exact fabricated-deadline failure
+	// mode this fix closes). Computed with a generous tolerance window below rather than an
+	// exact equality match, since the worker computes its own `time.Now()`-derived deadline
+	// independently of this test's `freshSince`.
+	expectedDeadlineFloor := freshSince.Add(householdOverCapacityGraceDays*24*time.Hour - time.Minute)
+	expectedDeadlineCeil := freshSince.Add(householdOverCapacityGraceDays*24*time.Hour + time.Minute)
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats, both top and fresh reads
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(freshHousehold, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2,
+		mock.MatchedBy(func(deadline time.Time) bool {
+			return deadline.After(expectedDeadlineFloor) && deadline.Before(expectedDeadlineCeil)
+		})).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), freshSince).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	// The critical assertion: the stale, already-past-deadline anchor must NOT trigger an
+	// incorrect auto-offboard. Case 5 (fresh start notice) must fire instead of Case 4, AND
+	// (via the mock.MatchedBy above) the notice's deadline must be derived from the FRESH
+	// anchor — not the stale one, which would already be ~6 days in the PAST and would have
+	// failed this exact assertion had the fix regressed to using the stale value.
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_StaleNameFromScan_NoticeUsesFreshName proves a Round 9
+// follow-up fix: h.Name, like the over-capacity anchor fields, is read once at scan time and
+// can go stale if the owner renames the household while it waits its turn in the scan loop.
+// GetHouseholdByID's response already carries the current name — this test proves it's
+// actually used for the notice email, not just the anchor/notice-sent fields.
+func TestHouseholdOverCapacityCheck_StaleNameFromScan_NoticeUsesFreshName(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Old Name"} // not yet flagged, stale name
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	// Fresh database row: the owner renamed the household while it waited its turn in the scan.
+	freshHousehold := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The New Name"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(freshHousehold, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The New Name", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+}
+
+// TestHouseholdOverCapacityCheck_HouseholdDisbandedConcurrently_SkipsGracefully proves the
+// Round 9 fix's edge case: if the household was disbanded (e.g. ForceDisband, Task 7) in
+// the gap between the scan-time list and this fresh re-read, GetHouseholdByID returns
+// domain.ErrHouseholdNotFound. processHousehold must treat this as "nothing left to do" —
+// return nil, not an error — and must not attempt any further state-transition write.
+func TestHouseholdOverCapacityCheck_HouseholdDisbandedConcurrently_SkipsGracefully(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(nil, domain.ErrHouseholdNotFound)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// --- Case 4: in-grace, past deadline → auto-offboard ---
+
+func TestHouseholdOverCapacityCheck_InGrace_PastDeadline_AutoOffboards(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour) // 15 days ago > 14-day deadline
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	// The expected anchor must match graceStart — the very over_capacity_since
+	// GetHouseholdByID's fresh re-read reflects into h, which the deadline decision above
+	// is based on. #1371 — Round 9 Gap Analysis fix.
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return(queued, nil)
+	mockRepo.On("ClearOverCapacityIfAnchorMatches", ctx, "hh-1", graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockOffboardSvc.AssertExpectations(t)
+	// Deadline reached — must NOT also send a redundant start/warning notice.
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	// Regression guard (real bug caught in review): OffboardExcessMembers already sends
+	// the "you've been removed" email to every queued member internally, immediately
+	// after its own tx.Commit (Task 3, household_service.go's sendRemovalEmails) —
+	// sending again from the returned queue here would double-email every
+	// auto-offboarded member. emailService must be COMPLETELY untouched by autoOffboard.
+	assert.Empty(t, mockEmailSvc.Calls)
+}
+
+// TestHouseholdOverCapacityCheck_AutoOffboard_DoesNotSendEmailsDirectly is a dedicated
+// regression test for the same bug: the worker's autoOffboard path must call ONLY
+// OffboardExcessMembers + ClearOverCapacity, never any email-sending method itself —
+// HouseholdOverCapacityEmailService doesn't even declare SendHouseholdMemberRemoved
+// (compile-time enforcement), and this proves emailService sees zero calls at runtime.
+func TestHouseholdOverCapacityCheck_AutoOffboard_DoesNotSendEmailsDirectly(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+		{ToEmail: "member3@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return(queued, nil)
+	mockRepo.On("ClearOverCapacityIfAnchorMatches", ctx, "hh-1", graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	assert.Empty(t, mockEmailSvc.Calls, "autoOffboard must not call any email method directly — OffboardExcessMembers already sent the removal emails internally")
+}
+
+// TestHouseholdOverCapacityCheck_InGrace_ExactlyAtDeadline_AutoOffboards proves a
+// household exactly at the 14-day deadline auto-offboards rather than sending a
+// redundant warning (spec: "a household exactly AT the 14-day deadline should
+// auto-offboard, not send a redundant warning").
+func TestHouseholdOverCapacityCheck_InGrace_ExactlyAtDeadline_AutoOffboards(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	// Exactly 14 days ago (any nonzero clock progression between "since" being read
+	// and "now" being computed inside the worker will already put now >= deadline).
+	graceStart := time.Now().Add(-14 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return([]services.QueuedRemovalEmail{}, nil)
+	mockRepo.On("ClearOverCapacityIfAnchorMatches", ctx, "hh-1", graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertExpectations(t)
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_AutoOffboard_ReadOnlyOwnerSkipsRemoval_StillClearsFlag
+// proves the worker side of the #1371 Gap Analysis Round 3, GT-2 fix: when
+// OffboardExcessMembers's own fresh, lock-guarded owner re-check finds the owner has gone
+// read-only (a TOCTOU race — the owner looked active when THIS worker run started, but a
+// concurrent Paddle webhook flipped their subscription before the deadline branch reached
+// OffboardExcessMembers) and returns an empty queue with no error, the over-capacity flag
+// must still be cleared — not left dangling — since grace is moot once the owner is
+// read-only (members already fall back to their own tier via the entitlement resolver's
+// owner-read-only branch). autoOffboard's ClearOverCapacityIfAnchorMatches call fires
+// whenever OffboardExcessMembers succeeds (regardless of how many, if any, members were
+// actually removed) — it is unconditional on SUCCESS, though still anchor-guarded against
+// a fresh, unrelated grace period landing in the tiny window before this call (Bug 4,
+// fourth Codex adversarial pass); this test uses AssertExpectations (not just a
+// permissive .On registration) to actually prove that call happens, rather than merely
+// allowing it.
+func TestHouseholdOverCapacityCheck_AutoOffboard_ReadOnlyOwnerSkipsRemoval_StillClearsFlag(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour) // past the 14-day deadline
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	// The worker's OWN top-of-run owner read still shows active — the race is that
+	// OffboardExcessMembers's independent, fresher re-read (simulated here via its mocked
+	// return value) finds the owner has since gone read-only.
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	// Empty queue, nil error — OffboardExcessMembers's fresh owner re-check found a
+	// read-only owner and skipped removal entirely (the scenario this fix addresses).
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return([]services.QueuedRemovalEmail{}, nil)
+	mockRepo.On("ClearOverCapacityIfAnchorMatches", ctx, "hh-1", graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertExpectations(t) // proves ClearOverCapacity was actually invoked, not just permitted
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+func TestHouseholdOverCapacityCheck_AutoOffboard_OffboardServiceError_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, _ := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return(nil, errors.New("offboard failed"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 of 1")
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacityIfAnchorMatches", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_AutoOffboard_AnchorMismatch_DoesNotClearFreshGracePeriod
+// is the worker-level regression test for the THIRD Codex adversarial pass of Round 9: a
+// concurrent clear-then-re-flag cycle landing between this worker's own fresh
+// GetHouseholdByID re-read and OffboardExcessMembers's own lock acquisition now makes
+// OffboardExcessMembers return domain.ErrOverCapacityAnchorMismatch (see that sentinel's
+// doc comment in domain/household.go) instead of a silent empty-no-error result.
+// autoOffboard must treat this distinctly from every OTHER nil/non-nil error case: it must
+// NOT propagate it as a hard error (mirroring how processHousehold already treats a
+// concurrently-disbanded household as a graceful no-op), AND — the actual bug this test
+// exists to catch — it must NOT call ClearOverCapacity either. The household is still
+// over capacity under a DIFFERENT, legitimately fresh grace period at this point; clearing
+// would erase that fresh period's own 14-day clock entirely, leaving the household
+// untracked until some future scan happens to re-flag it via Case 3. Pre-fix, autoOffboard
+// has no special case for this sentinel at all, so its `if err != nil { return
+// fmt.Errorf(...) }` branch fires unconditionally on ANY non-nil error — this test's
+// mocked non-nil error therefore surfaces as a wrongly-propagated hard error from Work,
+// failing the require.NoError(t, err) assertion below. #1371 — Round 9 Gap Analysis fix
+// (third Codex adversarial pass).
+func TestHouseholdOverCapacityCheck_AutoOffboard_AnchorMismatch_DoesNotClearFreshGracePeriod(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour) // past this worker's own 14-day deadline
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	// Simulates OffboardExcessMembers discovering, under its own lock, a concurrent
+	// clear-then-re-flag cycle: the anchor this worker decided on no longer matches.
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).
+		Return(nil, domain.ErrOverCapacityAnchorMismatch)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "an anchor mismatch is a graceful no-op, not a job failure")
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacityIfAnchorMatches", mock.Anything, mock.Anything, mock.Anything)
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_AutoOffboard_UsesAnchorGuardedClear is the dedicated
+// regression test for the FOURTH Codex adversarial pass of Round 9 (Bug 4): autoOffboard's
+// post-success clear must go through ClearOverCapacityIfAnchorMatches — the atomic
+// compare-and-clear that leaves a brand-new, independent grace period untouched if one
+// landed between OffboardExcessMembers's commit and this call — never the unconditional
+// ClearOverCapacity. Pre-fix, autoOffboard called ClearOverCapacity directly; this test
+// proves BOTH halves of the fix: the anchor-guarded method IS called with the correct
+// anchor (mockRepo.AssertExpectations), AND the old unconditional method is NOT called at
+// all (mockRepo.AssertNotCalled) — a mock configured only with .On("ClearOverCapacity", ...)
+// would panic with "unexpected call" the instant autoOffboard called the (unmocked)
+// ClearOverCapacityIfAnchorMatches instead, and a switch back to the old call would fail
+// the AssertNotCalled below.
+func TestHouseholdOverCapacityCheck_AutoOffboard_UsesAnchorGuardedClear(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-15 * 24 * time.Hour) // past the 14-day deadline
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockOffboardSvc.On("OffboardExcessMembers", ctx, "hh-1", graceStart).Return(queued, nil)
+	// Deliberately NOT registering "ClearOverCapacity" at all — if autoOffboard called it
+	// (the pre-fix behavior), the mock would panic with "unexpected call" rather than
+	// silently passing.
+	mockRepo.On("ClearOverCapacityIfAnchorMatches", ctx, "hh-1", graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockOffboardSvc.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// --- Case 5: in-grace, approaching notice time (initial notice not yet sent) ---
+
+// TestHouseholdOverCapacityCheck_InGrace_NoticeNotYetSent_SendsAndStamps also doubles as
+// the Bug 5 (fourth Codex adversarial pass) anchor-threading regression test: the
+// MarkOverCapacityStartNoticeSent expectation below is registered against the EXACT
+// graceStart anchor (not mock.AnythingOfType("time.Time")) — if sendStartNotice ever
+// regressed to stamping without threading *h.OverCapacitySince through, this expectation
+// would never match the actual call, and mockRepo.AssertExpectations(t) below would fail.
+func TestHouseholdOverCapacityCheck_InGrace_NoticeNotYetSent_SendsAndStamps(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-1 * 24 * time.Hour) // day 1 of grace — far from both deadline and warn threshold
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_InGrace_NoticeAlreadySent_NotSentTwice proves
+// idempotency: a subsequent run (notice-sent stamp already set) does not re-send.
+func TestHouseholdOverCapacityCheck_InGrace_NoticeAlreadySent_NotSentTwice(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-1 * 24 * time.Hour)
+	noticeSent := time.Now().Add(-12 * time.Hour) // already sent earlier today
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &noticeSent}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+}
+
+// TestHouseholdOverCapacityCheck_NoticeSendFails_DoesNotStamp_RetriesNextRun mirrors
+// RetentionCleanupCheckWorker's send-then-stamp tradeoff: a failed send must NOT be
+// stamped, so the notice is retried on the next daily run instead of being silently
+// skipped forever.
+func TestHouseholdOverCapacityCheck_NoticeSendFails_DoesNotStamp_RetriesNextRun(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-1 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(errors.New("sendgrid unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a failed best-effort notice send must not fail the job")
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_Case5_UsesFreshOwnerEmail_NotStaleEmail proves the bug
+// fix for the stale-owner-in-notice-email finding: sendStartNotice (Case 5) must use the
+// FRESH owner re-read (taken immediately before any write, to guard against the owner
+// changing their email via UpdateUserEmailTx in the narrow gap between the two
+// GetUserByID reads), not the STALE top-of-function owner read. Both reads return the
+// same owner (same ID/tier/status) — only the email differs, simulating a profile email
+// change landing in the race window.
+func TestHouseholdOverCapacityCheck_Case5_UsesFreshOwnerEmail_NotStaleEmail(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	staleOwner := &domain.User{ID: "owner-1", Email: "old@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	freshOwner := &domain.User{ID: "owner-1", Email: "new@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	// First read (top-of-function, Case 1 check) sees the OLD email; second, fresh read
+	// (immediately before the write path) sees the owner has since changed their email.
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(staleOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(freshOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "new@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockEmailSvc.AssertCalled(t, "SendHouseholdOverCapacityNotice", ctx, "new@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time"))
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice", ctx, "old@example.com", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// --- Case 6: in-grace, approaching 3-day deadline ---
+
+// TestHouseholdOverCapacityCheck_InGrace_ApproachingDeadline_SendsWarningAndStamps also
+// doubles as the Case-6 analogue of the Bug 5 anchor-threading regression test above: the
+// MarkOverCapacityWarn3dSent expectation below is registered against the EXACT graceStart
+// anchor, not a loose type matcher — a regression that stopped threading
+// *h.OverCapacitySince through send3dWarning's stamp call would fail
+// mockRepo.AssertExpectations(t) below.
+func TestHouseholdOverCapacityCheck_InGrace_ApproachingDeadline_SendsWarningAndStamps(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	// 12 days into a 14-day grace window == 2 days left == within the 3-day warn window.
+	graceStart := time.Now().Add(-12 * 24 * time.Hour)
+	noticeSent := time.Now().Add(-11 * 24 * time.Hour) // start notice already sent on day 1
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &noticeSent}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityWarning", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityWarn3dSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+}
+
+// TestHouseholdOverCapacityCheck_InGrace_WarningAlreadySent_NotSentTwice proves
+// idempotency for the 3-day warning.
+func TestHouseholdOverCapacityCheck_InGrace_WarningAlreadySent_NotSentTwice(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-12 * 24 * time.Hour)
+	noticeSent := time.Now().Add(-11 * 24 * time.Hour)
+	warnSent := time.Now().Add(-1 * time.Hour) // already sent earlier today
+	hh := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &noticeSent, OverCapacityWarn3dSentAt: &warnSent,
+	}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+}
+
+func TestHouseholdOverCapacityCheck_WarningSendFails_DoesNotStamp_RetriesNextRun(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-12 * 24 * time.Hour)
+	noticeSent := time.Now().Add(-11 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &noticeSent}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityWarning", ctx, "owner@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(errors.New("sendgrid unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a failed best-effort warning send must not fail the job")
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHouseholdOverCapacityCheck_Case6_UsesFreshOwnerEmail_NotStaleEmail is the Case-6
+// analogue of the Case-5 fix above: send3dWarning must also use the FRESH owner re-read,
+// not the stale top-of-function read, when the owner's email changed in the race window
+// between the two GetUserByID reads.
+func TestHouseholdOverCapacityCheck_Case6_UsesFreshOwnerEmail_NotStaleEmail(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	// 12 days into a 14-day grace window == 2 days left == within the 3-day warn window.
+	graceStart := time.Now().Add(-12 * 24 * time.Hour)
+	noticeSent := time.Now().Add(-11 * 24 * time.Hour) // start notice already sent on day 1
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &noticeSent}
+	staleOwner := &domain.User{ID: "owner-1", Email: "old@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	freshOwner := &domain.User{ID: "owner-1", Email: "new@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(staleOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(freshOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityWarning", ctx, "new@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityWarn3dSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), graceStart).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockEmailSvc.AssertCalled(t, "SendHouseholdOverCapacityWarning", ctx, "new@example.com", "The Smiths", 4, 2, mock.AnythingOfType("time.Time"))
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning", ctx, "old@example.com", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+}
+
+// --- Multi-household aggregation ("%d of %d failed" pattern, Task 2 precedent) ---
+
+func TestHouseholdOverCapacityCheck_OneOfTwoHouseholdsFails_ReturnsAggregateError(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, _, _ := setupOverCapacityCheckWorkerTest(t)
+
+	hhOK := &domain.Household{ID: "hh-ok", OwnerUserID: "owner-ok", Name: "OK Household"}
+	hhFail := &domain.Household{ID: "hh-fail", OwnerUserID: "owner-fail", Name: "Fail Household"}
+	ownerOK := &domain.User{ID: "owner-ok", SubscriptionTier: "household_5", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hhOK, hhFail}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-ok").Return(ownerOK, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-ok").Return(2, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-fail").Return(nil, errors.New("db unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 of 2")
+}
+
+func TestHouseholdOverCapacityCheck_ListError_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, _, _, _ := setupOverCapacityCheckWorkerTest(t)
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return(nil, errors.New("db unavailable"))
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err)
+}
+
+// --- UniqueOpts / constructor defaults ---
+
+// TestHouseholdOverCapacityCheckUniqueOpts proves uniqueness is enforced GLOBALLY across
+// all non-terminal states of this job kind, with no ByPeriod time-window escape hatch.
+// A prior version used ByPeriod: 23*time.Hour (a period-bucket-scoped window), which a
+// Codex review (Round 8) found could let a second instance run concurrently with a
+// still-running prior instance if that prior instance ran long enough to bridge into
+// the next 23h bucket — reopening the exact duplicate-notice-email risk this UniqueOpts
+// wiring exists to close. ByPeriod == 0 (unset) means River's dedup check applies
+// regardless of how much time has elapsed since the existing job was inserted.
+func TestHouseholdOverCapacityCheckUniqueOpts(t *testing.T) {
+	opts := HouseholdOverCapacityCheckUniqueOpts()
+
+	assert.False(t, opts.ByArgs)
+	assert.False(t, opts.ByQueue, "ByQueue must stay false — uniqueness must be global across queues, not scoped per-queue")
+	assert.Zero(t, opts.ByPeriod, "ByPeriod must be unset — global non-terminal-state uniqueness, not a time-bucketed window a long-running job could bridge past")
+	// ElementsMatch (not just Contains) proves ALL 5 non-terminal states are covered —
+	// Contains-only assertions on a subset would silently pass even if a state (e.g.
+	// JobStatePending) were dropped, leaving a real dedup gap undetected (Round 8 Codex
+	// finding on the drift-guard test's own blind spot).
+	assert.ElementsMatch(t, []queue.JobState{
+		queue.JobStateAvailable,
+		queue.JobStateScheduled,
+		queue.JobStateRunning,
+		queue.JobStateRetryable,
+		queue.JobStatePending,
+	}, opts.ByState)
+}
+
+func TestNewHouseholdOverCapacityCheckWorker_DefaultLogger(t *testing.T) {
+	mockRepo := new(mockHouseholdOverCapacityCheckRepository)
+	mockUserRepo := new(mockHouseholdOverCapacityUserRepository)
+	mockOffboardSvc := new(mockHouseholdOverCapacityOffboardService)
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	worker := NewHouseholdOverCapacityCheckWorker(HouseholdOverCapacityCheckWorkerDeps{
+		Repo:        mockRepo,
+		UserRepo:    mockUserRepo,
+		OffboardSvc: mockOffboardSvc,
+		TierConfig:  tierConfig,
+		// Logger nil — should use default
+	})
+
+	assert.NotNil(t, worker.logger)
+}

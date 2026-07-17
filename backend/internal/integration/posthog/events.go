@@ -79,6 +79,18 @@ const (
 	EventHouseholdAccountShared = "household_account_shared"
 	EventHouseholdAccountHidden = "household_account_hidden"
 
+	// Household offboarding & lifecycle events (Issue #1371 — Phase 7)
+	EventHouseholdMemberAutoOffboarded = "household_member_auto_offboarded"
+	EventHouseholdMembershipPurged     = "household_membership_purged"
+	EventHouseholdForceDisbanded       = "household_force_disbanded"
+	// EventHouseholdOverCapacityEntered fires the first time a household's active
+	// member count exceeds its owner's current plan seat count. Only fired from the
+	// Task 6, Part B webhook fast-path detection (subscription_webhook.go's
+	// reconcileOverCapacity) — the Task 6 daily backstop worker
+	// (household_over_capacity_check.go) has no analytics calls at all; it flags/
+	// clears the over-capacity state silently.
+	EventHouseholdOverCapacityEntered = "household_over_capacity_entered"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog

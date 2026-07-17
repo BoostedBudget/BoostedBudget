@@ -29,6 +29,11 @@ const mockHousehold: Household = {
   updated_at: '2025-01-01T00:00:00Z',
 }
 
+const mockOverCapacityHousehold: Household = {
+  ...mockHousehold,
+  over_capacity_since: '2026-07-01T00:00:00Z',
+}
+
 const mockEntitlement: HouseholdEntitlementSummary = {
   is_owner: true,
   seats_active: 2,
@@ -149,6 +154,57 @@ describe('useHousehold', () => {
     expect(result.current.seatsUsed).toBe(0)
     expect(result.current.seatsTotal).toBe(0)
     expect(result.current.isOwner).toBe(false)
+  })
+
+  it('surfaces overCapacitySince when the API returns it on the household', () => {
+    mockUseGetMyHousehold.mockReturnValue({
+      data: { household: mockOverCapacityHousehold, summary: mockEntitlement },
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchMyHousehold,
+    })
+    mockUseGetHouseholdEntitlement.mockReturnValue({
+      data: mockEntitlement,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchHouseholdEntitlement,
+    })
+
+    const { result } = renderHook(() => useHousehold(), { wrapper: createWrapper() })
+
+    expect(result.current.overCapacitySince).toBe('2026-07-01T00:00:00Z')
+  })
+
+  it('surfaces overCapacitySince as undefined when the API does not return it', () => {
+    mockUseGetMyHousehold.mockReturnValue({
+      data: mockResponseBody,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchMyHousehold,
+    })
+    mockUseGetHouseholdEntitlement.mockReturnValue({
+      data: mockEntitlement,
+      isLoading: false,
+      error: null,
+      refetch: mockRefetchHouseholdEntitlement,
+    })
+
+    const { result } = renderHook(() => useHousehold(), { wrapper: createWrapper() })
+
+    expect(result.current.overCapacitySince).toBeUndefined()
+  })
+
+  it('surfaces overCapacitySince as undefined when there is no household yet', () => {
+    mockUseGetMyHousehold.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: { response: { status: 404 } },
+      refetch: mockRefetchMyHousehold,
+    })
+
+    const { result } = renderHook(() => useHousehold(), { wrapper: createWrapper() })
+
+    expect(result.current.overCapacitySince).toBeUndefined()
   })
 
   it('refetch invalidates both query keys and refetches both queries', async () => {

@@ -14,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/pashagolub/pgxmock/v4"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -1757,4 +1758,571 @@ func TestWorker_SubscriptionUpdated_ToActive_ClearsPastDueStamp(t *testing.T) {
 	require.NoError(t, err)
 	mockWebhookRepo.AssertExpectations(t)
 	mockProfileRepo.AssertExpectations(t)
+}
+
+// ─── Household over-capacity reconcile (#1371 — Phase 7, Task 6, Part B) ─────
+
+// mockHouseholdOverCapacityRepo mocks the HouseholdOverCapacityRepository interface —
+// the narrow, non-transactional household lookup reconcileOverCapacity/
+// clearOverCapacityIfOwner use to decide whether a user owns a household at all before
+// opening a short-lived transaction for the lock + seat-count decision.
+type mockHouseholdOverCapacityRepo struct{ mock.Mock }
+
+func (m *mockHouseholdOverCapacityRepo) GetHouseholdForUser(ctx context.Context, userID string) (*domain.Household, bool, bool, error) {
+	args := m.Called(ctx, userID)
+	var h *domain.Household
+	if args.Get(0) != nil {
+		h = args.Get(0).(*domain.Household)
+	}
+	return h, args.Bool(1), args.Bool(2), args.Error(3)
+}
+
+// setupWorkerTestWithHousehold builds a worker with every dependency mocked, PLUS
+// HouseholdRepo + DB wired (a pgxmock pool) — needed because reconcileOverCapacity
+// opens its own real transaction to lock the household row (LockHouseholdByID), the
+// same way HouseholdService.OffboardExcessMembers does, per this codebase's
+// transactional-test convention (see household_service_test.go's newTxTestService).
+func setupWorkerTestWithHousehold(t *testing.T) (
+	*SubscriptionWebhookWorker,
+	*mockPaddleWebhookRepository,
+	*mockSubscriptionProfileRepository,
+	*mockClerkService,
+	*mockHouseholdOverCapacityRepo,
+	pgxmock.PgxPoolIface,
+) {
+	t.Helper()
+
+	mockWebhookRepo := new(mockPaddleWebhookRepository)
+	mockProfileRepo := new(mockSubscriptionProfileRepository)
+	mockClerk := new(mockClerkService)
+	mockHHRepo := new(mockHouseholdOverCapacityRepo)
+	pool, err := pgxmock.NewPool()
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+
+	worker := NewSubscriptionWebhookWorker(SubscriptionWebhookWorkerDeps{
+		PaddleWebhookRepo: mockWebhookRepo,
+		ProfileRepo:       mockProfileRepo,
+		ClerkService:      mockClerk,
+		TierConfig:        tierConfig,
+		HouseholdRepo:     mockHHRepo,
+		DB:                pool,
+		Logger:            logger,
+	})
+	return worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool
+}
+
+func TestReconcileOverCapacity_HouseholdRepoNotWired_NoOp(t *testing.T) {
+	worker, _, _, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+}
+
+func TestReconcileOverCapacity_NoHousehold_NoOp(t *testing.T) {
+	worker, _, _, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(nil, false, false, nil)
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "no transaction should be opened when the user owns no household")
+}
+
+func TestReconcileOverCapacity_FoundButNotOwner_NoOp(t *testing.T) {
+	worker, _, _, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "member-1").Return(hh, false, true, nil)
+
+	err := worker.reconcileOverCapacity(ctx, "member-1")
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "no transaction should be opened for a non-owner member")
+}
+
+func TestReconcileOverCapacity_ExceedsSeats_SetsOverCapacity(t *testing.T) {
+	worker, _, mockProfileRepo, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(hh, true, true, nil)
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+	mockProfileRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3)) // 3 active > 2 seats
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
+	pool.ExpectCommit()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestReconcileOverCapacity_ExceedsSeats_AlreadyInGrace_DoesNotSetAgain proves
+// SetOverCapacity is not re-issued when the household is already in grace — the second
+// call in a row (e.g. a follow-up webhook for the same owner) must see the LOCKED row's
+// over_capacity_since already set and skip straight to a no-op commit.
+func TestReconcileOverCapacity_ExceedsSeats_AlreadyInGrace_DoesNotSetAgain(t *testing.T) {
+	worker, _, mockProfileRepo, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+	graceStart := now.Add(-24 * time.Hour)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(hh, true, true, nil)
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+	mockProfileRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &graceStart, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	// No ExpectExec — SetOverCapacity must NOT be called a second time.
+	pool.ExpectCommit()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(), "SetOverCapacity must not be re-issued while already in grace")
+}
+
+func TestReconcileOverCapacity_WithinSeats_ClearsOverCapacity(t *testing.T) {
+	worker, _, mockProfileRepo, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+	graceStart := now.Add(-24 * time.Hour)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(hh, true, true, nil)
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_5", SubscriptionStatus: "active"} // 5 seats
+	mockProfileRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &graceStart, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3)) // 3 active <= 5 seats now
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+func TestReconcileOverCapacity_WithinSeats_NotInGrace_NoOp(t *testing.T) {
+	worker, _, mockProfileRepo, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(hh, true, true, nil)
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_5", SubscriptionStatus: "active"}
+	mockProfileRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	// No ExpectExec at all — neither Set nor Clear should fire.
+	pool.ExpectCommit()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+func TestReconcileOverCapacity_HouseholdLookupError_ReturnsError(t *testing.T) {
+	worker, _, _, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(nil, false, false, errors.New("db down"))
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.Error(t, err)
+}
+
+// ─── Call-site wiring: processSubscriptionUpdated / Activated / Canceled / PastDue ──
+
+// TestWorker_SubscriptionUpdated_ReconcilesOverCapacity_SetsOverCapacity drives the
+// full subscription.updated path end-to-end (through Work()) and proves
+// reconcileOverCapacity fires AFTER the tier write, flagging a household whose active
+// member count now exceeds the newly-written tier's seat count.
+func TestWorker_SubscriptionUpdated_ReconcilesOverCapacity_SetsOverCapacity(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	webhook := loadWebhookFixture(t, "subscription_updated.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.updated"}
+	job := createRiverJob(args)
+
+	// Owner's tier write already landed by the time reconcileOverCapacity fetches them
+	// fresh — this fixture's item resolves to "household_2" (2 seats); 3 active members
+	// pushes the household over capacity.
+	owner := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time"), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(owner, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "user_2abc123def456", "The Smiths", now, now, nil, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
+	pool.ExpectCommit()
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestWorker_SubscriptionUpdated_ReconcileOverCapacityError_DoesNotFailJob proves a
+// reconcileOverCapacity failure is logged, never propagated — the webhook's own
+// tier-change processing must still be treated as a full success (job not retried).
+func TestWorker_SubscriptionUpdated_ReconcileOverCapacityError_DoesNotFailJob(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_updated.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.updated"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "active", (*time.Time)(nil), mock.AnythingOfType("*time.Time"), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, "user_2abc123def456").Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	// Simulate a household lookup failure inside reconcileOverCapacity.
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(nil, false, false, errors.New("db down"))
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a reconcileOverCapacity failure must be logged, never fail the webhook job")
+	mockWebhookRepo.AssertExpectations(t)
+	mockProfileRepo.AssertExpectations(t)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "no transaction should be opened when the household lookup itself fails")
+}
+
+// TestWorker_SubscriptionActivated_ReconcilesOverCapacity_SetsOverCapacity drives
+// subscription.activated end-to-end and proves it gets the same defensive
+// reconcileOverCapacity call as subscription.updated.
+func TestWorker_SubscriptionActivated_ReconcilesOverCapacity_SetsOverCapacity(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	webhook := loadWebhookFixture(t, "subscription_activated.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.activated"}
+	job := createRiverJob(args)
+
+	owner := &domain.User{ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, mock.Anything).Return(owner, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearRetentionDates", ctx, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "user_2abc123def456", "The Smiths", now, now, nil, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+	pool.ExpectQuery(`over_capacity_since IS NULL`).WithArgs("hh-1", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(now))
+	pool.ExpectCommit()
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestWorker_SubscriptionCanceled_ClearsOverCapacity proves cancellation clears a
+// lingering over-capacity grace flag — grace is moot once the owner loses active
+// coverage entirely (members fall back to their own tier via the unchanged resolver).
+func TestWorker_SubscriptionCanceled_ClearsOverCapacity(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "household_2", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestWorker_SubscriptionPastDue_ClearsOverCapacity proves past_due (a read-only
+// status) also clears a lingering over-capacity grace flag.
+func TestWorker_SubscriptionPastDue_ClearsOverCapacity(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_past_due.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.past_due"}
+	job := createRiverJob(args)
+
+	// prevStatus must be active/trialing for processSubscriptionPastDue to proceed
+	// past its #898 guard.
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: "active"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockProfileRepo.On("SetPastDueStartedAt", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time")).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestWorker_SubscriptionUpdated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile
+// proves the Round 4 Gap Analysis fix: when subscription.updated resolves to a
+// read-only status (e.g. a scheduled downgrade landing the subscription in past_due via
+// this generic event rather than the dedicated subscription.past_due event),
+// processSubscriptionUpdated must call clearOverCapacityIfOwner — NOT
+// reconcileOverCapacity's seat-count path — mirroring processSubscriptionPastDue/
+// processSubscriptionCanceled's existing convention. Proven by expecting ONLY the
+// direct ClearOverCapacity exec (no ExpectBegin/Commit, no CountActiveMembers SELECT
+// COUNT, no SetOverCapacity) — pgxmock would fail on any unexpected call.
+func TestWorker_SubscriptionUpdated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	pastDuePayload := `{
+		"event_id": "evt_updated_pastdue_123",
+		"event_type": "subscription.updated",
+		"data": {
+			"id": "sub_01h1234567890abcdef",
+			"status": "past_due",
+			"customer_id": "ctm_01h1234567890abcdef",
+			"custom_data": {"user_id": "user_2abc123def456"},
+			"items": [{"price": {"id": "pri_premium_monthly"}}]
+		}
+	}`
+
+	webhook := &domain.PaddleWebhookEvent{
+		ID:             "test-webhook-id-updated-pastdue",
+		EventID:        "evt_updated_pastdue_123",
+		EventType:      "subscription.updated",
+		Payload:        json.RawMessage(pastDuePayload),
+		SignatureValid: true,
+	}
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-updated-pastdue",
+		EventID:   "evt_updated_pastdue_123",
+		EventType: "subscription.updated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-updated-pastdue").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "past_due", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	// #930 guard (unchanged): ClearRetentionDates/ClearPastDueStartedAt must NOT be
+	// called for a read-only status update.
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-updated-pastdue").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	mockProfileRepo.AssertNotCalled(t, "ClearPastDueStartedAt")
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "a read-only new status must clear over-capacity directly, not reconcile via the seat-count transaction")
+}
+
+// TestWorker_SubscriptionActivated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile
+// is the defensive twin of the Updated test above: an "activated" event carrying a
+// read-only status isn't expected from Paddle in practice (activation implies real
+// coverage), but processSubscriptionActivated must not blindly run the seat-count
+// reconcile path if it ever does — for consistency with every other call site.
+func TestWorker_SubscriptionActivated_NewStatusReadOnly_ClearsOverCapacityInsteadOfReconcile(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	pastDuePayload := `{
+		"event_id": "evt_activated_pastdue_123",
+		"event_type": "subscription.activated",
+		"data": {
+			"id": "sub_01h1234567890abcdef",
+			"status": "past_due",
+			"customer_id": "ctm_01h1234567890abcdef",
+			"custom_data": {"user_id": "user_2abc123def456"},
+			"items": [{"price": {"id": "pri_premium_monthly"}}]
+		}
+	}`
+
+	webhook := &domain.PaddleWebhookEvent{
+		ID:             "test-webhook-id-activated-pastdue",
+		EventID:        "evt_activated_pastdue_123",
+		EventType:      "subscription.activated",
+		Payload:        json.RawMessage(pastDuePayload),
+		SignatureValid: true,
+	}
+
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-activated-pastdue",
+		EventID:   "evt_activated_pastdue_123",
+		EventType: "subscription.activated",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123"}
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "user_2abc123def456"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-activated-pastdue").Return(webhook, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", mock.Anything, "past_due", (*time.Time)(nil), (*time.Time)(nil), mock.Anything).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	// #930/#933 guard (unchanged): the "Welcome aboard!" notification, ClearRetentionDates,
+	// and ClearPastDueStartedAt must NOT fire for a non-active status.
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-activated-pastdue").Return(nil)
+
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+	mockProfileRepo.AssertNotCalled(t, "ClearPastDueStartedAt")
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "a read-only new status must clear over-capacity directly, not reconcile via the seat-count transaction")
+}
+
+// TestWorker_SubscriptionCanceled_NonOwner_NoOp proves clearOverCapacityIfOwner is a
+// true no-op (no transaction opened at all) for a user who isn't a household owner.
+func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium", SubscriptionStatus: "active"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(nil, false, false, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockHHRepo.AssertExpectations(t)
+	require.NoError(t, pool.ExpectationsWereMet(), "no transaction/Exec should occur for a non-owner")
 }
