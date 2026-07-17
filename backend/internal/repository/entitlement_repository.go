@@ -33,6 +33,16 @@ type EntitlementRepository interface {
 	// ExpireActiveEntitlement sets effective_until=now() on the user's open-ended
 	// entitlement row, if any. Idempotent — a no-op (nil error) when none exists.
 	ExpireActiveEntitlement(ctx context.Context, userID string) error
+
+	// ExpireActiveHouseholdEntitlement sets effective_until=now() on userID's open-ended
+	// entitlement row, scoped to householdID AND source='household'. Unlike the broad
+	// ExpireActiveEntitlement (user_id only), this cannot accidentally close out an
+	// unrelated entitlement the user has since acquired (e.g. their own new subscription)
+	// — see
+	// TestEntitlementRepository_ExpireActiveHouseholdEntitlement_DoesNotTouchOwnSubscription.
+	// Idempotent — a no-op (nil error) when no matching row exists. #1371 — Phase 7
+	// foundation (PurgeRemovedMembership).
+	ExpireActiveHouseholdEntitlement(ctx context.Context, userID, householdID string) error
 }
 
 type entitlementRepository struct {
@@ -81,5 +91,13 @@ func (r *entitlementRepository) ExpireActiveEntitlement(ctx context.Context, use
 		UPDATE subscription_entitlements SET effective_until = now(), updated_at = now()
 		WHERE user_id = $1 AND effective_until IS NULL
 	`, userID)
+	return err
+}
+
+func (r *entitlementRepository) ExpireActiveHouseholdEntitlement(ctx context.Context, userID, householdID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE subscription_entitlements SET effective_until = now(), updated_at = now()
+		WHERE user_id = $1 AND household_id = $2 AND source = 'household' AND effective_until IS NULL
+	`, userID, householdID)
 	return err
 }

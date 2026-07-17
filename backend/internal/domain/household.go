@@ -58,6 +58,23 @@ type Household struct {
 	Name        string    `json:"name" db:"name"`
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+
+	// OverCapacitySince is the grace-period anchor timestamp. When set, the
+	// household currently has more active members than its plan's seat limit
+	// allows, and a 14-day grace clock is running before a background worker
+	// auto-offboards the most-recently-joined excess members. Nil when the
+	// household is within its seat limit. #1371 — Phase 7.
+	OverCapacitySince *time.Time `json:"over_capacity_since,omitempty" db:"over_capacity_since"`
+
+	// OverCapacityStartNoticeSentAt is an idempotency marker: non-nil once the
+	// "you're over capacity" warning email has been sent for the current grace
+	// period. #1371 — Phase 7.
+	OverCapacityStartNoticeSentAt *time.Time `json:"over_capacity_start_notice_sent_at,omitempty" db:"over_capacity_start_notice_sent_at"`
+
+	// OverCapacityWarn3dSentAt is an idempotency marker: non-nil once the
+	// "3 days left" warning email has been sent for the current grace period.
+	// #1371 — Phase 7.
+	OverCapacityWarn3dSentAt *time.Time `json:"over_capacity_warn3d_sent_at,omitempty" db:"over_capacity_warn3d_sent_at"`
 }
 
 // Validate checks that the Household has all required fields and valid values.
@@ -274,6 +291,18 @@ var (
 	ErrMemberNotFound            = errors.New("member not found")
 	ErrCannotRemoveOwner         = errors.New("cannot remove the household owner")
 	ErrOwnerPlanInactive         = errors.New("household owner's plan is not currently active")
+
+	// ErrOverCapacityAnchorMismatch is returned by HouseholdService.OffboardExcessMembers
+	// when the household row it locks no longer carries the same over_capacity_since the
+	// caller's own removal decision was based on — either a different (fresher) anchor, or
+	// nil (grace cleared entirely). This means a concurrent clear-then-re-flag cycle (e.g.
+	// a subscription webhook) landed in the race window between the caller's fresh read
+	// and OffboardExcessMembers's own lock acquisition, so the caller's decision is stale
+	// and must not be acted on. Deliberately NOT mapped to any HTTP status in
+	// internal/huma/errors/mapper.go — OffboardExcessMembers has exactly one caller,
+	// household_over_capacity_check.go's autoOffboard (a background worker), never an HTTP
+	// handler. #1371 — Round 9 Gap Analysis fix (third Codex adversarial pass).
+	ErrOverCapacityAnchorMismatch = errors.New("over-capacity anchor mismatch")
 
 	// ErrInviteeHasActivePaidSubscription is returned when an invitee has a live Paddle
 	// billing relationship (active/trialing/past_due). Immediate free household coverage

@@ -115,15 +115,34 @@ func (h *HouseholdHandler) UpdateHouseholdName(ctx context.Context, input *Updat
 // DeleteHouseholdInput represents the input for disbanding a household.
 type DeleteHouseholdInput struct {
 	inputs.AuthenticatedInput
+	// Force, when true, force-removes every active non-owner member (soft-remove,
+	// expire entitlement, revoke shares, send removal email — all inside ForceDisband's
+	// own transaction) before dissolving the household, instead of 409ing while active
+	// non-owner members remain. #1371 — Phase 7 Task 7.
+	Force bool `query:"force" doc:"Force-disband: remove all active non-owner members before dissolving the household, instead of failing while members remain (default false)"`
 }
 
 // DeleteHouseholdOutput represents the (empty) response for disbanding a household.
 type DeleteHouseholdOutput struct{}
 
-// DeleteHousehold handles DELETE /api/v1/households/me. Minimal stub (#1367 decision
-// #2): owner-only; 409 if any active non-owner members exist. Full force-disband is
-// Phase 7 (#1371).
+// DeleteHousehold handles DELETE /api/v1/households/me. Owner-only in both modes — the
+// service layer resolves ownership from the caller's userID and returns
+// domain.ErrNotHouseholdOwner otherwise (same authorization pattern for force and
+// non-force paths; no separate handler-side check). Without force (default, #1367
+// decision #2): 409 (domain.ErrHouseholdHasActiveMembers) if any active non-owner
+// members exist. With force=true (#1371 Phase 7): delegates to the already-built
+// HouseholdService.ForceDisband, which force-removes every active non-owner member and
+// sends their removal emails ITSELF, inside its own transaction, before dissolving the
+// household — the []QueuedRemovalEmail it returns is for caller bookkeeping only and is
+// deliberately not used to send anything here (re-sending it would double-send the same
+// emails ForceDisband already sent after its own commit).
 func (h *HouseholdHandler) DeleteHousehold(ctx context.Context, input *DeleteHouseholdInput) (*DeleteHouseholdOutput, error) {
+	if input.Force {
+		if _, err := h.service.ForceDisband(ctx, input.UserID); err != nil {
+			return nil, humaerrors.LoggingMapError(ctx, err)
+		}
+		return &DeleteHouseholdOutput{}, nil
+	}
 	if err := h.service.DeleteHousehold(ctx, input.UserID); err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -400,7 +419,7 @@ func RegisterHouseholdRoutes(api huma.API, handler *HouseholdHandler) {
 		Method:        http.MethodDelete,
 		Path:          "/api/v1/households/me",
 		Summary:       "Disband the household",
-		Description:   "Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability.",
+		Description:   "Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.",
 		Tags:          []string{"Household"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,

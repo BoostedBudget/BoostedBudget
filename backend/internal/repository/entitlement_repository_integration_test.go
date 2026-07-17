@@ -111,3 +111,88 @@ func TestEntitlementRepository_GetActiveEntitlement_HouseholdCoverage(t *testing
 		t.Fatalf("unexpected entitlement: %+v", ent)
 	}
 }
+
+// TestEntitlementRepository_ExpireActiveHouseholdEntitlement_ExpiresMatchingRow proves
+// the positive case: a genuinely-matching open household entitlement row (same user_id,
+// household_id, source='household', effective_until IS NULL) IS actually closed out by
+// the scoped method — this is the case
+// TestEntitlementRepository_ExpireActiveHouseholdEntitlement_DoesNotTouchOwnSubscription
+// alone doesn't cover, since a no-op implementation would also leave an unrelated row
+// untouched (Codex review finding).
+func TestEntitlementRepository_ExpireActiveHouseholdEntitlement_ExpiresMatchingRow(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewEntitlementRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id)
+		VALUES ($1, 'household', 'household_2', 'active', $2, $3)
+	`, memberID, householdID, ownerID)
+	if err != nil {
+		t.Fatalf("insert household entitlement: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, memberID) //nolint:errcheck
+	})
+
+	if err := repo.ExpireActiveHouseholdEntitlement(ctx, memberID, householdID); err != nil {
+		t.Fatalf("ExpireActiveHouseholdEntitlement: %v", err)
+	}
+
+	_, err = repo.GetActiveEntitlement(ctx, memberID)
+	if !errors.Is(err, repository.ErrEntitlementNotFound) {
+		t.Fatalf("expected the matching household entitlement to be expired (ErrEntitlementNotFound), got: %v", err)
+	}
+}
+
+// TestEntitlementRepository_ExpireActiveHouseholdEntitlement_DoesNotTouchOwnSubscription
+// proves the #1371 scoped expiry helper's reason for existing: a removed household
+// member who has since started their OWN subscription must keep that new coverage.
+// The existing broad ExpireActiveEntitlement(ctx, userID) matches by user_id ONLY and
+// would incorrectly expire the unrelated own_subscription row; the scoped method
+// (user_id + household_id + source='household') must leave it untouched.
+func TestEntitlementRepository_ExpireActiveHouseholdEntitlement_DoesNotTouchOwnSubscription(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewEntitlementRepository(pool)
+	ownerID := insertTestUser(t, pool)
+	memberID := insertTestUser(t, pool)
+	householdID := insertTestHousehold(t, pool, ownerID)
+
+	// The member's household entitlement was already expired at removal time (RemoveMember
+	// calls the broad ExpireActiveEntitlement defensively) — simulate that closed epoch here.
+	_, err := pool.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id, effective_from, effective_until)
+		VALUES ($1, 'household', 'household_2', 'active', $2, $3, now() - interval '31 days', now() - interval '30 days')
+	`, memberID, householdID, ownerID)
+	if err != nil {
+		t.Fatalf("insert closed household entitlement: %v", err)
+	}
+
+	// The member has since started their own, still-open subscription.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status)
+		VALUES ($1, 'own_subscription', 'premium', 'active')
+	`, memberID)
+	if err != nil {
+		t.Fatalf("insert own subscription entitlement: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM subscription_entitlements WHERE user_id = $1`, memberID) //nolint:errcheck
+	})
+
+	if err := repo.ExpireActiveHouseholdEntitlement(ctx, memberID, householdID); err != nil {
+		t.Fatalf("ExpireActiveHouseholdEntitlement: %v", err)
+	}
+
+	ent, err := repo.GetActiveEntitlement(ctx, memberID)
+	if err != nil {
+		t.Fatalf("own_subscription entitlement should still be active, got err: %v", err)
+	}
+	if string(ent.Source) != "own_subscription" || ent.Tier != "premium" {
+		t.Fatalf("own_subscription entitlement was disturbed: %+v", ent)
+	}
+}

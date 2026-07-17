@@ -33,6 +33,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 )
 
@@ -241,6 +242,19 @@ func main() {
 
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
+
+	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
+	// (purges household_members rows removed 30+ days ago). Constructed once
+	// householdService is available (below); not gated on DELETION_TOKEN_SECRET like
+	// retention's worker, since it depends on householdService, not deletionService.
+	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
+
+	// Issue #1371 — Phase 7 (Task 6): Declare household over-capacity check worker
+	// (authoritative daily backstop for the over-capacity grace lifecycle — flags/
+	// clears grace, sends owner notices, auto-offboards at the 14-day deadline).
+	// Constructed once householdService is available (below), same ordering
+	// constraint as Task 2's worker since it also needs householdService.OffboardExcessMembers.
+	var householdOverCapacityCheckWorker *jobs.HouseholdOverCapacityCheckWorker
 
 	// Issue #633: Declare DLQ cleanup check worker
 	var dlqCleanupCheckWorker *jobs.DLQCleanupCheckWorker
@@ -529,6 +543,49 @@ func main() {
 			appLogger.Warn("Email service disabled - cancellation links shown in UI instead (see GitHub issue for SendGrid integration)")
 		}
 
+		// Construct the household service here (rather than near route registration
+		// further down) so it is available to the Task 2 household member cleanup
+		// worker below, as well as the deletion-service owner guard a few lines down —
+		// both need it well before the dashboard/analytics handlers that also resolve
+		// `scope=household` requests (Issue #1369 — Phase 5). Route registration for
+		// the household/household-share endpoints themselves still happens further
+		// down, reusing this same householdService instance. #1371 — Phase 7 (Task 2).
+		householdService := services.NewHouseholdService(
+			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
+			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
+		)
+		householdService.SetAnalytics(phClient)
+		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
+		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
+		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
+		// (clerk.SetKey is already called there, well before the server accepts requests).
+		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+
+		// Issue #1371 — Phase 7 (Task 2): Create household member cleanup check worker.
+		// Unlike retention's worker (gated on DELETION_TOKEN_SECRET, since it calls
+		// deletionService), this worker delegates to householdService.PurgeRemovedMembership,
+		// which is always constructed above — so this worker is always non-nil too.
+		householdMemberCleanupCheckWorker = jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{
+			Repo:     householdRepo,
+			PurgeSvc: householdService,
+			Logger:   appLogger,
+		})
+		appLogger.Info("Household member cleanup check worker created (River)")
+
+		// Issue #1371 — Phase 7 (Task 6): Create household over-capacity check worker
+		// (authoritative daily backstop). Same non-nil-by-construction reasoning as
+		// Task 2's worker above: it delegates auto-offboard to householdService.
+		// OffboardExcessMembers, which is always constructed above.
+		householdOverCapacityCheckWorker = jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{
+			Repo:         householdRepo,
+			UserRepo:     profileRepo,
+			OffboardSvc:  householdService,
+			EmailService: emailService,
+			TierConfig:   tierConfig,
+			Logger:       appLogger,
+		})
+		appLogger.Info("Household over-capacity check worker created (River)")
+
 		// Create deletion services (if token secret configured)
 		if cfg.DeletionTokenSecret != "" {
 			// Initialize Deletion service (reuses auditLogger and emailService created earlier)
@@ -636,6 +693,10 @@ func main() {
 					// freed to self-subscribe once their owner stops actually covering
 					// them, even if the raw entitlement row hasn't been cleaned up yet.
 					EntitlementRepo: householdEntitlementService,
+					// Issue #1371 Task 5 — in-app downgrade seat guard: blocks a
+					// household owner from downgrading to a tier without enough seats
+					// for their current active+pending household.
+					HouseholdRepo: householdRepo,
 				})
 				appLogger.Info("Paddle checkout handler created")
 			}
@@ -651,7 +712,12 @@ func main() {
 					NotificationRepo:      notificationRepo,
 					PaddleTransactionRepo: paddleTransactionRepo,
 					TierConfig:            tierConfig,
-					Logger:                logger,
+					// Issue #1371 Task 6 (Part B): best-effort fast-path household
+					// over-capacity reconcile after tier-change/cancellation/past-due
+					// webhooks. householdRepo/db are already constructed above.
+					HouseholdRepo: householdRepo,
+					DB:            db,
+					Logger:        logger,
 				})
 				subscriptionWebhookWorker.SetAnalytics(phClient)
 				appLogger.Info("Subscription webhook worker created (River)")
@@ -1134,6 +1200,74 @@ func main() {
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
+			// HouseholdMemberCleanupCheckUniqueOpts (household_member_cleanup_check.go)
+			// documents the same shape below as the source of truth this must stay in
+			// sync with. UniqueOpts constrains to one check job in any non-terminal
+			// state AT ALL (no ByPeriod time window — see that function's doc comment
+			// for the Round 8 rationale) so that concurrent River clients/schedulers
+			// can't double-run the check and race to purge the same removed-membership
+			// rows twice (this worker only purges rows — no email is sent here, unlike
+			// its over-capacity sibling below).
+			if householdMemberCleanupCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.HouseholdMemberCleanupCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+								UniqueOpts: river.UniqueOpts{
+									ByArgs: false,
+									ByState: []rivertype.JobState{
+										rivertype.JobStateAvailable,
+										rivertype.JobStateScheduled,
+										rivertype.JobStateRunning,
+										rivertype.JobStateRetryable,
+										rivertype.JobStatePending,
+									},
+								},
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Household member cleanup check periodic job configured (daily)")
+			}
+
+			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check (daily)
+			// HouseholdOverCapacityCheckUniqueOpts (household_over_capacity_check.go)
+			// documents the same shape below as the source of truth this must stay in
+			// sync with. UniqueOpts constrains to one check job in any non-terminal
+			// state AT ALL (no ByPeriod time window — see that function's doc comment
+			// for the Round 8 rationale) — this worker sends a notice email BEFORE
+			// stamping *_sent_at (so a failed send retries next run), and two
+			// overlapping runs would both see "not yet sent" and both send a
+			// duplicate email.
+			if householdOverCapacityCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.HouseholdOverCapacityCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+								UniqueOpts: river.UniqueOpts{
+									ByArgs: false,
+									ByState: []rivertype.JobState{
+										rivertype.JobStateAvailable,
+										rivertype.JobStateScheduled,
+										rivertype.JobStateRunning,
+										rivertype.JobStateRetryable,
+										rivertype.JobStatePending,
+									},
+								},
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Household over-capacity check periodic job configured (daily)")
+			}
+
 			// Issue #633: DLQ cleanup check (daily)
 			if dlqCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
@@ -1268,6 +1402,18 @@ func main() {
 			if retentionCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
 				appLogger.Info("Retention cleanup check worker registered with River")
+			}
+			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check worker
+			// (constructed above, always non-nil here)
+			if householdMemberCleanupCheckWorker != nil {
+				river.AddWorker(riverWorkers, householdMemberCleanupCheckWorker)
+				appLogger.Info("Household member cleanup check worker registered with River")
+			}
+			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check worker
+			// (constructed above, always non-nil here)
+			if householdOverCapacityCheckWorker != nil {
+				river.AddWorker(riverWorkers, householdOverCapacityCheckWorker)
+				appLogger.Info("Household over-capacity check worker registered with River")
 			}
 			if dlqCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, dlqCleanupCheckWorker)
@@ -1535,20 +1681,11 @@ func main() {
 		// Issue #1109: Chain resolver maps stable user_account_id → current active account_id.
 		boostExecutionService.SetChainResolver(services.NewAccountChainResolver(accountRepo))
 
-		// Construct the household service ahead of the dashboard/analytics handlers below —
-		// both need it to resolve `scope=household` requests (Issue #1369 — Phase 5).
-		// Route registration for the household/household-share endpoints themselves still
-		// happens further down, reusing this same householdService instance.
-		householdService := services.NewHouseholdService(
-			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
-			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
-		)
-		householdService.SetAnalytics(phClient)
-		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
-		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
-		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
-		// (clerk.SetKey is already called there, well before the server accepts requests).
-		householdService.SetMemberProfileResolver(services.NewClerkMemberProfileResolver(identityRepo, services.NewDefaultClerkUserGetter()))
+		// householdService was already constructed earlier (right after emailService,
+		// before the deletion-service block) so the Task 2 household member cleanup
+		// worker and the deletion-service owner guard could both use it. Route
+		// registration for the household/household-share endpoints themselves still
+		// happens here, reusing that same instance. #1371 — Phase 7 (Task 2).
 
 		// Register Huma dashboard routes (Issue #559: Huma migration)
 		humaDashboardHandler := operations.NewDashboardHandler(dashboardService, householdService)
