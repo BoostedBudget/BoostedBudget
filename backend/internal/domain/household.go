@@ -292,6 +292,18 @@ var (
 	ErrCannotRemoveOwner         = errors.New("cannot remove the household owner")
 	ErrOwnerPlanInactive         = errors.New("household owner's plan is not currently active")
 
+	// ErrOverCapacityAnchorMismatch is returned by HouseholdService.OffboardExcessMembers
+	// when the household row it locks no longer carries the same over_capacity_since the
+	// caller's own removal decision was based on — either a different (fresher) anchor, or
+	// nil (grace cleared entirely). This means a concurrent clear-then-re-flag cycle (e.g.
+	// a subscription webhook) landed in the race window between the caller's fresh read
+	// and OffboardExcessMembers's own lock acquisition, so the caller's decision is stale
+	// and must not be acted on. Deliberately NOT mapped to any HTTP status in
+	// internal/huma/errors/mapper.go — OffboardExcessMembers has exactly one caller,
+	// household_over_capacity_check.go's autoOffboard (a background worker), never an HTTP
+	// handler. #1371 — Round 9 Gap Analysis fix (third Codex adversarial pass).
+	ErrOverCapacityAnchorMismatch = errors.New("over-capacity anchor mismatch")
+
 	// ErrInviteeHasActivePaidSubscription is returned when an invitee has a live Paddle
 	// billing relationship (active/trialing/past_due). Immediate free household coverage
 	// would create paid-and-covered overlap, whose only fair unwind is a partial refund —

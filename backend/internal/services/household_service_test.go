@@ -908,11 +908,22 @@ func TestHouseholdService_OffboardExcessMembers_NoExcess_NoOp(t *testing.T) {
 	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
 	defer pool.Close()
 	now := time.Now()
+	// A concrete, matching over-capacity anchor: production only ever calls this method
+	// with h.OverCapacitySince already set (Case 4 in processHousehold only fires once
+	// it's non-nil), so the locked row's own anchor here must match whatever the caller
+	// passes as expectedOverCapacitySince — otherwise the new Round 9 anchor-mismatch
+	// guard (tested separately below) would short-circuit this test before it ever
+	// reaches the excess-computation logic under test.
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &anchor, nil, nil))
+	// Round 9 Gap Analysis fix (6th round-9 fix): the owner is now read via lockAndGetUser
+	// (FOR UPDATE), not a plain userRepo.GetUserByID — see OffboardExcessMembers's doc
+	// comment above the owner read.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
@@ -922,7 +933,7 @@ func TestHouseholdService_OffboardExcessMembers_NoExcess_NoOp(t *testing.T) {
 			AddRow("mem-1", "hh-1", "member-1", "member", "active", now, nil, nil, nil, now, now))
 	pool.ExpectCommit()
 
-	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
 	require.NoError(t, err)
 	assert.Empty(t, queued, "2 active members on a 2-seat plan is not excess")
 	require.NoError(t, pool.ExpectationsWereMet())
@@ -944,11 +955,18 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 	joinedOwner := time.Now().Add(-72 * time.Hour)
 	joined1 := time.Now().Add(-48 * time.Hour)
 	joined2 := time.Now().Add(-24 * time.Hour) // most recently joined -> removed first (LIFO)
+	// Matching over-capacity anchor — see NoExcess_NoOp's comment above for why this must
+	// now be non-nil and match the call's expectedOverCapacitySince argument.
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, nil, nil, nil))
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, &anchor, nil, nil))
+	// Round 9 Gap Analysis fix (6th round-9 fix): the owner is now read via lockAndGetUser
+	// (FOR UPDATE), not a plain userRepo.GetUserByID — see OffboardExcessMembers's doc
+	// comment above the owner read.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
@@ -963,9 +981,20 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// removeMemberTx's own Task 6 Part D grace-clear check (see RemoveMember's identical
+	// pattern in TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity)
+	// fires here too: household.OverCapacitySince is now realistically non-nil (it must
+	// match the anchor above to satisfy the Round 9 precondition check), and post-removal
+	// active count (2: owner + member-1) is back within the 2-seat tier, so this in-flight
+	// removal transaction clears over-capacity itself — a harmless, idempotent duplicate
+	// of autoOffboard's own unconditional ClearOverCapacity call after this method returns.
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
 
-	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
 	require.NoError(t, err)
 	require.Len(t, queued, 1)
 	assert.Equal(t, "member2@example.com", queued[0].ToEmail)
@@ -996,11 +1025,18 @@ func TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoErr
 	joinedOwner := time.Now().Add(-72 * time.Hour)
 	joined1 := time.Now().Add(-48 * time.Hour)
 	joined2 := time.Now().Add(-24 * time.Hour)
+	// Matching over-capacity anchor — see NoExcess_NoOp's comment above for why this must
+	// now be non-nil and match the call's expectedOverCapacitySince argument.
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, nil, nil, nil))
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, &anchor, nil, nil))
+	// Round 9 Gap Analysis fix (6th round-9 fix): the owner is now read via lockAndGetUser
+	// (FOR UPDATE), not a plain userRepo.GetUserByID — see OffboardExcessMembers's doc
+	// comment above the owner read.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
@@ -1015,9 +1051,15 @@ func TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoErr
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// removeMemberTx's own Task 6 Part D grace-clear check fires here too — see the
+	// identical comment in RemovesMostRecentlyJoinedFirst above for why.
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()
 
-	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
 	require.NoError(t, err, "a failed best-effort email send must not surface as an OffboardExcessMembers error")
 	require.Len(t, queued, 1, "the queued result is unaffected by send failure")
 	require.NoError(t, pool.ExpectationsWereMet())
@@ -1034,7 +1076,9 @@ func TestHouseholdService_OffboardExcessMembers_HouseholdNotFound_RollsBack(t *t
 		WillReturnError(pgx.ErrNoRows)
 	pool.ExpectRollback()
 
-	_, err := svc.OffboardExcessMembers(context.Background(), "hh-missing")
+	// The lock itself fails before any row is ever read, so the anchor argument's value
+	// is irrelevant here — it's never compared against anything.
+	_, err := svc.OffboardExcessMembers(context.Background(), "hh-missing", time.Time{})
 	require.ErrorIs(t, err, domain.ErrHouseholdNotFound)
 	require.NoError(t, pool.ExpectationsWereMet())
 }
@@ -1059,21 +1103,202 @@ func TestHouseholdService_OffboardExcessMembers_OwnerFreshlyReadOnly_NoRemovals(
 	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
 	defer pool.Close()
 	now := time.Now()
+	// A matching over-capacity anchor: the new Round 9 anchor-mismatch guard runs BEFORE
+	// the owner-read-only check (it's the very first thing after LockHouseholdByID), so
+	// the locked row's anchor must match expectedOverCapacitySince here or this test
+	// would short-circuit on the anchor guard instead of ever reaching (and proving) the
+	// read-only-owner behavior it's actually testing.
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &anchor, nil, nil))
+	// Round 9 Gap Analysis fix (6th round-9 fix): the owner is now read via lockAndGetUser
+	// (FOR UPDATE), not a plain userRepo.GetUserByID — see OffboardExcessMembers's doc
+	// comment above the owner read. The read-only check still runs immediately after this
+	// lock, before any of the queries below.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	// No ListMembers query, no removal mutations, no tier lookup consequence — the
 	// read-only check short-circuits before any of that. If the implementation
 	// regressed to computing a seat limit and removing members anyway, pgxmock would
 	// see an unexpected ListMembers/UPDATE query here and fail.
 	pool.ExpectCommit()
 
-	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1")
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
 	require.NoError(t, err)
 	assert.Empty(t, queued, "a freshly read-only owner means grace is moot — nothing should be removed")
 	require.NoError(t, pool.ExpectationsWereMet(), "no ListMembers/removal query should have been issued for a read-only owner")
+	userRepo.AssertExpectations(t)
+}
+
+// TestHouseholdService_OffboardExcessMembers_LocksOwnerBeforeTierAndRemoval is a dedicated
+// lock-ordering regression test for the Round 9 Gap Analysis fix (6th round-9 fix, a later
+// Codex adversarial pass than the anchor-mismatch check above): the owner's users row must
+// be locked (lockAndGetUser's `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`) BEFORE this
+// method computes the owner's tier/seat limit and BEFORE it issues any ListMembers/removal
+// query — mirroring PurgeRemovedMembership/OffboardExcessMembers's existing "household-row
+// lock always taken first" convention, extended here to the owner's row specifically.
+// pgxmock enforces expectations in declaration order by default (see
+// TestHouseholdService_PurgeRemovedMembership_LocksHouseholdBeforeDelete's identical
+// rationale), so declaring the owner-lock ExpectExec BEFORE the ListMembers ExpectQuery and
+// the removal ExpectExecs below proves the lock genuinely precedes them — if the
+// implementation regressed to a plain, unlocked userRepo.GetUserByID (dropping the FOR
+// UPDATE statement entirely) or reordered the lock to AFTER the tier/removal logic, pgxmock
+// would see an unexpected query and fail with a clear ordering mismatch, not a false pass.
+// This is the pgxmock-level complement to the real-Postgres concurrency proof in
+// household_service_integration_test.go
+// (TestHouseholdServiceIntegration_OffboardExcessMembers_OwnerLockedDuringRemoval_ConcurrentTierUpgradeWaits)
+// — per this codebase's established rule (memory feedback_pgxmock_integration_coverage.md),
+// pgxmock alone can prove query SHAPE/ORDER but never a genuine row-lock/concurrency
+// guarantee, so this test is deliberately NOT a substitute for that real-DB proof.
+func TestHouseholdService_OffboardExcessMembers_LocksOwnerBeforeTierAndRemoval(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	owner := &domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+	userRepo.On("GetUserByID", mock.Anything, "member-2").
+		Return(&domain.User{ID: "member-2", Email: "member2@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member2@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days), false).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	joinedOwner := time.Now().Add(-72 * time.Hour)
+	joined1 := time.Now().Add(-48 * time.Hour)
+	joined2 := time.Now().Add(-24 * time.Hour)
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
+
+	pool.ExpectBegin()
+	// 1. Household-row lock (LockHouseholdByID) — always taken first.
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, &anchor, nil, nil))
+	// 2. Owner-row lock (lockAndGetUser) — must precede BOTH the ListMembers query (3) and
+	// the removal mutations (4) below. This is the query whose declaration position this
+	// test exists to pin down.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	// 3. ListMembers — the seat/excess computation the (now lock-protected) owner tier
+	// feeds into.
+	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+		}).
+			AddRow("mem-owner", "hh-1", "owner-1", "owner", "active", joinedOwner, nil, nil, nil, joinedOwner, joinedOwner).
+			AddRow("mem-1", "hh-1", "member-1", "member", "active", joined1, nil, nil, nil, joined1, joined1).
+			AddRow("mem-2", "hh-1", "member-2", "member", "active", joined2, nil, nil, nil, joined2, joined2))
+	// 4. Removal mutations — must never be reachable before the owner lock (2) above.
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
+	require.NoError(t, err)
+	require.Len(t, queued, 1)
+	require.NoError(t, pool.ExpectationsWereMet(),
+		"owner-row lock must be acquired before any ListMembers/removal query — see the numbered comments above")
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_OffboardExcessMembers_AnchorMismatchSinceCallerDecided_NoRemovals
+// proves the Round 9 Gap Analysis fix: the final Codex adversarial review found that even
+// after household_over_capacity_check.go's processHousehold re-reads the fresh
+// over_capacity_since immediately before deciding the grace deadline has passed, a
+// SEPARATE race window still exists between that decision and THIS method's own
+// LockHouseholdByID call a few lines later — a concurrent clear-then-re-flag cycle (e.g.
+// a subscription webhook) can land in that gap and set a genuinely FRESH
+// over_capacity_since under this method's lock, which the pre-fix implementation
+// completely ignored, proceeding with LIFO removal anyway based on the caller's
+// now-superseded deadline decision. OffboardExcessMembers now takes the caller's
+// expectedOverCapacitySince and, immediately after taking its own lock, verifies the
+// CURRENT locked row's OverCapacitySince still matches it — treating a mismatch as a
+// legitimate no-op, but NOT a silent one: it returns domain.ErrOverCapacityAnchorMismatch
+// so the caller (autoOffboard) can distinguish "no-op, safe to clear the flag" from
+// "no-op, DO NOT touch the flag — a fresh grace period is already running" (Round 9 Gap
+// Analysis fix, third Codex adversarial pass — see domain.ErrOverCapacityAnchorMismatch's
+// doc comment). This test seeds the locked household row with a DIFFERENT (fresher)
+// over_capacity_since than what the caller passes as its expected anchor, and asserts NO
+// ListMembers query and NO removal mutation ever happen — proving the real member-removal
+// action never executes despite 4 active members on a 2-seat plan (which would otherwise
+// trigger LIFO removal).
+func TestHouseholdService_OffboardExcessMembers_AnchorMismatchSinceCallerDecided_NoRemovals(t *testing.T) {
+	t.Parallel()
+	// No owner mock registrations: the anchor-mismatch check runs immediately after the
+	// lock, BEFORE the owner is ever fetched (mirroring the read-only-owner check's own
+	// position), so GetUserByID must never be called in this scenario. An unexpected call
+	// here would fail via mockUserLoader's own strict mock.Mock behavior.
+	userRepo := &mockUserLoader{}
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+
+	// The caller (the daily worker) made its removal decision based on THIS anchor —
+	// e.g. read fresh moments ago, deadline already passed.
+	callerDecidedAnchor := time.Now().Add(-15 * 24 * time.Hour)
+	// But the row actually locked under THIS method's own LockHouseholdByID reflects a
+	// concurrent clear-then-re-flag cycle that landed in the race window: a genuinely
+	// fresh anchor, nowhere near its own deadline. Passed as a *time.Time (not a bare
+	// time.Time) to AddRow — pgxmock/pgx's scan plan for a nullable timestamp column
+	// requires either nil or a pointer, matching this file's other nullable-timestamp
+	// AddRow calls (see household_repository_test.go's removedAt pattern).
+	currentDBAnchor := time.Now().Add(-1 * time.Hour)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &currentDBAnchor, nil, nil))
+	// No ListMembers query, no removal mutations, no owner lookup — the anchor-mismatch
+	// check short-circuits before any of that, exactly like the read-only-owner branch
+	// above. If the implementation regressed to ignoring the mismatch, pgxmock would see
+	// an unexpected ListMembers/UPDATE query here and fail.
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", callerDecidedAnchor)
+	assert.ErrorIs(t, err, domain.ErrOverCapacityAnchorMismatch, "a mismatched over-capacity anchor must surface the sentinel so the caller knows NOT to clear the flag")
+	assert.Nil(t, queued, "no removal queue should be returned on an anchor mismatch")
+	require.NoError(t, pool.ExpectationsWereMet(), "no ListMembers/removal query should have been issued when the anchor no longer matches")
+	userRepo.AssertExpectations(t)
+}
+
+// TestHouseholdService_OffboardExcessMembers_AnchorNilMismatch_NoRemovals covers the
+// other half of the mismatch check: the household's CURRENT over_capacity_since has been
+// cleared entirely (nil) by the time this method's lock is acquired — e.g. the owner
+// manually removed enough members via RemoveMember's own grace-clear branch in the race
+// window — while the caller still passes the anchor it originally decided on. A nil
+// current value must also be treated as "no longer matches", not skip the check via a
+// nil-pointer short-circuit, and must ALSO surface domain.ErrOverCapacityAnchorMismatch
+// rather than a silent empty-no-error result.
+func TestHouseholdService_OffboardExcessMembers_AnchorNilMismatch_NoRemovals(t *testing.T) {
+	t.Parallel()
+	// No owner mock registrations — see AnchorMismatchSinceCallerDecided_NoRemovals's
+	// comment above: GetUserByID must never be called when the anchor check short-
+	// circuits first.
+	userRepo := &mockUserLoader{}
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+
+	callerDecidedAnchor := time.Now().Add(-15 * 24 * time.Hour)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil))
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", callerDecidedAnchor)
+	assert.ErrorIs(t, err, domain.ErrOverCapacityAnchorMismatch, "a nil current anchor must also surface the sentinel, not a silent empty-no-error result")
+	assert.Nil(t, queued, "no removal queue should be returned on an anchor mismatch")
+	require.NoError(t, pool.ExpectationsWereMet(), "no ListMembers/removal query should have been issued when the current anchor is nil")
 	userRepo.AssertExpectations(t)
 }
 

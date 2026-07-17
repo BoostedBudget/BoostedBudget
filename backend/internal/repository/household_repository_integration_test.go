@@ -441,10 +441,10 @@ func TestHouseholdRepository_ClearOverCapacity_Integration(t *testing.T) {
 	if _, err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
 		t.Fatalf("SetOverCapacity: %v", err)
 	}
-	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since, since); err != nil {
 		t.Fatalf("MarkOverCapacityStartNoticeSent: %v", err)
 	}
-	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, since); err != nil {
+	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, since, since); err != nil {
 		t.Fatalf("MarkOverCapacityWarn3dSent: %v", err)
 	}
 
@@ -495,7 +495,7 @@ func TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integrat
 	if _, err := repo.SetOverCapacity(ctx, householdID, since); err != nil {
 		t.Fatalf("SetOverCapacity: %v", err)
 	}
-	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since); err != nil {
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, since, since); err != nil {
 		t.Fatalf("MarkOverCapacityStartNoticeSent (in grace): %v", err)
 	}
 	h, _, found, err := repo.GetHouseholdForUser(ctx, ownerID)
@@ -511,10 +511,13 @@ func TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integrat
 	if err := repo.ClearOverCapacity(ctx, householdID); err != nil {
 		t.Fatalf("ClearOverCapacity: %v", err)
 	}
-	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, time.Now()); err != nil {
+	// Anchor arg is irrelevant here: over_capacity_since is now NULL, and `NULL = $3` is
+	// never true in SQL regardless of what's passed — even the once-correct `since`
+	// anchor still yields a 0-row no-op.
+	if err := repo.MarkOverCapacityStartNoticeSent(ctx, householdID, time.Now(), since); err != nil {
 		t.Fatalf("MarkOverCapacityStartNoticeSent (not in grace, should be a no-op, not an error): %v", err)
 	}
-	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, time.Now()); err != nil {
+	if err := repo.MarkOverCapacityWarn3dSent(ctx, householdID, time.Now(), since); err != nil {
 		t.Fatalf("MarkOverCapacityWarn3dSent (not in grace, should be a no-op, not an error): %v", err)
 	}
 

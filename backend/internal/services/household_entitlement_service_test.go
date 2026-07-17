@@ -149,6 +149,16 @@ func (m *mockHouseholdRepo) DeleteRemovedMember(ctx context.Context, membershipI
 	return args.String(0), args.String(1), args.Error(2)
 }
 
+// GetHouseholdByID (#1371 — Round 9 Gap Analysis fix) is not exercised by these Phase 2
+// resolver tests; stubbed to satisfy the expanded HouseholdRepository interface.
+func (m *mockHouseholdRepo) GetHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
+	args := m.Called(ctx, householdID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.Household), args.Error(1)
+}
+
 // SetOverCapacity, ClearOverCapacity, MarkOverCapacityStartNoticeSent,
 // MarkOverCapacityWarn3dSent, ListHouseholdsWithMembers, GetRemovedMemberForUpdate,
 // RestoreMember (#1371 — Phase 7, Task 1), and ListMembershipsPastPurgeWindow
@@ -167,13 +177,18 @@ func (m *mockHouseholdRepo) ClearOverCapacity(ctx context.Context, householdID s
 	return args.Error(0)
 }
 
-func (m *mockHouseholdRepo) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error {
-	args := m.Called(ctx, householdID, sentAt)
+func (m *mockHouseholdRepo) ClearOverCapacityIfAnchorMatches(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, expectedOverCapacitySince)
 	return args.Error(0)
 }
 
-func (m *mockHouseholdRepo) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error {
-	args := m.Called(ctx, householdID, sentAt)
+func (m *mockHouseholdRepo) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, sentAt, expectedOverCapacitySince)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdRepo) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
+	args := m.Called(ctx, householdID, sentAt, expectedOverCapacitySince)
 	return args.Error(0)
 }
 
