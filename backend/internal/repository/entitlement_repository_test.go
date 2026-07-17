@@ -82,3 +82,41 @@ func TestEntitlementRepository_ExpireActiveEntitlement_NoneOpen_Idempotent(t *te
 	err := repo.ExpireActiveEntitlement(context.Background(), "user-1")
 	require.NoError(t, err)
 }
+
+// ─── ExpireActiveHouseholdEntitlement (#1371 — Phase 7 foundation) ───────────
+//
+// Scoped by user_id AND household_id AND source='household', unlike the broad
+// ExpireActiveEntitlement above (user_id only) — see the real-DB proof in
+// entitlement_repository_integration_test.go that the scoping actually matters.
+
+func TestEntitlementRepository_ExpireActiveHouseholdEntitlement(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupEntitlementMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE subscription_entitlements SET effective_until = now(), updated_at = now()
+		WHERE user_id = $1 AND household_id = $2 AND source = 'household' AND effective_until IS NULL
+	`)).
+		WithArgs("user-1", "hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.ExpireActiveHouseholdEntitlement(context.Background(), "user-1", "hh-1")
+	require.NoError(t, err)
+}
+
+func TestEntitlementRepository_ExpireActiveHouseholdEntitlement_NoneOpen_Idempotent(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupEntitlementMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE subscription_entitlements SET effective_until = now(), updated_at = now()
+		WHERE user_id = $1 AND household_id = $2 AND source = 'household' AND effective_until IS NULL
+	`)).
+		WithArgs("user-1", "hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ExpireActiveHouseholdEntitlement(context.Background(), "user-1", "hh-1")
+	require.NoError(t, err)
+}

@@ -674,6 +674,203 @@ pollLoop:
 	require.NoError(t, acceptErr, "AcceptInvite legitimately held the owner-row lock first (owner was genuinely still active throughout), so it must succeed")
 }
 
+// TestHouseholdServiceIntegration_OffboardExcessMembers_OwnerLockedDuringRemoval_ConcurrentTierUpgradeWaits
+// closes a Round 9 Gap Analysis finding (Codex adversarial review, a later pass than the
+// anchor-mismatch fix covered elsewhere in this round): a fifth, exceptionally thorough
+// Codex pass walked the whole over-capacity lifecycle end-to-end to confirm the
+// "concurrent clear-then-re-flag anchor race" class this round had been chasing had
+// genuinely converged safe — and, in doing so, surfaced a DIFFERENT, pre-existing bug in
+// the same function that predates Round 9 entirely (Round 3-era code, untouched by any
+// earlier Round 9 fix).
+//
+// OffboardExcessMembers already locked the household row and (as of this round's earlier
+// fixes) re-verified the over-capacity anchor under that lock, but then read the OWNER via
+// a plain, unlocked userRepo.GetUserByID and computed the seat limit from that unlocked
+// snapshot — all while STILL holding the household lock, but with no lock at all on the
+// owner's own user row. Concrete race: a concurrent Paddle webhook could commit an owner
+// tier UPGRADE (e.g. household_2 -> household_4) in the window between that read and the
+// actual member removal a few lines later, so the removal would proceed using the
+// now-stale, too-low household_2 seat limit — incorrectly removing members who would
+// actually fit under the just-committed, current tier. This is a live path to incorrect
+// member removal, not merely a stale-read annoyance.
+//
+// The fix reuses this codebase's existing, already-proven lockAndGetUser helper (already
+// used 3x elsewhere in this file: DeclineInvite once, AcceptInvite twice) to lock the
+// owner's users row for the remainder of OffboardExcessMembers's own transaction before
+// reading it.
+//
+// PROVING THIS DETERMINISTICALLY: per this codebase's established rule (memory
+// feedback_pgxmock_integration_coverage.md), pgxmock cannot prove a genuine row-lock/
+// concurrency guarantee — only a real Postgres instance can. This test is the
+// OffboardExcessMembers analog of
+// TestHouseholdServiceIntegration_AcceptInvite_OwnerStatusRace_NoStaleRead directly above,
+// reusing the exact same technique for the exact same reason: a test-only hook
+// (offboardExcessMembersAfterOwnerLockHook, nil in production) fires immediately after
+// OffboardExcessMembers locks+reads the owner, while its transaction (and, in the fixed
+// code, its owner-row lock) is still open. While paused there, this test starts a
+// concurrent "Paddle tier-upgrade" UPDATE against the SAME owner row and asserts, within a
+// bounded window — polled via pg_stat_activity.wait_event_type, not inferred from elapsed
+// wall-clock time — that the upgrade does NOT complete, i.e. is genuinely blocked waiting
+// for OffboardExcessMembers's own transaction to end. A broken (pre-fix) implementation
+// holds no lock on the owner's row at this point, so the concurrent UPDATE would complete
+// immediately, uncontended — this test asserts that must never happen.
+//
+// It also proves the removal decision itself is correct, not just that a lock exists: the
+// household starts with 4 active members (owner + 3) on the owner's CURRENT household_2
+// (2-seat) tier — genuinely over capacity by 2. While the upgrade is blocked, exactly 2
+// members must be removed (down to the owner + 1), matching the LOCKED, pre-upgrade
+// snapshot — proving the removal was based on whichever tier value was visible at lock
+// time, not a value the blocked concurrent writer could have raced in. Once
+// OffboardExcessMembers commits and releases the lock, the blocked upgrade must complete
+// (no deadlock) and land the owner on household_4 for any FUTURE call.
+func TestHouseholdServiceIntegration_OffboardExcessMembers_OwnerLockedDuringRemoval_ConcurrentTierUpgradeWaits(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	impl := f.svc // concrete *householdService — this test installs a synchronization hook on it.
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	member1 := insertIntegrationTestUser(t, f.profileRepo, "member1-"+t.Name()+"@example.com", "premium", "trial")
+	member2 := insertIntegrationTestUser(t, f.profileRepo, "member2-"+t.Name()+"@example.com", "premium", "trial")
+	member3 := insertIntegrationTestUser(t, f.profileRepo, "member3-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, //nolint:errcheck
+			[]string{owner.ID, member1.ID, member2.ID, member3.ID})
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Concurrency Test Household (owner lock during offboard)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	// Insert the 3 non-owner members' active membership rows directly — this test only
+	// cares about the owner-lock/removal race, not the full invite/entitlement lifecycle
+	// already covered by TestHouseholdServiceIntegration_AcceptInvite_FullHappyPath.
+	for _, m := range []*domain.User{member1, member2, member3} {
+		_, err = f.pool.Exec(ctx, `
+			INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+		`, household.ID, m.ID)
+		require.NoError(t, err)
+	}
+
+	// The household is now over capacity: 4 active members (owner + 3) on a household_2
+	// (2-seat) plan. Set a matching over_capacity_since anchor — OffboardExcessMembers's
+	// own Round 9 anchor-mismatch guard requires the locked row's anchor to match
+	// expectedOverCapacitySince, or it short-circuits before ever reaching the owner read
+	// this test exists to exercise.
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+	anchor := time.Now().Add(-10 * 24 * time.Hour).Truncate(time.Microsecond)
+	_, err = hhRepo.SetOverCapacity(ctx, household.ID, anchor)
+	require.NoError(t, err)
+
+	reachedHook := make(chan struct{})
+	releaseHook := make(chan struct{})
+	impl.offboardExcessMembersAfterOwnerLockHook = func() {
+		close(reachedHook)
+		<-releaseHook
+	}
+	t.Cleanup(func() { impl.offboardExcessMembersAfterOwnerLockHook = nil })
+
+	// Safety net: if any assertion below fails (t.Fatal unwinds via runtime.Goexit, skipping
+	// the rest of the function body), releaseHookOnce still fires via this defer, so the
+	// OffboardExcessMembers goroutine — paused inside the hook, holding an open transaction/
+	// connection — is never leaked.
+	var releaseHookOnce sync.Once
+	releaseHookFn := func() { releaseHookOnce.Do(func() { close(releaseHook) }) }
+	defer releaseHookFn()
+
+	var wg sync.WaitGroup
+	var offboardErr error
+	var queued []QueuedRemovalEmail
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		queued, offboardErr = f.svc.OffboardExcessMembers(ctx, household.ID, anchor)
+	}()
+
+	select {
+	case <-reachedHook:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for OffboardExcessMembers to reach the post-owner-lock hook")
+	}
+
+	// OffboardExcessMembers is now paused with the owner locked+read but its transaction
+	// still open. Try to run the simulated Paddle tier-upgrade concurrently against the
+	// SAME owner row.
+	upgradeDone := make(chan error, 1)
+	upgradePIDReady := make(chan int32, 1)
+	go func() {
+		upgradeTx, txErr := f.pool.Begin(ctx)
+		if txErr != nil {
+			upgradePIDReady <- 0
+			upgradeDone <- txErr
+			return
+		}
+		var pid int32
+		if scanErr := upgradeTx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); scanErr != nil {
+			_ = upgradeTx.Rollback(ctx)
+			upgradePIDReady <- 0
+			upgradeDone <- scanErr
+			return
+		}
+		upgradePIDReady <- pid
+		if _, txErr = upgradeTx.Exec(ctx, `UPDATE users SET subscription_tier = 'household_4' WHERE id = $1`, owner.ID); txErr != nil {
+			_ = upgradeTx.Rollback(ctx)
+			upgradeDone <- txErr
+			return
+		}
+		upgradeDone <- upgradeTx.Commit(ctx)
+	}()
+	upgradePID := <-upgradePIDReady
+	require.NotZero(t, upgradePID)
+
+	// Poll pg_stat_activity directly for the upgrade backend's own wait_event_type, rather
+	// than inferring "blocked" from elapsed wall-clock time — the same technique used by
+	// OwnerStatusRace_NoStaleRead above.
+	upgradeBlockedOnLock := false
+	deadline := time.Now().Add(3 * time.Second)
+pollLoop:
+	for time.Now().Before(deadline) {
+		select {
+		case upgradeErr := <-upgradeDone:
+			require.NoError(t, upgradeErr) // it did complete — that's the failure being asserted below
+			t.Fatal("the simulated Paddle tier-upgrade completed while OffboardExcessMembers's owner-row lock was still open — the owner's row is not locked, so the removal decision was made on a read a concurrent writer could invalidate at any moment")
+		default:
+		}
+
+		var waitEventType *string
+		require.NoError(t, f.pool.QueryRow(ctx,
+			`SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1`, upgradePID,
+		).Scan(&waitEventType))
+		if waitEventType != nil && *waitEventType == "Lock" {
+			upgradeBlockedOnLock = true
+			break pollLoop
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.True(t, upgradeBlockedOnLock,
+		"timed out waiting for the simulated tier upgrade to genuinely block on a lock — OffboardExcessMembers may have finished without ever needing the owner-row lock")
+
+	releaseHookFn()
+	wg.Wait()
+
+	require.NoError(t, offboardErr)
+	// The removal decision must reflect the LOCKED, pre-upgrade household_2 (2-seat)
+	// snapshot: 4 active members - 2 seats = 2 members removed.
+	require.Len(t, queued, 2, "removal must be based on the pre-upgrade household_2 (2-seat) snapshot visible under the lock, not any value the concurrent upgrade could have introduced")
+
+	activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, activeCount, "exactly 2 active members must remain (owner + 1), matching the LOCKED household_2 seat count")
+
+	upgradeErr := <-upgradeDone
+	require.NoError(t, upgradeErr, "the simulated tier upgrade must succeed once OffboardExcessMembers's transaction ends — no deadlock")
+
+	var finalTier string
+	require.NoError(t, f.pool.QueryRow(ctx, `SELECT subscription_tier FROM users WHERE id = $1`, owner.ID).Scan(&finalTier))
+	require.Equal(t, "household_4", finalTier, "the concurrent upgrade must land after OffboardExcessMembers releases the lock")
+}
+
 // TestHouseholdServiceIntegration_AcceptInvite_HiddenAccountIDs_CreatesConsistentHiddenRow
 // is the #1368 (Phase 4) regression proving Decision A: the accept-transaction's
 // hidden_account_ids opt-out (#1367 — Phase 3, household_service.go step (8)) is left
@@ -892,4 +1089,225 @@ func TestHouseholdServiceIntegration_SetAccountShareVisibility_CrossMemberIsolat
 	}
 	require.Contains(t, memberIDs, memberAcctID)
 	require.NotContains(t, memberIDs, ownerAcctID, "member's account list must never leak the owner's account")
+}
+
+// ─── AcceptInvite — re-invite-within-window restore path (#1371 Task 4) ──────
+
+// TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWindow proves
+// the core Task 4 behavior against real Postgres: a member who was removed less than the
+// 30-day purge window ago, then re-invited, gets their EXACT SAME household_members row
+// reactivated on accept — not a second, duplicate row — with a fresh household
+// entitlement and their seat counted as active again.
+func TestHouseholdServiceIntegration_AcceptInvite_RestoresRemovedMemberWithinWindow(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household (restore)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// First join.
+	inviteResult1, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken1 := inviteResult1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptResult1, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken1, true, nil)
+	require.NoError(t, err)
+	originalMemberID := acceptResult1.Member.ID
+	originalUpdatedAt := acceptResult1.Member.UpdatedAt
+
+	// Owner removes them — soft-remove leaves a status='removed' historical row (this is
+	// exactly the state Task 2's purge worker would later sweep after 30 days).
+	require.NoError(t, f.svc.RemoveMember(ctx, owner.ID, invitee.ID))
+
+	var removedAt *time.Time
+	err = f.pool.QueryRow(ctx, `SELECT removed_at FROM household_members WHERE id = $1`, originalMemberID).Scan(&removedAt)
+	require.NoError(t, err)
+	require.NotNil(t, removedAt, "the original row must be soft-removed, not deleted")
+
+	// Owner re-invites the same email within the 30-day window.
+	inviteResult2, err := f.svc.CreateInvite(ctx, owner.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	rawToken2 := inviteResult2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	acceptResult2, err := f.svc.AcceptInvite(ctx, invitee.ID, rawToken2, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, originalMemberID, acceptResult2.Member.ID, "the SAME row must be restored, not a new one inserted")
+	require.Equal(t, domain.HouseholdMemberStatusActive, acceptResult2.Member.Status)
+	require.Nil(t, acceptResult2.Member.RemovedAt)
+	require.True(t, acceptResult2.Member.UpdatedAt.After(originalUpdatedAt),
+		"Member.UpdatedAt returned from the restore path must be fresh (RestoreMember's RETURNING updated_at), not the stale pre-restore value — #1371 Task 4 Codex finding")
+
+	// Exactly ONE household_members row for this (household, user) pair — never two.
+	var rowCount int
+	err = f.pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_members WHERE household_id = $1 AND user_id = $2`,
+		household.ID, invitee.ID).Scan(&rowCount)
+	require.NoError(t, err)
+	require.Equal(t, 1, rowCount, "restore must reuse the existing row, never leave a duplicate historical row behind")
+
+	// The restored row itself is active with removed_at cleared, and the in-memory
+	// UpdatedAt AcceptInvite returned must match what was actually persisted.
+	member, err := hhRepo.GetActiveMember(ctx, household.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, originalMemberID, member.ID)
+	require.Nil(t, member.RemovedAt)
+	require.True(t, acceptResult2.Member.UpdatedAt.Equal(member.UpdatedAt),
+		"the returned Member.UpdatedAt must match the row actually persisted in the database")
+
+	// A fresh household entitlement exists for the restored member.
+	entRepo := repository.NewEntitlementRepository(f.pool)
+	entitlement, err := entRepo.GetActiveEntitlement(ctx, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.EntitlementSourceHousehold, entitlement.Source)
+	require.Equal(t, owner.ID, *entitlement.PayerUserID)
+
+	// Seat count reflects them as active again (owner + restored invitee = 2).
+	activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, activeCount)
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_SeatLimitBlocksRestore proves the restore
+// path does NOT bypass the seat check: if the household is already at capacity by the
+// time the re-invited member accepts, they are blocked with ErrHouseholdSeatsFull exactly
+// like a fresh join would be, and their removed row is left untouched (not restored).
+func TestHouseholdServiceIntegration_AcceptInvite_SeatLimitBlocksRestore(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	// Owner starts on household_3 (3 seats) so memberB's re-invite can be issued (and
+	// remain pending) alongside memberC's, before the owner's plan is downgraded to
+	// household_2 — mirrors the established downgrade-race technique used by
+	// TestHouseholdServiceIntegration_AcceptInvite_ConcurrentDifferentTokens_SeatCapEnforced.
+	owner := insertIntegrationTestUser(t, f.profileRepo, "owner-"+t.Name()+"@example.com", "household_3", "active")
+	memberB := insertIntegrationTestUser(t, f.profileRepo, "member-b-"+t.Name()+"@example.com", "premium", "trial")
+	memberC := insertIntegrationTestUser(t, f.profileRepo, "member-c-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{owner.ID, memberB.ID, memberC.ID}) //nolint:errcheck
+	})
+
+	household, err := f.svc.CreateHousehold(ctx, owner.ID, "Integration Test Household (seat limit restore)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, household.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// memberB joins, then is removed — leaving a removed row and freeing a seat.
+	inviteB1, err := f.svc.CreateInvite(ctx, owner.ID, memberB.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB1 := inviteB1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptB1, err := f.svc.AcceptInvite(ctx, memberB.ID, tokenB1, true, nil)
+	require.NoError(t, err)
+	removedMemberID := acceptB1.Member.ID
+	require.NoError(t, f.svc.RemoveMember(ctx, owner.ID, memberB.ID))
+
+	// Owner re-invites memberB (this invite is still pending when memberB attempts to
+	// accept it, below) BEFORE memberC takes the freed seat.
+	inviteB2, err := f.svc.CreateInvite(ctx, owner.ID, memberB.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB2 := inviteB2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	// memberC now fills the freed seat (owner + memberC = 2 active, still under the
+	// household_3 cap of 3).
+	inviteC, err := f.svc.CreateInvite(ctx, owner.ID, memberC.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenC := inviteC.InviteLink[len("https://app.example.com/households/invites/"):]
+	_, err = f.svc.AcceptInvite(ctx, memberC.ID, tokenC, true, nil)
+	require.NoError(t, err)
+
+	// Owner's plan is downgraded to household_2 (2 seats) — the household is now exactly
+	// at capacity (owner + memberC), simulating a Paddle downgrade race.
+	_, err = f.pool.Exec(ctx, `UPDATE users SET subscription_tier = 'household_2' WHERE id = $1`, owner.ID)
+	require.NoError(t, err)
+
+	// memberB — who still holds a valid pending invite AND has a removed row for this
+	// household — tries to accept. The seat check must block this exactly like it would a
+	// fresh join, even though a removed row exists to restore.
+	_, err = f.svc.AcceptInvite(ctx, memberB.ID, tokenB2, true, nil)
+	require.ErrorIs(t, err, domain.ErrHouseholdSeatsFull)
+
+	// The removed row must be left completely untouched — still removed, not restored.
+	member, err := hhRepo.GetRemovedMemberForUpdate(ctx, household.ID, memberB.ID, removalPurgeWindowDays)
+	require.NoError(t, err)
+	require.Equal(t, removedMemberID, member.ID)
+	require.Equal(t, domain.HouseholdMemberStatusRemoved, member.Status)
+	require.NotNil(t, member.RemovedAt)
+}
+
+// TestHouseholdServiceIntegration_AcceptInvite_RestoreConflict_UserActiveElsewhere proves
+// the conflict case: a caller has a removed row for household A, but has SINCE joined a
+// DIFFERENT household B as an active member. Re-accepting a stale invite to household A
+// must surface RestoreMember's existing conflict mapping (ErrAlreadyInHousehold) rather
+// than silently succeeding or leaving two active rows for the same user — the global
+// uq_household_members_active_user partial unique index (migration 000107) is what
+// RestoreMember's UPDATE collides against here.
+func TestHouseholdServiceIntegration_AcceptInvite_RestoreConflict_UserActiveElsewhere(t *testing.T) {
+	f := setupHouseholdServiceIntegration(t)
+	ctx := context.Background()
+
+	ownerA := insertIntegrationTestUser(t, f.profileRepo, "owner-a-"+t.Name()+"@example.com", "household_2", "active")
+	ownerB := insertIntegrationTestUser(t, f.profileRepo, "owner-b-"+t.Name()+"@example.com", "household_2", "active")
+	invitee := insertIntegrationTestUser(t, f.profileRepo, "invitee-"+t.Name()+"@example.com", "premium", "trial")
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []string{ownerA.ID, ownerB.ID, invitee.ID}) //nolint:errcheck
+	})
+
+	householdA, err := f.svc.CreateHousehold(ctx, ownerA.ID, "Household A (conflict test)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, householdA.ID) //nolint:errcheck
+	})
+	householdB, err := f.svc.CreateHousehold(ctx, ownerB.ID, "Household B (conflict test)")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		f.pool.Exec(context.Background(), `DELETE FROM households WHERE id = $1`, householdB.ID) //nolint:errcheck
+	})
+
+	hhRepo := repository.NewHouseholdRepository(f.pool)
+
+	// Invitee joins household A, then is removed — leaving a removed row in A.
+	inviteA1, err := f.svc.CreateInvite(ctx, ownerA.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenA1 := inviteA1.InviteLink[len("https://app.example.com/households/invites/"):]
+	acceptA1, err := f.svc.AcceptInvite(ctx, invitee.ID, tokenA1, true, nil)
+	require.NoError(t, err)
+	removedMemberID := acceptA1.Member.ID
+	require.NoError(t, f.svc.RemoveMember(ctx, ownerA.ID, invitee.ID))
+
+	// Invitee joins household B as an active member — a DIFFERENT household entirely.
+	inviteB, err := f.svc.CreateInvite(ctx, ownerB.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenB := inviteB.InviteLink[len("https://app.example.com/households/invites/"):]
+	_, err = f.svc.AcceptInvite(ctx, invitee.ID, tokenB, true, nil)
+	require.NoError(t, err)
+
+	// Owner A re-invites the same email — invitee still has a removed row in A.
+	inviteA2, err := f.svc.CreateInvite(ctx, ownerA.ID, invitee.Email, "https://app.example.com")
+	require.NoError(t, err)
+	tokenA2 := inviteA2.InviteLink[len("https://app.example.com/households/invites/"):]
+
+	_, err = f.svc.AcceptInvite(ctx, invitee.ID, tokenA2, true, nil)
+	require.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
+
+	// The stale removed row in A must remain untouched (still removed).
+	memberA, err := hhRepo.GetRemovedMemberForUpdate(ctx, householdA.ID, invitee.ID, removalPurgeWindowDays)
+	require.NoError(t, err)
+	require.Equal(t, removedMemberID, memberA.ID)
+	require.Equal(t, domain.HouseholdMemberStatusRemoved, memberA.Status)
+
+	// The active row in B must remain untouched (still active).
+	memberB, err := hhRepo.GetActiveMember(ctx, householdB.ID, invitee.ID)
+	require.NoError(t, err)
+	require.Equal(t, domain.HouseholdMemberStatusActive, memberB.Status)
 }

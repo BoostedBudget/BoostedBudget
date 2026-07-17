@@ -95,7 +95,13 @@ export function DisbandHouseholdDialog({ open, onOpenChange }: DisbandHouseholdD
     setError(null)
     setIsDisbanding(true)
     try {
-      await deleteHouseholdMutation.mutateAsync()
+      // No params: this dialog only ever performs the non-force disband path
+      // (canDisband already requires zero active non-owner members) — force
+      // defaults to false server-side. The `deleteHousehold` params became
+      // required here only because `make generate-api-client` finally picked
+      // up the DELETE /households/me `?force=true` query param (#1371 Task 7),
+      // which had never been regenerated until this Task 9 codegen run.
+      await deleteHouseholdMutation.mutateAsync({})
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: getGetMyHouseholdQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getGetHouseholdEntitlementQueryKey() }),

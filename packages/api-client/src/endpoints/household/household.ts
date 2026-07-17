@@ -55,6 +55,7 @@ import type {
   CreateHouseholdRequestBody,
   CreateInviteRequestBody,
   CreateInviteResponseBody,
+  DeleteHouseholdParams,
   ErrorModel,
   GetInvitePreviewResponseBody,
   GetMyHouseholdResponseBody,
@@ -386,17 +387,18 @@ export const useDeclineHouseholdInvite = <TError = ErrorType<ErrorModel>,
       return useMutation(getDeclineHouseholdInviteMutationOptions(options), queryClient);
     }
     /**
- * Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability.
+ * Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.
  * @summary Disband the household
  */
 export const deleteHousehold = (
-
+    params?: DeleteHouseholdParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<void>(
-      {url: `/api/v1/households/me`, method: 'DELETE', signal
+      {url: `/api/v1/households/me`, method: 'DELETE',
+        params, signal
     },
       options);
     }
@@ -404,8 +406,8 @@ export const deleteHousehold = (
 
 
 export const getDeleteHouseholdMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,void, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,{params?: DeleteHouseholdParams}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,{params?: DeleteHouseholdParams}, TContext> => {
 
 const mutationKey = ['deleteHousehold'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -417,10 +419,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteHousehold>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteHousehold>>, {params?: DeleteHouseholdParams}> = (props) => {
+          const {params} = props ?? {};
 
-
-          return  deleteHousehold(requestOptions)
+          return  deleteHousehold(params,requestOptions)
         }
 
 
@@ -438,11 +440,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Disband the household
  */
 export const useDeleteHousehold = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteHousehold>>, TError,{params?: DeleteHouseholdParams}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof deleteHousehold>>,
         TError,
-        void,
+        {params?: DeleteHouseholdParams},
         TContext
       > => {
       return useMutation(getDeleteHouseholdMutationOptions(options), queryClient);

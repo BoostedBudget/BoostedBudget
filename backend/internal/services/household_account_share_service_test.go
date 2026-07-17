@@ -37,8 +37,8 @@ func TestHouseholdService_SetAccountShareVisibility_AccountNotOwned_RollsBack(t 
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
 			AddRow("acct-other", "inst-blind", nil))
@@ -64,8 +64,8 @@ func TestHouseholdService_SetAccountShareVisibility_MalformedID_ReturnsAccountNo
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
 			AddRow("acct-1", "inst-blind", nil))
@@ -87,8 +87,8 @@ func TestHouseholdService_SetAccountShareVisibility_Share_Success(t *testing.T) 
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
 			AddRow("acct-1", instIdx, &maskIdx))
@@ -115,8 +115,8 @@ func TestHouseholdService_SetAccountShareVisibility_Hide_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("FROM user_accounts WHERE user_id").WithArgs("caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
 			AddRow("acct-1", "inst-blind", nil))
@@ -157,8 +157,8 @@ func TestHouseholdService_ListMyAccountShares_Success(t *testing.T) {
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("FOR UPDATE OF hm").WithArgs("caller-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
 	pool.ExpectQuery("LEFT JOIN household_account_shares").WithArgs("hh-1", "caller-1").
 		WillReturnRows(pgxmock.NewRows([]string{"user_account_id", "visibility", "revoked_at"}).
 			AddRow("acct-1", nil, nil))

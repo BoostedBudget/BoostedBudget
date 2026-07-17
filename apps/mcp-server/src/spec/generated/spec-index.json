@@ -2406,7 +2406,15 @@
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Owner-only. Requires zero active non-owner members. Full force-disband is a Phase 7 (#1371) capability."
+      "description": "Owner-only. Without ?force=true, requires zero active non-owner members (409 otherwise). With ?force=true (#1371), force-removes every active non-owner member (with removal email) before dissolving the household.",
+      "parameters": [
+        {
+          "name": "force",
+          "in": "query",
+          "description": "Force-disband: remove all active non-owner members before dissolving the household, instead of failing while members remain (default false)",
+          "type": "boolean"
+        }
+      ]
     },
     {
       "operationId": "listMyAccountShares",

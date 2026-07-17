@@ -22,6 +22,20 @@ func setupHouseholdMockDB(t *testing.T) (pgxmock.PgxPoolIface, HouseholdReposito
 	return mock, NewHouseholdRepository(mock)
 }
 
+// householdColumnNames / householdMemberColumnNames mirror the production Scan()
+// column order in household_repository.go's householdScanArgs / householdMemberScanArgs
+// helpers, so pgxmock row fixtures stay in sync across every test that builds a full
+// households / household_members row.
+var householdColumnNames = []string{
+	"id", "owner_user_id", "name", "created_at", "updated_at",
+	"over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at",
+}
+
+var householdMemberColumnNames = []string{
+	"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+	"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+}
+
 func TestHouseholdRepository_CreateHousehold(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdMockDB(t)
@@ -86,21 +100,26 @@ func TestHouseholdRepository_LockActiveMembershipForUser_Found(t *testing.T) {
 	defer mock.Close()
 
 	now := time.Now()
+	overCapSince := now.Add(-24 * time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at, h.over_capacity_since, h.over_capacity_start_notice_sent_at, h.over_capacity_warn3d_sent_at
 		FROM household_members hm
 		JOIN households h ON h.id = hm.household_id
 		WHERE hm.user_id = $1 AND hm.status = 'active'
 		FOR UPDATE OF hm
 	`)).
 		WithArgs("user-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at"}).
-			AddRow("hh-1", "owner-1", "The Smiths", now, now))
+		WillReturnRows(pgxmock.NewRows(householdColumnNames).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &overCapSince, nil, nil))
 
 	h, err := repo.LockActiveMembershipForUser(context.Background(), "user-1")
 	require.NoError(t, err)
 	assert.Equal(t, "hh-1", h.ID)
 	assert.Equal(t, "owner-1", h.OwnerUserID)
+	require.NotNil(t, h.OverCapacitySince)
+	assert.WithinDuration(t, overCapSince, *h.OverCapacitySince, time.Second)
+	assert.Nil(t, h.OverCapacityStartNoticeSentAt)
+	assert.Nil(t, h.OverCapacityWarn3dSentAt)
 }
 
 func TestHouseholdRepository_LockActiveMembershipForUser_NotFound(t *testing.T) {
@@ -109,7 +128,7 @@ func TestHouseholdRepository_LockActiveMembershipForUser_NotFound(t *testing.T) 
 	defer mock.Close()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at
+		SELECT h.id, h.owner_user_id, h.name, h.created_at, h.updated_at, h.over_capacity_since, h.over_capacity_start_notice_sent_at, h.over_capacity_warn3d_sent_at
 		FROM household_members hm
 		JOIN households h ON h.id = hm.household_id
 		WHERE hm.user_id = $1 AND hm.status = 'active'
@@ -218,6 +237,12 @@ func TestHouseholdRepository_InsertMember_DuplicateOwnerRow(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
 }
 
+// TestHouseholdRepository_ListMembers proves ListMembers orders by joined_at ASC with a
+// deterministic id ASC tie-breaker (Gap Analysis Round 3, GT-4): without the tie-breaker,
+// OffboardExcessMembers's LIFO (most-recently-joined-first) removal would be
+// nondeterministic if two members shared an identical joined_at timestamp. Mirrors the
+// same "created_at ASC, id ASC" tie-breaker convention already used by
+// user_account_repository.go.
 func TestHouseholdRepository_ListMembers(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdMockDB(t)
@@ -225,9 +250,9 @@ func TestHouseholdRepository_ListMembers(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
-		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC`)).
+		FROM household_members WHERE household_id = $1 AND status = 'active' ORDER BY joined_at ASC, id ASC`)).
 		WithArgs("hh-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at", "prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at"}).
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
 			AddRow("mem-1", "hh-1", "owner-1", "owner", "active", now, nil, nil, nil, now, now))
 
 	members, err := repo.ListMembers(context.Background(), "hh-1")
@@ -245,7 +270,7 @@ func TestHouseholdRepository_GetActiveMember(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
 		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'active'`)).
 		WithArgs("hh-1", "user-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at", "prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at"}).
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
 			AddRow("mem-1", "hh-1", "user-1", "member", "active", now, nil, nil, nil, now, now))
 
 	member, err := repo.GetActiveMember(context.Background(), "hh-1", "user-1")
@@ -309,4 +334,538 @@ func TestHouseholdRepository_InsertMember_OtherDBError(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, domain.ErrAlreadyInHousehold)
 	assert.NotErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
+}
+
+// ─── LockHouseholdByID (#1371 — Phase 7 foundation) ──────────────────────────
+
+func TestHouseholdRepository_LockHouseholdByID_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1 FOR UPDATE
+	`)).
+		WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows(householdColumnNames).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+
+	h, err := repo.LockHouseholdByID(context.Background(), "hh-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", h.ID)
+	assert.Equal(t, "owner-1", h.OwnerUserID)
+	assert.Equal(t, "The Smiths", h.Name)
+	assert.Nil(t, h.OverCapacitySince)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_LockHouseholdByID_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1 FOR UPDATE
+	`)).
+		WithArgs("hh-missing").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.LockHouseholdByID(context.Background(), "hh-missing")
+	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
+}
+
+// ─── GetHouseholdByID (#1371 — Round 9 Gap Analysis fix) ─────────────────────
+
+func TestHouseholdRepository_GetHouseholdByID_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1
+	`)).
+		WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows(householdColumnNames).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+
+	h, err := repo.GetHouseholdByID(context.Background(), "hh-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", h.ID)
+	assert.Equal(t, "owner-1", h.OwnerUserID)
+	assert.Equal(t, "The Smiths", h.Name)
+	assert.Nil(t, h.OverCapacitySince)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_GetHouseholdByID_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1
+	`)).
+		WithArgs("hh-missing").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetHouseholdByID(context.Background(), "hh-missing")
+	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
+}
+
+// ─── DeleteRemovedMember (#1371 — Phase 7 foundation) ────────────────────────
+
+func TestHouseholdRepository_DeleteRemovedMember_Success(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		DELETE FROM household_members WHERE id = $1 AND status = 'removed'
+		RETURNING household_id, user_id
+	`)).
+		WithArgs("member-row-1").
+		WillReturnRows(pgxmock.NewRows([]string{"household_id", "user_id"}).AddRow("hh-1", "member-1"))
+
+	householdID, userID, err := repo.DeleteRemovedMember(context.Background(), "member-row-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", householdID)
+	assert.Equal(t, "member-1", userID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_DeleteRemovedMember_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		DELETE FROM household_members WHERE id = $1 AND status = 'removed'
+		RETURNING household_id, user_id
+	`)).
+		WithArgs("member-row-active").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, _, err := repo.DeleteRemovedMember(context.Background(), "member-row-active")
+	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
+}
+
+// ─── SetOverCapacity / ClearOverCapacity / notice markers (#1371 — Task 1) ───
+
+func TestHouseholdRepository_SetOverCapacity(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	since := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH upd AS (
+			UPDATE households SET over_capacity_since = $2
+			WHERE id = $1 AND over_capacity_since IS NULL
+			RETURNING over_capacity_since
+		), locked_read AS (
+			SELECT over_capacity_since FROM households
+			WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM upd)
+			FOR UPDATE
+		)
+		SELECT over_capacity_since FROM upd
+		UNION ALL
+		SELECT over_capacity_since FROM locked_read`)).
+		WithArgs("hh-1", since).
+		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(since))
+
+	effectiveSince, err := repo.SetOverCapacity(context.Background(), "hh-1", since)
+	require.NoError(t, err)
+	assert.Equal(t, since, effectiveSince)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// SetOverCapacity must be a no-op (not an error) when grace is already active — the
+// original deadline is never reset by a second call — but it must still return the
+// TRUE effective over_capacity_since (the original, earlier value),
+// not the `since` this call attempted to set. This is what lets a caller that loses a
+// race against a concurrent writer detect the real grace anchor instead of trusting
+// its own local timestamp (#1371 fabricated-deadline fix).
+func TestHouseholdRepository_SetOverCapacity_AlreadyActive_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	originalSince := time.Now().Add(-3 * 24 * time.Hour)
+	attemptedSince := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH upd AS (
+			UPDATE households SET over_capacity_since = $2
+			WHERE id = $1 AND over_capacity_since IS NULL
+			RETURNING over_capacity_since
+		), locked_read AS (
+			SELECT over_capacity_since FROM households
+			WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM upd)
+			FOR UPDATE
+		)
+		SELECT over_capacity_since FROM upd
+		UNION ALL
+		SELECT over_capacity_since FROM locked_read`)).
+		WithArgs("hh-1", attemptedSince).
+		WillReturnRows(pgxmock.NewRows([]string{"over_capacity_since"}).AddRow(originalSince))
+
+	effectiveSince, err := repo.SetOverCapacity(context.Background(), "hh-1", attemptedSince)
+	require.NoError(t, err)
+	assert.Equal(t, originalSince, effectiveSince, "must return the ORIGINAL effective value, not the attempted `since`")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_ClearOverCapacity(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL WHERE id = $1`)).
+		WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.ClearOverCapacity(context.Background(), "hh-1")
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ClearOverCapacity is idempotent: calling it on a household not currently in
+// grace (0 rows changed by the NULL assignments, or the row simply already all-NULL)
+// must not error.
+func TestHouseholdRepository_ClearOverCapacity_NotInGrace_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL WHERE id = $1`)).
+		WithArgs("hh-missing").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ClearOverCapacity(context.Background(), "hh-missing")
+	require.NoError(t, err)
+}
+
+// TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MatchingAnchor_Clears proves
+// the atomic compare-and-clear WHERE clause includes the anchor guard
+// (over_capacity_since = $2), not just a bare id match — the SQL text assertion below is
+// what actually distinguishes this method from the unconditional ClearOverCapacity.
+// #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 4).
+func TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MatchingAnchor_Clears(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	expectedSince := time.Now().Add(-15 * 24 * time.Hour)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL
+		WHERE id = $1 AND over_capacity_since = $2`)).
+		WithArgs("hh-1", expectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.ClearOverCapacityIfAnchorMatches(context.Background(), "hh-1", expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MismatchedAnchor_NoOp proves a
+// mismatched anchor (0 rows affected — the household's CURRENT over_capacity_since no
+// longer equals the anchor the caller expected, e.g. a concurrent clear-then-re-flag
+// cycle landed first) is a legitimate no-op, not an error. autoOffboard relies on this to
+// avoid erasing a brand-new, independent grace period. #1371 — Round 9 Gap Analysis fix
+// (fourth Codex adversarial pass, Bug 4).
+func TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MismatchedAnchor_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-15 * 24 * time.Hour)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL
+		WHERE id = $1 AND over_capacity_since = $2`)).
+		WithArgs("hh-1", staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ClearOverCapacityIfAnchorMatches(context.Background(), "hh-1", staleExpectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_MarkOverCapacityStartNoticeSent(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	expectedSince := time.Now().Add(-2 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, expectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.MarkOverCapacityStartNoticeSent(context.Background(), "hh-1", sentAt, expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_MarkOverCapacityStartNoticeSent_AnchorMismatch_NoOp proves a
+// mismatched anchor (0 rows affected) is not an error — the send-then-stamp design
+// already tolerates a "stamp didn't take" outcome, and a mismatch here means the notice
+// that was actually sent described a NOW-SUPERSEDED grace period; the new one gets its
+// own notice on a future run. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial
+// pass, Bug 5).
+func TestHouseholdRepository_MarkOverCapacityStartNoticeSent_AnchorMismatch_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-2 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkOverCapacityStartNoticeSent(context.Background(), "hh-1", sentAt, staleExpectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_MarkOverCapacityWarn3dSent(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	expectedSince := time.Now().Add(-12 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, expectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.MarkOverCapacityWarn3dSent(context.Background(), "hh-1", sentAt, expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_MarkOverCapacityWarn3dSent_AnchorMismatch_NoOp is the
+// MarkOverCapacityWarn3dSent analogue of the start-notice mismatch test above. #1371 —
+// Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 5).
+func TestHouseholdRepository_MarkOverCapacityWarn3dSent_AnchorMismatch_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-12 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkOverCapacityWarn3dSent(context.Background(), "hh-1", sentAt, staleExpectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ─── ListHouseholdsWithMembers (#1371 — Task 1) ──────────────────────────────
+
+func TestHouseholdRepository_ListHouseholdsWithMembers(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	overCapSince := now.Add(-time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households h
+		WHERE EXISTS (SELECT 1 FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active')
+	`)).
+		WillReturnRows(pgxmock.NewRows(householdColumnNames).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil).
+			AddRow("hh-2", "owner-2", "The Joneses", now, now, &overCapSince, nil, nil))
+
+	households, err := repo.ListHouseholdsWithMembers(context.Background())
+	require.NoError(t, err)
+	require.Len(t, households, 2)
+	assert.Equal(t, "hh-1", households[0].ID)
+	assert.Nil(t, households[0].OverCapacitySince)
+	assert.Equal(t, "hh-2", households[1].ID)
+	require.NotNil(t, households[1].OverCapacitySince)
+	assert.WithinDuration(t, overCapSince, *households[1].OverCapacitySince, time.Second)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_ListHouseholdsWithMembers_Empty(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households h
+		WHERE EXISTS (SELECT 1 FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active')
+	`)).
+		WillReturnRows(pgxmock.NewRows(householdColumnNames))
+
+	households, err := repo.ListHouseholdsWithMembers(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, households)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ─── GetRemovedMemberForUpdate / RestoreMember (#1371 — Task 1, used by re-invite in Task 4) ───
+
+func TestHouseholdRepository_GetRemovedMemberForUpdate_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	removedAt := now
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed' AND removed_at >= now() - $3::interval
+		ORDER BY removed_at DESC, created_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`)).
+		WithArgs("hh-1", "user-1", "30 days").
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
+			AddRow("mem-1", "hh-1", "user-1", "member", "removed", now, &removedAt, nil, nil, now, now))
+
+	m, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-1", 30)
+	require.NoError(t, err)
+	assert.Equal(t, "mem-1", m.ID)
+	assert.Equal(t, domain.HouseholdMemberStatusRemoved, m.Status)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_GetRemovedMemberForUpdate_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members WHERE household_id = $1 AND user_id = $2 AND status = 'removed' AND removed_at >= now() - $3::interval
+		ORDER BY removed_at DESC, created_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`)).
+		WithArgs("hh-1", "user-2", "30 days").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetRemovedMemberForUpdate(context.Background(), "hh-1", "user-2", 30)
+	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
+}
+
+func TestHouseholdRepository_RestoreMember(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
+		WithArgs("mem-1").
+		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(now))
+
+	updatedAt, err := repo.RestoreMember(context.Background(), "mem-1")
+	require.NoError(t, err)
+	assert.Equal(t, now, updatedAt, "the freshly-written updated_at must be returned so callers can keep their in-memory struct authoritative (#1371 Task 4)")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_RestoreMember_NotRemoved(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
+		WithArgs("mem-active").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.RestoreMember(context.Background(), "mem-active")
+	assert.ErrorIs(t, err, domain.ErrMemberNotFound)
+}
+
+// RestoreMember must map the same unique-constraint violations InsertMember does
+// (Codex review finding, #1371 Task 1): restoring a removed row can collide with
+// uq_household_members_active_user if the user has since become active elsewhere
+// (that index is NOT scoped to household_id — see migration 000107), or with
+// uq_household_members_active_owner in an owner-row edge case. Leaking the raw
+// pgconn.PgError here would give Task 4's re-invite flow a different error contract
+// than every other write path in this file.
+func TestHouseholdRepository_RestoreMember_UserActiveElsewhere(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
+		WithArgs("mem-1").
+		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_user"})
+
+	_, err := repo.RestoreMember(context.Background(), "mem-1")
+	assert.ErrorIs(t, err, domain.ErrAlreadyInHousehold)
+}
+
+func TestHouseholdRepository_RestoreMember_DuplicateOwnerRow(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE household_members SET status = 'active', removed_at = NULL, updated_at = now() WHERE id = $1 AND status = 'removed'
+		RETURNING updated_at`)).
+		WithArgs("mem-1").
+		WillReturnError(&pgconn.PgError{Code: "23505", ConstraintName: "uq_household_members_active_owner"})
+
+	_, err := repo.RestoreMember(context.Background(), "mem-1")
+	assert.ErrorIs(t, err, domain.ErrAlreadyOwnsHousehold)
+}
+
+// ─── ListMembershipsPastPurgeWindow (#1371 — Task 2) ─────────────────────────
+
+func TestHouseholdRepository_ListMembershipsPastPurgeWindow(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	removedAt := now.Add(-31 * 24 * time.Hour)
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members
+		WHERE status = 'removed' AND removed_at < now() - $1::interval
+		ORDER BY removed_at ASC
+	`)).
+		WithArgs("30 days").
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames).
+			AddRow("mem-1", "hh-1", "user-1", "member", "removed", now, &removedAt, nil, nil, now, now))
+
+	members, err := repo.ListMembershipsPastPurgeWindow(context.Background(), 30)
+	require.NoError(t, err)
+	require.Len(t, members, 1)
+	assert.Equal(t, "mem-1", members[0].ID)
+	assert.Equal(t, domain.HouseholdMemberStatusRemoved, members[0].Status)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_ListMembershipsPastPurgeWindow_Empty(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, household_id, user_id, role, status, joined_at, removed_at, prior_subscription_tier, prior_subscription_status, created_at, updated_at
+		FROM household_members
+		WHERE status = 'removed' AND removed_at < now() - $1::interval
+		ORDER BY removed_at ASC
+	`)).
+		WithArgs("30 days").
+		WillReturnRows(pgxmock.NewRows(householdMemberColumnNames))
+
+	members, err := repo.ListMembershipsPastPurgeWindow(context.Background(), 30)
+	require.NoError(t, err)
+	assert.Empty(t, members)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

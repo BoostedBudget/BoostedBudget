@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -56,6 +57,42 @@ type HouseholdMemberView struct {
 	DisplayName string                       `json:"display_name,omitempty"`
 	AvatarURL   string                       `json:"avatar_url,omitempty"`
 }
+
+// QueuedRemovalEmail is a "you've been removed from a household" notification collected
+// during a removal transaction (removeMemberTx) for the caller to send AFTER that
+// transaction commits — never inside it. RemoveMember/OffboardExcessMembers/
+// ForceDisband each send these via sendRemovalEmails (EmailService.
+// SendHouseholdMemberRemoved) immediately after their own tx.Commit succeeds (#1371 —
+// Task 3). PurgeDate is now+30d, matching the purge-window messaging ("your data will
+// be permanently removed on <date>") — meaningful for RemoveMember/OffboardExcessMembers,
+// where the status='removed' row genuinely lingers until the purge worker deletes it.
+//
+// Disbanded is false for removeMemberTx's own zero-value default (RemoveMember/
+// OffboardExcessMembers); ForceDisband flips it to true on every queued email it sends,
+// since it deletes the entire household row (cascading household_members away
+// immediately) in the SAME transaction as the removals — there is no lingering row left
+// for PurgeDate to ever apply to. Round 4 Gap Analysis fix (#1371).
+type QueuedRemovalEmail struct {
+	ToEmail       string
+	HouseholdName string
+	PurgeDate     time.Time
+	Disbanded     bool
+}
+
+// removalPurgeWindowDays is removalPurgeWindow expressed as a day-count — the single
+// source of truth both for the time.Duration below and for the int day-count
+// GetRemovedMemberForUpdate uses to enforce the same 30-day re-invite restore window
+// (Gap Analysis Round 3, GT-3: without this enforcement, a delayed/paused Task 2 purge
+// worker could let a 60+ day stale removal be silently restored via re-invite). Do not
+// hardcode 30 anywhere else — reference this constant instead.
+const removalPurgeWindowDays = 30
+
+// removalPurgeWindow is how long a removed member's membership/shares/entitlement
+// linger before PurgeRemovedMembership permanently deletes them — the window
+// communicated in QueuedRemovalEmail.PurgeDate. Not specified by #1371 Task 0; chosen
+// to match the task description's "now + 30 days" default. Revisit if product
+// requirements narrow this once Task 2 (the purge worker) schedules real purge jobs.
+const removalPurgeWindow = time.Duration(removalPurgeWindowDays) * 24 * time.Hour
 
 // MemberProfileResolver resolves a household member's display name + avatar. Optional
 // (nil-safe) — when HouseholdService.SetMemberProfileResolver is never called,
@@ -140,6 +177,64 @@ type HouseholdService interface {
 	ListMembers(ctx context.Context, userID string) ([]HouseholdMemberView, error)
 	RemoveMember(ctx context.Context, actorUserID, targetUserID string) error
 
+	// OffboardExcessMembers brings householdID back into compliance with its owner's
+	// current effective seat count by removing the most-recently-joined active
+	// non-owner members (LIFO) one at a time, until active count <= allowed seats, all
+	// inside one transaction. A no-op (empty slice, nil error) if the household is
+	// already within its seat count, OR if the owner's subscription status — re-read
+	// fresh under this method's own household-row lock — is read-only (Gap Analysis
+	// Round 3, GT-2: closes a TOCTOU window where a caller's own owner read could be
+	// stale by the time it calls this method). Safe for a background worker to call —
+	// never nests a transaction. Returns the removal emails to send after commit. #1371 —
+	// Phase 7 foundation; the decision of WHEN/how-many to call this with (grace
+	// periods, over_capacity_since bookkeeping) is Task 6's responsibility, not this
+	// method's.
+	//
+	// expectedOverCapacitySince is the over_capacity_since value the CALLER's own removal
+	// decision was based on (e.g. household_over_capacity_check.go's autoOffboard, which
+	// only calls this once its fresh re-read has determined the grace deadline computed
+	// from that value has passed). This method re-verifies, immediately after taking its
+	// own lock, that the CURRENT locked row's OverCapacitySince still matches — a
+	// mismatch (including a nil current value) means a concurrent clear-then-re-flag
+	// cycle (e.g. a subscription webhook) landed between the caller's decision and this
+	// method's own LockHouseholdByID call, leaving a genuinely fresh (or cleared) anchor
+	// under this lock that the caller's decision never saw. This closes a Round 9 Gap
+	// Analysis finding (Codex adversarial review): without this check, the pre-fix
+	// implementation silently ignored the fresh anchor, proceeding with LIFO removal
+	// based on the caller's now-superseded decision. On a mismatch, this method commits
+	// its (empty) transaction and returns (nil, domain.ErrOverCapacityAnchorMismatch) —
+	// deliberately NOT the same "nil error, empty slice" shape as the read-only-owner
+	// no-op below, because the CALLER must be able to tell the two apart: a read-only
+	// owner means grace is moot and the caller may safely clear its over-capacity flag,
+	// but an anchor mismatch means the household is STILL over capacity under a
+	// different, legitimately fresh grace period that the caller must leave untouched
+	// (third Codex adversarial pass — a follow-up bug found in autoOffboard's original,
+	// unconditional post-call ClearOverCapacity). This method still does not own or
+	// compute any grace-period logic itself — it only verifies a precondition the caller
+	// already decided on still holds at the moment of the lock.
+	OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]QueuedRemovalEmail, error)
+
+	// PurgeRemovedMembership permanently deletes a household_members row (identified by
+	// its own id) that is already status='removed', along with that member's
+	// household_account_shares rows for the household and their household-scoped
+	// entitlement, all inside one transaction. householdID is the row's own household —
+	// the caller (the daily purge worker) already knows it from its scan, and it's used
+	// to take the household-row lock FIRST, per this codebase's lock-ordering convention
+	// (see AcceptInvite/DeleteHousehold/OffboardExcessMembers/ForceDisband). Does NOT
+	// touch the member's own accounts/transactions/budgets. Returns
+	// domain.ErrHouseholdNotFound if the household row can't be locked, or
+	// domain.ErrMemberNotFound if no such removed row exists. #1371 — Phase 7 foundation
+	// (run ~30 days after removal).
+	PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error
+
+	// ForceDisband removes every active non-owner member of ownerUserID's household,
+	// then dissolves the household exactly like DeleteHousehold does — all inside one
+	// transaction (unlike the public DeleteHousehold, which refuses to disband while
+	// active non-owner members remain). Returns domain.ErrNotHouseholdOwner if
+	// ownerUserID does not own a household. Returns the removal emails to send after
+	// commit. #1371 — Phase 7 foundation.
+	ForceDisband(ctx context.Context, ownerUserID string) ([]QueuedRemovalEmail, error)
+
 	CreateInvite(ctx context.Context, ownerUserID, inviteeEmail, frontendURL string) (*HouseholdCreateInviteResult, error)
 	ListInvites(ctx context.Context, ownerUserID string) ([]domain.HouseholdInvite, error)
 	RevokeInvite(ctx context.Context, ownerUserID, inviteID string) error
@@ -189,6 +284,11 @@ type householdService struct {
 	// acceptInviteAfterOwnerCheckHook is a test-only synchronization seam (see the call site
 	// in AcceptInvite for why it exists). Always nil in production.
 	acceptInviteAfterOwnerCheckHook func()
+
+	// offboardExcessMembersAfterOwnerLockHook is a test-only synchronization seam, the
+	// OffboardExcessMembers analog of acceptInviteAfterOwnerCheckHook above — see the call
+	// site in OffboardExcessMembers for why it exists. Always nil in production.
+	offboardExcessMembersAfterOwnerLockHook func()
 }
 
 // NewHouseholdService creates a new HouseholdService. db must be the same pool used to
@@ -450,10 +550,8 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 	}()
 
 	hhRepo := repository.NewHouseholdRepository(tx)
-	entRepo := repository.NewEntitlementRepository(tx)
-	shareRepo := repository.NewHouseholdShareRepository(tx)
 
-	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, actorUserID)
+	household, _, found, cerr := hhRepo.GetHouseholdForUser(ctx, actorUserID)
 	if cerr != nil {
 		return cerr
 	}
@@ -461,38 +559,408 @@ func (s *householdService) RemoveMember(ctx context.Context, actorUserID, target
 		cerr = domain.ErrMemberNotFound
 		return cerr
 	}
-	isSelfLeave := actorUserID == targetUserID
-	if !isSelfLeave && !isOwner {
-		cerr = domain.ErrNotHouseholdOwner
-		return cerr
-	}
-	if targetUserID == household.OwnerUserID {
-		// Reject removing the owner via this path (self-leave or owner-remove) — owner
-		// exit only via DeleteHousehold. Prevents an ownerless-but-active household
-		// (Codex #1367 review, High finding 4).
-		cerr = domain.ErrCannotRemoveOwner
+
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see OffboardExcessMembers/ForceDisband/PurgeRemovedMembership) — Gap
+	// Analysis Round 3, GT-1: without this, RemoveMember mutates household_members before
+	// ever locking households (the grace-clear branch inside removeMemberTx below only
+	// takes that lock conditionally, and only AFTER the member row is already updated),
+	// which inverts the lock order every sibling method uses and creates a real deadlock
+	// risk against a concurrent OffboardExcessMembers run (locks households first, then
+	// the same member's household_members row). GetHouseholdForUser above is only a
+	// non-locking lookup used to resolve which household actorUserID belongs to; this
+	// re-fetch under FOR UPDATE is the authoritative, locked household struct used for
+	// everything downstream. If the household was concurrently deleted between the two
+	// reads (e.g. a racing ForceDisband), this surfaces as a legitimate
+	// domain.ErrHouseholdNotFound rather than proceeding against a stale reference.
+	household, cerr = hhRepo.LockHouseholdByID(ctx, household.ID)
+	if cerr != nil {
 		return cerr
 	}
 
-	if cerr = hhRepo.RemoveMember(ctx, household.ID, targetUserID); cerr != nil {
-		return cerr
-	}
-	if cerr = entRepo.ExpireActiveEntitlement(ctx, targetUserID); cerr != nil {
-		return cerr
-	}
-	if cerr = shareRepo.RevokeSharesForUser(ctx, household.ID, targetUserID); cerr != nil {
+	email, cerr := s.removeMemberTx(ctx, tx, household, actorUserID, targetUserID)
+	if cerr != nil {
 		return cerr
 	}
 
 	if cerr = tx.Commit(ctx); cerr != nil {
 		return cerr
 	}
-	if isSelfLeave {
+	if actorUserID == targetUserID {
 		s.capture(targetUserID, phclient.EventHouseholdMemberLeft)
 	} else {
 		s.capture(actorUserID, phclient.EventHouseholdMemberRemoved)
 	}
+	if email != nil {
+		s.sendRemovalEmails(ctx, []QueuedRemovalEmail{*email})
+	}
 	return nil
+}
+
+// removeMemberTx contains the actual soft-remove + expire-entitlement + revoke-shares
+// sequence, scoped to the caller-owned transaction tx — it never Begins/Commits/
+// Rollbacks. Extracted from RemoveMember (#1371 — Phase 7 foundation) so
+// OffboardExcessMembers and ForceDisband can call it multiple times within ONE shared
+// transaction, and so a future force-disband endpoint never has to nest a transaction.
+// household must already be resolved/locked by the caller (GetHouseholdForUser,
+// LockHouseholdByID, etc.) — this never looks it up itself, so it stays reusable across
+// every caller's own resolution strategy (by actor's membership, by householdID, ...).
+//
+// Authorization (unchanged from the original RemoveMember): the owner can remove any
+// non-owner member; any member can self-leave; the owner can never be removed via this
+// path (owner exit is DeleteHousehold/ForceDisband only — Codex #1367 review, High
+// finding 4).
+func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, household *domain.Household, actorUserID, targetUserID string) (*QueuedRemovalEmail, error) {
+	isSelfLeave := actorUserID == targetUserID
+	isOwner := actorUserID == household.OwnerUserID
+	if !isSelfLeave && !isOwner {
+		return nil, domain.ErrNotHouseholdOwner
+	}
+	if targetUserID == household.OwnerUserID {
+		return nil, domain.ErrCannotRemoveOwner
+	}
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+	shareRepo := repository.NewHouseholdShareRepository(tx)
+
+	if err := hhRepo.RemoveMember(ctx, household.ID, targetUserID); err != nil {
+		return nil, err
+	}
+	if err := entRepo.ExpireActiveEntitlement(ctx, targetUserID); err != nil {
+		return nil, err
+	}
+	if err := shareRepo.RevokeSharesForUser(ctx, household.ID, targetUserID); err != nil {
+		return nil, err
+	}
+
+	// #1371 — Task 6, Part D: grace-clear on in-app member removal. Only checked (and
+	// only EVER checked) when the household is currently in over-capacity grace —
+	// households never in grace skip this entirely, no extra queries. Re-counts
+	// activeCount POST-removal (the removal above already committed within this same
+	// tx) against the owner's CURRENT effective-tier seat count (same technique as
+	// paddle_checkout.go's checkDowngradeSeatCapacity — Task 5), so an owner manually
+	// removing members during grace gets immediate credit without waiting for the next
+	// daily household_over_capacity_check worker run (Task 6, Part C).
+	if household.OverCapacitySince != nil {
+		owner, err := s.userRepo.GetUserByID(ctx, household.OwnerUserID)
+		if err != nil {
+			return nil, err
+		}
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+		if err != nil {
+			return nil, err
+		}
+		activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
+		if err != nil {
+			return nil, err
+		}
+		if activeCount <= ownerTier.Pricing.UsersIncluded {
+			if err := hhRepo.ClearOverCapacity(ctx, household.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Collect (never send) the removal notification for the caller to fire after commit
+	// — see sendRemovalEmails (#1371 — Task 3).
+	target, err := s.userRepo.GetUserByID(ctx, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	return &QueuedRemovalEmail{
+		ToEmail:       target.Email,
+		HouseholdName: household.Name,
+		PurgeDate:     time.Now().Add(removalPurgeWindow),
+	}, nil
+}
+
+// sendRemovalEmails is the best-effort, log-and-continue notification step called by
+// RemoveMember/OffboardExcessMembers/ForceDisband immediately AFTER their own
+// tx.Commit succeeds — never before. By the time this runs, the removal is already
+// durable, so a failed send must never be surfaced as (or cause a rollback of) the
+// caller's removal error; it is only ever logged. Nil-safe: no-ops if no EmailService
+// was injected, matching this codebase's analytics/email nil-safe convention (see
+// CLAUDE.md "No-op safe"). #1371 — Task 3.
+func (s *householdService) sendRemovalEmails(ctx context.Context, queued []QueuedRemovalEmail) {
+	if s.emailService == nil {
+		return
+	}
+	for _, q := range queued {
+		if err := s.emailService.SendHouseholdMemberRemoved(ctx, q.ToEmail, q.HouseholdName, q.PurgeDate, q.Disbanded); err != nil {
+			slog.Default().Warn("household: failed to send member-removed email; removal already committed",
+				"email", q.ToEmail, "household_name", q.HouseholdName, "error", err)
+		}
+	}
+}
+
+// OffboardExcessMembers implements the HouseholdService method of the same name — see
+// the interface doc comment for the full contract.
+func (s *householdService) OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]QueuedRemovalEmail, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see AcceptInvite/DeleteHousehold).
+	household, cerr := hhRepo.LockHouseholdByID(ctx, householdID)
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	// Round 9 Gap Analysis fix (Codex adversarial review): verify the anchor the caller's
+	// own removal decision was based on still matches the CURRENT locked row, before doing
+	// anything else — including before the owner-read-only check below. A concurrent
+	// clear-then-re-flag cycle (e.g. a subscription webhook) can land between the caller's
+	// own fresh read and this lock acquisition, leaving a genuinely fresh over_capacity_since
+	// here that the caller's decision never saw. Unlike the read-only-owner case immediately
+	// below, this is NOT reported the same way: return domain.ErrOverCapacityAnchorMismatch
+	// (rather than a nil-error empty slice) so the caller can tell "grace is moot, safe to
+	// clear" apart from "still over capacity under a different, fresh grace period — do NOT
+	// clear it" (third Codex adversarial pass, household_over_capacity_check.go's autoOffboard).
+	if household.OverCapacitySince == nil || !household.OverCapacitySince.Equal(expectedOverCapacitySince) {
+		if cerr = tx.Commit(ctx); cerr != nil {
+			return nil, cerr
+		}
+		return nil, domain.ErrOverCapacityAnchorMismatch
+	}
+
+	// Owner is read via lockAndGetUser (the same helper DeclineInvite/AcceptInvite already
+	// use), NOT a plain userRepo.GetUserByID — a further Round 9 Gap Analysis fix (Codex
+	// adversarial review, a later pass than the anchor-mismatch check above: while walking
+	// the whole over-capacity lifecycle end-to-end to confirm that chain had converged
+	// safe, this pass surfaced a DIFFERENT, pre-existing bug in this same function that
+	// predates Round 9 entirely — Round 3-era code, untouched by any earlier fix this
+	// round). Even with the household row already locked above, a plain unlocked read here
+	// left a live race: a concurrent Paddle webhook could commit an owner tier UPGRADE
+	// (e.g. household_2 -> household_4) in the window between this read and the actual
+	// LIFO removal several lines below — removal that runs on THIS SAME transaction, still
+	// holding the household lock, but with no lock at all on the user row in between. The
+	// removal would then proceed using the now-stale, too-low household_2 seat limit,
+	// incorrectly removing members who would actually fit under the just-committed,
+	// current tier — a real path to incorrect member removal, not merely a stale-read
+	// annoyance. lockAndGetUser closes it exactly like it already does for
+	// DeclineInvite/AcceptInvite: the FOR UPDATE lock taken here is held for the remainder
+	// of THIS transaction, so any concurrent writer to the owner's users row must wait
+	// until this transaction commits or rolls back — the read below (and the seat-limit/
+	// removal decision built on it) is therefore guaranteed fresh AND stays fresh for the
+	// rest of this method's lifetime, not just at the instant of the read.
+	owner, cerr := s.lockAndGetUser(ctx, tx, household.OwnerUserID)
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	// Test-only synchronization seam (always nil in production): invoked immediately after
+	// the owner is locked+read, while this transaction (and its owner-row lock) is still
+	// open. Exists solely so the real-DB regression test for the fix above
+	// (TestHouseholdServiceIntegration_OffboardExcessMembers_OwnerLockedDuringRemoval_ConcurrentTierUpgradeWaits)
+	// can deterministically prove a concurrent owner-tier write is genuinely blocked at
+	// this point, rather than relying on incidental lock timing that does not reliably
+	// discriminate a fixed implementation from a broken one — mirroring
+	// acceptInviteAfterOwnerCheckHook's identical rationale in AcceptInvite.
+	if s.offboardExcessMembersAfterOwnerLockHook != nil {
+		s.offboardExcessMembersAfterOwnerLockHook()
+	}
+
+	// Gap Analysis Round 3, GT-2: re-check the owner's subscription status FRESH, under
+	// this method's own locks (the household row above, and now — per the fix just above —
+	// the owner's own user row too), rather than trusting a caller's possibly-stale read.
+	// household_over_capacity_check.go's processHousehold reads the owner once at the top
+	// of a run, then may call this method (via autoOffboard) some time later in that SAME
+	// run — if the owner's subscription lapses via a concurrent Paddle webhook in that
+	// window, the caller's cached owner would still look active. A read-only owner means
+	// the over-capacity grace is moot: members already fall back to their own tier via the
+	// (unchanged) entitlement resolver's owner-read-only branch, so there's nothing to
+	// LIFO-remove — skip straight to a normal commit instead of computing a seat limit and
+	// removing anyone. This is a legitimate "nothing to do" outcome, not an error; the
+	// caller (the daily worker's autoOffboard) already clears the over-capacity flag
+	// unconditionally after any successful call here, regardless of queue length.
+	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+		if cerr = tx.Commit(ctx); cerr != nil {
+			return nil, cerr
+		}
+		return []QueuedRemovalEmail{}, nil
+	}
+
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	members, cerr := hhRepo.ListMembers(ctx, householdID) // active members, joined_at ASC, incl. owner
+	if cerr != nil {
+		return nil, cerr
+	}
+	nonOwner := nonOwnerMembers(members, household.OwnerUserID)
+
+	excess := len(members) - ownerTier.Pricing.UsersIncluded
+	var queued []QueuedRemovalEmail
+	// Walk nonOwner from the tail (most-recently-joined, since it's ASC by joined_at) —
+	// LIFO auto-offboarding per #1371.
+	for i := len(nonOwner) - 1; i >= 0 && excess > 0; i-- {
+		email, err := s.removeMemberTx(ctx, tx, household, household.OwnerUserID, nonOwner[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+		if email != nil {
+			queued = append(queued, *email)
+		}
+		excess--
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return nil, cerr
+	}
+	for range queued {
+		s.capture(household.OwnerUserID, phclient.EventHouseholdMemberAutoOffboarded)
+	}
+	s.sendRemovalEmails(ctx, queued)
+	return queued, nil
+}
+
+// PurgeRemovedMembership implements the HouseholdService method of the same name — see
+// the interface doc comment for the full contract.
+func (s *householdService) PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	shareRepo := repository.NewHouseholdShareRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+
+	// Household-row lock always taken first, per this codebase's lock-ordering
+	// convention (see AcceptInvite/DeleteHousehold/OffboardExcessMembers/ForceDisband).
+	// This is the daily purge worker's sibling to AcceptInvite's re-invite-restore path
+	// (which also locks the household first, then does its own row-level
+	// GetRemovedMemberForUpdate before flipping status back to 'active') — taking the
+	// same household lock here adds a real layer of defense-in-depth against the two
+	// transactions racing, even though the row-level guards below (WHERE status='removed'
+	// on the delete, plus the rejoin-race check) already prevent actual data corruption
+	// either way.
+	if _, cerr = hhRepo.LockHouseholdByID(ctx, householdID); cerr != nil {
+		return cerr
+	}
+
+	_, userID, cerr := hhRepo.DeleteRemovedMember(ctx, membershipID)
+	if cerr != nil {
+		return cerr
+	}
+
+	// Guard against a rejoin race (Codex review finding): the deleted row only tells us
+	// WHO the stale removal belonged to, not whether they're still gone. If the user has
+	// since rejoined this same household (a new active membership row exists — from a
+	// fresh AcceptInvite, with its own fresh shares/entitlement), the shares/entitlement
+	// we're about to touch belong to that CURRENT membership, not the stale one just
+	// deleted. Blindly cleaning up by (household_id, user_id) alone would wipe the
+	// rejoined member's live data. Deleting the stale historical row above is always
+	// safe regardless — only the destructive cleanup below needs this check.
+	if _, cerr = hhRepo.GetActiveMember(ctx, householdID, userID); cerr == nil {
+		return tx.Commit(ctx)
+	}
+	if !errors.Is(cerr, domain.ErrMemberNotFound) {
+		return cerr
+	}
+
+	if cerr = shareRepo.DeleteSharesForUser(ctx, householdID, userID); cerr != nil {
+		return cerr
+	}
+	// Scoped (not the broad ExpireActiveEntitlement) — a removed member may have since
+	// started their own subscription; the scoped method can't accidentally close it out.
+	if cerr = entRepo.ExpireActiveHouseholdEntitlement(ctx, userID, householdID); cerr != nil {
+		return cerr
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return cerr
+	}
+	s.capture(userID, phclient.EventHouseholdMembershipPurged)
+	return nil
+}
+
+// ForceDisband implements the HouseholdService method of the same name — see the
+// interface doc comment for the full contract.
+func (s *householdService) ForceDisband(ctx context.Context, ownerUserID string) ([]QueuedRemovalEmail, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cerr error
+	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	hhRepo := repository.NewHouseholdRepository(tx)
+	entRepo := repository.NewEntitlementRepository(tx)
+
+	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, ownerUserID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if !found || !isOwner {
+		cerr = domain.ErrNotHouseholdOwner
+		return nil, cerr
+	}
+	// Household-row lock first, matching DeleteHousehold/AcceptInvite lock ordering.
+	if _, cerr = hhRepo.LockHouseholdForUpdate(ctx, household.ID); cerr != nil {
+		return nil, cerr
+	}
+
+	members, cerr := hhRepo.ListMembers(ctx, household.ID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	var queued []QueuedRemovalEmail
+	for _, m := range nonOwnerMembers(members, household.OwnerUserID) {
+		email, err := s.removeMemberTx(ctx, tx, household, ownerUserID, m.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if email != nil {
+			queued = append(queued, *email)
+		}
+	}
+
+	// Dissolve exactly like DeleteHousehold — composed directly (not via the public
+	// DeleteHousehold method, which opens its own transaction and rejects disbanding
+	// while active non-owner members remain) since every member was just force-removed
+	// above within this same transaction.
+	if cerr = hhRepo.DeleteHousehold(ctx, household.ID, ownerUserID); cerr != nil {
+		return nil, cerr
+	}
+	if cerr = entRepo.ExpireActiveEntitlement(ctx, ownerUserID); cerr != nil {
+		return nil, cerr
+	}
+
+	if cerr = tx.Commit(ctx); cerr != nil {
+		return nil, cerr
+	}
+	s.capture(ownerUserID, phclient.EventHouseholdForceDisbanded)
+	// Round 4 Gap Analysis fix: the household row (and its cascaded household_members
+	// rows) is already gone by this point — mark every queued email as disbanded so
+	// sendRemovalEmails sends the corrected copy (no future-cleanup reference) instead of
+	// the individual-removal/auto-offboard copy's "cleaned up after 30 days" language,
+	// which is factually wrong here.
+	for i := range queued {
+		queued[i].Disbanded = true
+	}
+	s.sendRemovalEmails(ctx, queued)
+	return queued, nil
 }
 
 // ─── Invite lifecycle ──────────────────────────────────────────────────────────
@@ -762,18 +1230,51 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		return nil, cerr
 	}
 
-	// (5) Insert membership, snapshotting the caller's prior tier/status for Phase 7 restore.
-	priorTier := caller.ComputeEffectiveTier()
-	priorStatus := caller.SubscriptionStatus
-	member := &domain.HouseholdMember{
-		HouseholdID:             inv.HouseholdID,
-		UserID:                  callerUserID,
-		Role:                    domain.HouseholdRoleMember,
-		Status:                  domain.HouseholdMemberStatusActive,
-		PriorSubscriptionTier:   &priorTier,
-		PriorSubscriptionStatus: &priorStatus,
-	}
-	if cerr = hhRepo.InsertMember(ctx, member); cerr != nil {
+	// (5) Restore-or-insert membership (#1371 Task 4 — re-invite within the 30-day
+	// preservation window). If the caller has a 'removed' household_members row for THIS
+	// household — they were removed less than purgeAfterDays ago and are now being
+	// re-invited before Task 2's purge worker sweeps that row — reactivate the SAME row
+	// instead of inserting a duplicate historical one: GetRemovedMemberForUpdate locks
+	// the most recent removed row FOR UPDATE, then RestoreMember flips it back to
+	// status='active'. If no removed row exists (first-ever join, or the purge worker
+	// already deleted it), fall through to the original fresh-insert path, unchanged.
+	// Either branch is still gated by the seat check above — a restored member counts as
+	// a new active member against the seat cap exactly like a fresh join does.
+	var member *domain.HouseholdMember
+	removedMember, cerr := hhRepo.GetRemovedMemberForUpdate(ctx, inv.HouseholdID, callerUserID, removalPurgeWindowDays)
+	switch {
+	case cerr == nil:
+		// Restore path: reactivate the existing row rather than inserting a new one.
+		// RestoreMember already maps a since-joined-elsewhere conflict to
+		// ErrAlreadyInHousehold/ErrAlreadyOwnsHousehold (same contract InsertMember
+		// uses below) — surface it as-is rather than swallowing it. It also RETURNs
+		// the freshly-written updated_at (Codex review, #1371 Task 4) so the
+		// in-memory struct we return to the caller never leaks the pre-restore,
+		// stale updated_at into the API response.
+		updatedAt, cerr := hhRepo.RestoreMember(ctx, removedMember.ID)
+		if cerr != nil {
+			return nil, cerr
+		}
+		removedMember.Status = domain.HouseholdMemberStatusActive
+		removedMember.RemovedAt = nil
+		removedMember.UpdatedAt = updatedAt
+		member = removedMember
+	case errors.Is(cerr, domain.ErrMemberNotFound):
+		// Fresh-insert path: unchanged from before Task 4.
+		priorTier := caller.ComputeEffectiveTier()
+		priorStatus := caller.SubscriptionStatus
+		member = &domain.HouseholdMember{
+			HouseholdID:             inv.HouseholdID,
+			UserID:                  callerUserID,
+			Role:                    domain.HouseholdRoleMember,
+			Status:                  domain.HouseholdMemberStatusActive,
+			PriorSubscriptionTier:   &priorTier,
+			PriorSubscriptionStatus: &priorStatus,
+		}
+		if cerr = hhRepo.InsertMember(ctx, member); cerr != nil {
+			return nil, cerr
+		}
+	default:
 		return nil, cerr
 	}
 
@@ -899,6 +1400,19 @@ func callerHasLivePaddleSubscription(u *domain.User) bool {
 	default:
 		return false
 	}
+}
+
+// nonOwnerMembers filters members down to non-owner rows, preserving order. Shared by
+// OffboardExcessMembers (which needs the filtered slice for LIFO reverse iteration) and
+// ForceDisband (which just ranges over it) — #1371 Phase 7 foundation.
+func nonOwnerMembers(members []domain.HouseholdMember, ownerUserID string) []domain.HouseholdMember {
+	nonOwner := make([]domain.HouseholdMember, 0, len(members))
+	for _, m := range members {
+		if m.UserID != ownerUserID {
+			nonOwner = append(nonOwner, m)
+		}
+	}
+	return nonOwner
 }
 
 // splitBySet partitions fingerprints into shared/hidden account-ID lists for the

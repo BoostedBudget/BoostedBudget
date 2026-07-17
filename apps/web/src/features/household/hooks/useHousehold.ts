@@ -29,6 +29,13 @@ export interface UseHouseholdResult {
   isOwner: boolean
   seatsUsed: number
   seatsTotal: number
+  /**
+   * ISO timestamp of when the household first went over its plan's seat
+   * limit (mapped from `Household.over_capacity_since`). `undefined` when
+   * the household is within its seat limit, or when there's no household
+   * to report on yet.
+   */
+  overCapacitySince: string | undefined
   isLoading: boolean
   error: Error | null
   refetch: () => Promise<void>
@@ -82,6 +89,7 @@ export function useHousehold(): UseHouseholdResult {
   const seatsUsed = summary?.seats_active ?? 0
   const seatsTotal = summary?.users_included ?? 0
   const isOwner = summary?.is_owner ?? false
+  const overCapacitySince = household?.over_capacity_since ?? undefined
 
   // The expected 404 (no household) is not surfaced as an error; any other
   // failure on either query is.
@@ -110,6 +118,7 @@ export function useHousehold(): UseHouseholdResult {
     isOwner,
     seatsUsed,
     seatsTotal,
+    overCapacitySince,
     isLoading,
     error,
     refetch,

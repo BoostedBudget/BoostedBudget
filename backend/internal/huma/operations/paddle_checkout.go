@@ -26,6 +26,17 @@ type checkoutEntitlementReader interface {
 	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
 }
 
+// checkoutHouseholdSeatReader is the narrow capability HandleUpdateSubscription needs to
+// enforce the in-app downgrade seat guard (#1371 Task 5): find whether the caller owns a
+// household, and count its active members + pending invites against the post-change
+// effective tier's seat allowance. repository.HouseholdRepository satisfies this
+// structurally.
+type checkoutHouseholdSeatReader interface {
+	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
+	CountActiveMembers(ctx context.Context, householdID string) (int, error)
+	CountPendingInvites(ctx context.Context, householdID string) (int, error)
+}
+
 // PaddleCheckoutHandler handles Paddle checkout and subscription management operations.
 type PaddleCheckoutHandler struct {
 	paddleService   services.PaddleService
@@ -33,7 +44,8 @@ type PaddleCheckoutHandler struct {
 	config          *config.Config
 	tierConfig      *config.TierConfig
 	logger          *slog.Logger
-	entitlementRepo checkoutEntitlementReader // #1367 — Phase 3: nil skips the covered-member guard
+	entitlementRepo checkoutEntitlementReader   // #1367 — Phase 3: nil skips the covered-member guard
+	householdRepo   checkoutHouseholdSeatReader // #1371 — Task 5: nil skips the downgrade seat guard
 }
 
 // PaddleCheckoutHandlerDeps contains dependencies for PaddleCheckoutHandler.
@@ -50,6 +62,13 @@ type PaddleCheckoutHandlerDeps struct {
 	// moment their household owner stops actually covering them. Should always be wired
 	// in production; nil only to avoid breaking call sites unrelated to households.
 	EntitlementRepo checkoutEntitlementReader
+	// HouseholdRepo is optional (nil-safe) — when set, blocks a household owner from
+	// downgrading their subscription tier in-app if the new EFFECTIVE tier (honoring an
+	// active manual_tier_override) doesn't have enough seats for their current
+	// active+pending household (#1371 Task 5). Non-owners and solo users are unaffected.
+	// Should always be wired in production; nil only to avoid breaking call sites
+	// unrelated to households.
+	HouseholdRepo checkoutHouseholdSeatReader
 }
 
 // NewPaddleCheckoutHandler creates a new PaddleCheckoutHandler instance.
@@ -65,6 +84,7 @@ func NewPaddleCheckoutHandler(deps PaddleCheckoutHandlerDeps) *PaddleCheckoutHan
 		tierConfig:      deps.TierConfig,
 		logger:          logger,
 		entitlementRepo: deps.EntitlementRepo,
+		householdRepo:   deps.HouseholdRepo,
 	}
 }
 
@@ -462,6 +482,15 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get Paddle price ID for tier %s/%s: %w", input.Body.NewTier, input.Body.BillingInterval, err))
 	}
 
+	// #1371 Task 5 — in-app downgrade seat guard: block a household owner from
+	// downgrading to a tier that doesn't have enough seats for their current household.
+	// Nil-safe (mirrors entitlementRepo above) and a no-op for non-owners/solo users.
+	if h.householdRepo != nil {
+		if err := h.checkDowngradeSeatCapacity(ctx, user, input.Body.NewTier); err != nil {
+			return nil, err
+		}
+	}
+
 	prorationMode := input.Body.ProrationBillingMode
 	if prorationMode == "" {
 		prorationMode = "prorated_immediately"
@@ -497,6 +526,70 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 	out.Body.Status = string(updatedSub.Status)
 	out.Body.Message = message
 	return out, nil
+}
+
+// checkDowngradeSeatCapacity blocks a household owner from downgrading their subscription
+// tier in-app if the new tier doesn't have enough seats for their current household
+// (#1371 Task 5). It computes the owner's POST-CHANGE EFFECTIVE tier — simulating what
+// ComputeEffectiveTier() would resolve to if SubscriptionTier were set to newTier,
+// without mutating the caller's real record or writing to the DB — so an owner whose
+// active manual_tier_override keeps them on a higher effective tier than the raw
+// requested tier is correctly NOT blocked (they aren't actually downgrading in effective
+// terms). Returns nil (no-op) if the caller doesn't own a household; seats are an owner
+// concept, so a member changing their own tier is never affected. Does not touch the
+// over-capacity/grace mechanism (Task 6) — this is a synchronous pre-flight check only.
+func (h *PaddleCheckoutHandler) checkDowngradeSeatCapacity(ctx context.Context, user *domain.User, newTier string) error {
+	household, isOwner, found, err := h.householdRepo.GetHouseholdForUser(ctx, user.ID)
+	if err != nil {
+		return humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to look up household for user %s: %w", user.ID, err))
+	}
+	if !found || !isOwner {
+		return nil
+	}
+
+	// Simulate the post-change effective tier: copy the user, set the hypothetical new
+	// SubscriptionTier, and let ComputeEffectiveTier() apply the existing
+	// manual_tier_override logic on top of it (same pointer fields, no DB write).
+	simulatedUser := *user
+	simulatedUser.SubscriptionTier = newTier
+	effectiveTier := simulatedUser.ComputeEffectiveTier()
+
+	tier, err := h.tierConfig.GetTier(domain.TierName(effectiveTier))
+	if err != nil {
+		return humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to get tier config for effective tier %s: %w", effectiveTier, err))
+	}
+
+	activeCount, err := h.householdRepo.CountActiveMembers(ctx, household.ID)
+	if err != nil {
+		return humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to count active members for household %s: %w", household.ID, err))
+	}
+	pendingCount, err := h.householdRepo.CountPendingInvites(ctx, household.ID)
+	if err != nil {
+		return humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to count pending invites for household %s: %w", household.ID, err))
+	}
+
+	totalMembers := activeCount + pendingCount
+	if totalMembers <= tier.Pricing.UsersIncluded {
+		return nil
+	}
+
+	shortfall := totalMembers - tier.Pricing.UsersIncluded
+	h.logger.Warn("blocked in-app downgrade: insufficient seats for current household",
+		"user_id", user.ID,
+		"household_id", household.ID,
+		"requested_tier", newTier,
+		"effective_tier", effectiveTier,
+		"active_members", activeCount,
+		"pending_invites", pendingCount,
+		"seats_included", tier.Pricing.UsersIncluded,
+		"shortfall", shortfall,
+	)
+
+	memberWord := "members"
+	if shortfall == 1 {
+		memberWord = "member"
+	}
+	return huma.Error409Conflict(fmt.Sprintf("Remove %d %s before downgrading", shortfall, memberWord))
 }
 
 // HandleCancelSubscription handles POST /api/v1/subscription/cancel.

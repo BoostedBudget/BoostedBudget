@@ -251,8 +251,8 @@ func TestHouseholdShareRepository_Rejoin_DistinctRow_Integration(t *testing.T) {
 	require.NoError(t, repo.InsertShare(ctx, hh, ua, nil, domain.ShareVisibilityShared))
 
 	var rows []struct {
-		id        string
-		revoked   bool
+		id      string
+		revoked bool
 	}
 	pgRows, err := pool.Query(ctx, `SELECT id::text, revoked_at IS NOT NULL FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2 ORDER BY created_at`, hh, ua)
 	require.NoError(t, err)
@@ -305,4 +305,42 @@ func TestHouseholdShareRepository_ListMyAccountShares_Integration(t *testing.T) 
 
 	require.Contains(t, byID, newAccount)
 	assert.Nil(t, byID[newAccount].Visibility, "no grant row yet -> nil, not a default")
+}
+
+// TestHouseholdShareRepository_DeleteSharesForUser_Integration proves DeleteSharesForUser's
+// subquery join (`user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $2)`)
+// is actually correct against real tables: it must hard-delete the target user's own
+// share rows within the household, but must NEVER touch another user's share rows in
+// that SAME household — a wrong join/column here would still "pass" a pgxmock regex
+// match on the query text alone (#1371 Task 0 follow-up, coordinator review).
+func TestHouseholdShareRepository_DeleteSharesForUser_Integration(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewHouseholdShareRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAccount := insertTestUserAccount(t, pool, owner)
+	memberAccount := insertTestUserAccount(t, pool, member)
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM household_account_shares WHERE household_id = $1`, hh) //nolint:errcheck
+	})
+
+	_, err := repo.SetShareVisibility(ctx, hh, ownerAccount, nil, domain.ShareVisibilityShared)
+	require.NoError(t, err)
+	_, err = repo.SetShareVisibility(ctx, hh, memberAccount, nil, domain.ShareVisibilityShared)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.DeleteSharesForUser(ctx, hh, member))
+
+	var memberShareCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`, hh, memberAccount).Scan(&memberShareCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, memberShareCount, "the target member's share row must be hard-deleted")
+
+	var ownerShareCount int
+	err = pool.QueryRow(ctx, `SELECT COUNT(*) FROM household_account_shares WHERE household_id = $1 AND user_account_id = $2`, hh, ownerAccount).Scan(&ownerShareCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, ownerShareCount, "the owner's share row in the SAME household must be completely untouched")
 }

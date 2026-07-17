@@ -205,6 +205,25 @@ func (m *MockEmailService) SendHouseholdInvite(ctx context.Context, toEmail, inv
 	return args.Error(0)
 }
 
+// SendHouseholdMemberRemoved (#1371 — Phase 7, Task 3) is not exercised by these
+// deletion tests; stubbed to satisfy the expanded EmailService interface.
+func (m *MockEmailService) SendHouseholdMemberRemoved(ctx context.Context, toEmail, householdName string, purgeDate time.Time, disbanded bool) error {
+	args := m.Called(ctx, toEmail, householdName, purgeDate, disbanded)
+	return args.Error(0)
+}
+
+// SendHouseholdOverCapacityNotice/Warning (#1371 — Phase 7, Task 6) are not exercised
+// by these deletion tests; stubbed to satisfy the expanded EmailService interface.
+func (m *MockEmailService) SendHouseholdOverCapacityNotice(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
+func (m *MockEmailService) SendHouseholdOverCapacityWarning(ctx context.Context, toEmail, householdName string, activeCount, seatLimit int, deadline time.Time) error {
+	args := m.Called(ctx, toEmail, householdName, activeCount, seatLimit, deadline)
+	return args.Error(0)
+}
+
 // MockClerkService for testing
 type MockClerkService struct {
 	mock.Mock
@@ -1162,8 +1181,8 @@ func TestRequestDeletion_Transactional_OwnerWithActiveMembers_RollsBack(t *testi
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
@@ -1195,8 +1214,8 @@ func TestRequestDeletion_Transactional_OwnerWithNoOtherMembers_LocksRevokesAndMa
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "owner"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "owner"))
 	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
@@ -1231,8 +1250,8 @@ func TestRequestDeletion_Transactional_NonOwner_JustMarksForDeletion(t *testing.
 
 	pool.ExpectBegin()
 	pool.ExpectQuery("household_members hm").WithArgs("member-1").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "role"}).
-			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), "member"))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), nil, nil, nil, "member"))
 	pool.ExpectExec("UPDATE users SET deletion_requested_at").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectCommit()

@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -110,6 +111,30 @@ func (m *mockHouseholdService) ResolveScope(ctx context.Context, requestingUserI
 	return args.Get(0).(*domain.HouseholdScope), args.Error(1)
 }
 
+// OffboardExcessMembers, PurgeRemovedMembership, and ForceDisband (#1371 — Phase 7
+// foundation) are not exercised by these operation-layer tests (no HTTP endpoint wires
+// to them yet); stubbed to satisfy the expanded HouseholdService interface.
+func (m *mockHouseholdService) OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, householdID, expectedOverCapacitySince)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
+}
+
+func (m *mockHouseholdService) PurgeRemovedMembership(ctx context.Context, householdID, membershipID string) error {
+	args := m.Called(ctx, householdID, membershipID)
+	return args.Error(0)
+}
+
+func (m *mockHouseholdService) ForceDisband(ctx context.Context, ownerUserID string) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, ownerUserID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]services.QueuedRemovalEmail), args.Error(1)
+}
+
 func TestCreateHousehold_Success(t *testing.T) {
 	svc := &mockHouseholdService{}
 	h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}
@@ -158,6 +183,60 @@ func TestGetMyHousehold_Found(t *testing.T) {
 	assert.Equal(t, 1, out.Body.Summary.SeatsPending)
 }
 
+// TestGetMyHousehold_OverCapacitySince_RoundTrips proves GET /api/v1/households/me
+// surfaces the #1371 Task 1 over_capacity_since grace-period anchor: omitted from the
+// JSON response when the household is within its seat limit (nil), and present with the
+// correct RFC3339 timestamp when a grace period is running. GetMyHousehold passes
+// domain.Household straight through with no field-by-field DTO mapping, so this pins
+// down the JSON wire contract the frontend (Task 10) will read, not just Go struct
+// equality. #1371 — Phase 7 Task 9.
+func TestGetMyHousehold_OverCapacitySince_RoundTrips(t *testing.T) {
+	summary := domain.HouseholdEntitlementSummary{Tier: "household_2", UsersIncluded: 2, IsOwner: true, SeatsActive: 3, SeatsPending: 0}
+
+	t.Run("nil when not over capacity", func(t *testing.T) {
+		svc := &mockHouseholdService{}
+		h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths"}
+		svc.On("GetMyHousehold", mock.Anything, "user-1").Return(h, summary, true, nil)
+
+		handler := NewHouseholdHandler(svc, "https://app.example.com")
+		out, err := handler.GetMyHousehold(context.Background(), &GetMyHouseholdInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		})
+		require.NoError(t, err)
+		assert.Nil(t, out.Body.Household.OverCapacitySince)
+
+		raw, err := json.Marshal(out.Body)
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "over_capacity_since", "omitempty must drop the field entirely when nil")
+	})
+
+	t.Run("set with correct timestamp when over capacity", func(t *testing.T) {
+		since := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+		svc := &mockHouseholdService{}
+		h := &domain.Household{ID: "hh-1", OwnerUserID: "user-1", Name: "The Smiths", OverCapacitySince: &since}
+		svc.On("GetMyHousehold", mock.Anything, "user-1").Return(h, summary, true, nil)
+
+		handler := NewHouseholdHandler(svc, "https://app.example.com")
+		out, err := handler.GetMyHousehold(context.Background(), &GetMyHouseholdInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, out.Body.Household.OverCapacitySince)
+		assert.True(t, since.Equal(*out.Body.Household.OverCapacitySince))
+
+		raw, err := json.Marshal(out.Body)
+		require.NoError(t, err)
+		var decoded struct {
+			Household struct {
+				OverCapacitySince *time.Time `json:"over_capacity_since"`
+			} `json:"household"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		require.NotNil(t, decoded.Household.OverCapacitySince)
+		assert.True(t, since.Equal(*decoded.Household.OverCapacitySince))
+	})
+}
+
 func TestGetMyHousehold_NotFound(t *testing.T) {
 	svc := &mockHouseholdService{}
 	svc.On("GetMyHousehold", mock.Anything, "user-1").Return(nil, domain.HouseholdEntitlementSummary{}, false, nil)
@@ -203,6 +282,105 @@ func TestDeleteHousehold_MapsError(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
 	})
 	require.Error(t, err)
+}
+
+// TestDeleteHousehold_NoForce_CallsDeleteHousehold pins down the unchanged (#1367) "soft"
+// behavior when force is explicitly false: the handler must still call the old
+// DeleteHousehold path, not ForceDisband.
+func TestDeleteHousehold_NoForce_CallsDeleteHousehold(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("DeleteHousehold", mock.Anything, "user-1").Return(nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Force:              false,
+	})
+	require.NoError(t, err)
+	svc.AssertExpectations(t)
+	svc.AssertNotCalled(t, "ForceDisband", mock.Anything, mock.Anything)
+}
+
+// TestDeleteHousehold_Force_Success covers #1371 Task 7: force=true must delegate to
+// ForceDisband (not DeleteHousehold), even when active non-owner members exist —
+// ForceDisband itself already force-removes them in one transaction (Task 0).
+func TestDeleteHousehold_Force_Success(t *testing.T) {
+	svc := &mockHouseholdService{}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return(queued, nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	out, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+	svc.AssertExpectations(t)
+	svc.AssertNotCalled(t, "DeleteHousehold", mock.Anything, mock.Anything)
+}
+
+// TestDeleteHousehold_Force_NoOtherMembers_Success covers the owner-alone case: force=true
+// on a household with no active non-owner members must still succeed (ForceDisband
+// already handles this per Task 0 — an empty removal slice is not an error).
+func TestDeleteHousehold_Force_NoOtherMembers_Success(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return([]services.QueuedRemovalEmail{}, nil)
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+}
+
+// TestDeleteHousehold_Force_NonOwner_MapsError confirms force=true is rejected for a
+// non-owner exactly like the existing non-force path — ForceDisband itself returns
+// domain.ErrNotHouseholdOwner (same authorization pattern as DeleteHousehold), and the
+// handler must propagate it, not silently succeed.
+func TestDeleteHousehold_Force_NonOwner_MapsError(t *testing.T) {
+	svc := &mockHouseholdService{}
+	svc.On("ForceDisband", mock.Anything, "member-1").Return(nil, domain.ErrNotHouseholdOwner)
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "member-1"},
+		Force:              true,
+	})
+	require.Error(t, err)
+}
+
+// TestDeleteHousehold_Force_DoesNotResendRemovalEmails is the explicit regression test
+// for the known Task 6 double-send bug shape (see #1371 history: OffboardExcessMembers's
+// caller re-sent emails from the returned slice on top of the service's own internal
+// send). ForceDisband already calls sendRemovalEmails internally right after its own
+// tx.Commit — the handler must treat the returned []QueuedRemovalEmail as
+// caller-bookkeeping ONLY and must never re-send from it. mockHouseholdService only
+// stubs ForceDisband (Once()); HouseholdHandler holds no EmailService/notifier of its
+// own, so there is no second send path available to it — if a future change added one
+// and used it, this mock would either fail the Once() cardinality check (if it called
+// ForceDisband again) or panic on an unexpected call to any other unstubbed method.
+func TestDeleteHousehold_Force_DoesNotResendRemovalEmails(t *testing.T) {
+	svc := &mockHouseholdService{}
+	queued := []services.QueuedRemovalEmail{
+		{ToEmail: "member1@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+		{ToEmail: "member2@example.com", HouseholdName: "The Smiths", PurgeDate: time.Now().Add(30 * 24 * time.Hour)},
+	}
+	svc.On("ForceDisband", mock.Anything, "owner-1").Return(queued, nil).Once()
+
+	handler := NewHouseholdHandler(svc, "https://app.example.com")
+	_, err := handler.DeleteHousehold(context.Background(), &DeleteHouseholdInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "owner-1"},
+		Force:              true,
+	})
+	require.NoError(t, err)
+
+	// Once() above already enforces ForceDisband was called exactly one time; asserting
+	// expectations here re-confirms no other stubbed/unstubbed interaction occurred.
+	svc.AssertExpectations(t)
 }
 
 func TestListMembers_Success(t *testing.T) {
