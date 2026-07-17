@@ -114,8 +114,8 @@ func (m *mockHouseholdService) ResolveScope(ctx context.Context, requestingUserI
 // OffboardExcessMembers, PurgeRemovedMembership, and ForceDisband (#1371 — Phase 7
 // foundation) are not exercised by these operation-layer tests (no HTTP endpoint wires
 // to them yet); stubbed to satisfy the expanded HouseholdService interface.
-func (m *mockHouseholdService) OffboardExcessMembers(ctx context.Context, householdID string) ([]services.QueuedRemovalEmail, error) {
-	args := m.Called(ctx, householdID)
+func (m *mockHouseholdService) OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]services.QueuedRemovalEmail, error) {
+	args := m.Called(ctx, householdID, expectedOverCapacitySince)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

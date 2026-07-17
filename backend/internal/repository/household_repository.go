@@ -97,6 +97,17 @@ type HouseholdRepository interface {
 	// foundation.
 	LockHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error)
 
+	// GetHouseholdByID returns the full household record, keyed directly by householdID,
+	// WITHOUT taking a row lock — a plain read counterpart to LockHouseholdByID. Used by
+	// the Task 6 daily backstop worker to re-read the over-capacity state (anchor +
+	// notice-sent markers) fresh immediately before computing a grace deadline, since its
+	// scan-time snapshot can be stale by the time a given household's turn comes up in the
+	// sequential scan loop (no lock needed — an unconditional read, not a
+	// read-then-write critical section). Returns domain.ErrHouseholdNotFound if no such
+	// household exists (e.g. disbanded concurrently via ForceDisband). #1371 — Round 9
+	// Gap Analysis fix.
+	GetHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error)
+
 	// DeleteRemovedMember permanently deletes a household_members row identified by its
 	// own id, but ONLY if its status is 'removed' — it will never delete an 'active' row,
 	// which would bypass RemoveMember's authorization/owner-protection checks. Returns
@@ -127,15 +138,50 @@ type HouseholdRepository interface {
 	// safe to call on a household not currently in grace. #1371 — Phase 7.
 	ClearOverCapacity(ctx context.Context, householdID string) error
 
-	// MarkOverCapacityStartNoticeSent records that the "you're over capacity"
-	// warning email has been sent for the current grace period, so the Task 6
-	// worker never sends it twice. #1371 — Phase 7.
-	MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error
+	// ClearOverCapacityIfAnchorMatches clears the over-capacity grace state ONLY if the
+	// household's CURRENT over_capacity_since still equals expectedOverCapacitySince — an
+	// atomic compare-and-clear in a single round-trip (the WHERE clause does the compare
+	// AND the mutation atomically, no separate lock/read needed, unlike
+	// OffboardExcessMembers which needs a lock for its more complex removal work). Used by
+	// HouseholdOverCapacityCheckWorker.autoOffboard specifically: after a successful
+	// excess-member removal, a brand-new, independent over-capacity event could have
+	// re-flagged the household in the tiny window between OffboardExcessMembers's commit
+	// and this call — an unconditional clear would erase that fresh, unrelated grace
+	// period. A mismatch (0 rows affected) is not an error — it just means the anchor
+	// changed, so leave it alone; the next daily scan handles whatever the current state
+	// now is. Deliberately a NEW, narrowly-scoped sibling of ClearOverCapacity rather than
+	// a signature change to it: ClearOverCapacity's 7 other production call sites (the 4
+	// clear-if-flagged branches in household_over_capacity_check.go's Cases 1/2 and their
+	// fresh-recheck counterparts, subscription_webhook.go's two clears,
+	// household_service.go's removeMemberTx) have no natural "expected anchor" to verify
+	// against, so forcing them to fake one would be worse than a second method.
+	// #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 4).
+	ClearOverCapacityIfAnchorMatches(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) error
 
-	// MarkOverCapacityWarn3dSent records that the "3 days left" warning email
-	// has been sent for the current grace period, so the Task 6 worker never
-	// sends it twice. #1371 — Phase 7.
-	MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error
+	// MarkOverCapacityStartNoticeSent records that the "you're over capacity" warning
+	// email has been sent for the current grace period, so the Task 6 worker never sends
+	// it twice. Guarded by over_capacity_since = expectedOverCapacitySince (not just IS NOT
+	// NULL) — expectedOverCapacitySince must be the SAME anchor the email content was
+	// actually generated for (the caller's fresh h.OverCapacitySince at send time). Without
+	// this, a clear-then-re-flag cycle landing between the send and this stamp call would
+	// incorrectly mark the NEW, unrelated grace period as "already notified" — even though
+	// the email that was actually sent described the OLD, now-superseded one, silently
+	// skipping the owner-facing notice the new grace period is entitled to (auto-offboard
+	// timing itself is unaffected, since that depends on over_capacity_since directly, not
+	// these notice-sent flags). A mismatch (0 rows affected) is not an error: the
+	// send-then-stamp design already tolerates "stamp didn't take" as "the new grace
+	// period gets its own notice on a future run," since its OWN notice-sent flag was
+	// never touched by this mismatched attempt. #1371 — Round 9 Gap Analysis fix (fourth
+	// Codex adversarial pass, Bug 5); originally guarded by IS NOT NULL only (Round 5).
+	MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error
+
+	// MarkOverCapacityWarn3dSent records that the "3 days left" warning email has been
+	// sent for the current grace period, so the Task 6 worker never sends it twice. See
+	// MarkOverCapacityStartNoticeSent's doc comment for why expectedOverCapacitySince is
+	// required and why a mismatch is a legitimate no-op, not an error. #1371 — Round 9 Gap
+	// Analysis fix (fourth Codex adversarial pass, Bug 5); originally guarded by IS NOT
+	// NULL only (Round 5).
+	MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error
 
 	// ListHouseholdsWithMembers returns every household that currently has at
 	// least one active member, regardless of over-capacity state. This is the
@@ -379,6 +425,21 @@ func (r *householdRepository) LockHouseholdByID(ctx context.Context, householdID
 	return &h, nil
 }
 
+func (r *householdRepository) GetHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error) {
+	var h domain.Household
+	err := r.db.QueryRow(ctx, `
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1
+	`, householdID).Scan(householdScanArgs(&h)...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrHouseholdNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
 func (r *householdRepository) DeleteRemovedMember(ctx context.Context, membershipID string) (string, string, error) {
 	var householdID, userID string
 	err := r.db.QueryRow(ctx, `
@@ -457,26 +518,53 @@ func (r *householdRepository) ClearOverCapacity(ctx context.Context, householdID
 	return err
 }
 
-// MarkOverCapacityStartNoticeSent stamps the initial grace notice as sent. Guarded by
-// `over_capacity_since IS NOT NULL` — Round 5 Gap Analysis fix (#1371): the daily
-// backstop worker can race a concurrent read-only-owner ClearOverCapacity (webhook fast
-// path or the worker's own next run), and without this guard a stale notice-sent stamp
-// could be written onto a household that's no longer in grace. A 0-row UPDATE is not an
-// error, preserving the existing nil-on-success contract.
-func (r *householdRepository) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error {
+// ClearOverCapacityIfAnchorMatches clears the over-capacity grace state ONLY if the
+// household's CURRENT over_capacity_since still equals expectedOverCapacitySince — an
+// atomic compare-and-clear in a single round-trip (the WHERE clause does the compare AND
+// the mutation atomically, no separate lock/read needed, unlike OffboardExcessMembers
+// which needs a lock for its more complex removal work). Used by autoOffboard (Task 6)
+// specifically: after a successful excess-member removal, a brand-new, independent
+// over-capacity event could have re-flagged the household in the tiny window between
+// OffboardExcessMembers's commit and this call — an unconditional clear would erase that
+// fresh, unrelated grace period. A mismatch (0 rows affected) is not an error — it just
+// means the anchor changed, so leave it alone; the next daily scan handles whatever the
+// current state now is. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass).
+func (r *householdRepository) ClearOverCapacityIfAnchorMatches(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL
-	`, householdID, sentAt)
+		UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL
+		WHERE id = $1 AND over_capacity_since = $2
+	`, householdID, expectedOverCapacitySince)
+	return err
+}
+
+// MarkOverCapacityStartNoticeSent stamps the initial grace notice as sent. Guarded by
+// `over_capacity_since = expectedOverCapacitySince` — originally just `IS NOT NULL`
+// (Round 5 Gap Analysis fix: the daily backstop worker can race a concurrent
+// read-only-owner ClearOverCapacity, and without SOME guard a stale notice-sent stamp
+// could be written onto a household that's no longer in grace), but that guard alone
+// couldn't detect a clear-THEN-re-flag cycle landing between the notice email actually
+// being sent (for the OLD anchor) and this stamp call — it would incorrectly mark the
+// NEW, unrelated grace period as "already notified," silently skipping that new period's
+// own legitimate notice. Comparing against the specific anchor the email content was
+// generated for closes that gap. A mismatched-anchor 0-row UPDATE is still not an error,
+// preserving the existing nil-on-success, send-then-stamp-tolerates-a-miss contract.
+// #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass).
+func (r *householdRepository) MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3
+	`, householdID, sentAt, expectedOverCapacitySince)
 	return err
 }
 
 // MarkOverCapacityWarn3dSent stamps the "3 days left" warning as sent. Guarded by
-// `over_capacity_since IS NOT NULL` — see MarkOverCapacityStartNoticeSent's doc comment
-// for why. Round 5 Gap Analysis fix (#1371).
-func (r *householdRepository) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error {
+// `over_capacity_since = expectedOverCapacitySince` — see
+// MarkOverCapacityStartNoticeSent's doc comment for the full rationale (originally `IS
+// NOT NULL` only, Round 5; tightened to the specific anchor, Round 9). #1371 — Round 9
+// Gap Analysis fix (fourth Codex adversarial pass).
+func (r *householdRepository) MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error {
 	_, err := r.db.Exec(ctx, `
-		UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL
-	`, householdID, sentAt)
+		UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3
+	`, householdID, sentAt, expectedOverCapacitySince)
 	return err
 }
 

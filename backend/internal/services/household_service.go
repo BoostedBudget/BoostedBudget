@@ -189,7 +189,30 @@ type HouseholdService interface {
 	// Phase 7 foundation; the decision of WHEN/how-many to call this with (grace
 	// periods, over_capacity_since bookkeeping) is Task 6's responsibility, not this
 	// method's.
-	OffboardExcessMembers(ctx context.Context, householdID string) ([]QueuedRemovalEmail, error)
+	//
+	// expectedOverCapacitySince is the over_capacity_since value the CALLER's own removal
+	// decision was based on (e.g. household_over_capacity_check.go's autoOffboard, which
+	// only calls this once its fresh re-read has determined the grace deadline computed
+	// from that value has passed). This method re-verifies, immediately after taking its
+	// own lock, that the CURRENT locked row's OverCapacitySince still matches — a
+	// mismatch (including a nil current value) means a concurrent clear-then-re-flag
+	// cycle (e.g. a subscription webhook) landed between the caller's decision and this
+	// method's own LockHouseholdByID call, leaving a genuinely fresh (or cleared) anchor
+	// under this lock that the caller's decision never saw. This closes a Round 9 Gap
+	// Analysis finding (Codex adversarial review): without this check, the pre-fix
+	// implementation silently ignored the fresh anchor, proceeding with LIFO removal
+	// based on the caller's now-superseded decision. On a mismatch, this method commits
+	// its (empty) transaction and returns (nil, domain.ErrOverCapacityAnchorMismatch) —
+	// deliberately NOT the same "nil error, empty slice" shape as the read-only-owner
+	// no-op below, because the CALLER must be able to tell the two apart: a read-only
+	// owner means grace is moot and the caller may safely clear its over-capacity flag,
+	// but an anchor mismatch means the household is STILL over capacity under a
+	// different, legitimately fresh grace period that the caller must leave untouched
+	// (third Codex adversarial pass — a follow-up bug found in autoOffboard's original,
+	// unconditional post-call ClearOverCapacity). This method still does not own or
+	// compute any grace-period logic itself — it only verifies a precondition the caller
+	// already decided on still holds at the moment of the lock.
+	OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]QueuedRemovalEmail, error)
 
 	// PurgeRemovedMembership permanently deletes a household_members row (identified by
 	// its own id) that is already status='removed', along with that member's
@@ -261,6 +284,11 @@ type householdService struct {
 	// acceptInviteAfterOwnerCheckHook is a test-only synchronization seam (see the call site
 	// in AcceptInvite for why it exists). Always nil in production.
 	acceptInviteAfterOwnerCheckHook func()
+
+	// offboardExcessMembersAfterOwnerLockHook is a test-only synchronization seam, the
+	// OffboardExcessMembers analog of acceptInviteAfterOwnerCheckHook above — see the call
+	// site in OffboardExcessMembers for why it exists. Always nil in production.
+	offboardExcessMembersAfterOwnerLockHook func()
 }
 
 // NewHouseholdService creates a new HouseholdService. db must be the same pool used to
@@ -668,7 +696,7 @@ func (s *householdService) sendRemovalEmails(ctx context.Context, queued []Queue
 
 // OffboardExcessMembers implements the HouseholdService method of the same name — see
 // the interface doc comment for the full contract.
-func (s *householdService) OffboardExcessMembers(ctx context.Context, householdID string) ([]QueuedRemovalEmail, error) {
+func (s *householdService) OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]QueuedRemovalEmail, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -688,23 +716,73 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 		return nil, cerr
 	}
 
-	owner, cerr := s.userRepo.GetUserByID(ctx, household.OwnerUserID)
+	// Round 9 Gap Analysis fix (Codex adversarial review): verify the anchor the caller's
+	// own removal decision was based on still matches the CURRENT locked row, before doing
+	// anything else — including before the owner-read-only check below. A concurrent
+	// clear-then-re-flag cycle (e.g. a subscription webhook) can land between the caller's
+	// own fresh read and this lock acquisition, leaving a genuinely fresh over_capacity_since
+	// here that the caller's decision never saw. Unlike the read-only-owner case immediately
+	// below, this is NOT reported the same way: return domain.ErrOverCapacityAnchorMismatch
+	// (rather than a nil-error empty slice) so the caller can tell "grace is moot, safe to
+	// clear" apart from "still over capacity under a different, fresh grace period — do NOT
+	// clear it" (third Codex adversarial pass, household_over_capacity_check.go's autoOffboard).
+	if household.OverCapacitySince == nil || !household.OverCapacitySince.Equal(expectedOverCapacitySince) {
+		if cerr = tx.Commit(ctx); cerr != nil {
+			return nil, cerr
+		}
+		return nil, domain.ErrOverCapacityAnchorMismatch
+	}
+
+	// Owner is read via lockAndGetUser (the same helper DeclineInvite/AcceptInvite already
+	// use), NOT a plain userRepo.GetUserByID — a further Round 9 Gap Analysis fix (Codex
+	// adversarial review, a later pass than the anchor-mismatch check above: while walking
+	// the whole over-capacity lifecycle end-to-end to confirm that chain had converged
+	// safe, this pass surfaced a DIFFERENT, pre-existing bug in this same function that
+	// predates Round 9 entirely — Round 3-era code, untouched by any earlier fix this
+	// round). Even with the household row already locked above, a plain unlocked read here
+	// left a live race: a concurrent Paddle webhook could commit an owner tier UPGRADE
+	// (e.g. household_2 -> household_4) in the window between this read and the actual
+	// LIFO removal several lines below — removal that runs on THIS SAME transaction, still
+	// holding the household lock, but with no lock at all on the user row in between. The
+	// removal would then proceed using the now-stale, too-low household_2 seat limit,
+	// incorrectly removing members who would actually fit under the just-committed,
+	// current tier — a real path to incorrect member removal, not merely a stale-read
+	// annoyance. lockAndGetUser closes it exactly like it already does for
+	// DeclineInvite/AcceptInvite: the FOR UPDATE lock taken here is held for the remainder
+	// of THIS transaction, so any concurrent writer to the owner's users row must wait
+	// until this transaction commits or rolls back — the read below (and the seat-limit/
+	// removal decision built on it) is therefore guaranteed fresh AND stays fresh for the
+	// rest of this method's lifetime, not just at the instant of the read.
+	owner, cerr := s.lockAndGetUser(ctx, tx, household.OwnerUserID)
 	if cerr != nil {
 		return nil, cerr
 	}
 
+	// Test-only synchronization seam (always nil in production): invoked immediately after
+	// the owner is locked+read, while this transaction (and its owner-row lock) is still
+	// open. Exists solely so the real-DB regression test for the fix above
+	// (TestHouseholdServiceIntegration_OffboardExcessMembers_OwnerLockedDuringRemoval_ConcurrentTierUpgradeWaits)
+	// can deterministically prove a concurrent owner-tier write is genuinely blocked at
+	// this point, rather than relying on incidental lock timing that does not reliably
+	// discriminate a fixed implementation from a broken one — mirroring
+	// acceptInviteAfterOwnerCheckHook's identical rationale in AcceptInvite.
+	if s.offboardExcessMembersAfterOwnerLockHook != nil {
+		s.offboardExcessMembersAfterOwnerLockHook()
+	}
+
 	// Gap Analysis Round 3, GT-2: re-check the owner's subscription status FRESH, under
-	// this method's own household-row lock, rather than trusting a caller's possibly-stale
-	// read. household_over_capacity_check.go's processHousehold reads the owner once at
-	// the top of a run, then may call this method (via autoOffboard) some time later in
-	// that SAME run — if the owner's subscription lapses via a concurrent Paddle webhook
-	// in that window, the caller's cached owner would still look active. A read-only owner
-	// means the over-capacity grace is moot: members already fall back to their own tier
-	// via the (unchanged) entitlement resolver's owner-read-only branch, so there's
-	// nothing to LIFO-remove — skip straight to a normal commit instead of computing a
-	// seat limit and removing anyone. This is a legitimate "nothing to do" outcome, not an
-	// error; the caller (the daily worker's autoOffboard) already clears the over-capacity
-	// flag unconditionally after any successful call here, regardless of queue length.
+	// this method's own locks (the household row above, and now — per the fix just above —
+	// the owner's own user row too), rather than trusting a caller's possibly-stale read.
+	// household_over_capacity_check.go's processHousehold reads the owner once at the top
+	// of a run, then may call this method (via autoOffboard) some time later in that SAME
+	// run — if the owner's subscription lapses via a concurrent Paddle webhook in that
+	// window, the caller's cached owner would still look active. A read-only owner means
+	// the over-capacity grace is moot: members already fall back to their own tier via the
+	// (unchanged) entitlement resolver's owner-read-only branch, so there's nothing to
+	// LIFO-remove — skip straight to a normal commit instead of computing a seat limit and
+	// removing anyone. This is a legitimate "nothing to do" outcome, not an error; the
+	// caller (the daily worker's autoOffboard) already clears the over-capacity flag
+	// unconditionally after any successful call here, regardless of queue length.
 	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
 		if cerr = tx.Commit(ctx); cerr != nil {
 			return nil, cerr

@@ -8,6 +8,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -60,12 +61,43 @@ type HouseholdOverCapacityCheckRepository interface {
 	// fast path) already set it first — so callers must use the returned value,
 	// never their own local `since`, to compute anything owner-facing.
 	SetOverCapacity(ctx context.Context, householdID string, since time.Time) (time.Time, error)
-	// ClearOverCapacity ends the current grace period (Task 1).
+	// ClearOverCapacity ends the current grace period (Task 1). Used by Cases 1/2/3's
+	// own fresh-re-check clears, which have no natural "expected anchor" to verify
+	// against — NOT by autoOffboard, which uses ClearOverCapacityIfAnchorMatches instead.
 	ClearOverCapacity(ctx context.Context, householdID string) error
+	// ClearOverCapacityIfAnchorMatches atomically clears the over-capacity grace state
+	// ONLY if the household's CURRENT over_capacity_since still equals
+	// expectedOverCapacitySince — used EXCLUSIVELY by autoOffboard, after a successful
+	// OffboardExcessMembers call. Between that call's commit (releasing its lock) and
+	// this clear, an entirely new, independent over-capacity event could have re-flagged
+	// the household (e.g. another member joining, unrelated to the removal that just
+	// happened) — an unconditional ClearOverCapacity would erase that brand-new,
+	// legitimate grace period. A mismatch (0 rows affected) is not an error; it just
+	// means autoOffboard must leave the flag alone and let the next daily scan handle
+	// whatever the current state now is. #1371 — Round 9 Gap Analysis fix (fourth Codex
+	// adversarial pass, Bug 4).
+	ClearOverCapacityIfAnchorMatches(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) error
 	// MarkOverCapacityStartNoticeSent records the initial grace notice was sent (Task 1).
-	MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time) error
-	// MarkOverCapacityWarn3dSent records the "3 days left" warning was sent (Task 1).
-	MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time) error
+	// expectedOverCapacitySince must be the SAME anchor (h.OverCapacitySince) the notice
+	// email's content was actually generated from — a mismatch means a concurrent
+	// clear-then-re-flag cycle superseded that grace period between the send and this
+	// stamp call, and the mismatched stamp attempt correctly no-ops rather than marking
+	// the NEW, unrelated grace period as already-notified. #1371 — Round 9 Gap Analysis
+	// fix (fourth Codex adversarial pass, Bug 5).
+	MarkOverCapacityStartNoticeSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error
+	// MarkOverCapacityWarn3dSent records the "3 days left" warning was sent (Task 1). See
+	// MarkOverCapacityStartNoticeSent's doc comment for why expectedOverCapacitySince is
+	// required. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 5).
+	MarkOverCapacityWarn3dSent(ctx context.Context, householdID string, sentAt time.Time, expectedOverCapacitySince time.Time) error
+	// GetHouseholdByID re-reads the full household record, keyed by ID, with no lock. Needed
+	// because the owner/tier/activeCount fresh re-checks added in Rounds 5-8 never re-read
+	// h.OverCapacitySince or its two notice-sent markers themselves — this worker's scan-time
+	// snapshot of a household can go stale sitting unprocessed in the sequential scan loop,
+	// and ClearOverCapacity nulls all three of those columns together, so a real
+	// clear-then-re-flag cycle produces a genuinely fresh anchor+markers triple in the
+	// database that the stale in-memory struct has no way to see without this re-read.
+	// #1371 — Round 9 Gap Analysis fix.
+	GetHouseholdByID(ctx context.Context, householdID string) (*domain.Household, error)
 }
 
 // HouseholdOverCapacityUserRepository defines the owner-lookup method needed to
@@ -79,8 +111,25 @@ type HouseholdOverCapacityUserRepository interface {
 // household's grace period has fully expired. Delegates ALL LIFO removal logic to
 // HouseholdService.OffboardExcessMembers (#1371 Task 0) — this worker never touches
 // member-removal SQL directly, only the grace-window bookkeeping around it.
+//
+// expectedOverCapacitySince must be the SAME over_capacity_since this worker's own fresh
+// re-check (processHousehold's GetHouseholdByID re-read) based its deadline-passed
+// decision on — never a locally-recomputed or stale value. OffboardExcessMembers
+// re-verifies this anchor still matches the row it actually locks, and no-ops (rather
+// than removing anyone) if a concurrent clear-then-re-flag cycle landed in the race
+// window between this worker's fresh re-check and OffboardExcessMembers's own lock
+// acquisition — see that method's doc comment for the full rationale. #1371 — Round 9
+// Gap Analysis fix (Codex adversarial review).
+//
+// On that anchor-mismatch no-op, OffboardExcessMembers returns
+// domain.ErrOverCapacityAnchorMismatch rather than a nil-error empty slice —
+// autoOffboard MUST check for this sentinel via errors.Is and, when it matches, skip its
+// own ClearOverCapacity call entirely (rather than clearing unconditionally, as it does
+// for every other nil-error outcome). The household is still over capacity at that point,
+// just under a different, legitimately fresh grace period that this worker's stale
+// decision must not erase. #1371 — Round 9 Gap Analysis fix (third Codex adversarial pass).
 type HouseholdOverCapacityOffboardService interface {
-	OffboardExcessMembers(ctx context.Context, householdID string) ([]services.QueuedRemovalEmail, error)
+	OffboardExcessMembers(ctx context.Context, householdID string, expectedOverCapacitySince time.Time) ([]services.QueuedRemovalEmail, error)
 }
 
 // HouseholdOverCapacityEmailService defines the email methods needed by this worker:
@@ -308,6 +357,43 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
+	// Fresh over-capacity-state re-read: the owner/tier/activeCount fresh re-checks above
+	// (Rounds 5-8) all guard against THIS worker flagging/notifying/offboarding a household
+	// that no longer warrants it — but none of them re-read h.OverCapacitySince itself, nor
+	// the two notice-sent markers (h.OverCapacityStartNoticeSentAt/h.OverCapacityWarn3dSentAt).
+	// Those are still the values scanHouseholds's single ListHouseholdsWithMembers call read
+	// at the START of this scan pass, which can be stale by the time this household's turn
+	// comes up in the sequential scan loop. ClearOverCapacity nulls all three of those columns
+	// TOGETHER, so a real "clear, then re-flag" sequence (e.g. the owner briefly comes back
+	// within capacity via the webhook fast path, then goes over again shortly after) produces
+	// a genuinely FRESH anchor+markers triple in the database — new over_capacity_since,
+	// both notice-sent markers back to nil. Without this re-read, Case 3's `h.OverCapacitySince
+	// == nil` check is skipped (the stale h already has a non-nil value), and the deadline
+	// below gets computed from the STALE, possibly already-past-deadline anchor — triggering
+	// an immediate, incorrect auto-offboard (real member removal) even though the database's
+	// TRUE grace period may have started only moments ago. Re-reading owner/tier/activeCount
+	// alone cannot catch this: none of those three values change across a clear-then-re-flag
+	// cycle, only the over-capacity columns themselves do. #1371 — Round 9 Gap Analysis fix
+	// (Codex adversarial review).
+	freshHousehold, err := w.repo.GetHouseholdByID(ctx, h.ID)
+	if errors.Is(err, domain.ErrHouseholdNotFound) {
+		// Household was disbanded concurrently (e.g. ForceDisband) — nothing left to do.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to re-read over-capacity state for household %s (fresh re-check): %w", h.ID, err)
+	}
+	h.OverCapacitySince = freshHousehold.OverCapacitySince
+	h.OverCapacityStartNoticeSentAt = freshHousehold.OverCapacityStartNoticeSentAt
+	h.OverCapacityWarn3dSentAt = freshHousehold.OverCapacityWarn3dSentAt
+	// Also refresh h.Name: it's shown to the owner in the notice emails below, and — like
+	// the over-capacity fields above — is otherwise still the scan-time snapshot, stale if
+	// the owner renamed the household while it waited its turn in the scan loop. Free to
+	// correct here since GetHouseholdByID already fetched the current row. #1371 — Round 9
+	// follow-up (Codex adversarial review, same staleness class as Round 6's stale-owner-
+	// email fix, applied to the household's own display name instead of the owner's).
+	h.Name = freshHousehold.Name
+
 	// Case 3: over capacity, not yet flagged — the webhook fast path missed this one.
 	if h.OverCapacitySince == nil {
 		since := time.Now()
@@ -366,12 +452,42 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 // again here from the returned queue would double-email every auto-offboarded member
 // (caught in review; ForceDisband, Task 7, has the identical internally-sends-AND-
 // returns-a-queue shape, so any future caller there must not repeat this mistake).
+//
+// h.OverCapacitySince is guaranteed non-nil here: this is only ever called from Case 4 in
+// processHousehold, which only fires once the grace deadline (itself computed FROM
+// h.OverCapacitySince, after this worker's own fresh GetHouseholdByID re-read) has passed.
+// That dereferenced value is passed through as OffboardExcessMembers's
+// expectedOverCapacitySince — the anchor this worker's OWN deadline decision was based
+// on — so OffboardExcessMembers can detect (and no-op on) a concurrent clear-then-re-flag
+// race landing between this worker's re-read and OffboardExcessMembers's own lock
+// acquisition. #1371 — Round 9 Gap Analysis fix (Codex adversarial review).
+//
+// The post-success clear below uses ClearOverCapacityIfAnchorMatches, NOT the
+// unconditional ClearOverCapacity: OffboardExcessMembers just succeeded USING the anchor
+// this worker expected, but between its commit (releasing its lock) and this clear call,
+// an entirely new, independent over-capacity event could have landed (e.g. the
+// subscription webhook re-flagging the household for an unrelated reason — another
+// member joining, another tier downgrade). An unconditional clear would erase that
+// brand-new, legitimate grace period; the anchor-guarded clear leaves it untouched on a
+// mismatch instead. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass,
+// Bug 4).
 func (w *HouseholdOverCapacityCheckWorker) autoOffboard(ctx context.Context, jobID int64, h *domain.Household, activeCount, seatLimit int) error {
-	queued, err := w.offboardSvc.OffboardExcessMembers(ctx, h.ID)
+	queued, err := w.offboardSvc.OffboardExcessMembers(ctx, h.ID, *h.OverCapacitySince)
+	if errors.Is(err, domain.ErrOverCapacityAnchorMismatch) {
+		// A concurrent clear-then-re-flag cycle landed between this worker's fresh
+		// re-read and OffboardExcessMembers's own lock acquisition — the household is
+		// now under a DIFFERENT (or cleared) grace period than the one this worker
+		// decided to act on. Do NOT clear over-capacity here: doing so would erase a
+		// legitimately fresh grace period that deserves its own full 14 days. Leave the
+		// flag exactly as OffboardExcessMembers found it — the next daily scan will
+		// correctly re-evaluate against whatever the CURRENT anchor now is. #1371 —
+		// Round 9 Gap Analysis fix (third Codex adversarial pass).
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to auto-offboard excess members for household %s: %w", h.ID, err)
 	}
-	if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
+	if err := w.repo.ClearOverCapacityIfAnchorMatches(ctx, h.ID, *h.OverCapacitySince); err != nil {
 		return fmt.Errorf("failed to clear over-capacity after auto-offboard for household %s: %w", h.ID, err)
 	}
 	w.logger.Info("household auto-offboarded excess members after grace deadline",
@@ -384,6 +500,14 @@ func (w *HouseholdOverCapacityCheckWorker) autoOffboard(ctx context.Context, job
 // — but ONLY on a successful send. Mirrors RetentionCleanupCheckWorker.send30dNotices'
 // send-then-stamp tradeoff exactly: a failed send skips the stamp so the notice is
 // retried on the next daily run instead of being silently skipped forever.
+//
+// The stamp call passes *h.OverCapacitySince as the expected anchor: h.OverCapacitySince
+// at this point is the SAME fresh value processHousehold used to compute deadline (this
+// is the caller's already-current struct field, not re-read again) — the exact anchor
+// the notice email's content was generated for. Without threading it through, a
+// clear-then-re-flag cycle landing between the send above and this stamp call would mark
+// the NEW, unrelated grace period as already-notified, silently skipping ITS legitimate
+// notice. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 5).
 func (w *HouseholdOverCapacityCheckWorker) sendStartNotice(ctx context.Context, jobID int64, owner *domain.User, h *domain.Household, activeCount, seatLimit int, deadline time.Time) error {
 	if w.emailService == nil {
 		return nil
@@ -397,14 +521,16 @@ func (w *HouseholdOverCapacityCheckWorker) sendStartNotice(ctx context.Context, 
 			"job_id", jobID, "household_id", h.ID, "error", err)
 		return nil
 	}
-	if err := w.repo.MarkOverCapacityStartNoticeSent(ctx, h.ID, time.Now()); err != nil {
+	if err := w.repo.MarkOverCapacityStartNoticeSent(ctx, h.ID, time.Now(), *h.OverCapacitySince); err != nil {
 		return fmt.Errorf("failed to mark over-capacity start notice sent for household %s: %w", h.ID, err)
 	}
 	return nil
 }
 
 // send3dWarning sends the "3 days left" follow-up email and stamps it as sent — same
-// send-then-stamp tradeoff as sendStartNotice.
+// send-then-stamp tradeoff as sendStartNotice, including the anchor-guarded stamp (see
+// that method's doc comment for the full mis-stamping race this closes). #1371 — Round 9
+// Gap Analysis fix (fourth Codex adversarial pass, Bug 5).
 func (w *HouseholdOverCapacityCheckWorker) send3dWarning(ctx context.Context, jobID int64, owner *domain.User, h *domain.Household, activeCount, seatLimit int, deadline time.Time) error {
 	if w.emailService == nil {
 		return nil
@@ -418,7 +544,7 @@ func (w *HouseholdOverCapacityCheckWorker) send3dWarning(ctx context.Context, jo
 			"job_id", jobID, "household_id", h.ID, "error", err)
 		return nil
 	}
-	if err := w.repo.MarkOverCapacityWarn3dSent(ctx, h.ID, time.Now()); err != nil {
+	if err := w.repo.MarkOverCapacityWarn3dSent(ctx, h.ID, time.Now(), *h.OverCapacitySince); err != nil {
 		return fmt.Errorf("failed to mark over-capacity 3-day warning sent for household %s: %w", h.ID, err)
 	}
 	return nil

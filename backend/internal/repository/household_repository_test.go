@@ -377,6 +377,47 @@ func TestHouseholdRepository_LockHouseholdByID_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
 }
 
+// ─── GetHouseholdByID (#1371 — Round 9 Gap Analysis fix) ─────────────────────
+
+func TestHouseholdRepository_GetHouseholdByID_Found(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1
+	`)).
+		WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows(householdColumnNames).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+
+	h, err := repo.GetHouseholdByID(context.Background(), "hh-1")
+	require.NoError(t, err)
+	assert.Equal(t, "hh-1", h.ID)
+	assert.Equal(t, "owner-1", h.OwnerUserID)
+	assert.Equal(t, "The Smiths", h.Name)
+	assert.Nil(t, h.OverCapacitySince)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHouseholdRepository_GetHouseholdByID_NotFound(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, owner_user_id, name, created_at, updated_at, over_capacity_since, over_capacity_start_notice_sent_at, over_capacity_warn3d_sent_at
+		FROM households WHERE id = $1
+	`)).
+		WithArgs("hh-missing").
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := repo.GetHouseholdByID(context.Background(), "hh-missing")
+	assert.ErrorIs(t, err, domain.ErrHouseholdNotFound)
+}
+
 // ─── DeleteRemovedMember (#1371 — Phase 7 foundation) ────────────────────────
 
 func TestHouseholdRepository_DeleteRemovedMember_Success(t *testing.T) {
@@ -507,17 +548,83 @@ func TestHouseholdRepository_ClearOverCapacity_NotInGrace_NoOp(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MatchingAnchor_Clears proves
+// the atomic compare-and-clear WHERE clause includes the anchor guard
+// (over_capacity_since = $2), not just a bare id match — the SQL text assertion below is
+// what actually distinguishes this method from the unconditional ClearOverCapacity.
+// #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 4).
+func TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MatchingAnchor_Clears(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	expectedSince := time.Now().Add(-15 * 24 * time.Hour)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL
+		WHERE id = $1 AND over_capacity_since = $2`)).
+		WithArgs("hh-1", expectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.ClearOverCapacityIfAnchorMatches(context.Background(), "hh-1", expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MismatchedAnchor_NoOp proves a
+// mismatched anchor (0 rows affected — the household's CURRENT over_capacity_since no
+// longer equals the anchor the caller expected, e.g. a concurrent clear-then-re-flag
+// cycle landed first) is a legitimate no-op, not an error. autoOffboard relies on this to
+// avoid erasing a brand-new, independent grace period. #1371 — Round 9 Gap Analysis fix
+// (fourth Codex adversarial pass, Bug 4).
+func TestHouseholdRepository_ClearOverCapacityIfAnchorMatches_MismatchedAnchor_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-15 * 24 * time.Hour)
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL, over_capacity_warn3d_sent_at = NULL
+		WHERE id = $1 AND over_capacity_since = $2`)).
+		WithArgs("hh-1", staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ClearOverCapacityIfAnchorMatches(context.Background(), "hh-1", staleExpectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestHouseholdRepository_MarkOverCapacityStartNoticeSent(t *testing.T) {
 	t.Parallel()
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
+	expectedSince := time.Now().Add(-2 * 24 * time.Hour)
 	sentAt := time.Now()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL`)).
-		WithArgs("hh-1", sentAt).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, expectedSince).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.MarkOverCapacityStartNoticeSent(context.Background(), "hh-1", sentAt)
+	err := repo.MarkOverCapacityStartNoticeSent(context.Background(), "hh-1", sentAt, expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_MarkOverCapacityStartNoticeSent_AnchorMismatch_NoOp proves a
+// mismatched anchor (0 rows affected) is not an error — the send-then-stamp design
+// already tolerates a "stamp didn't take" outcome, and a mismatch here means the notice
+// that was actually sent described a NOW-SUPERSEDED grace period; the new one gets its
+// own notice on a future run. #1371 — Round 9 Gap Analysis fix (fourth Codex adversarial
+// pass, Bug 5).
+func TestHouseholdRepository_MarkOverCapacityStartNoticeSent_AnchorMismatch_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-2 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_start_notice_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkOverCapacityStartNoticeSent(context.Background(), "hh-1", sentAt, staleExpectedSince)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -527,12 +634,32 @@ func TestHouseholdRepository_MarkOverCapacityWarn3dSent(t *testing.T) {
 	mock, repo := setupHouseholdMockDB(t)
 	defer mock.Close()
 
+	expectedSince := time.Now().Add(-12 * 24 * time.Hour)
 	sentAt := time.Now()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since IS NOT NULL`)).
-		WithArgs("hh-1", sentAt).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, expectedSince).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.MarkOverCapacityWarn3dSent(context.Background(), "hh-1", sentAt)
+	err := repo.MarkOverCapacityWarn3dSent(context.Background(), "hh-1", sentAt, expectedSince)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHouseholdRepository_MarkOverCapacityWarn3dSent_AnchorMismatch_NoOp is the
+// MarkOverCapacityWarn3dSent analogue of the start-notice mismatch test above. #1371 —
+// Round 9 Gap Analysis fix (fourth Codex adversarial pass, Bug 5).
+func TestHouseholdRepository_MarkOverCapacityWarn3dSent_AnchorMismatch_NoOp(t *testing.T) {
+	t.Parallel()
+	mock, repo := setupHouseholdMockDB(t)
+	defer mock.Close()
+
+	staleExpectedSince := time.Now().Add(-12 * 24 * time.Hour)
+	sentAt := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE households SET over_capacity_warn3d_sent_at = $2 WHERE id = $1 AND over_capacity_since = $3`)).
+		WithArgs("hh-1", sentAt, staleExpectedSince).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkOverCapacityWarn3dSent(context.Background(), "hh-1", sentAt, staleExpectedSince)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
