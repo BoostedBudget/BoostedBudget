@@ -477,10 +477,13 @@ func TestHouseholdRepository_ClearOverCapacity_Integration(t *testing.T) {
 
 // TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integration proves
 // MarkOverCapacityStartNoticeSent/MarkOverCapacityWarn3dSent are guarded by
-// `over_capacity_since IS NOT NULL`: once a household's grace has been cleared (e.g. by
-// a concurrent read-only-owner clear racing the daily backstop worker), a stale notice
-// stamp must NOT be written. Round 5 Gap Analysis fix (#1371) — pgxmock can prove the
-// query shape, but not that the predicate really protects a live, already-cleared row.
+// `over_capacity_since = expectedOverCapacitySince` (originally just `IS NOT NULL` — Round
+// 5 Gap Analysis fix; widened to compare the specific expected anchor in Round 9, so a
+// stamp can't mis-mark a DIFFERENT, superseding grace period as already-notified): once a
+// household's grace has been cleared (e.g. by a concurrent read-only-owner clear racing
+// the daily backstop worker), a stale notice stamp must NOT be written, regardless of
+// which anchor value is passed — pgxmock can prove the query shape, but not that the
+// predicate really protects a live, already-cleared row.
 func TestHouseholdRepository_MarkOverCapacityNotices_NoOpWhenNotInGrace_Integration(t *testing.T) {
 	pool := setupHouseholdSchemaDB(t)
 	ctx := context.Background()
