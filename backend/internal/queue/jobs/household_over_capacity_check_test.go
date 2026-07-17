@@ -489,6 +489,111 @@ func TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_AlreadyFlagge
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
 }
 
+// TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_NotYetFlagged_SkipsSetOverCapacity
+// proves the fresh re-check block must ALSO re-count active members, not just re-check
+// owner read-only status and seat limit. The top-of-function CountActiveMembers read (4,
+// over the 2-seat tier) can be just as stale as the owner/tier reads it sits alongside —
+// e.g. the owner removes members in the gap between that read and the write path below.
+// A fresh CountActiveMembers call immediately before Case 3's SetOverCapacity must catch
+// this and bail out WITHOUT flagging a household that's already back within capacity by
+// the time the write would happen.
+func TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_NotYetFlagged_SkipsSetOverCapacity(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	// First read (top-of-function) sees 4 active members — over the 2-seat limit; second,
+	// fresh read (immediately before the write path) sees the owner has since removed
+	// members, bringing the household back to exactly the 2-seat limit.
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(2, nil).Once()
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	// Never flag a household that's already back within capacity by the fresh read.
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	// Never flagged in the first place, so nothing to clear either.
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_AlreadyFlagged_ClearsGrace
+// proves the same fresh active-member recount clears an ALREADY-flagged household's grace
+// (rather than sending a spurious notice/warning or auto-offboarding) when members were
+// removed in the gap between the top-of-function count and the fresh re-check.
+func TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_AlreadyFlagged_ClearsGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour) // well within grace, notice not yet sent
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(2, nil).Once()
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityStartNoticeSent", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkOverCapacityWarn3dSent", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_ActiveCountChangesButStillOverCapacity_NoticeUsesFreshCount
+// proves that when the fresh re-check's recount is STILL over capacity (just a different
+// number than the stale top-of-function count), the FRESH count — not the stale one —
+// must be what flows downstream: into the notice email's "X active members" content. The
+// household starts unflagged, so this drives Case 3 (SetOverCapacity) and falls through
+// to Case 5 (start notice) in the same run.
+func TestHouseholdOverCapacityCheck_ActiveCountChangesButStillOverCapacity_NoticeUsesFreshCount(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	// Stale count (6) and fresh count (5) are BOTH over the 2-seat limit, but differ from
+	// each other — the notice must reflect the fresh count, not the stale one.
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(6, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(5, nil).Once()
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 5, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	// The strongest assertion: the notice's active-member count must be the FRESH count,
+	// never the stale top-of-function count.
+	mockEmailSvc.AssertCalled(t, "SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 5, 2, mock.AnythingOfType("time.Time"))
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 6, 2, mock.AnythingOfType("time.Time"))
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
 // --- Case 4: in-grace, past deadline → auto-offboard ---
 
 func TestHouseholdOverCapacityCheck_InGrace_PastDeadline_AutoOffboards(t *testing.T) {
@@ -911,13 +1016,31 @@ func TestHouseholdOverCapacityCheck_ListError_ReturnsError(t *testing.T) {
 
 // --- UniqueOpts / constructor defaults ---
 
+// TestHouseholdOverCapacityCheckUniqueOpts proves uniqueness is enforced GLOBALLY across
+// all non-terminal states of this job kind, with no ByPeriod time-window escape hatch.
+// A prior version used ByPeriod: 23*time.Hour (a period-bucket-scoped window), which a
+// Codex review (Round 8) found could let a second instance run concurrently with a
+// still-running prior instance if that prior instance ran long enough to bridge into
+// the next 23h bucket — reopening the exact duplicate-notice-email risk this UniqueOpts
+// wiring exists to close. ByPeriod == 0 (unset) means River's dedup check applies
+// regardless of how much time has elapsed since the existing job was inserted.
 func TestHouseholdOverCapacityCheckUniqueOpts(t *testing.T) {
 	opts := HouseholdOverCapacityCheckUniqueOpts()
 
 	assert.False(t, opts.ByArgs)
-	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
-	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
-	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.False(t, opts.ByQueue, "ByQueue must stay false — uniqueness must be global across queues, not scoped per-queue")
+	assert.Zero(t, opts.ByPeriod, "ByPeriod must be unset — global non-terminal-state uniqueness, not a time-bucketed window a long-running job could bridge past")
+	// ElementsMatch (not just Contains) proves ALL 5 non-terminal states are covered —
+	// Contains-only assertions on a subset would silently pass even if a state (e.g.
+	// JobStatePending) were dropped, leaving a real dedup gap undetected (Round 8 Codex
+	// finding on the drift-guard test's own blind spot).
+	assert.ElementsMatch(t, []queue.JobState{
+		queue.JobStateAvailable,
+		queue.JobStateScheduled,
+		queue.JobStateRunning,
+		queue.JobStateRetryable,
+		queue.JobStatePending,
+	}, opts.ByState)
 }
 
 func TestNewHouseholdOverCapacityCheckWorker_DefaultLogger(t *testing.T) {

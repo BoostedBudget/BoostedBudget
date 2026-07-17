@@ -287,6 +287,18 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return fmt.Errorf("failed to resolve fresh tier for owner %s: %w", h.OwnerUserID, err)
 	}
 	seatLimit = freshTier.Pricing.UsersIncluded
+
+	// Also re-count active members: the top-of-function activeCount read is just as
+	// susceptible to staleness as the owner/tier reads above it — e.g. the owner removes
+	// members in the gap between that read and this write path. Reassign activeCount in
+	// place (mirroring how seatLimit itself is reassigned above) so every downstream use —
+	// this re-check's own capacity comparison, the eventual SetOverCapacity call, and the
+	// notice email content passed to sendStartNotice/send3dWarning/autoOffboard further
+	// down — reflects the fresh count, not the stale one.
+	activeCount, err = w.repo.CountActiveMembers(ctx, h.ID)
+	if err != nil {
+		return fmt.Errorf("failed to re-count active members for household %s (fresh re-check): %w", h.ID, err)
+	}
 	if activeCount <= seatLimit {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
@@ -412,13 +424,21 @@ func (w *HouseholdOverCapacityCheckWorker) send3dWarning(ctx context.Context, jo
 	return nil
 }
 
-// HouseholdOverCapacityCheckUniqueOpts returns the recommended uniqueness options.
-// Only one check job should run at a time to prevent duplicate processing.
+// HouseholdOverCapacityCheckUniqueOpts returns the recommended uniqueness options. Only
+// one check job may exist in any of the listed non-terminal states AT ALL, regardless of
+// how much time has elapsed since it was inserted — deliberately NOT time-windowed via
+// ByPeriod. Round 8 Codex review: a ByPeriod-bucketed window (the original design) only
+// dedupes inserts within the SAME bucket, so a still-running instance that bridges into
+// the next bucket would NOT block a new insert — reopening the duplicate-notice-email
+// risk this UniqueOpts wiring exists to close. The trade-off: a job stuck in a
+// non-terminal state (e.g. perpetually retryable) blocks all future daily runs of this
+// kind until it reaches a terminal state (completed/discarded/cancelled) via River's own
+// max-attempts/backoff exhaustion or manual intervention — accepted as preferable to a
+// silent duplicate-run window, since these are lightweight daily backstop jobs never
+// expected to run anywhere near long enough to matter in practice.
 func HouseholdOverCapacityCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent
-		// 23 hours period — avoids overlap on daily schedule
-		ByPeriod: 23 * time.Hour,
 		ByState: []queue.JobState{
 			queue.JobStateAvailable,
 			queue.JobStateScheduled,

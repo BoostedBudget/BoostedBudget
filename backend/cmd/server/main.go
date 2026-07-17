@@ -33,6 +33,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/maxnussbaum/BoostedBudget/internal/workers"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 )
 
@@ -1200,6 +1201,14 @@ func main() {
 			}
 
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
+			// HouseholdMemberCleanupCheckUniqueOpts (household_member_cleanup_check.go)
+			// documents the same shape below as the source of truth this must stay in
+			// sync with. UniqueOpts constrains to one check job in any non-terminal
+			// state AT ALL (no ByPeriod time window — see that function's doc comment
+			// for the Round 8 rationale) so that concurrent River clients/schedulers
+			// can't double-run the check and race to purge the same removed-membership
+			// rows twice (this worker only purges rows — no email is sent here, unlike
+			// its over-capacity sibling below).
 			if householdMemberCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
@@ -1208,6 +1217,16 @@ func main() {
 								TriggerSource: "periodic",
 							}, &river.InsertOpts{
 								Queue: "low",
+								UniqueOpts: river.UniqueOpts{
+									ByArgs: false,
+									ByState: []rivertype.JobState{
+										rivertype.JobStateAvailable,
+										rivertype.JobStateScheduled,
+										rivertype.JobStateRunning,
+										rivertype.JobStateRetryable,
+										rivertype.JobStatePending,
+									},
+								},
 							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},
@@ -1216,6 +1235,14 @@ func main() {
 			}
 
 			// Issue #1371 — Phase 7 (Task 6): Household over-capacity check (daily)
+			// HouseholdOverCapacityCheckUniqueOpts (household_over_capacity_check.go)
+			// documents the same shape below as the source of truth this must stay in
+			// sync with. UniqueOpts constrains to one check job in any non-terminal
+			// state AT ALL (no ByPeriod time window — see that function's doc comment
+			// for the Round 8 rationale) — this worker sends a notice email BEFORE
+			// stamping *_sent_at (so a failed send retries next run), and two
+			// overlapping runs would both see "not yet sent" and both send a
+			// duplicate email.
 			if householdOverCapacityCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
@@ -1224,6 +1251,16 @@ func main() {
 								TriggerSource: "periodic",
 							}, &river.InsertOpts{
 								Queue: "low",
+								UniqueOpts: river.UniqueOpts{
+									ByArgs: false,
+									ByState: []rivertype.JobState{
+										rivertype.JobStateAvailable,
+										rivertype.JobStateScheduled,
+										rivertype.JobStateRunning,
+										rivertype.JobStateRetryable,
+										rivertype.JobStatePending,
+									},
+								},
 							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},

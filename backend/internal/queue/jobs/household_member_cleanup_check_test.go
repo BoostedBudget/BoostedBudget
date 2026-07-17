@@ -173,14 +173,28 @@ func TestHouseholdMemberCleanupCheck_NoMultiTableSQL(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
-// TestHouseholdMemberCleanupCheckUniqueOpts tests the unique opts configuration.
+// TestHouseholdMemberCleanupCheckUniqueOpts proves uniqueness is enforced GLOBALLY across
+// all non-terminal states of this job kind, with no ByPeriod time-window escape hatch —
+// see the identical rationale on TestHouseholdOverCapacityCheckUniqueOpts (Round 8 Codex
+// finding: a period-bucketed window could let a second instance run concurrently with a
+// still-running prior instance that bridged into the next bucket).
 func TestHouseholdMemberCleanupCheckUniqueOpts(t *testing.T) {
 	opts := HouseholdMemberCleanupCheckUniqueOpts()
 
 	assert.False(t, opts.ByArgs)
-	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
-	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
-	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.False(t, opts.ByQueue, "ByQueue must stay false — uniqueness must be global across queues, not scoped per-queue")
+	assert.Zero(t, opts.ByPeriod, "ByPeriod must be unset — global non-terminal-state uniqueness, not a time-bucketed window a long-running job could bridge past")
+	// ElementsMatch (not just Contains) proves ALL 5 non-terminal states are covered —
+	// Contains-only assertions on a subset would silently pass even if a state (e.g.
+	// JobStatePending) were dropped, leaving a real dedup gap undetected (Round 8 Codex
+	// finding on the drift-guard test's own blind spot).
+	assert.ElementsMatch(t, []queue.JobState{
+		queue.JobStateAvailable,
+		queue.JobStateScheduled,
+		queue.JobStateRunning,
+		queue.JobStateRetryable,
+		queue.JobStatePending,
+	}, opts.ByState)
 }
 
 // TestNewHouseholdMemberCleanupCheckWorker_DefaultLogger tests that nil logger uses default.
