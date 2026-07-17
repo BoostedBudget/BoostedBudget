@@ -363,10 +363,42 @@ func TestHouseholdRepository_SetOverCapacity_ConcurrentRaceLoser_ReturnsWinnersV
 	// table-level lock is granted to both immediately. pg_stat_activity's
 	// wait_event_type is the simplest reliable signal for "this backend is
 	// blocked on a lock," regardless of which lock type it's waiting on.
+	//
+	// This handshake is scoped as tightly as pg_stat_activity allows, because the
+	// unscoped version is GLOBAL across the whole Postgres instance: `go test
+	// ./...` runs multiple packages concurrently (up to GOMAXPROCS), and every
+	// integration-test package in this repo connects to the same DATABASE_URL/
+	// database (setupHouseholdSchemaDB, and CI's `DATABASE_URL` guard in
+	// .github/workflows/test.yml, both point at one shared database) — so an
+	// unrelated backend from a totally different concurrently-running test,
+	// blocked on some unrelated lock, could satisfy an unscoped count(*) > 0
+	// check before THIS test's own loser query has actually reached blocking.
+	// That reintroduces exactly the false-pass risk this handshake exists to
+	// eliminate. Two layers of scoping close that gap:
+	//  1. `datname = current_database()` — scopes to backends connected to this
+	//     test's own database (cheap, and still meaningful if other integration
+	//     suites ever point at a different database).
+	//  2. `query LIKE '%locked_read%'` — `locked_read` is the CTE name in
+	//     SetOverCapacity's SQL (household_repository.go) and is grep-confirmed
+	//     unique to that one query in the entire codebase (production +
+	//     pgxmock-based unit test expectations only); pg_stat_activity.query
+	//     reflects a backend's currently-executing statement text by default
+	//     (track_activities), including while blocked, so this identifies the
+	//     loser's own backend specifically rather than any other concurrent
+	//     query that merely happens to be waiting on a lock.
+	// If the query-text match ever fails to find the blocked backend (e.g. a
+	// future Postgres/pgx formatting quirk), this fails safe: the poll times out
+	// below with an honest, loud failure rather than a silent false pass.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var waitingBackends int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND pid != pg_backend_pid()`).Scan(&waitingBackends); err != nil {
+		if err := pool.QueryRow(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock'
+			  AND pid != pg_backend_pid()
+			  AND datname = current_database()
+			  AND query LIKE '%locked_read%'
+		`).Scan(&waitingBackends); err != nil {
 			t.Fatalf("polling pg_stat_activity for the loser's blocked backend: %v", err)
 		}
 		if waitingBackends > 0 {

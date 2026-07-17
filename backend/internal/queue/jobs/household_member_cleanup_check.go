@@ -165,13 +165,15 @@ func (w *HouseholdMemberCleanupCheckWorker) purgeExpiredMemberships(ctx context.
 	return nil
 }
 
-// HouseholdMemberCleanupCheckUniqueOpts returns the recommended uniqueness options.
-// Only one check job should run at a time to prevent duplicate purge processing.
+// HouseholdMemberCleanupCheckUniqueOpts returns the recommended uniqueness options. Only
+// one check job may exist in any of the listed non-terminal states AT ALL, regardless of
+// how much time has elapsed since it was inserted — see
+// HouseholdOverCapacityCheckUniqueOpts's doc comment for the full Round 8 rationale
+// (deliberately not time-windowed via ByPeriod, which could let a still-running instance
+// bridge past a period-bucket boundary and reopen a duplicate-processing window).
 func HouseholdMemberCleanupCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent
-		// 23 hours period — avoids overlap on daily schedule
-		ByPeriod: 23 * time.Hour,
 		ByState: []queue.JobState{
 			queue.JobStateAvailable,
 			queue.JobStateScheduled,
