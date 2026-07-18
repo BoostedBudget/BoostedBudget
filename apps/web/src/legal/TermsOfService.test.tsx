@@ -159,4 +159,44 @@ describe('TermsOfService', () => {
     expect(screen.getByText(/consumer arbitration rules of the american arbitration association/i)).toBeInTheDocument()
     expect(screen.getByText(/filing fees are governed by the aaa consumer arbitration rules fee schedule/i)).toBeInTheDocument()
   })
+
+  it('renders household data visibility disclosures for shared accounts', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/data visibility between members/i)).toBeInTheDocument()
+    expect(screen.getByText(/^account balances$/i)).toBeInTheDocument()
+    expect(screen.getByText(/net worth contribution/i)).toBeInTheDocument()
+    expect(screen.getByText(/spending activity, including merchant names/i)).toBeInTheDocument()
+    expect(screen.getByText(/income sources and savings-rate figures/i)).toBeInTheDocument()
+  })
+
+  it('renders what household members can never see', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/individual transaction line items/i)).toBeInTheDocument()
+    expect(screen.getByText(/full account numbers/i)).toBeInTheDocument()
+    expect(screen.getByText(/login credentials/i)).toBeInTheDocument()
+  })
+
+  it('renders consent-at-join disclosures for account sharing', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/consent at join/i)).toBeInTheDocument()
+    expect(screen.getByText(/choose which to share with the household/i)).toBeInTheDocument()
+    expect(screen.getByText(/all accounts are shared by default/i)).toBeInTheDocument()
+    expect(screen.getByText(/version identifier and timestamp/i)).toBeInTheDocument()
+    expect(screen.getByText(/accounts you link to boostedbudget after joining a household/i)).toBeInTheDocument()
+    expect(screen.getByText(/default to shared/i)).toBeInTheDocument()
+  })
+
+  it('renders account-level hide behavior distinct from personal-view hide', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/hiding accounts and revoking sharing/i)).toBeInTheDocument()
+    expect(screen.getByText(/removed from the household's shared view immediately/i)).toBeInTheDocument()
+    expect(screen.getByText(/separate from hiding an account from your own personal views/i)).toBeInTheDocument()
+  })
+
+  it('renders leaving/removal household-visibility disclosure', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/leaving or being removed/i)).toBeInTheDocument()
+    expect(screen.getByText(/immediately lose visibility into your shared accounts/i)).toBeInTheDocument()
+    expect(screen.getByText(/personal data.*is retained/i)).toBeInTheDocument()
+  })
 })
