@@ -83,7 +83,8 @@ export function PrivacyPolicy() {
               delivery, financial operations, subscription processing</li>
             <li><strong>Legitimate interests (Art. 6(1)(f)):</strong> Security and fraud prevention,
               service improvement, error tracking and performance monitoring</li>
-            <li><strong>Consent (Art. 6(1)(a)):</strong> Analytics cookies (PostHog), marketing emails</li>
+            <li><strong>Consent (Art. 6(1)(a)):</strong> Analytics cookies (PostHog), marketing emails,
+              household data sharing (see Section 9)</li>
             <li><strong>Legal obligation (Art. 6(1)(c)):</strong> Tax records, regulatory compliance,
               responding to lawful requests</li>
           </ul>
@@ -294,8 +295,11 @@ export function PrivacyPolicy() {
           <p>
             When a household member is removed from a shared plan, their data is preserved for
             30 days before permanent deletion (see our{' '}
-            <Link to="/legal/terms">Terms of Service</Link>, Section 9.2). The backup retention
-            period in Section 8.3 applies after permanent deletion.
+            <Link to="/legal/terms">Terms of Service</Link>, Section 9.2). Other household members'
+            access to that member's shared data ends immediately upon removal, and the data-sharing
+            grants themselves are purged along with the rest of the removed member's data at the end
+            of the 30-day window. The backup retention period in Section 8.3 applies after permanent
+            deletion.
           </p>
         </section>
 
@@ -308,11 +312,47 @@ export function PrivacyPolicy() {
             <li><strong>Legal Compliance:</strong> When required by law, court order, or government request</li>
             <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of assets</li>
             <li><strong>Fraud Prevention:</strong> To protect against fraud, security threats, or illegal activity</li>
+            <li><strong>Household Members:</strong> For accounts you choose to share, other members of
+              your household (see below)</li>
           </ul>
           <p>
             You may control optional data processing (analytics and marketing) in your Privacy
             Settings. Essential service-provider processing required to operate the Service cannot
             be disabled while your account is active.
+          </p>
+
+          <h3>9.1 Household Data Sharing</h3>
+          <p>
+            If you belong to a household plan, you can choose which of your linked accounts to share
+            with the rest of your household. Sharing is <strong>per-account</strong> and, for any
+            account you choose to share, other household members can see:
+          </p>
+          <ul>
+            <li>Account names</li>
+            <li>Account balances</li>
+            <li>Net worth contribution</li>
+            <li>Spending activity, including merchant names</li>
+            <li>Income sources and savings-rate figures</li>
+          </ul>
+          <p>Household members can <strong>never</strong> see:</p>
+          <ul>
+            <li>Individual transaction line items</li>
+            <li>Full account numbers</li>
+            <li>Login credentials</li>
+          </ul>
+          <p>
+            Before joining a household, you will be shown your currently linked accounts and asked to
+            choose which to share; all accounts are shared by default and you may opt out of sharing
+            any individual account before joining. Accounts you link to BoostedBudget after joining a
+            household are likewise offered for sharing and default to shared, and you choose whether
+            to share each one before it enters the household view. Your consent to household data
+            sharing is recorded for compliance purposes.
+          </p>
+          <p>
+            You may hide any of your linked accounts from the household view at any time from your
+            Account Settings, which immediately removes that account from other members' view. See
+            our <Link to="/legal/terms">Terms of Service</Link>, Section 9, for full details on
+            household plans and data visibility between members.
           </p>
         </section>
 

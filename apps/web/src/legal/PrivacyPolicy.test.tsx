@@ -128,4 +128,35 @@ describe('PrivacyPolicy', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/april 4, 2026/i)).toBeInTheDocument()
   })
+
+  it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const consentBasisItem = screen.getByText(/analytics cookies \(posthog\), marketing emails/i)
+    expect(consentBasisItem.textContent).toMatch(/household data sharing/i)
+  })
+
+  it('renders Household Members data-sharing subsection with accurate visible/never-shared lists (Section 9)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/9\.1 household data sharing/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/household members/i).length).toBeGreaterThan(0)
+    // Visible to household members
+    expect(screen.getByText(/account balances/i)).toBeInTheDocument()
+    expect(screen.getByText(/net worth contribution/i)).toBeInTheDocument()
+    expect(screen.getByText(/spending activity, including merchant names/i)).toBeInTheDocument()
+    expect(screen.getByText(/income sources and savings-rate figures/i)).toBeInTheDocument()
+    // Never shared with household members
+    expect(screen.getByText(/individual transaction line items/i)).toBeInTheDocument()
+    expect(screen.getByText(/full account numbers/i)).toBeInTheDocument()
+    expect(screen.getByText(/login credentials/i)).toBeInTheDocument()
+  })
+
+  it('describes both household consent moments and per-account revocation (Section 9)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    // Consent at invite-join
+    expect(screen.getByText(/before joining a household/i)).toBeInTheDocument()
+    // Consent at newly-linked-account sharing
+    expect(screen.getByText(/accounts you link.*after joining a household/i)).toBeInTheDocument()
+    // Revocation via hiding
+    expect(screen.getByText(/hide.*account.*household/i)).toBeInTheDocument()
+  })
 })
