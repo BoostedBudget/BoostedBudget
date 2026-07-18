@@ -344,7 +344,11 @@ func (e *InviteeHasActivePaidSubscriptionError) Unwrap() error {
 // HouseholdShareConsentVersion is the consent-copy version recorded on every
 // household_share_consents row written by the accept flow. Bump this constant
 // whenever the consent language changes materially. Finalized wording/versioning
-// scheme is owned by legal issue #1372.
+// scheme was completed by issue #1372. The canonical copy source is
+// apps/web/src/features/household/householdShareConsent.ts (which exports
+// HOUSEHOLD_SHARE_CONSENT_VERSION as the frontend counterpart). The two
+// version strings must stay in sync; TestHouseholdShareConsentVersion_MatchesFrontendConstant
+// pins this literal value.
 const HouseholdShareConsentVersion = "household-share-v1"
 
 // ─── HouseholdShareConsent ───────────────────────────────────────────────────
