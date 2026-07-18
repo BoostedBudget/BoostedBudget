@@ -61,6 +61,10 @@ describe('HOUSEHOLD_SHARE_CONSENT_COPY', () => {
     const neverShared = HOUSEHOLD_SHARE_CONSENT_COPY.neverShared.join(' | ').toLowerCase()
     expect(neverShared).toMatch(/individual transaction/)
     expect(neverShared).toMatch(/full account number/)
+    // The household aggregate/dashboard response never serializes a `mask` field either
+    // (only id/name/balance), so the never-shared disclosure must cover masks, not just
+    // full account numbers.
+    expect(neverShared).toMatch(/mask/)
     expect(neverShared).toMatch(/credential/)
   })
 })

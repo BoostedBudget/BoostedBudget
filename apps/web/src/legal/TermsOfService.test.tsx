@@ -172,7 +172,9 @@ describe('TermsOfService', () => {
   it('renders what household members can never see', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getByText(/individual transaction line items/i)).toBeInTheDocument()
-    expect(screen.getByText(/full account numbers/i)).toBeInTheDocument()
+    // Covers both unmasked and masked account numbers — the household aggregate response
+    // never serializes even a masked/last-4 account number (only id/name/balance).
+    expect(screen.getByText(/full account numbers or masks/i)).toBeInTheDocument()
     expect(screen.getByText(/login credentials/i)).toBeInTheDocument()
   })
 

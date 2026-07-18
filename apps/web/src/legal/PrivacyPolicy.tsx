@@ -337,20 +337,24 @@ export function PrivacyPolicy() {
           <p>Household members can <strong>never</strong> see:</p>
           <ul>
             <li>Individual transaction line items</li>
-            <li>Full account numbers</li>
+            <li>Full account numbers or masks</li>
             <li>Login credentials</li>
           </ul>
           <p>
             Before joining a household, you will be shown your currently linked accounts and asked to
             choose which to share; all accounts are shared by default and you may opt out of sharing
-            any individual account before joining. Accounts you link to BoostedBudget after joining a
-            household are likewise offered for sharing and default to shared, and you choose whether
-            to share each one before it enters the household view. Your consent to household data
-            sharing is recorded for compliance purposes.
+            any individual account before joining. Your explicit consent is recorded, along with a
+            version identifier and timestamp, for compliance purposes.
+          </p>
+          <p>
+            Accounts you link to BoostedBudget after joining a household are likewise offered for
+            sharing and default to shared, and you choose whether to share each one before it enters
+            the household view.
           </p>
           <p>
             You may hide any of your linked accounts from the household view at any time from your
-            Account Settings, which immediately removes that account from other members' view. See
+            Account Settings. Once you save this change, the account is removed from other members'
+            view. See
             our <Link to="/legal/terms">Terms of Service</Link>, Section 9, for full details on
             household plans and data visibility between members.
           </p>
