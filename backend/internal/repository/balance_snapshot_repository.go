@@ -227,7 +227,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
 // account shared into the household, across all members. Joint accounts (same physical
-// fingerprint shared by two members) dedup via householdAccountsCTEForBalances, which picks
+// fingerprint shared by two members) dedup via householdAccountsCTEForBalancesAsOf, which picks
 // the freshest-synced copy — then DISTINCT ON here also collapses that chosen
 // user_account_id to its single latest-as-of-asOf snapshot. Issue #1369 — Phase 5.
 func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {

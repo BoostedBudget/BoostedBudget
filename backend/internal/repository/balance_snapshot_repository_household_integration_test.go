@@ -336,3 +336,64 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccount
 	assert.NotContains(t, creditTotals, float64(100), "the depository-only day must not match a credit filter")
 	assert.NotContains(t, creditTotals, float64(999), "the stale depository copy must never surface under any filter")
 }
+
+// TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountCopiesClipIndependently
+// is a regression guard for the fix in #1378: when two copies of the same joint-account
+// fingerprint have DIFFERENT share_started_at values, each copy must be clipped against ITS OWN
+// share_started_at, not some shared/collapsed value. Owner's copy was shared 2 months ago;
+// member's copy was shared only 8 days ago — a much more recent share date. Owner's snapshot at
+// day -20 falls after owner's own share date but before member's, and must still be INCLUDED
+// because clipping is per-row (per household_accounts copy), not per-fingerprint-collapsed.
+// Member's snapshot at day -15 falls before member's own share date and must be EXCLUDED, even
+// though owner's data from that same era survives — proving the two copies clip independently.
+func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountCopiesClipIndependently(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// Anchor all "day" arithmetic at noon UTC so intra-day hour offsets never cross a calendar-day
+	// boundary regardless of what wall-clock time the test actually runs at.
+	today := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), time.Now().UTC().Day(), 12, 0, 0, 0, time.UTC)
+	fingerprint := "joint-fp-clip-independent-" + hh
+
+	ownerSharedAt := today.AddDate(0, -2, 0)  // 2 months ago — well before the queried range
+	memberSharedAt := today.AddDate(0, 0, -8) // only 8 days ago — much more recent than owner's
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, ownerSharedAt)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, memberSharedAt)
+
+	// Owner snapshot at day -20: after owner's OWN share date (2 months ago) but before member's
+	// (8 days ago). Must be INCLUDED — clipping uses owner's own share date, not member's.
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 111, today.AddDate(0, 0, -20))
+	// Member snapshot at day -15: before member's OWN share date (8 days ago). Must be EXCLUDED,
+	// even though the same calendar-day window is otherwise in range and owner's data from that
+	// era is included — this is the crux of the "independent" claim.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 222, today.AddDate(0, 0, -15))
+	// Member snapshot at day -3: after member's own share date (8 days ago). Must be INCLUDED.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 333, today.AddDate(0, 0, -3))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, today.AddDate(0, -1, 0), today, nil)
+	require.NoError(t, err)
+
+	found111, found222, found333 := false, false, false
+	for _, p := range points {
+		if p.TotalBalance == 111 {
+			found111 = true
+		}
+		if p.TotalBalance == 222 {
+			found222 = true
+		}
+		if p.TotalBalance == 333 {
+			found333 = true
+		}
+	}
+	assert.True(t, found111, "owner's early data must survive despite member's later share date — clipping uses owner's own share_started_at")
+	assert.False(t, found222, "member's pre-share data must be excluded even though owner's data from the same era is included")
+	assert.True(t, found333, "member's post-share data must be included")
+}
