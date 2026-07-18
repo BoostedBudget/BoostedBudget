@@ -34,6 +34,7 @@ import { Switch } from '@/components/ui/switch'
 import { AccountSummaryHeader } from '@/features/accounts/components/AccountSummaryHeader'
 import { getAccountTypeLabel } from '@/features/accounts/utils'
 import { useActiveAccounts } from '@/features/accounts/hooks/useActiveAccounts'
+import { HOUSEHOLD_SHARE_CONSENT_COPY } from '../householdShareConsent'
 
 export interface ConsentPreviewProps {
   /** Called with the full list of currently-hidden `user_account_id`s whenever a toggle changes. */
@@ -73,10 +74,7 @@ export function ConsentPreview({ onHiddenAccountIdsChange }: ConsentPreviewProps
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Choose which of your accounts to share with this household. All accounts are shared by
-        default — you can change this any time after joining.
-      </p>
+      <p className="text-sm text-muted-foreground">{HOUSEHOLD_SHARE_CONSENT_COPY.invitePreviewIntro}</p>
       {accounts.map((account) => {
         // `user_account_id` is the id the backend's IDOR/subset check
         // (household_service.go's AcceptInvite validates hidden_account_ids

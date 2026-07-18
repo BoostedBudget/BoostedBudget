@@ -38,6 +38,9 @@ export {
 // Owner-facing over-capacity banner (Issue #1371 Task 10)
 export { HouseholdOverCapacityBanner } from './components/HouseholdOverCapacityBanner'
 
+// Canonical consent-copy artifact (Issue #1372 Task 1)
+export { HOUSEHOLD_SHARE_CONSENT_VERSION, HOUSEHOLD_SHARE_CONSENT_COPY } from './householdShareConsent'
+
 // Hooks (Task 3: ProfilePage integration)
 export { useHousehold, type UseHouseholdResult } from './hooks/useHousehold'
 export { useAcceptInvite, type UseAcceptInviteResult, type AcceptInviteErrorKind } from './hooks/useAcceptInvite'

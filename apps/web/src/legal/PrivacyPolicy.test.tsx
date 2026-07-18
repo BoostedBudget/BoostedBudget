@@ -124,8 +124,53 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
   })
 
-  it('renders correct Last Updated date (April 4, 2026)', () => {
+  it('renders correct Last Updated date (July 18, 2026)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/april 4, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/july 18, 2026/i)).toBeInTheDocument()
+  })
+
+  it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    const consentBasisItem = screen.getByText(/analytics cookies \(posthog\), marketing emails/i)
+    expect(consentBasisItem.textContent).toMatch(/household data sharing/i)
+  })
+
+  it('renders Household Members data-sharing subsection with accurate visible/never-shared lists (Section 9)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/9\.1 household data sharing/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/household members/i).length).toBeGreaterThan(0)
+    // Visible to household members
+    expect(screen.getByText(/account balances/i)).toBeInTheDocument()
+    expect(screen.getByText(/net worth contribution/i)).toBeInTheDocument()
+    expect(screen.getByText(/spending activity, including merchant names/i)).toBeInTheDocument()
+    expect(screen.getByText(/income sources and savings-rate figures/i)).toBeInTheDocument()
+    // Never shared with household members
+    expect(screen.getByText(/individual transaction line items/i)).toBeInTheDocument()
+    // Covers both unmasked and masked account numbers — the household aggregate response
+    // never serializes even a masked/last-4 account number (only id/name/balance).
+    expect(screen.getByText(/full account numbers or masks/i)).toBeInTheDocument()
+    expect(screen.getByText(/login credentials/i)).toBeInTheDocument()
+  })
+
+  it('describes both household consent moments and per-account revocation (Section 9)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    // Consent at invite-join
+    expect(screen.getByText(/before joining a household/i)).toBeInTheDocument()
+    // Consent at newly-linked-account sharing
+    expect(screen.getByText(/accounts you link.*after joining a household/i)).toBeInTheDocument()
+    // Revocation via hiding
+    expect(screen.getByText(/hide.*account.*household/i)).toBeInTheDocument()
+  })
+
+  it('scopes the recorded-consent language to invite-join only, not post-join account sharing (Section 9.1)', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    // The "recorded... version identifier and timestamp" claim describes the versioned
+    // consent snapshot written by AcceptInvite (backend household_service.go), which only
+    // happens at invite-join time. Post-join newly-linked-account sharing only writes a
+    // household_account_shares visibility row (SetShareVisibility), not a versioned
+    // consent entry, so that paragraph must not carry this claim.
+    const recordedText = screen.getByText(/version identifier and timestamp/i)
+    expect(recordedText.textContent).toMatch(/before joining a household/i)
+    expect(recordedText.textContent).not.toMatch(/after joining a household/i)
   })
 })
