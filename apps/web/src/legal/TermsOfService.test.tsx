@@ -187,7 +187,7 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getByText(/data visibility between members/i)).toBeInTheDocument()
     // Anchored exact-match: "account balances" also appears unanchored in Section 2
-    // (Information We Collect); an unanchored regex here matches both and throws
+    // (Service Description); an unanchored regex here matches both and throws
     // "Found multiple elements" (verified by running the suite after this line was
     // briefly de-anchored — restoring the anchors here, deliberately, per Round 1's
     // Task 2 review).
