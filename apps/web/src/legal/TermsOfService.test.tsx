@@ -147,6 +147,18 @@ describe('TermsOfService', () => {
     expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
   })
 
+  it('renders 30-day data preservation for removed household members (Section 9.2)', () => {
+    renderWithRouter(<TermsOfService />)
+    // First assert the section heading to locate §9.2 specifically
+    expect(screen.getByRole('heading', { name: /downgrading household plans/i })).toBeInTheDocument()
+    // Then assert the unique context: "Removed members' data" (unique to this section)
+    expect(screen.getByText(/removed members' data/i)).toBeInTheDocument()
+    // Assert the 30-day preservation period (appears multiple times in document, verified by section context)
+    expect(screen.getAllByText(/30 days/i).length).toBeGreaterThan(0)
+    // Assert completion of the phrase (also appears multiple times, verified by section context above)
+    expect(screen.getAllByText(/before permanent deletion/i).length).toBeGreaterThan(0)
+  })
+
   it('renders GDPR Article 6 legal basis in Privacy Policy (via ToS cross-reference)', () => {
     // ToS references Privacy Policy; confirm ToS itself links to it
     renderWithRouter(<TermsOfService />)
