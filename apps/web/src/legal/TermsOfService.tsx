@@ -15,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: April 4, 2026</p>
+        <p className="last-updated">Last Updated: July 18, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>

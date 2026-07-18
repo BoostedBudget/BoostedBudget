@@ -18,7 +18,7 @@ export function PrivacyPolicy() {
         <h1 className="text-foreground text-4xl mb-2 border-b-[3px] border-primary pb-4 sm:text-[2rem] xs:text-[1.75rem]">
           Privacy Policy
         </h1>
-        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: April 4, 2026</p>
+        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: July 18, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
