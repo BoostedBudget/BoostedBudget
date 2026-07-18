@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { Account } from '@boostedbudget/api-client/models'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
+import { HOUSEHOLD_SHARE_CONSENT_COPY } from '../householdShareConsent'
 import { ConsentPreview } from './ConsentPreview'
 
 function makeAccount(overrides: Partial<Account> = {}): Account {
@@ -138,5 +139,17 @@ describe('ConsentPreview', () => {
     // The callback must never have been invoked with 'account-1' (or at all,
     // since the switch is disabled and the click is a no-op).
     expect(reported).toBeNull()
+  })
+
+  it('renders the canonical invite-preview intro copy from the householdShareConsent module (issue #1372)', () => {
+    // Regression guard: this copy must stay sourced from the shared module
+    // so it never drifts from the ToS/Privacy Policy legal text, which is
+    // written to match it.
+    const accounts = [makeAccount({ id: 'account-1', user_account_id: 'ua-1', name: 'Checking' })]
+    mockUseGetAccounts.mockReturnValue({ data: { accounts }, isLoading: false, error: null, refetch: () => Promise.resolve() })
+
+    render(<ConsentPreview onHiddenAccountIdsChange={() => {}} />)
+
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.invitePreviewIntro)).toBeInTheDocument()
   })
 })

@@ -80,6 +80,7 @@ import type { Account } from '@/features/accounts/types'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useHouseholdVisibility } from '../hooks/useHouseholdVisibility'
+import { HOUSEHOLD_SHARE_CONSENT_COPY } from '../householdShareConsent'
 
 export interface ShareNewAccountsDialogProps {
   open: boolean
@@ -188,11 +189,8 @@ function ShareNewAccountsDialogContent({ accounts, onOpenChange }: ShareNewAccou
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Share your new accounts?</DialogTitle>
-        <DialogDescription>
-          Choose which of the accounts you just connected to share with your household. All
-          accounts are shared by default — you can change this any time from account settings.
-        </DialogDescription>
+        <DialogTitle>{HOUSEHOLD_SHARE_CONSENT_COPY.shareNewAccountsTitle}</DialogTitle>
+        <DialogDescription>{HOUSEHOLD_SHARE_CONSENT_COPY.shareNewAccountsDescription}</DialogDescription>
       </DialogHeader>
 
       <div className="space-y-3">
