@@ -462,6 +462,20 @@ func TestHouseholdShareConsentVersion_IsNonEmpty(t *testing.T) {
 	}
 }
 
+// TestHouseholdShareConsentVersion_MatchesFrontendConstant pins the literal
+// value of HouseholdShareConsentVersion. It MUST match the frontend's
+// HOUSEHOLD_SHARE_CONSENT_VERSION constant
+// (apps/web/src/features/household/householdShareConsent.ts) — issue #1372
+// Task 1. If this test fails after an intentional change to the constant,
+// update the frontend constant (and its own pinning test) to match.
+func TestHouseholdShareConsentVersion_MatchesFrontendConstant(t *testing.T) {
+	t.Parallel()
+	const wantVersion = "household-share-v1"
+	if HouseholdShareConsentVersion != wantVersion {
+		t.Fatalf("HouseholdShareConsentVersion = %q, want %q (must match frontend householdShareConsent.ts)", HouseholdShareConsentVersion, wantVersion)
+	}
+}
+
 func TestInviteeHasActivePaidSubscriptionError_MatchesSentinelViaErrorsIs(t *testing.T) {
 	t.Parallel()
 	when := time.Now().Add(48 * time.Hour)

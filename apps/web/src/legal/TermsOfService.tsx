@@ -15,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: April 4, 2026</p>
+        <p className="last-updated">Last Updated: July 18, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>
@@ -235,6 +235,60 @@ export function TermsOfService() {
               <strong> 30 days</strong> before permanent deletion</li>
             <li>Removed members may create their own independent BoostedBudget account</li>
           </ul>
+
+          <h3>9.3 Data Visibility Between Members</h3>
+          <p>
+            For any account you choose to share with your household, other household members can see:
+          </p>
+          <ul>
+            <li>Account names</li>
+            <li>Account balances</li>
+            <li>Net worth contribution</li>
+            <li>Spending activity, including merchant names</li>
+            <li>Income sources and savings-rate figures</li>
+          </ul>
+          <p>
+            Household members can <strong>never</strong> see:
+          </p>
+          <ul>
+            <li>Individual transaction line items</li>
+            <li>Full account numbers or masks</li>
+            <li>Login credentials</li>
+          </ul>
+
+          <h3>9.4 Consent at Join</h3>
+          <p>
+            Before joining a household, you will be shown your currently linked accounts and asked to
+            choose which to share with the household. All accounts are shared by default, and you may
+            opt out of sharing any individual account before joining. Your explicit consent is
+            recorded, along with a version identifier and timestamp, for compliance purposes.
+          </p>
+          <p>
+            Accounts you link to BoostedBudget after joining a household are likewise offered for
+            sharing. These newly linked accounts default to shared, and you choose whether to share
+            each one before it enters the household view.
+          </p>
+
+          <h3>9.5 Hiding Accounts and Revoking Sharing</h3>
+          <p>
+            You may hide any of your linked accounts from the household view at any time from your
+            Account Settings. Once you save this change, the account is removed from the household's
+            shared view.
+          </p>
+          <p>
+            Hiding an account from the household view is separate from hiding an account from your
+            own personal views. Hiding an account for yourself does not change what other household
+            members can see, and hiding an account from the household does not change what you can
+            see in your own account.
+          </p>
+
+          <h3>9.6 Leaving or Being Removed</h3>
+          <p>
+            When you leave a household or are removed by the account owner, other household members
+            immediately lose visibility into your shared accounts. Your personal data
+            (linked accounts, rules, transaction history) is retained under the same terms described
+            in Section 9.2.
+          </p>
         </section>
 
         <section>

@@ -21,7 +21,7 @@ describe('TermsOfService', () => {
 
   it('renders "Last Updated" date', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/last updated: april/i)).toBeInTheDocument()
+    expect(screen.getByText(/last updated: july 18, 2026/i)).toBeInTheDocument()
   })
 
   it('renders all major sections', () => {
@@ -147,6 +147,29 @@ describe('TermsOfService', () => {
     expect(screen.queryByText(/preserved indefinitely/i)).not.toBeInTheDocument()
   })
 
+  it('renders 30-day data preservation for removed household members (Section 9.2)', () => {
+    renderWithRouter(<TermsOfService />)
+    // First assert the section heading to locate §9.2 specifically
+    expect(screen.getByRole('heading', { name: /downgrading household plans/i })).toBeInTheDocument()
+
+    // Locate the specific <li> describing removed members' data retention. Its
+    // text ("...preserved for <strong>30 days</strong> before permanent deletion")
+    // spans multiple text nodes/elements, so a custom matcher anchored to the
+    // <li> itself is used rather than a plain string/regex query - this pins the
+    // assertions below to that exact DOM node instead of "somewhere in the whole
+    // rendered document."
+    const removedMembersDataItem = screen.getByText((_content, element) => {
+      return element?.tagName === 'LI' && /removed members' data/i.test(element.textContent ?? '')
+    })
+
+    // Assert the 30-day preservation period and the permanent-deletion phrase are
+    // both contained within THIS list item. If §9.2's phrasing is edited or
+    // removed, this fails even if unrelated "30 days" / "permanent deletion" text
+    // exists (now or in the future) elsewhere in the ~600-line document.
+    expect(removedMembersDataItem.textContent).toMatch(/30 days/i)
+    expect(removedMembersDataItem.textContent).toMatch(/before permanent deletion/i)
+  })
+
   it('renders GDPR Article 6 legal basis in Privacy Policy (via ToS cross-reference)', () => {
     // ToS references Privacy Policy; confirm ToS itself links to it
     renderWithRouter(<TermsOfService />)
@@ -158,5 +181,55 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     expect(screen.getByText(/consumer arbitration rules of the american arbitration association/i)).toBeInTheDocument()
     expect(screen.getByText(/filing fees are governed by the aaa consumer arbitration rules fee schedule/i)).toBeInTheDocument()
+  })
+
+  it('renders household data visibility disclosures for shared accounts', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/data visibility between members/i)).toBeInTheDocument()
+    // Anchored exact-match: "account balances" also appears unanchored in Section 2
+    // (Service Description); an unanchored regex here matches both and throws
+    // "Found multiple elements" (verified by running the suite after this line was
+    // briefly de-anchored — restoring the anchors here, deliberately, per Round 1's
+    // Task 2 review).
+    expect(screen.getByText(/^account balances$/i)).toBeInTheDocument()
+    expect(screen.getByText(/net worth contribution/i)).toBeInTheDocument()
+    expect(screen.getByText(/spending activity, including merchant names/i)).toBeInTheDocument()
+    expect(screen.getByText(/income sources and savings-rate figures/i)).toBeInTheDocument()
+  })
+
+  it('renders what household members can never see', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/individual transaction line items/i)).toBeInTheDocument()
+    // Covers both unmasked and masked account numbers — the household aggregate response
+    // never serializes even a masked/last-4 account number (only id/name/balance).
+    expect(screen.getByText(/full account numbers or masks/i)).toBeInTheDocument()
+    expect(screen.getByText(/login credentials/i)).toBeInTheDocument()
+  })
+
+  it('renders consent-at-join disclosures for account sharing', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/consent at join/i)).toBeInTheDocument()
+    expect(screen.getByText(/choose which to share with the household/i)).toBeInTheDocument()
+    expect(screen.getByText(/all accounts are shared by default/i)).toBeInTheDocument()
+    expect(screen.getByText(/version identifier and timestamp/i)).toBeInTheDocument()
+    expect(screen.getByText(/accounts you link to boostedbudget after joining a household/i)).toBeInTheDocument()
+    expect(screen.getByText(/default to shared/i)).toBeInTheDocument()
+  })
+
+  it('renders account-level hide behavior distinct from personal-view hide', () => {
+    renderWithRouter(<TermsOfService />)
+    // Check for the new wording without "immediately"
+    expect(screen.getByText(/removed from the household's shared view\./i)).toBeInTheDocument()
+    // Confirm the old overclaiming phrase is NOT present
+    expect(screen.queryByText(/removed from the household's shared view immediately/i)).not.toBeInTheDocument()
+    // Confirm the distinction between hiding from household vs personal views is explained
+    expect(screen.getByText(/hiding an account from the household view is separate from hiding an account from your own personal views/i)).toBeInTheDocument()
+  })
+
+  it('renders leaving/removal household-visibility disclosure', () => {
+    renderWithRouter(<TermsOfService />)
+    expect(screen.getByText(/leaving or being removed/i)).toBeInTheDocument()
+    expect(screen.getByText(/immediately lose visibility into your shared accounts/i)).toBeInTheDocument()
+    expect(screen.getByText(/personal data.*is retained/i)).toBeInTheDocument()
   })
 })
