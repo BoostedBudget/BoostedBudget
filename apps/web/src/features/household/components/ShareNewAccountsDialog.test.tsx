@@ -27,6 +27,7 @@ import {
 import { mockToastError } from '@/test/mocks/sonner'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { HOUSEHOLD_SHARE_CONSENT_COPY } from '../householdShareConsent'
 import { ShareNewAccountsDialog } from './ShareNewAccountsDialog'
 
 function makeAccount(overrides: Partial<Account> = {}): Account {
@@ -102,6 +103,19 @@ describe('ShareNewAccountsDialog', () => {
 
     expect(mockUseListMyAccountShares).not.toHaveBeenCalled()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+
+  it('renders its title and description from the canonical householdShareConsent module (issue #1372)', () => {
+    // Regression guard: this copy must stay sourced from the shared module
+    // so it never drifts from the ToS/Privacy Policy legal text, which is
+    // written to match it.
+    const accounts = [makeAccount({ id: 'account-1', user_account_id: 'ua-1', name: 'Checking' })]
+    renderDialog(accounts)
+
+    expect(
+      screen.getByRole('heading', { name: HOUSEHOLD_SHARE_CONSENT_COPY.shareNewAccountsTitle })
+    ).toBeInTheDocument()
+    expect(screen.getByText(HOUSEHOLD_SHARE_CONSENT_COPY.shareNewAccountsDescription)).toBeInTheDocument()
   })
 
   it('renders one row per passed-in account, each defaulted to shared (switch on)', () => {
