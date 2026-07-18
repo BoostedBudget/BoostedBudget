@@ -252,7 +252,7 @@ export function TermsOfService() {
           </p>
           <ul>
             <li>Individual transaction line items</li>
-            <li>Full account numbers</li>
+            <li>Full account numbers or masks</li>
             <li>Login credentials</li>
           </ul>
 

@@ -54,5 +54,9 @@ export const HOUSEHOLD_SHARE_CONSENT_COPY = {
   ],
 
   /** What is never shared with household members, regardless of visibility settings. */
-  neverShared: ['Individual transaction line items', 'Full account numbers', 'Login credentials'],
+  neverShared: [
+    'Individual transaction line items',
+    'Full account numbers or masks',
+    'Login credentials',
+  ],
 } as const
