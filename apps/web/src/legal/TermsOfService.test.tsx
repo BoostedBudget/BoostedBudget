@@ -151,12 +151,23 @@ describe('TermsOfService', () => {
     renderWithRouter(<TermsOfService />)
     // First assert the section heading to locate §9.2 specifically
     expect(screen.getByRole('heading', { name: /downgrading household plans/i })).toBeInTheDocument()
-    // Then assert the unique context: "Removed members' data" (unique to this section)
-    expect(screen.getByText(/removed members' data/i)).toBeInTheDocument()
-    // Assert the 30-day preservation period (appears multiple times in document, verified by section context)
-    expect(screen.getAllByText(/30 days/i).length).toBeGreaterThan(0)
-    // Assert completion of the phrase (also appears multiple times, verified by section context above)
-    expect(screen.getAllByText(/before permanent deletion/i).length).toBeGreaterThan(0)
+
+    // Locate the specific <li> describing removed members' data retention. Its
+    // text ("...preserved for <strong>30 days</strong> before permanent deletion")
+    // spans multiple text nodes/elements, so a custom matcher anchored to the
+    // <li> itself is used rather than a plain string/regex query - this pins the
+    // assertions below to that exact DOM node instead of "somewhere in the whole
+    // rendered document."
+    const removedMembersDataItem = screen.getByText((_content, element) => {
+      return element?.tagName === 'LI' && /removed members' data/i.test(element.textContent ?? '')
+    })
+
+    // Assert the 30-day preservation period and the permanent-deletion phrase are
+    // both contained within THIS list item. If §9.2's phrasing is edited or
+    // removed, this fails even if unrelated "30 days" / "permanent deletion" text
+    // exists (now or in the future) elsewhere in the ~600-line document.
+    expect(removedMembersDataItem.textContent).toMatch(/30 days/i)
+    expect(removedMembersDataItem.textContent).toMatch(/before permanent deletion/i)
   })
 
   it('renders GDPR Article 6 legal basis in Privacy Policy (via ToS cross-reference)', () => {
