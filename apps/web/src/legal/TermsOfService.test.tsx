@@ -190,9 +190,12 @@ describe('TermsOfService', () => {
 
   it('renders account-level hide behavior distinct from personal-view hide', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/hiding accounts and revoking sharing/i)).toBeInTheDocument()
-    expect(screen.getByText(/removed from the household's shared view immediately/i)).toBeInTheDocument()
-    expect(screen.getByText(/separate from hiding an account from your own personal views/i)).toBeInTheDocument()
+    // Check for the new wording without "immediately"
+    expect(screen.getByText(/removed from the household's shared view\./i)).toBeInTheDocument()
+    // Confirm the old overclaiming phrase is NOT present
+    expect(screen.queryByText(/removed from the household's shared view immediately/i)).not.toBeInTheDocument()
+    // Confirm the distinction between hiding from household vs personal views is explained
+    expect(screen.getByText(/hiding an account from the household view is separate from hiding an account from your own personal views/i)).toBeInTheDocument()
   })
 
   it('renders leaving/removal household-visibility disclosure', () => {
