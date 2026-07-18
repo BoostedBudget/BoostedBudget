@@ -124,9 +124,9 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
   })
 
-  it('renders correct Last Updated date (April 4, 2026)', () => {
+  it('renders correct Last Updated date (July 18, 2026)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/april 4, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/july 18, 2026/i)).toBeInTheDocument()
   })
 
   it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {
