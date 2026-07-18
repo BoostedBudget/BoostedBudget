@@ -273,7 +273,7 @@ export function TermsOfService() {
           <p>
             You may hide any of your linked accounts from the household view at any time from your
             Account Settings. Once you save this change, the account is removed from the household's
-            shared view immediately.
+            shared view.
           </p>
           <p>
             Hiding an account from the household view is separate from hiding an account from your
