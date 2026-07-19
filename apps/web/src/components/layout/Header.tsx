@@ -93,7 +93,7 @@ export function Header({ className }: HeaderProps) {
 
         {/* Desktop: Login or User Dropdown */}
         {isAuthenticated ? (
-          <UserDropdown user={user || {}} onLogout={handleLogout} className="hidden md:flex" />
+          <UserDropdown user={user} onLogout={handleLogout} className="hidden md:flex" />
         ) : (
           <Button onClick={handleLogin} className="hidden md:inline-flex">
             Log In
@@ -103,7 +103,7 @@ export function Header({ className }: HeaderProps) {
         {/* Mobile Navigation */}
         <MobileNav
           isAuthenticated={isAuthenticated ?? false}
-          user={user || null}
+          user={user}
           onLogout={handleLogout}
           onLogin={handleLogin}
         />

@@ -3,8 +3,7 @@ import { Button } from '@/components/ui/button'
 import { usePaddleCheckout } from '../../billing/hooks/usePaddleCheckout'
 import { classifyTierChange } from '../../subscription/lib/tierDirection'
 import type { PricingState } from '../hooks/usePricingContext'
-import type { SubscriptionTier } from '../../subscription/types'
-import type { TierName } from '../../subscription/types'
+import type { SubscriptionTier, TierName } from '../../subscription/types'
 
 interface TierActionButtonProps {
   tierKey: TierName
