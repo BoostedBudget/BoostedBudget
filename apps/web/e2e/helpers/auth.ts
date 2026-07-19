@@ -52,43 +52,6 @@ export async function loginWithClerk(
 }
 
 /**
- * Perform signup via Clerk
- * @param page - Playwright page object
- * @param credentials - New user credentials
- */
-export async function signupWithClerk(
-  page: Page,
-  credentials: ClerkCredentials
-): Promise<void> {
-  // Click login button to open Clerk UI
-  await page.click('button:has-text("Log In")');
-
-  // Wait for Clerk sign-in UI
-  await page.waitForSelector('input[name="identifier"], input[type="email"]', { timeout: 10000 });
-
-  // Look for "Sign up" or "Don't have an account" link
-  const signupLink = page.locator('a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Don\'t have an account")');
-  if (await signupLink.isVisible({ timeout: 2000 })) {
-    await signupLink.click();
-  }
-
-  // Fill in email
-  await page.fill('input[name="emailAddress"], input[type="email"]', credentials.email);
-
-  // Fill in password
-  await page.fill('input[name="password"], input[type="password"]', credentials.password);
-
-  // Click submit button
-  await page.click('button[type="submit"], button:has-text("Continue"), button:has-text("Sign up")');
-
-  // Wait for redirect back to app (use dynamic port from env, fallback to 3000)
-  await page.waitForURL(new RegExp(`localhost:${process.env.E2E_FRONTEND_PORT || '3000'}`), { timeout: 15000 });
-
-  // Wait for authentication to complete
-  await page.waitForTimeout(2000);
-}
-
-/**
  * Perform logout
  * @param page - Playwright page object
  */

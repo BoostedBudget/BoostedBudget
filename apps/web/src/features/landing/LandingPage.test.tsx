@@ -5,7 +5,7 @@
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -325,7 +325,6 @@ describe('LandingPage', () => {
 
   describe('Coming Soon state (removed with the feature-flag kill-switch, #1398)', () => {
     beforeEach(() => {
-      window.ENV = { POSTHOG_KEY: 'test-key' }
       mockUseUser.mockReturnValue({ user: undefined, isSignedIn: false, isLoaded: true })
       mockUseClerk.mockReturnValue({ openSignIn: () => {}, openSignUp: () => {} })
       mockUseGetSubscriptionTiers.mockReturnValue({
@@ -334,10 +333,6 @@ describe('LandingPage', () => {
         error: null,
         refetch: mockRefetchSubscriptionTiers,
       })
-    })
-
-    afterEach(() => {
-      delete (window as Window & { ENV?: unknown }).ENV
     })
 
     it('renders Start Free Today CTA buttons', () => {
