@@ -1,8 +1,8 @@
 /**
  * HeroSection Component Tests
  *
- * Tests for the hero section with login-enabled feature flag behavior.
- * Issue #1184: Coming Soon state when login is disabled
+ * Issue #1398: the PostHog feature-flag kill-switch (and its "Coming Soon" disabled
+ * state) was removed — the CTA always renders "Start Free Today" and opens Clerk sign-up.
  */
 
 import { describe, it, expect, beforeEach } from 'bun:test'
@@ -10,7 +10,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { HeroSection } from './HeroSection'
 import { mockUseClerk, createMockClerk } from '@/test/mocks/clerk'
-import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 function renderHeroSection() {
   return render(
@@ -23,74 +22,33 @@ function renderHeroSection() {
 describe('HeroSection', () => {
   beforeEach(() => {
     mockUseClerk.mockClear()
-    mockUseFeatureFlagEnabled.mockClear()
-
-    // Default: no POSTHOG_KEY → useLoginEnabled returns { enabled: true }
-    delete (window as Window & { ENV?: Record<string, string> }).ENV
 
     mockUseClerk.mockReturnValue(createMockClerk())
   })
 
-  describe('when loginEnabled=true (default, no PostHog key)', () => {
-    it('renders "Start Free Today" button', () => {
-      renderHeroSection()
-      expect(screen.getByRole('button', { name: /start free today/i })).toBeInTheDocument()
-    })
-
-    it('"Start Free Today" button is not disabled', () => {
-      renderHeroSection()
-      const btn = screen.getByRole('button', { name: /start free today/i })
-      expect(btn).not.toBeDisabled()
-    })
-
-    it('does not render "Coming Soon" button', () => {
-      renderHeroSection()
-      expect(screen.queryByRole('button', { name: /coming soon/i })).not.toBeInTheDocument()
-    })
-
-    it('calls openSignUp when CTA button is clicked', () => {
-      const clerkMock = createMockClerk()
-      mockUseClerk.mockReturnValue(clerkMock)
-
-      renderHeroSection()
-      const btn = screen.getByRole('button', { name: /start free today/i })
-      fireEvent.click(btn)
-      expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
-    })
+  it('renders "Start Free Today" button', () => {
+    renderHeroSection()
+    expect(screen.getByRole('button', { name: /start free today/i })).toBeInTheDocument()
   })
 
-  describe('when loginEnabled=false (PostHog flag disabled)', () => {
-    beforeEach(() => {
-      // Set PostHog key so isPostHogConfigured() returns true
-      ;(window as Window & { ENV?: Record<string, string> }).ENV = { POSTHOG_KEY: 'test-key' }
-      // Feature flag returns false → login disabled
-      mockUseFeatureFlagEnabled.mockReturnValue(false)
-    })
+  it('"Start Free Today" button is not disabled', () => {
+    renderHeroSection()
+    const btn = screen.getByRole('button', { name: /start free today/i })
+    expect(btn).not.toBeDisabled()
+  })
 
-    it('renders "Start Free Today" button', () => {
-      renderHeroSection()
-      expect(screen.getByRole('button', { name: /start free today/i })).toBeInTheDocument()
-    })
+  it('does not render "Coming Soon" button', () => {
+    renderHeroSection()
+    expect(screen.queryByRole('button', { name: /coming soon/i })).not.toBeInTheDocument()
+  })
 
-    it('"Start Free Today" button is not disabled', () => {
-      renderHeroSection()
-      const btn = screen.getByRole('button', { name: /start free today/i })
-      expect(btn).not.toBeDisabled()
-    })
+  it('calls openSignUp when CTA button is clicked', () => {
+    const clerkMock = createMockClerk()
+    mockUseClerk.mockReturnValue(clerkMock)
 
-    it('does not render "Coming Soon" button', () => {
-      renderHeroSection()
-      expect(screen.queryByRole('button', { name: /coming soon/i })).not.toBeInTheDocument()
-    })
-
-    it('calls openSignUp when CTA button is clicked', () => {
-      const clerkMock = createMockClerk()
-      mockUseClerk.mockReturnValue(clerkMock)
-
-      renderHeroSection()
-      const btn = screen.getByRole('button', { name: /start free today/i })
-      fireEvent.click(btn)
-      expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
-    })
+    renderHeroSection()
+    const btn = screen.getByRole('button', { name: /start free today/i })
+    fireEvent.click(btn)
+    expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
   })
 })

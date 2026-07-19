@@ -18,7 +18,6 @@ import {
   mockRefetchSubscriptionTiers,
 } from '@/test/mocks/subscription-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
-import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -324,10 +323,9 @@ describe('LandingPage', () => {
     })
   })
 
-  describe('when login is disabled (lockdown active)', () => {
+  describe('Coming Soon state (removed with the feature-flag kill-switch, #1398)', () => {
     beforeEach(() => {
       window.ENV = { POSTHOG_KEY: 'test-key' }
-      mockUseFeatureFlagEnabled.mockReturnValue(false)
       mockUseUser.mockReturnValue({ user: undefined, isSignedIn: false, isLoaded: true })
       mockUseClerk.mockReturnValue({ openSignIn: () => {}, openSignUp: () => {} })
       mockUseGetSubscriptionTiers.mockReturnValue({
@@ -340,7 +338,6 @@ describe('LandingPage', () => {
 
     afterEach(() => {
       delete (window as Window & { ENV?: unknown }).ENV
-      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
     })
 
     it('renders Start Free Today CTA buttons', () => {

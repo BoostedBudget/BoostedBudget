@@ -1,16 +1,15 @@
 /**
  * LandingHeader Component Tests
  *
- * Tests for the landing page header with login-enabled feature flag behavior.
- * Issue #1184: Coming Soon state when login is disabled
+ * Issue #1398: the PostHog feature-flag kill-switch (and its "Coming Soon" disabled
+ * state) was removed — Log In / Start Free always render, on desktop and in the mobile menu.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { LandingHeader } from './LandingHeader'
 import { mockUseClerk } from '@/test/mocks/clerk'
-import { mockUseFeatureFlagEnabled } from '@/test/mocks/posthog'
 
 function renderLandingHeader() {
   return render(
@@ -23,83 +22,48 @@ function renderLandingHeader() {
 describe('LandingHeader', () => {
   beforeEach(() => {
     mockUseClerk.mockClear()
-    mockUseFeatureFlagEnabled.mockClear()
 
     mockUseClerk.mockReturnValue({
       openSignIn: () => {},
       openSignUp: () => {},
     })
-
-    // Default: no POSTHOG_KEY → useLoginEnabled returns { enabled: true }
-    delete (window as Window & { ENV?: Record<string, string> }).ENV
   })
 
-  describe('when loginEnabled=true (default, no PostHog key)', () => {
-    it('renders Log In button (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
-    })
-
-    it('renders Start Free button (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.getByRole('button', { name: /start free/i })).toBeInTheDocument()
-    })
-
-    it('does not render Coming Soon badge (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
-    })
+  it('renders Log In button (desktop)', () => {
+    renderLandingHeader()
+    expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
   })
 
-  describe('when loginEnabled=false (PostHog flag disabled)', () => {
-    beforeEach(() => {
-      // Set PostHog key so isPostHogConfigured() returns true
-      ;(window as Window & { ENV?: Record<string, string> }).ENV = { POSTHOG_KEY: 'test-key' }
-      // Feature flag returns false → login disabled
-      mockUseFeatureFlagEnabled.mockReturnValue(false)
-    })
+  it('renders Start Free button (desktop)', () => {
+    renderLandingHeader()
+    expect(screen.getByRole('button', { name: /start free/i })).toBeInTheDocument()
+  })
 
-    afterEach(() => {
-      delete (window as Window & { ENV?: Record<string, string> }).ENV
-      mockUseFeatureFlagEnabled.mockReturnValue(undefined)
-    })
+  it('does not render Coming Soon badge (desktop)', () => {
+    renderLandingHeader()
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+  })
 
-    it('renders Log In button (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
-    })
+  it('renders Log In and Start Free buttons in mobile menu', () => {
+    renderLandingHeader()
 
-    it('renders Start Free button (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.getByRole('button', { name: /start free/i })).toBeInTheDocument()
-    })
+    // Open the mobile menu
+    const menuButton = screen.getByRole('button', { name: /open menu/i })
+    fireEvent.click(menuButton)
 
-    it('does not render Coming Soon badge (desktop)', () => {
-      renderLandingHeader()
-      expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
-    })
+    // Desktop CTAs remain in the DOM (only CSS-hidden), so opening the mobile
+    // menu adds a second set of Log In / Start Free buttons.
+    expect(screen.getAllByRole('button', { name: /log in/i })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /start free/i })).toHaveLength(2)
+  })
 
-    it('renders Log In and Start Free buttons in mobile menu', () => {
-      renderLandingHeader()
+  it('does not render Coming Soon badge in mobile menu', () => {
+    renderLandingHeader()
 
-      // Open the mobile menu
-      const menuButton = screen.getByRole('button', { name: /open menu/i })
-      fireEvent.click(menuButton)
+    // Open the mobile menu
+    const menuButton = screen.getByRole('button', { name: /open menu/i })
+    fireEvent.click(menuButton)
 
-      // Desktop CTAs remain in the DOM (only CSS-hidden), so opening the mobile
-      // menu adds a second set of Log In / Start Free buttons.
-      expect(screen.getAllByRole('button', { name: /log in/i })).toHaveLength(2)
-      expect(screen.getAllByRole('button', { name: /start free/i })).toHaveLength(2)
-    })
-
-    it('does not render Coming Soon badge in mobile menu', () => {
-      renderLandingHeader()
-
-      // Open the mobile menu
-      const menuButton = screen.getByRole('button', { name: /open menu/i })
-      fireEvent.click(menuButton)
-
-      expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
-    })
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
   })
 })
