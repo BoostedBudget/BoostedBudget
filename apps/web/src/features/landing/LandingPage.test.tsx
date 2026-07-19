@@ -343,14 +343,15 @@ describe('LandingPage', () => {
       mockUseFeatureFlagEnabled.mockReturnValue(undefined)
     })
 
-    it('does not render Start Free Today CTA buttons', () => {
+    it('renders Start Free Today CTA buttons', () => {
       renderWithProviders(<LandingPage />)
-      expect(screen.queryByRole('button', { name: /start free today/i })).not.toBeInTheDocument()
+      const ctaButtons = screen.getAllByRole('button', { name: /start free today/i })
+      expect(ctaButtons.length).toBeGreaterThanOrEqual(1)
     })
 
-    it('renders Coming Soon state instead of auth CTAs', () => {
+    it('does not render Coming Soon state', () => {
       renderWithProviders(<LandingPage />)
-      expect(screen.getAllByText(/coming soon/i).length).toBeGreaterThanOrEqual(1)
+      expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
     })
   })
 })
