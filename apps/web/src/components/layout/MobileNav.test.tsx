@@ -155,18 +155,16 @@ describe('MobileNav', () => {
     expect(trigger).toHaveClass('custom-class')
   })
 
-  // Converted regression check for the removed PostHog feature-flag kill-switch prop
-  // (#1398) that used to gate MobileNav's mobile Log In button.
-  // Pre-removal, MobileNav's render guard was
-  // `!isAuthenticated && <that prop> && (<Button>...Log In</Button>)`, so passing
-  // that prop as `false` hid this button. That guard — and the prop entirely — is
-  // gone now, so there is no prop to gate on; the test below asserts the button
-  // renders unconditionally for a signed-out user, which is the intentional
-  // replacement coverage for the old flag-disabled case (verified against a
-  // scratch copy of the pre-removal source: flipping that old test's assertion to
-  // expect the button present, while still passing that removed prop as false, fails
-  // against the pre-removal component — see task-1-report.md for the verification
-  // transcript). Do not reintroduce that gating prop here.
+  // Issue #1398 removed the PostHog feature-flag kill-switch prop that used to gate
+  // MobileNav's mobile Log In button (pre-removal render guard was
+  // `!isAuthenticated && <that prop> && (<Button>...Log In</Button>)`). That prop no
+  // longer exists on MobileNav's props, so there is nothing left to pass or gate on.
+  // The test below verifies the mobile Log In button renders unconditionally for a
+  // signed-out user post-removal. Note: since the prop is gone, this test would also
+  // have passed against the OLD component (which defaulted the prop to `true`) — it
+  // is not a regression test proving the old gated-off behavior is now bypassed, only
+  // confirmation that the button renders by default today. Do not reintroduce that
+  // gating prop here.
   describe('login button always renders when signed out (no feature-flag gating prop)', () => {
     it('renders login button regardless', async () => {
       const user = userEvent.setup()

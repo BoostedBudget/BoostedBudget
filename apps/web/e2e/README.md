@@ -25,11 +25,12 @@ End-to-end testing suite for BoostedBudget using Playwright. These tests verify 
 - ✅ Protected routes redirect to login when not authenticated
 - ✅ Login button opens Clerk modal
 - ✅ Invalid credentials show error message
-- ✅ Signup option available in Clerk modal
+- ✅ Sign-up is invite-only (Clerk Restricted mode) — new accounts require an
+  allowlisted email; existing accounts sign in normally
 - ✅ Clerk redirect configuration is correct
 - ⏭️ **Skipped (requires Clerk test credentials)**:
   - Successful login with valid credentials
-  - Account creation flow
+  - Account creation flow (allowlisted email required)
   - Authenticated user can access protected routes
   - User profile information display
   - Logout flow
