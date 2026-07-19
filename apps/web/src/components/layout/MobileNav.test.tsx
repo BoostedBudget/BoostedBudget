@@ -155,8 +155,18 @@ describe('MobileNav', () => {
     expect(trigger).toHaveClass('custom-class')
   })
 
-  describe('loginEnabled prop', () => {
-    it('does not render login button when loginEnabled=false', async () => {
+  // Issue #1398 removed the PostHog feature-flag kill-switch prop that used to gate
+  // MobileNav's mobile Log In button (pre-removal render guard was
+  // `!isAuthenticated && <that prop> && (<Button>...Log In</Button>)`). That prop no
+  // longer exists on MobileNav's props, so there is nothing left to pass or gate on.
+  // The test below verifies the mobile Log In button renders unconditionally for a
+  // signed-out user post-removal. Note: since the prop is gone, this test would also
+  // have passed against the OLD component (which defaulted the prop to `true`) — it
+  // is not a regression test proving the old gated-off behavior is now bypassed, only
+  // confirmation that the button renders by default today. Do not reintroduce that
+  // gating prop here.
+  describe('login button always renders when signed out (no feature-flag gating prop)', () => {
+    it('renders login button regardless', async () => {
       const user = userEvent.setup()
       render(
         <BrowserRouter>
@@ -165,30 +175,6 @@ describe('MobileNav', () => {
             user={null}
             onLogout={mockOnLogout}
             onLogin={mockOnLogin}
-            loginEnabled={false}
-          />
-        </BrowserRouter>
-      )
-
-      await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-      await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument()
-      })
-
-      expect(screen.queryByRole('button', { name: /log in/i })).not.toBeInTheDocument()
-    })
-
-    it('renders login button when loginEnabled=true', async () => {
-      const user = userEvent.setup()
-      render(
-        <BrowserRouter>
-          <MobileNav
-            isAuthenticated={false}
-            user={null}
-            onLogout={mockOnLogout}
-            onLogin={mockOnLogin}
-            loginEnabled={true}
           />
         </BrowserRouter>
       )

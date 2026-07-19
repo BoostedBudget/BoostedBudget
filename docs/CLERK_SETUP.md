@@ -204,9 +204,12 @@ docker-compose up
 ```
 
 1. Navigate to `http://localhost:3000`
-2. Click **Sign Up** or **Log In**
+2. Click **Log In**
 3. You should see Clerk's sign-in UI (modal or redirect based on config)
-4. Create a test account or use existing credentials
+4. Sign in with an existing test user's credentials — sign-up is invite-only (Clerk
+   Restricted mode), so new accounts require an email on the Clerk allowlist (see
+   §8.1 to create one via the Dashboard). For QA testing, prefer the `qa-login`
+   auth-bypass flow instead of public self-signup.
 5. After login, you should be redirected back to the app
 
 ### 8.3 Verify JWT Token

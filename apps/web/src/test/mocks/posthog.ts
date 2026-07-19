@@ -33,10 +33,7 @@ mock.module('../../shared/lib/posthog', () => ({
   isPostHogConfigured: () => !!(window.ENV?.POSTHOG_KEY),
 }))
 
-export const mockUseFeatureFlagEnabled = mock(() => undefined as boolean | undefined)
-
-// Mock posthog-js/react for feature flag hooks
+// Mock posthog-js/react for PostHogProvider (used by apps/web/src/main.tsx)
 mock.module('posthog-js/react', () => ({
   PostHogProvider: ({ children }: { children: unknown }) => children,
-  useFeatureFlagEnabled: mockUseFeatureFlagEnabled,
 }))

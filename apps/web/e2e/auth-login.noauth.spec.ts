@@ -141,7 +141,10 @@ test.describe('Clerk Authentication - Login Flow', () => {
   });
 
   test.describe('Signup Flow', () => {
-    test('should have signup option on Clerk login page', async ({ page }) => {
+    // Skipped as part of #1398: Clerk Restricted sign-up mode (invite-only) hides the public
+    // "Sign up" link/prompt on the Clerk <SignIn/> UI by default, so this assertion no longer
+    // holds. Follow-up to re-enable once open sign-up returns: #1400.
+    test.skip('should have signup option on Clerk login page', async ({ page }) => {
       await setupClerkTestingToken({ page });
       await page.goto('/');
       await acceptCookieConsent(page);
