@@ -28,7 +28,6 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
 import { posthog } from './shared/lib/posthog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
-import { useLoginEnabled } from './shared/hooks'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
 // Redirect that forwards any extra query params from the old route to the new one.
@@ -142,10 +141,7 @@ function App() {
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
 
-  const { enabled: loginEnabled } = useLoginEnabled()
-  // When lockdown is active (!loginEnabled), show landing page even for authenticated users
-  // to prevent a redirect loop: ProtectedRoute → / → /dashboard → ProtectedRoute → ...
-  const isLandingPage = location.pathname === '/' && (!isAuthenticated || !loginEnabled)
+  const isLandingPage = location.pathname === '/' && !isAuthenticated
 
   // Initialize Paddle.js SDK
   useEffect(() => {
