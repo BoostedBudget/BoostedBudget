@@ -10,7 +10,6 @@ export type { UseUrlStateOptions, UseUrlStateReturn } from './useUrlState'
 export { useSortUrlState, parseSortParam, serializeSortParam, toggleSort } from './useSortUrlState'
 export type { UseSortUrlStateOptions, UseSortUrlStateReturn } from './useSortUrlState'
 export { useFilterState } from './useFilterState'
-export { useLoginEnabled } from './useLoginEnabled'
 export { useKeyboardShortcuts } from './useKeyboardShortcuts'
 export type { KeyMap } from './useKeyboardShortcuts'
 export type {
