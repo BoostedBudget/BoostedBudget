@@ -179,3 +179,221 @@ func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_ClipsToShare
 	assert.False(t, foundBefore, "snapshot dated before shared_at must be excluded")
 	assert.True(t, foundAfter, "snapshot dated after shared_at must be included")
 }
+
+// TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountPerDayDedup guards
+// against #1378: GetAggregatedHistoryForHousehold used to resolve a joint account's fingerprint
+// collision to ONE globally-freshest winner for the WHOLE query (householdAccountsCTEForBalances),
+// so a member who started syncing mid-range would erase the OTHER member's genuinely-earlier
+// history from every day of the series, not merely clip it at share_started_at. The fix must pick
+// a winner PER CALENDAR DAY instead.
+func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountPerDayDedup(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// Anchor all "day" arithmetic at noon UTC so intra-day hour offsets below never cross a
+	// calendar-day boundary regardless of what wall-clock time the test actually runs at.
+	today := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), time.Now().UTC().Day(), 12, 0, 0, 0, time.UTC)
+	fingerprint := "joint-fp-" + hh
+	sharedAt := today.AddDate(0, -2, 0) // well before the queried range — no clipping in play here
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, sharedAt)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, sharedAt)
+
+	// Owner's copy: EARLY snapshots, then stops syncing.
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, today.AddDate(0, 0, -20))
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, today.AddDate(0, 0, -16))
+	// Day -2: BOTH copies sync on the SAME calendar day — owner earlier in the day (stale
+	// within that day), member later (fresh within that day). Proves the per-day winner is
+	// resolved WITHIN a day of genuine overlap, not merely across non-overlapping days.
+	overlapDay := today.AddDate(0, 0, -2)
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, overlapDay.Add(-2*time.Hour))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 250, overlapDay.Add(2*time.Hour))
+	// Member's copy: starts syncing LATE in the range — globally freshest overall.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 250, today)
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, today.AddDate(0, -1, 0), today, nil)
+	require.NoError(t, err)
+
+	foundEarly, foundLate := false, false
+	for _, p := range points {
+		assert.NotEqual(t, float64(350), p.TotalBalance, "joint account must never double-count both copies on a single day, including a day both copies genuinely overlap on")
+		if p.TotalBalance == 100 {
+			foundEarly = true
+		}
+		if p.TotalBalance == 250 {
+			foundLate = true
+		}
+	}
+	assert.True(t, foundEarly, "owner's earlier data for the joint account must survive per-day, not be erased by member's globally-freshest copy")
+	assert.True(t, foundLate, "member's later data for the joint account must be included")
+}
+
+// TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_NonJointAccountAggregatesEveryDay
+// is a regression guard: a normal (non-joint, nil-fingerprint) household account must still
+// aggregate every day it has a snapshot, proving the per-day fingerprint dedup falls back
+// correctly to user_account_id when there's no physical fingerprint collision to resolve.
+func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_NonJointAccountAggregatesEveryDay(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 10, now.AddDate(0, 0, -2))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 20, now.AddDate(0, 0, -1))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 30, now)
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, now.AddDate(0, -1, 0), now, nil)
+	require.NoError(t, err)
+
+	var totals []float64
+	for _, p := range points {
+		totals = append(totals, p.TotalBalance)
+	}
+	assert.Contains(t, totals, float64(10), "day -2 balance must be present")
+	assert.Contains(t, totals, float64(20), "day -1 balance must be present")
+	assert.Contains(t, totals, float64(30), "day 0 balance must be present")
+}
+
+// TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountTypeFilterAppliesToWinner
+// guards against a fix regression flagged in Codex adversarial review (finding H1): the
+// accountTypes filter must be applied to the PER-DAY WINNER's type, not used to filter the
+// DISTINCT ON candidate set before freshness is resolved. The two joint-account copies are
+// given DIFFERENT account types (owner=depository, member=credit) and made to overlap on the
+// SAME calendar day, so the two filtering strategies produce different, distinguishable
+// results: filtering candidates before ranking would let the stale depository copy leak
+// through on the overlap day even though the fresher credit copy should have won (and then
+// been excluded by the filter); filtering the winner's type afterward correctly excludes that
+// day entirely.
+func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountTypeFilterAppliesToWinner(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// insertTestAccount seeds both accounts as type 'depository' by default; give the member's
+	// copy a different type so the two copies are distinguishable by type.
+	_, err := pool.Exec(ctx, `UPDATE accounts SET type = 'credit' WHERE id = $1`, memberAcct.AccountID)
+	require.NoError(t, err, "set member account type to credit")
+
+	today := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), time.Now().UTC().Day(), 12, 0, 0, 0, time.UTC)
+	fingerprint := "joint-fp-type-" + hh
+	sharedAt := today.AddDate(0, -2, 0)
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, sharedAt)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, sharedAt)
+
+	// Day -20: owner (depository) only — an unambiguous depository-only day.
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 100, today.AddDate(0, 0, -20))
+	// Day -5: BOTH copies overlap — owner (depository, stale within the day) at 10:00, member
+	// (credit, fresh within the day) at 14:00. The day's true winner is the credit copy.
+	overlapDay := today.AddDate(0, 0, -5)
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 999, overlapDay.Add(-2*time.Hour))
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 250, overlapDay.Add(2*time.Hour))
+	// Day 0: member (credit) only — an unambiguous credit-only day.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 300, today)
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	depositoryOnly, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, today.AddDate(0, -1, 0), today, []string{"depository"})
+	require.NoError(t, err)
+	var depositoryTotals []float64
+	for _, p := range depositoryOnly {
+		depositoryTotals = append(depositoryTotals, p.TotalBalance)
+	}
+	assert.Contains(t, depositoryTotals, float64(100), "the unambiguous depository-only day must still surface")
+	assert.NotContains(t, depositoryTotals, float64(999),
+		"the stale depository copy on the overlap day must NOT leak through — the fresher credit copy won that day and doesn't match the filter")
+	assert.NotContains(t, depositoryTotals, float64(250), "the credit copy must never be labeled depository")
+	assert.NotContains(t, depositoryTotals, float64(300), "the credit-only day must not match a depository filter")
+
+	creditOnly, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, today.AddDate(0, -1, 0), today, []string{"credit"})
+	require.NoError(t, err)
+	var creditTotals []float64
+	for _, p := range creditOnly {
+		creditTotals = append(creditTotals, p.TotalBalance)
+	}
+	assert.Contains(t, creditTotals, float64(250), "the overlap day's true (credit) winner must surface under a credit filter")
+	assert.Contains(t, creditTotals, float64(300), "the unambiguous credit-only day must still surface")
+	assert.NotContains(t, creditTotals, float64(100), "the depository-only day must not match a credit filter")
+	assert.NotContains(t, creditTotals, float64(999), "the stale depository copy must never surface under any filter")
+}
+
+// TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountCopiesClipIndependently
+// is a regression guard for the fix in #1378: when two copies of the same joint-account
+// fingerprint have DIFFERENT share_started_at values, each copy must be clipped against ITS OWN
+// share_started_at, not some shared/collapsed value. Owner's copy was shared 2 months ago;
+// member's copy was shared only 8 days ago — a much more recent share date. Owner's snapshot at
+// day -20 falls after owner's own share date but before member's, and must still be INCLUDED
+// because clipping is per-row (per household_accounts copy), not per-fingerprint-collapsed.
+// Member's snapshot at day -15 falls before member's own share date and must be EXCLUDED, even
+// though owner's data from that same era survives — proving the two copies clip independently.
+func TestBalanceSnapshotRepository_GetAggregatedHistoryForHousehold_JointAccountCopiesClipIndependently(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+	repo := repository.NewBalanceSnapshotRepository(pool)
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	ownerAcct := setupHouseholdMemberAccount(t, pool, owner)
+	memberAcct := setupHouseholdMemberAccount(t, pool, member)
+
+	// Anchor all "day" arithmetic at noon UTC so intra-day hour offsets never cross a calendar-day
+	// boundary regardless of what wall-clock time the test actually runs at.
+	today := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), time.Now().UTC().Day(), 12, 0, 0, 0, time.UTC)
+	fingerprint := "joint-fp-clip-independent-" + hh
+
+	ownerSharedAt := today.AddDate(0, -2, 0)  // 2 months ago — well before the queried range
+	memberSharedAt := today.AddDate(0, 0, -8) // only 8 days ago — much more recent than owner's
+	insertHouseholdShare(t, pool, hh, ownerAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, ownerSharedAt)
+	insertHouseholdShare(t, pool, hh, memberAcct.UserAccountID, &fingerprint, domain.ShareVisibilityShared, memberSharedAt)
+
+	// Owner snapshot at day -20: after owner's OWN share date (2 months ago) but before member's
+	// (8 days ago). Must be INCLUDED — clipping uses owner's own share date, not member's.
+	insertBalanceSnapshot(t, pool, owner, ownerAcct.AccountID, ownerAcct.UserAccountID, 111, today.AddDate(0, 0, -20))
+	// Member snapshot at day -15: before member's OWN share date (8 days ago). Must be EXCLUDED,
+	// even though the same calendar-day window is otherwise in range and owner's data from that
+	// era is included — this is the crux of the "independent" claim.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 222, today.AddDate(0, 0, -15))
+	// Member snapshot at day -3: after member's own share date (8 days ago). Must be INCLUDED.
+	insertBalanceSnapshot(t, pool, member, memberAcct.AccountID, memberAcct.UserAccountID, 333, today.AddDate(0, 0, -3))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	points, err := repo.GetAggregatedHistoryForHousehold(ctx, owner, scope, today.AddDate(0, -1, 0), today, nil)
+	require.NoError(t, err)
+
+	found111, found222, found333 := false, false, false
+	for _, p := range points {
+		if p.TotalBalance == 111 {
+			found111 = true
+		}
+		if p.TotalBalance == 222 {
+			found222 = true
+		}
+		if p.TotalBalance == 333 {
+			found333 = true
+		}
+	}
+	assert.True(t, found111, "owner's early data must survive despite member's later share date — clipping uses owner's own share_started_at")
+	assert.False(t, found222, "member's pre-share data must be excluded even though owner's data from the same era is included")
+	assert.True(t, found333, "member's post-share data must be included")
+}
