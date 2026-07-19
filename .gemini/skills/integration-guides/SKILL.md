@@ -285,39 +285,6 @@ func (h *PaddleWebhookHandler) HandleWebhook(ctx context.Context, event paddle.E
 }
 ```
 
-### Subscription Service
-
-```go
-// internal/services/subscription_service.go
-
-func (s *subscriptionService) CheckLimit(ctx context.Context, user *domain.User, resource domain.Resource, current int) (*domain.LimitCheckResult, error) {
-    tier := s.getTierConfig(user.SubscriptionTier)
-
-    var limit int
-    switch resource {
-    case domain.ResourceRules:
-        limit = tier.MaxRules
-    case domain.ResourceAccounts:
-        limit = tier.MaxAccounts
-    default:
-        return nil, fmt.Errorf("unknown resource: %s", resource)
-    }
-
-    // Check for user-specific overrides
-    override, err := s.overrideRepo.GetByUserAndResource(ctx, user.ID, resource)
-    if err == nil && override != nil {
-        limit = override.Limit
-    }
-
-    return &domain.LimitCheckResult{
-        Allowed:     current < limit,
-        Current:     current,
-        Limit:       limit,
-        HasOverride: override != nil,
-    }, nil
-}
-```
-
 ### QA Environment Limitations
 
 > **Note:** Paddle webhook testing requires staging environment.
