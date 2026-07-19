@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button'
 import { Rocket, Shield, CreditCard } from 'lucide-react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
-import { useLoginEnabled } from '@/shared/hooks'
 
 interface HeroSectionProps {
   onScrollToHowItWorks?: () => void
@@ -19,7 +18,6 @@ interface HeroSectionProps {
 export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
   const { openSignUp } = useClerk()
   const trackEvent = useTrackEvent()
-  const { enabled: loginEnabled } = useLoginEnabled()
 
   const handleScrollToHowItWorks = () => {
     if (onScrollToHowItWorks) {
@@ -82,23 +80,13 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
 
           {/* CTA Buttons */}
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            {loginEnabled ? (
-              <Button
-                size="lg"
-                onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
-                className="w-full bg-blue-600 px-10 py-6 text-lg font-semibold shadow-lg shadow-blue-500/25 hover:bg-blue-500 hover:shadow-blue-500/30 sm:w-auto"
-              >
-                Start Free Today
-              </Button>
-            ) : (
-              <Button
-                disabled
-                size="lg"
-                className="w-full bg-blue-600/60 px-10 py-6 text-lg font-semibold opacity-60 sm:w-auto"
-              >
-                Coming Soon
-              </Button>
-            )}
+            <Button
+              size="lg"
+              onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
+              className="w-full bg-blue-600 px-10 py-6 text-lg font-semibold shadow-lg shadow-blue-500/25 hover:bg-blue-500 hover:shadow-blue-500/30 sm:w-auto"
+            >
+              Start Free Today
+            </Button>
             <Button
               variant="outline"
               size="lg"

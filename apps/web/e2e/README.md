@@ -4,12 +4,12 @@ End-to-end testing suite for BoostedBudget using Playwright. These tests verify 
 
 ## Test Coverage
 
-### 1. Health Endpoint (`health.spec.ts`)
+### 1. Health Endpoint (`health.noauth.spec.ts`)
 - ✅ Backend health endpoint returns correct status
 - ✅ Application homepage loads successfully
 - ✅ Backend API is accessible
 
-### 2. Cookie Consent Banner (`cookie-consent.spec.ts`)
+### 2. Cookie Consent Banner (`cookie-consent.noauth.spec.ts`)
 - ✅ GDPR cookie consent banner displays on first visit
 - ✅ Accept All / Necessary Only / Customize buttons present
 - ✅ Banner hides after user selection
@@ -20,16 +20,17 @@ End-to-end testing suite for BoostedBudget using Playwright. These tests verify 
 - ✅ Privacy and Cookie policy links present
 - ✅ Accessibility (ARIA labels, role attributes)
 
-### 3. Clerk Authentication (`auth.spec.ts`)
+### 3. Clerk Authentication (`auth-login.noauth.spec.ts`)
 - ✅ Unauthenticated state shows Log In button
 - ✅ Protected routes redirect to login when not authenticated
 - ✅ Login button opens Clerk modal
 - ✅ Invalid credentials show error message
-- ✅ Signup option available in Clerk modal
+- ✅ Sign-up is invite-only (Clerk Restricted mode) — new accounts require an
+  allowlisted email; existing accounts sign in normally
 - ✅ Clerk redirect configuration is correct
 - ⏭️ **Skipped (requires Clerk test credentials)**:
   - Successful login with valid credentials
-  - Account creation flow
+  - Account creation flow (allowlisted email required)
   - Authenticated user can access protected routes
   - User profile information display
   - Logout flow
@@ -97,7 +98,7 @@ bun run test:e2e:debug
 
 ### Run Specific Test File
 ```bash
-npx playwright test health.spec.ts
+npx playwright test health.noauth.spec.ts
 ```
 
 ### View Test Report
@@ -113,17 +114,22 @@ e2e/
 ├── .env.test.example            # Example environment configuration
 ├── helpers/
 │   └── auth.ts                  # Clerk helper functions
-├── health.spec.ts               # Health endpoint tests
-├── cookie-consent.spec.ts       # GDPR cookie consent tests
-└── auth.spec.ts                 # Clerk authentication flow tests
+├── health.noauth.spec.ts         # Health endpoint tests
+├── cookie-consent.noauth.spec.ts # GDPR cookie consent tests
+└── auth-login.noauth.spec.ts     # Clerk authentication flow tests
+(46 spec files total; only the ones referenced above are shown here. 44 match Playwright's
+ testMatch pattern (`*.auth.spec.ts` / `*.noauth.spec.ts`); the remaining 2
+ (`subscription-checkout.spec.ts`, `subscription-management.spec.ts`) are known-dead legacy
+ files never discovered by Playwright — tracked in #1402)
 ```
 
 ## Helper Functions
 
 The `helpers/auth.ts` module provides reusable functions for Clerk flows:
 
-- `signInWithClerk(page, credentials)` - Perform login via Clerk modal
-- `signOut(page)` - Perform logout
+- `loginWithClerk(page, credentials)` - Perform login via Clerk sign-in modal, where
+  `credentials` is a `ClerkCredentials` object (`{ email, password }`)
+- `logout(page)` - Perform logout and verify the logged-out state
 - `isAuthenticated(page)` - Check if user is authenticated
 - `acceptCookieConsent(page)` - Accept GDPR cookie consent banner
 
