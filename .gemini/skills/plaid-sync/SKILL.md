@@ -69,9 +69,9 @@ Historical depth is determined by `GetHistoricalDepthLimit()` in `subscription_s
 
 ## Sync Frequency
 
-`executions_per_day = -1` (unlimited) for all tiers — no frequency cap configured. Syncs are
-webhook-driven (`INITIAL_UPDATE`, `DEFAULT_UPDATE`, `HISTORICAL_UPDATE`, `TRANSACTIONS_REMOVED`)
-rather than polled on a fixed interval.
+No per-tier or per-user sync-frequency limit exists (the legacy `executions_per_day` field was
+removed in #1386 as dead code). Syncs are webhook-driven (`INITIAL_UPDATE`, `DEFAULT_UPDATE`,
+`HISTORICAL_UPDATE`, `TRANSACTIONS_REMOVED`) rather than polled on a fixed interval.
 
 ## Key Files
 
