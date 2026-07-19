@@ -8,7 +8,6 @@ import { MobileNav } from './MobileNav'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { NotificationBell, NotificationDrawer } from '@/features/notifications'
-import { useLoginEnabled } from '@/shared/hooks'
 import { useReviewSummary } from '@/features/transactions/hooks/useReviewSummary'
 
 function ReviewInboxButton() {
@@ -41,7 +40,6 @@ export function Header({ className }: HeaderProps) {
   const { user: clerkUser } = useUser()
   const { openSignIn, signOut } = useClerk()
   const [notifOpen, setNotifOpen] = useState(false)
-  const { enabled: loginEnabled } = useLoginEnabled()
 
   // Map Clerk user to a format compatible with existing components
   const user = clerkUser ? {
@@ -97,11 +95,9 @@ export function Header({ className }: HeaderProps) {
         {isAuthenticated ? (
           <UserDropdown user={user || {}} onLogout={handleLogout} className="hidden md:flex" />
         ) : (
-          loginEnabled && (
-            <Button onClick={handleLogin} className="hidden md:inline-flex">
-              Log In
-            </Button>
-          )
+          <Button onClick={handleLogin} className="hidden md:inline-flex">
+            Log In
+          </Button>
         )}
 
         {/* Mobile Navigation */}
@@ -110,7 +106,6 @@ export function Header({ className }: HeaderProps) {
           user={user || null}
           onLogout={handleLogout}
           onLogin={handleLogin}
-          loginEnabled={loginEnabled}
         />
       </div>
     </header>

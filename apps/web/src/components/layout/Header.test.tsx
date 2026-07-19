@@ -219,7 +219,7 @@ describe('Header', () => {
     })
   })
 
-  describe('when login is disabled', () => {
+  describe('when login_enabled flag is false (flag no longer gates the login button)', () => {
     beforeEach(() => {
       setupUnauthenticatedMocks()
       window.ENV = { POSTHOG_KEY: 'test-key' }
@@ -231,17 +231,17 @@ describe('Header', () => {
       mockUseFeatureFlagEnabled.mockReturnValue(undefined)
     })
 
-    it('does not render login button when login is disabled', () => {
+    it('still renders login button when flag is false', () => {
       renderHeader()
-      expect(screen.queryByRole('button', { name: /log in/i })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /log in/i })).toBeInTheDocument()
     })
 
-    it('still renders logo when login is disabled', () => {
+    it('still renders logo when flag is false', () => {
       renderHeader()
       expect(screen.getByText(/boostedbudget/i)).toBeInTheDocument()
     })
 
-    it('still renders mobile nav trigger when login is disabled', () => {
+    it('still renders mobile nav trigger when flag is false', () => {
       renderHeader()
       expect(screen.getByRole('button', { name: /open menu/i })).toBeInTheDocument()
     })
