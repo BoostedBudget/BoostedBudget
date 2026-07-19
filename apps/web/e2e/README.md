@@ -117,15 +117,19 @@ e2e/
 ├── health.noauth.spec.ts         # Health endpoint tests
 ├── cookie-consent.noauth.spec.ts # GDPR cookie consent tests
 └── auth-login.noauth.spec.ts     # Clerk authentication flow tests
-(36 spec files total; only the ones referenced above are shown here)
+(46 spec files total; only the ones referenced above are shown here. 44 match Playwright's
+ testMatch pattern (`*.auth.spec.ts` / `*.noauth.spec.ts`); the remaining 2
+ (`subscription-checkout.spec.ts`, `subscription-management.spec.ts`) are known-dead legacy
+ files never discovered by Playwright — tracked in #1402)
 ```
 
 ## Helper Functions
 
 The `helpers/auth.ts` module provides reusable functions for Clerk flows:
 
-- `signInWithClerk(page, credentials)` - Perform login via Clerk modal
-- `signOut(page)` - Perform logout
+- `loginWithClerk(page, credentials)` - Perform login via Clerk sign-in modal, where
+  `credentials` is a `ClerkCredentials` object (`{ email, password }`)
+- `logout(page)` - Perform logout and verify the logged-out state
 - `isAuthenticated(page)` - Check if user is authenticated
 - `acceptCookieConsent(page)` - Accept GDPR cookie consent banner
 
