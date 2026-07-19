@@ -1,6 +1,5 @@
-import { useNavigate } from 'react-router-dom'
+import { useClerk } from '@clerk/react-router'
 import { Button } from '@/components/ui/button'
-import { useLoginEnabled } from '@/shared/hooks'
 import { usePaddleCheckout } from '../../billing/hooks/usePaddleCheckout'
 import { classifyTierChange } from '../../subscription/lib/tierDirection'
 import type { PricingState } from '../hooks/usePricingContext'
@@ -22,8 +21,7 @@ export function TierActionButton({
   tiers,
   onChangePlan,
 }: TierActionButtonProps) {
-  const navigate = useNavigate()
-  const { enabled: loginEnabled } = useLoginEnabled()
+  const { openSignUp } = useClerk()
   const { checkout, isLoading } = usePaddleCheckout()
 
   const handleCheckout = async () => {
@@ -42,12 +40,9 @@ export function TierActionButton({
   }
 
   if (pricingState.status === 'signed-out') {
-    if (!loginEnabled) {
-      return <Button disabled className="w-full">Coming Soon</Button>
-    }
     const handleSignedOutClick = () => {
       sessionStorage.setItem('checkout_intent', JSON.stringify({ tier: tierKey, billingInterval, storedAt: Date.now() }))
-      navigate('/sign-up', { state: { checkoutIntent: { tier: tierKey, billingInterval } } })
+      openSignUp()
     }
     return (
       <Button onClick={handleSignedOutClick} className="w-full">
