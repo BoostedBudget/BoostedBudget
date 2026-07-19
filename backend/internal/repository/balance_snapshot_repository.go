@@ -227,7 +227,7 @@ func (r *balanceSnapshotRepository) GetLatestByUserID(ctx context.Context, userI
 
 // GetSnapshotsAsOfForHousehold retrieves the latest snapshot at or before asOf for every
 // account shared into the household, across all members. Joint accounts (same physical
-// fingerprint shared by two members) dedup via householdAccountsCTEForBalances, which picks
+// fingerprint shared by two members) dedup via householdAccountsCTEForBalancesAsOf, which picks
 // the freshest-synced copy — then DISTINCT ON here also collapses that chosen
 // user_account_id to its single latest-as-of-asOf snapshot. Issue #1369 — Phase 5.
 func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, asOf time.Time) ([]domain.BalanceSnapshot, error) {
@@ -252,50 +252,52 @@ func (r *balanceSnapshotRepository) GetSnapshotsAsOfForHousehold(ctx context.Con
 // aggregates across every account shared into the household, clipped per-account to
 // share_started_at.
 //
-// Known limitation (related to Codex adversarial review P1-2, fixed for the point-in-time
-// case via householdAccountsCTEForBalancesAsOf/GetSnapshotsAsOfForHousehold): this method
-// still uses householdAccountsCTEForBalances, which picks ONE globally-freshest winner per
-// joint-account fingerprint for the WHOLE query — not per calendar day. If a joint account's
-// freshest-ever copy belongs to a member who joined/started syncing partway through
-// [startDate, endDate], the OTHER member's genuinely earlier history for that same physical
-// account is dropped from the whole series, not merely clipped at share_started_at. A full
-// fix needs the day-by-day dedup in latest_per_account_per_day to pick its own per-day
-// winner rather than relying on one query-wide `household_accounts` resolution — tracked as
-// a fast-follow in #1378, not fixed in this phase. Issue #1369 — Phase 5.
+// Joint-account fingerprint collisions (the same physical account linked and shared by two
+// members) are resolved PER CALENDAR DAY, not once for the whole query: latest_per_account_per_day
+// uses DISTINCT ON ((day), fingerprint) to pick each day's freshest-synced copy independently.
+// This matters because a joint account's globally-freshest copy may belong to a member who only
+// started syncing partway through [startDate, endDate] — resolving one query-wide winner (as an
+// earlier version of this method did, via householdAccountsCTEForBalances) would erase the OTHER
+// member's genuinely-earlier history from the ENTIRE series, not merely clip it at
+// share_started_at (Codex adversarial review P1-2; fixed here per #1378, tracked as a fast-follow
+// from #1369 — the asOf-bounded point-in-time case, householdAccountsCTEForBalancesAsOf, was
+// already correct since it only ever resolves a single instant).
+//
+// The accountTypes filter is applied to the per-day WINNER's type in the outer query, not inside
+// the DISTINCT ON candidate set — filtering candidates first could let a stale copy whose type
+// happens to match beat the freshest copy for a day.
+//
+// Pre-existing, unchanged-by-this-fix assumption: current_balance always comes from the
+// selected balance_snapshots row directly (never wrong), but account_type comes from
+// whichever `accounts` row the LEFT JOIN matches by user_account_id — not specifically
+// bs.account_id. This is only ambiguous if two 'active' accounts rows ever shared one
+// user_account_id, which the Plaid re-link handler guarantees never happens (no DB
+// constraint enforces it — see migration 000033). The trailing `a.id` ORDER BY tiebreak
+// keeps that (should-be-impossible) case deterministic rather than fanning out and
+// double-summing balances, as the pre-#1378 query did.
 func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context.Context, requestingUserID string, scope *domain.HouseholdScope, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("dashboard_history").Inc()
 
 	const queryBase = `
 		WITH ` + `%s,` + `
 		latest_per_account_per_day AS (
-		    SELECT
+		    SELECT DISTINCT ON ((bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint)
 		        (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		        bs.user_account_id AS chain_key,
-		        MAX(bs.snapshot_at) AS latest_at,
-		        MAX(bs.id::text) AS latest_id
+		        bs.current_balance,
+		        a.type AS account_type
 		    FROM balance_snapshots bs
 		    JOIN household_accounts ha ON ha.user_account_id = bs.user_account_id
 		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
 		    WHERE (bs.snapshot_at AT TIME ZONE 'UTC')::date >= GREATEST($4::date, (ha.share_started_at AT TIME ZONE 'UTC')::date)
 		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date <= $5::date
-		      %s
-		    GROUP BY snapshot_date, chain_key
-		),
-		deduped AS (
-		    SELECT (bs.snapshot_at AT TIME ZONE 'UTC')::date AS snapshot_date,
-		           bs.current_balance, a.type AS account_type
-		    FROM balance_snapshots bs
-		    JOIN latest_per_account_per_day l
-		      ON bs.user_account_id = l.chain_key
-		      AND (bs.snapshot_at AT TIME ZONE 'UTC')::date = l.snapshot_date
-		      AND bs.snapshot_at = l.latest_at
-		      AND bs.id::text = l.latest_id
-		    LEFT JOIN accounts a ON a.user_account_id = bs.user_account_id AND a.status = 'active'
+		    ORDER BY (bs.snapshot_at AT TIME ZONE 'UTC')::date, ha.fingerprint,
+		             bs.snapshot_at DESC, bs.id DESC, a.id
 		)
 		SELECT snapshot_date,
 		       COALESCE(account_type, '') AS account_type,
 		       SUM(current_balance) AS type_balance
-		FROM deduped
+		FROM latest_per_account_per_day
+		%s
 		GROUP BY snapshot_date, account_type
 		ORDER BY snapshot_date ASC, account_type ASC
 	`
@@ -306,9 +308,9 @@ func (r *balanceSnapshotRepository) GetAggregatedHistoryForHousehold(ctx context
 	var query string
 	if len(accountTypes) > 0 {
 		args = append(args, accountTypes)
-		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalances(), "AND a.type = ANY($6)")
+		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "WHERE account_type = ANY($6)")
 	} else {
-		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalances(), "")
+		query = fmt.Sprintf(queryBase, householdAccountsCTEForBalancesPerDay(), "")
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)
