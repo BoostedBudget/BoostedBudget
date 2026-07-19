@@ -34,38 +34,23 @@ afterEach(() => {
 })
 
 describe('ProtectedRoute', () => {
-  describe('while flags are loading (flagLoading=true)', () => {
-    it('shows skeleton for authenticated user while flag is loading', () => {
+  describe('login_enabled flag no longer gates auth (flag removed from gating)', () => {
+    it('renders children for signed-in user while flag is loading (undefined) — no skeleton', () => {
       window.ENV = { POSTHOG_KEY: 'test-key' }
-      mockUseFeatureFlagEnabled.mockReturnValue(undefined) // undefined → loading
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined) // undefined → loading; should have no effect
       mockUseAuth.mockReturnValue({ isSignedIn: true, isLoaded: true } as ReturnType<typeof mockUseAuth>)
 
       renderProtectedRoute()
 
-      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
+      expect(screen.getByText('Protected Content')).toBeInTheDocument()
       expect(screen.queryByText('Home')).not.toBeInTheDocument()
-      // Skeleton is rendered — presence indicated by animate-pulse class
-      expect(document.querySelector('.animate-pulse')).not.toBeNull()
+      expect(document.querySelector('.animate-pulse')).toBeNull()
     })
 
-    it('shows skeleton for unauthenticated user while flag is loading', () => {
+    it('redirects unauthenticated user to / while flag is loading (undefined), not stuck on a skeleton', () => {
       window.ENV = { POSTHOG_KEY: 'test-key' }
-      mockUseFeatureFlagEnabled.mockReturnValue(undefined) // undefined → loading
+      mockUseFeatureFlagEnabled.mockReturnValue(undefined) // undefined → loading; should have no effect
       mockUseAuth.mockReturnValue({ isSignedIn: false, isLoaded: true } as ReturnType<typeof mockUseAuth>)
-
-      renderProtectedRoute()
-
-      expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
-      expect(screen.queryByText('Home')).not.toBeInTheDocument()
-      expect(document.querySelector('.animate-pulse')).not.toBeNull()
-    })
-  })
-
-  describe('when login_enabled=false (hard lockdown)', () => {
-    it('redirects authenticated user to / when login is disabled', () => {
-      window.ENV = { POSTHOG_KEY: 'test-key' }
-      mockUseFeatureFlagEnabled.mockReturnValue(false)
-      mockUseAuth.mockReturnValue({ isSignedIn: true, isLoaded: true } as ReturnType<typeof mockUseAuth>)
 
       renderProtectedRoute()
 
@@ -73,7 +58,18 @@ describe('ProtectedRoute', () => {
       expect(screen.getByText('Home')).toBeInTheDocument()
     })
 
-    it('redirects unauthenticated user to / when login is disabled', () => {
+    it('renders children for signed-in user when flag is false (no lockdown redirect)', () => {
+      window.ENV = { POSTHOG_KEY: 'test-key' }
+      mockUseFeatureFlagEnabled.mockReturnValue(false)
+      mockUseAuth.mockReturnValue({ isSignedIn: true, isLoaded: true } as ReturnType<typeof mockUseAuth>)
+
+      renderProtectedRoute()
+
+      expect(screen.getByText('Protected Content')).toBeInTheDocument()
+      expect(screen.queryByText('Home')).not.toBeInTheDocument()
+    })
+
+    it('redirects unauthenticated user to / when flag is false (redirect is auth-driven, not lockdown)', () => {
       window.ENV = { POSTHOG_KEY: 'test-key' }
       mockUseFeatureFlagEnabled.mockReturnValue(false)
       mockUseAuth.mockReturnValue({ isSignedIn: false, isLoaded: true } as ReturnType<typeof mockUseAuth>)
@@ -111,8 +107,7 @@ describe('ProtectedRoute', () => {
 
   describe('while Clerk is loading (isLoaded=false)', () => {
     it('shows skeleton while Clerk auth is still loading', () => {
-      // No PostHog key → isPostHogConfigured()=false → login immediately enabled; flag value is irrelevant
-      mockUseFeatureFlagEnabled.mockReturnValue(true)
+      // login_enabled flag no longer gates auth — only Clerk's isLoaded matters here
       mockUseAuth.mockReturnValue({ isSignedIn: false, isLoaded: false } as ReturnType<typeof mockUseAuth>)
 
       renderProtectedRoute()

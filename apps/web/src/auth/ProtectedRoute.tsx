@@ -1,6 +1,5 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@clerk/react-router'
-import { useLoginEnabled } from '@/shared/hooks'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
@@ -8,11 +7,10 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { isSignedIn, isLoaded } = useAuth()
-  const { enabled: loginEnabled, loading: flagLoading } = useLoginEnabled()
   const location = useLocation()
 
-  // Show skeleton while either Clerk or feature flag is loading
-  if (!isLoaded || flagLoading) {
+  // Show skeleton while Clerk is loading
+  if (!isLoaded) {
     return (
       <div className="flex justify-center items-center min-h-screen bg-muted">
         <div className="w-full max-w-md p-6 space-y-4">
@@ -29,11 +27,6 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
         </div>
       </div>
     )
-  }
-
-  // Hard lockdown — block ALL users (even authenticated) when flag is OFF
-  if (!loginEnabled) {
-    return <Navigate to="/" replace />
   }
 
   if (!isSignedIn) {

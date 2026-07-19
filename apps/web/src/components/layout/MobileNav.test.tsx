@@ -155,8 +155,19 @@ describe('MobileNav', () => {
     expect(trigger).toHaveClass('custom-class')
   })
 
-  describe('loginEnabled prop', () => {
-    it('does not render login button when loginEnabled=false', async () => {
+  // Converted regression check for the removed `loginEnabled` kill-switch (#1398).
+  // Pre-removal, MobileNav's render guard was
+  // `!isAuthenticated && loginEnabled && (<Button>...Log In</Button>)`, so passing
+  // `loginEnabled={false}` hid this button. That guard — and the prop entirely — is
+  // gone now, so there is no prop to gate on; the test below asserts the button
+  // renders unconditionally for a signed-out user, which is the intentional
+  // replacement coverage for the old `loginEnabled=false` case (verified against a
+  // scratch copy of the pre-removal source: flipping that old test's assertion to
+  // expect the button present, while still passing `loginEnabled={false}`, fails
+  // against the pre-removal component — see task-1-report.md for the verification
+  // transcript). Do not reintroduce a `loginEnabled` prop here.
+  describe('login button always renders when signed out (no loginEnabled prop)', () => {
+    it('renders login button regardless', async () => {
       const user = userEvent.setup()
       render(
         <BrowserRouter>
@@ -165,30 +176,6 @@ describe('MobileNav', () => {
             user={null}
             onLogout={mockOnLogout}
             onLogin={mockOnLogin}
-            loginEnabled={false}
-          />
-        </BrowserRouter>
-      )
-
-      await user.click(screen.getByRole('button', { name: /open menu/i }))
-
-      await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument()
-      })
-
-      expect(screen.queryByRole('button', { name: /log in/i })).not.toBeInTheDocument()
-    })
-
-    it('renders login button when loginEnabled=true', async () => {
-      const user = userEvent.setup()
-      render(
-        <BrowserRouter>
-          <MobileNav
-            isAuthenticated={false}
-            user={null}
-            onLogout={mockOnLogout}
-            onLogin={mockOnLogin}
-            loginEnabled={true}
           />
         </BrowserRouter>
       )
