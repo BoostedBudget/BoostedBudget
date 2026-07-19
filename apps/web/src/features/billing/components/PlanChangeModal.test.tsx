@@ -25,7 +25,6 @@ const createMockTier = (
     users_included: usersIncluded,
   },
   limits: {
-    executions_per_day: Math.max(10, usersIncluded * 100),
     transaction_history_days: 365,
   },
   features: [],

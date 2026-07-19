@@ -15,13 +15,13 @@
  *
  * No free tier. New users get a 60-day Premium trial.
  *
- * | Tier        | Users | Transaction History | Executions/Day | Price     |
- * |-------------|-------|---------------------|----------------|-----------|
- * | premium     | 1     | 730 days            | Unlimited      | $8.99/mo  |
- * | household_2 | 2     | 730 days            | Unlimited      | $12.99/mo |
- * | household_3 | 3     | 730 days            | Unlimited      | $14.99/mo |
- * | household_4 | 4     | 730 days            | Unlimited      | $16.99/mo |
- * | household_5 | 5+    | 730 days            | Unlimited      | $18.99/mo |
+ * | Tier        | Users | Transaction History | Price     |
+ * |-------------|-------|---------------------|-----------|
+ * | premium     | 1     | 730 days            | $8.99/mo  |
+ * | household_2 | 2     | 730 days            | $12.99/mo |
+ * | household_3 | 3     | 730 days            | $14.99/mo |
+ * | household_4 | 4     | 730 days            | $16.99/mo |
+ * | household_5 | 5+    | 730 days            | $18.99/mo |
  *
  * ## Regions
  *
@@ -32,6 +32,5 @@
  */
 
 export interface SubscriptionLimits {
-  executions_per_day: number;
   transaction_history_days: number;
 }
