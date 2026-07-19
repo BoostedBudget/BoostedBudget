@@ -91,7 +91,6 @@ func NewAnalyticsRepository(db DB) AnalyticsRepository {
 	return &analyticsRepository{db: db}
 }
 
-
 // GetCashFlowAggregation returns aggregated income and expenses for a date range.
 // Income: amount < 0 (inflow/credit)
 // Expenses: amount > 0 (outflow/debit, PFCv2)
@@ -544,40 +543,35 @@ func householdScopeArgs(requestingUserID string, scope *domain.HouseholdScope) [
 	return []interface{}{requestingUserID, scope.HouseholdID, scope.MemberUserIDs}
 }
 
-// householdAccountsCTEForBalances is the balance/net-worth sibling of householdAccountsCTE.
-// Same visibility/revocation/member filter, but joint-account fingerprint collisions are
-// resolved by picking the copy with the FRESHEST synced balance snapshot, not the
-// earliest-shared one — a stale, rarely-synced copy of a joint account must never win over
-// a copy that's actively being kept up to date (Codex adversarial review, P1-8). Used only
-// by account_repository.go / balance_snapshot_repository.go's household-scope methods; the
-// spending/cash-flow queries in this file use householdAccountsCTE (earliest-shared)
-// instead, since transaction history — not current balance freshness — is what matters
-// there. Same three leading args as householdAccountsCTE: $1 = requesting userID (pins
-// its type; unused otherwise here), $2 = household ID, $3 = active member user IDs.
-func householdAccountsCTEForBalances() string {
+// householdAccountsCTEForBalancesPerDay is the historical-aggregation sibling of the balance
+// CTEs, used by GetAggregatedHistoryForHousehold. Unlike householdAccountsCTEForBalancesAsOf
+// (a single point-in-time query), a date-range history query must choose a joint-account
+// fingerprint winner PER CALENDAR DAY — a copy that only started syncing mid-range must not
+// erase the other member's genuinely-earlier data from the whole series (Codex adversarial
+// review P1-2, deferred fast-follow #1378). So this CTE does NOT collapse fingerprint
+// collisions to one row; it exposes every shared user_account_id along with its physical
+// fingerprint and its own share_started_at, leaving per-day dedup to the caller's
+// DISTINCT ON ((day), fingerprint). Same three leading args as householdAccountsCTE: $1 =
+// requesting userID (pins its type; unused otherwise here), $2 = household ID, $3 = active
+// member user IDs.
+func householdAccountsCTEForBalancesPerDay() string {
 	return `household_accounts AS (
-		SELECT DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))
-			ua.id         AS user_account_id,
-			ua.user_id    AS owner_user_id,
-			has.shared_at AS share_started_at,
-			$1::uuid      AS _requesting_user_id
+		SELECT
+			ua.id                                                 AS user_account_id,
+			COALESCE(has.physical_account_blind_idx, ua.id::text) AS fingerprint,
+			has.shared_at                                         AS share_started_at,
+			$1::uuid                                              AS _requesting_user_id
 		FROM household_account_shares has
 		JOIN user_accounts ua ON ua.id = has.user_account_id
-		LEFT JOIN LATERAL (
-			SELECT MAX(bs.snapshot_at) AS latest_snapshot_at
-			FROM balance_snapshots bs
-			WHERE bs.user_account_id = ua.id
-		) latest ON true
 		WHERE has.household_id = $2
 		  AND has.visibility  = 'shared'
 		  AND has.revoked_at IS NULL
 		  AND ua.user_id = ANY($3)
-		ORDER BY COALESCE(has.physical_account_blind_idx, ua.id::text), latest.latest_snapshot_at DESC NULLS LAST, ua.id
 	)`
 }
 
-// householdAccountsCTEForBalancesAsOf is the asOf-bounded sibling of
-// householdAccountsCTEForBalances, used by point-in-time balance lookups
+// householdAccountsCTEForBalancesAsOf is the asOf-bounded, single-instant sibling of
+// householdAccountsCTEForBalancesPerDay, used by point-in-time balance lookups
 // (GetSnapshotsAsOfForHousehold) that are evaluated at a specific instant — both the
 // "current" call (asOf=now) and a "previous period" call (asOf=now-30d) reuse this same
 // query, so the joint-account fingerprint winner must be picked using "latest snapshot AT
@@ -585,9 +579,11 @@ func householdAccountsCTEForBalances() string {
 // query could pick the globally-freshest member's copy even when THAT copy has no snapshot
 // before the cutoff, silently returning zero data for the joint account instead of falling
 // back to the other member's genuinely earlier balance (Codex adversarial review, P1-2).
-// Same three leading args as householdAccountsCTEForBalances, PLUS $4 = the asOf cutoff
-// (reused both for the winner-selection bound here and the caller's own snapshot_at <= $4
-// filter in the outer query).
+// Unlike the per-day variant, this CTE collapses to ONE winner via DISTINCT ON, which is
+// correct here because the whole query only ever evaluates a single instant. Same three
+// leading args as householdAccountsCTEForBalancesPerDay, PLUS $4 = the asOf cutoff (reused
+// both for the winner-selection bound here and the caller's own snapshot_at <= $4 filter in
+// the outer query).
 func householdAccountsCTEForBalancesAsOf() string {
 	return `household_accounts AS (
 		SELECT DISTINCT ON (COALESCE(has.physical_account_blind_idx, ua.id::text))
