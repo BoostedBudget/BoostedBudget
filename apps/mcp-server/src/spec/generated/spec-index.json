@@ -420,7 +420,7 @@
       ],
       "manifestClass": "read",
       "excluded": true,
-      "description": "Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.",
+      "description": "Create a per-user resource limit override (e.g. transaction_history_days). Requires admin privileges.",
       "parameters": [
         {
           "name": "user_id",

@@ -353,46 +353,6 @@ func TestBoostExecutionRepository_GetByBoostIDWithFilter_WithStatus(t *testing.T
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// --- GetTodayExecutionCount ---
-
-func TestBoostExecutionRepository_GetTodayExecutionCount_Success(t *testing.T) {
-	mock, repo := setupBoostExecutionMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-
-	countRows := pgxmock.NewRows([]string{"count"}).AddRow(5)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*)`)).
-		WithArgs(userID, pgxmock.AnyArg()).
-		WillReturnRows(countRows)
-
-	count, err := repo.GetTodayExecutionCount(ctx, userID)
-
-	require.NoError(t, err)
-	assert.Equal(t, 5, count)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestBoostExecutionRepository_GetTodayExecutionCount_Zero(t *testing.T) {
-	mock, repo := setupBoostExecutionMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-
-	countRows := pgxmock.NewRows([]string{"count"}).AddRow(0)
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*)`)).
-		WithArgs(userID, pgxmock.AnyArg()).
-		WillReturnRows(countRows)
-
-	count, err := repo.GetTodayExecutionCount(ctx, userID)
-
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 // --- GetLastExecutionForBoost ---
 
 func TestBoostExecutionRepository_GetLastExecutionForBoost_Found(t *testing.T) {

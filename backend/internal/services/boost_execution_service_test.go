@@ -20,10 +20,9 @@ import (
 // Mock repositories for testing.
 
 type mockBoostExecutionRepository struct {
-	executions          []*domain.BoostExecution
-	todayExecutionCount int
-	createError         error
-	updateError         error
+	executions  []*domain.BoostExecution
+	createError error
+	updateError error
 }
 
 func (m *mockBoostExecutionRepository) Create(ctx context.Context, execution *domain.BoostExecution) error {
@@ -64,10 +63,6 @@ func (m *mockBoostExecutionRepository) GetByBoostID(ctx context.Context, ruleID 
 		}
 	}
 	return result, nil
-}
-
-func (m *mockBoostExecutionRepository) GetTodayExecutionCount(ctx context.Context, userID string) (int, error) {
-	return m.todayExecutionCount, nil
 }
 
 func (m *mockBoostExecutionRepository) GetLastExecutionForBoost(ctx context.Context, ruleID string) (*domain.BoostExecution, error) {
@@ -750,54 +745,6 @@ func TestProcessEventTrigger(t *testing.T) {
 		assert.Empty(t, suggestionRepo.suggestions)
 	})
 
-	t.Run("executes rule regardless of high execution count", func(t *testing.T) {
-		execRepo := &mockBoostExecutionRepository{
-			todayExecutionCount: 1000, // High count
-		}
-		suggestionRepo := &mockTransferSuggestionRepository{}
-
-		actionsJSON, _ := json.Marshal(domain.TransferAction{
-			FromAccountID: "account-1",
-			ToAccountID:   "account-2",
-			AmountType:    "fixed",
-			Amount:        100.0,
-		})
-
-		boostRepo := &mockBoostsRepository{
-			boosts: []*domain.Boost{
-				{
-					ID:       "rule-1",
-					UserID:   userID,
-					Name:     "Test Rule",
-					Enabled:  true,
-					BoostType: domain.BoostTypeTransferSuggestion,
-					TriggerConfig: domain.TriggerConfig{
-						Type:  domain.TriggerTypeEvent,
-						Event: "transaction_created",
-					},
-					Conditions:     []domain.BoostCondition{},
-					ConditionLogic: "AND",
-					Actions:        actionsJSON,
-				},
-			},
-		}
-
-		service := NewBoostExecutionService(
-			execRepo,
-			suggestionRepo,
-			boostRepo,
-			nil,
-		)
-
-		eventData := map[string]interface{}{
-			"amount": 100.0,
-		}
-
-		err := service.ProcessEventTrigger(ctx, userID, "transaction_created", eventData)
-
-		require.NoError(t, err)
-		assert.Len(t, suggestionRepo.suggestions, 1)
-	})
 }
 
 // TestGetExecutionHistory tests execution history retrieval.

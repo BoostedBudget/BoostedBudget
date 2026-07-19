@@ -21,7 +21,7 @@ function makeTier(priceMonthly: number): SubscriptionTier {
     name: 'premium',
     display_name: 'Premium',
     description: '',
-    limits: { transaction_history_days: 365, executions_per_day: -1 },
+    limits: { transaction_history_days: 365 },
     features: {
       ai_insights: false,
       api_access: false,

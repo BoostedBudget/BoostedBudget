@@ -15,7 +15,7 @@ import (
 //
 // It catches two failure modes:
 //  1. A bogus value in the enum (e.g. "automation_rules") that has no matching constant.
-//  2. A real constant (e.g. "executions_per_day") missing from the enum.
+//  2. A real constant (e.g. "transaction_history_days") missing from the enum.
 //
 // The SetLimit/GetLimit round-trip additionally proves each constant is wired in both
 // switch statements — SetLimit has no default branch, so an unwired type is a silent no-op.
