@@ -60,28 +60,6 @@ func (s *SubscriptionService) ListTiers(ctx context.Context) ([]domain.Subscript
 	return tiers, nil
 }
 
-// CheckLimit checks if a user is within the limit for a specific resource type
-// Returns a LimitCheckResult with details about current usage vs limit
-func (s *SubscriptionService) CheckLimit(
-	ctx context.Context,
-	user *domain.User,
-	resourceType domain.ResourceType,
-	currentUsage int,
-) (*domain.LimitCheckResult, error) {
-	// Get user's effective subscription (base tier + any overrides)
-	effectiveSub, err := s.GetEffectiveSubscription(ctx, user)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get effective subscription: %w", err)
-	}
-
-	// Get the limit for this resource type
-	limit := effectiveSub.Limits.GetLimit(resourceType)
-
-	// Create and return the limit check result
-	result := domain.NewLimitCheckResult(resourceType, currentUsage, limit)
-	return result, nil
-}
-
 // GetEffectiveSubscription returns the effective subscription for a user
 // Combines base tier limits with any user-specific overrides and, if an
 // entitlement resolver is injected, household coverage (Issue #1366).

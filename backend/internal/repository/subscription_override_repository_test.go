@@ -61,7 +61,7 @@ func TestSubscriptionOverrideRepository_CreateOverride_Success(t *testing.T) {
 	reason := "enterprise_deal"
 	override := &domain.UserSubscriptionOverride{
 		UserID:       "user-123",
-		ResourceType: "executions_per_day",
+		ResourceType: "transaction_history_days",
 		LimitValue:   500,
 		Reason:       &reason,
 	}
@@ -89,7 +89,7 @@ func TestSubscriptionOverrideRepository_CreateOverride_Error(t *testing.T) {
 	ctx := context.Background()
 	override := &domain.UserSubscriptionOverride{
 		UserID:       "user-123",
-		ResourceType: "executions_per_day",
+		ResourceType: "transaction_history_days",
 		LimitValue:   500,
 	}
 
@@ -113,8 +113,7 @@ func TestSubscriptionOverrideRepository_GetActiveOverrides_Success(t *testing.T)
 	userID := "user-abc"
 
 	rows := pgxmock.NewRows(overrideColumns)
-	rows.AddRow(makeOverrideRow(1, userID, "executions_per_day")...)
-	rows.AddRow(makeOverrideRow(2, userID, "transaction_history_days")...)
+	rows.AddRow(makeOverrideRow(1, userID, "transaction_history_days")...)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, resource_type`)).
 		WithArgs(userID).
@@ -123,11 +122,10 @@ func TestSubscriptionOverrideRepository_GetActiveOverrides_Success(t *testing.T)
 	results, err := repo.GetActiveOverrides(ctx, userID)
 
 	require.NoError(t, err)
-	assert.Len(t, results, 2)
+	assert.Len(t, results, 1)
 	assert.Equal(t, int64(1), results[0].ID)
 	assert.Equal(t, userID, results[0].UserID)
-	assert.Equal(t, "executions_per_day", results[0].ResourceType)
-	assert.Equal(t, int64(2), results[1].ID)
+	assert.Equal(t, "transaction_history_days", results[0].ResourceType)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -158,7 +156,7 @@ func TestSubscriptionOverrideRepository_DeleteOverride_Success(t *testing.T) {
 
 	ctx := context.Background()
 	userID := "user-123"
-	resourceType := "executions_per_day"
+	resourceType := "transaction_history_days"
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_subscription_overrides`)).
 		WithArgs(userID, resourceType).
@@ -176,7 +174,7 @@ func TestSubscriptionOverrideRepository_DeleteOverride_NotFound(t *testing.T) {
 
 	ctx := context.Background()
 	userID := "user-123"
-	resourceType := "executions_per_day"
+	resourceType := "transaction_history_days"
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_subscription_overrides`)).
 		WithArgs(userID, resourceType).
@@ -195,7 +193,7 @@ func TestSubscriptionOverrideRepository_DeleteOverride_Error(t *testing.T) {
 
 	ctx := context.Background()
 	userID := "user-123"
-	resourceType := "executions_per_day"
+	resourceType := "transaction_history_days"
 
 	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM user_subscription_overrides`)).
 		WithArgs(userID, resourceType).
@@ -218,7 +216,7 @@ func TestSubscriptionOverrideRepository_GetOverrideByID_Success(t *testing.T) {
 	userID := "user-xyz"
 
 	rows := pgxmock.NewRows(overrideColumns)
-	rows.AddRow(makeOverrideRow(overrideID, userID, "executions_per_day")...)
+	rows.AddRow(makeOverrideRow(overrideID, userID, "transaction_history_days")...)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, user_id, resource_type`)).
 		WithArgs(overrideID).
@@ -230,7 +228,7 @@ func TestSubscriptionOverrideRepository_GetOverrideByID_Success(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, overrideID, result.ID)
 	assert.Equal(t, userID, result.UserID)
-	assert.Equal(t, "executions_per_day", result.ResourceType)
+	assert.Equal(t, "transaction_history_days", result.ResourceType)
 	assert.Equal(t, 100, result.LimitValue)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

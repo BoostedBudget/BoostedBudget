@@ -411,7 +411,6 @@ components:
           description: The resource type to override
           enum:
             - transaction_history_days
-            - executions_per_day
           type: string
       required:
         - resource_type
@@ -5661,15 +5660,11 @@ components:
     SubscriptionLimits:
       additionalProperties: false
       properties:
-        executions_per_day:
-          format: int64
-          type: integer
         transaction_history_days:
           format: int64
           type: integer
       required:
         - transaction_history_days
-        - executions_per_day
       type: object
     SubscriptionPricing:
       additionalProperties: false
@@ -7322,13 +7317,13 @@ info:
 
     No free tier. New users get a 60-day Premium trial.
 
-    | Tier        | Users | Transaction History | Executions/Day | Price     |
-    |-------------|-------|---------------------|----------------|-----------|
-    | premium     | 1     | 730 days            | Unlimited      | $8.99/mo  |
-    | household_2 | 2     | 730 days            | Unlimited      | $12.99/mo |
-    | household_3 | 3     | 730 days            | Unlimited      | $14.99/mo |
-    | household_4 | 4     | 730 days            | Unlimited      | $16.99/mo |
-    | household_5 | 5+    | 730 days            | Unlimited      | $18.99/mo |
+    | Tier        | Users | Transaction History | Price     |
+    |-------------|-------|---------------------|-----------|
+    | premium     | 1     | 730 days            | $8.99/mo  |
+    | household_2 | 2     | 730 days            | $12.99/mo |
+    | household_3 | 3     | 730 days            | $14.99/mo |
+    | household_4 | 4     | 730 days            | $16.99/mo |
+    | household_5 | 5+    | 730 days            | $18.99/mo |
 
     ## Regions
 
@@ -8046,7 +8041,7 @@ paths:
         - Admin Subscriptions
   /api/v1/admin/users/{user_id}/subscription/override:
     post:
-      description: Create a per-user resource limit override (e.g. transaction_history_days, executions_per_day). Requires admin privileges.
+      description: Create a per-user resource limit override (e.g. transaction_history_days). Requires admin privileges.
       operationId: create-admin-subscription-override
       parameters:
         - description: ID of the user to override
