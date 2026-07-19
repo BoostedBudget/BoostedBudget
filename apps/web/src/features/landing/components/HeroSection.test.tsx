@@ -67,31 +67,30 @@ describe('HeroSection', () => {
       mockUseFeatureFlagEnabled.mockReturnValue(false)
     })
 
-    it('renders "Coming Soon" button', () => {
+    it('renders "Start Free Today" button', () => {
       renderHeroSection()
-      expect(screen.getByRole('button', { name: /coming soon/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /start free today/i })).toBeInTheDocument()
     })
 
-    it('"Coming Soon" button is disabled', () => {
+    it('"Start Free Today" button is not disabled', () => {
       renderHeroSection()
-      const btn = screen.getByRole('button', { name: /coming soon/i })
-      expect(btn).toBeDisabled()
+      const btn = screen.getByRole('button', { name: /start free today/i })
+      expect(btn).not.toBeDisabled()
     })
 
-    it('does not render "Start Free Today" button', () => {
+    it('does not render "Coming Soon" button', () => {
       renderHeroSection()
-      expect(screen.queryByRole('button', { name: /start free today/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /coming soon/i })).not.toBeInTheDocument()
     })
 
-    it('does not call openSignUp when Coming Soon button is in the DOM', () => {
+    it('calls openSignUp when CTA button is clicked', () => {
       const clerkMock = createMockClerk()
       mockUseClerk.mockReturnValue(clerkMock)
 
       renderHeroSection()
-      // Button is disabled — clicking it should not call openSignUp
-      const btn = screen.getByRole('button', { name: /coming soon/i })
+      const btn = screen.getByRole('button', { name: /start free today/i })
       fireEvent.click(btn)
-      expect(clerkMock.openSignUp).not.toHaveBeenCalled()
+      expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
     })
   })
 })
