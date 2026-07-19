@@ -126,7 +126,6 @@ func TestTierConfig_Validation(t *testing.T) {
 		t.Run(string(name), func(t *testing.T) {
 			assert.NotEmpty(t, tier.DisplayName)
 			assert.GreaterOrEqual(t, tier.Limits.TransactionHistoryDays, -1)
-			assert.GreaterOrEqual(t, tier.Limits.ExecutionsPerDay, -1)
 		})
 	}
 }

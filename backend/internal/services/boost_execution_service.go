@@ -247,7 +247,6 @@ func (s *boostExecutionService) GetExecutionHistoryWithFilter(ctx context.Contex
 // - Evaluates each condition and returns individual results
 // - Simulates what action would occur (without persisting)
 // - Works on disabled rules for preview purposes
-// - Does NOT count toward daily execution limits
 // - Does NOT persist execution records
 // - Does NOT create transfer suggestions or send notifications
 func (s *boostExecutionService) TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error) {

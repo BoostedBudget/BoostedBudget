@@ -37,35 +37,34 @@ cd backend && go run cmd/server/main.go
 **Structure**:
 ```yaml
 tiers:
-  free:
-    display_name: "Free"
-    price_monthly: 0.00
-    price_yearly: 0.00
-    limits:
-      rules: 2             # Max automation rules
-      executions_per_day: 1
-      min_execution_interval_minutes: 1440  # 24 hours
-    features:
-      ai_insights: false
-      # ... more features
-
-  premium_lite:
-    # ... tier definition
-
   premium:
-    # ... tier definition
+    display_name: "Premium"
+    description: "Full-featured budgeting for individuals"
+    price_monthly: 8.99
+    price_yearly: 79.00
+    mobile_price_yearly: 89.99
+    users_included: 1
+    limits:
+      transaction_history_days: 730  # Unlimited: -1
+    features:
+      ai_insights: true
+      api_access: true
+      priority_support: true
+      custom_categories: true
+      custom_tags: true
+      advanced_reports: true
 
-  premium_plus:
-    # ... tier definition (use -1 for unlimited)
+  household_2:
+    # ... tier definition (household tiers follow same structure)
 
-default_tier: "free"
+default_tier: "premium"
 trial:
-  enabled: false
-  duration_days: 14
+  enabled: true
+  duration_days: 60
   tier: "premium"
 ```
 
-**Tier Naming Convention**: Use underscores (`premium_lite`, `premium_plus`), not hyphens or symbols.
+**Tier Naming Convention**: Use underscores (`household_2`, `household_3`, etc.), not hyphens or symbols.
 
 **Validation**:
 - Backend validates on load (see `tier_config.go:validate()`)
@@ -251,7 +250,7 @@ bun run test -- src/features/subscription/hooks/useSubscriptionTiers.test.tsx --
 cd backend && go run cmd/server/main.go
 
 # Test API endpoint
-curl http://localhost:8080/api/v1/subscription/tiers | jq '.tiers.premium_plus'
+curl http://localhost:8080/api/v1/subscription/tiers | jq '.tiers.premium'
 ```
 
 ---

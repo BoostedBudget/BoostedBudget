@@ -174,13 +174,10 @@ func (tc *TierConfig) validate() error {
 			return fmt.Errorf("tier '%s' missing display name", name)
 		}
 
-		// Validate the 2 configurable limits are non-negative (except unlimited = -1)
-		// After simplification, only transaction_history_days and executions_per_day are configurable
+		// Validate the only configurable limit is non-negative.
+		// After simplification, only transaction_history_days is configurable.
 		if tier.Limits.TransactionHistoryDays < 0 {
 			return fmt.Errorf("tier '%s' has invalid transaction_history_days: %d", name, tier.Limits.TransactionHistoryDays)
-		}
-		if tier.Limits.ExecutionsPerDay < -1 {
-			return fmt.Errorf("tier '%s' has invalid executions_per_day: %d", name, tier.Limits.ExecutionsPerDay)
 		}
 	}
 

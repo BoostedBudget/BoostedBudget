@@ -37,7 +37,6 @@ const SUB_DETAIL = {
     subscription_status: 'active',
     limits: {
         transaction_history_days: 730,
-        executions_per_day: -1,
     },
     features: { ai_insights: true },
     manual_tier_override: null,
