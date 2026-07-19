@@ -36,7 +36,6 @@ func TestGetTierLimits_Premium(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 730, tier.Limits.TransactionHistoryDays, "Premium should have 730 transaction history days")
-	assert.Equal(t, -1, tier.Limits.ExecutionsPerDay, "Premium should have unlimited executions per day (-1)")
 	assert.True(t, tier.Features.PrioritySupport, "Premium should have priority support")
 	assert.True(t, tier.Features.AdvancedReports, "Premium should have advanced reports")
 }
@@ -53,32 +52,8 @@ func TestGetTierLimits_Household5(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 730, tier.Limits.TransactionHistoryDays, "Household5 should have 730 transaction history days")
-	assert.Equal(t, -1, tier.Limits.ExecutionsPerDay, "Household5 should have unlimited executions per day (-1)")
 	assert.True(t, tier.Features.AIInsights, "Household5 should have AI insights")
 	assert.True(t, tier.Features.APIAccess, "Household5 should have API access")
-}
-
-// TestCheckLimit_FiniteOverLimit tests that a finite limit correctly blocks usage over the limit.
-// This replaces the deleted account-resource tests as the sole exerciser of the "over finite limit → not allowed" branch.
-func TestCheckLimit_FiniteOverLimit(t *testing.T) {
-	tierConfig, err := config.LoadTierConfig()
-	require.NoError(t, err)
-
-	service := NewSubscriptionService(tierConfig, nil)
-	ctx := context.Background()
-
-	user := &domain.User{
-		ID:               "user-123",
-		SubscriptionTier: string(domain.TierPremium),
-	}
-
-	// Premium tier has 730 transaction_history_days; 800 exceeds the limit
-	result, err := service.CheckLimit(ctx, user, domain.ResourceTransactionHistoryDays, 800)
-	require.NoError(t, err)
-	assert.False(t, result.Allowed, "Should not allow usage over the finite limit")
-	assert.False(t, result.IsUnlimited, "transaction_history_days is not unlimited")
-	assert.Equal(t, 730, result.Limit, "Limit should be 730 for premium tier")
-	assert.Equal(t, 800, result.CurrentUsage, "CurrentUsage should echo the usage passed in")
 }
 
 // TestGetEffectiveSubscription_NoOverrides tests getting effective subscription without overrides
@@ -305,37 +280,6 @@ func TestGetEffectiveSubscription_PermanentOverride(t *testing.T) {
 	effective, err := service.GetEffectiveSubscription(ctx, user)
 	require.NoError(t, err)
 	assert.Equal(t, domain.TierHousehold5, effective.Tier, "Permanent override (nil expiry) should always apply")
-}
-
-// TestCheckLimit_AllResourceTypes tests all resource types
-func TestCheckLimit_AllResourceTypes(t *testing.T) {
-	tierConfig, err := config.LoadTierConfig()
-	require.NoError(t, err)
-
-	service := NewSubscriptionService(tierConfig, nil)
-	ctx := context.Background()
-
-	user := &domain.User{
-		ID:               "user-123",
-		SubscriptionTier: string(domain.TierPremium),
-	}
-
-	testCases := []struct {
-		name          string
-		resourceType  domain.ResourceType
-		expectedLimit int
-	}{
-		{"transaction_history_days", domain.ResourceTransactionHistoryDays, 730},
-		{"executions_per_day", domain.ResourceExecutionsPerDay, -1},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := service.CheckLimit(ctx, user, tc.resourceType, 0)
-			require.NoError(t, err)
-			assert.Equal(t, tc.expectedLimit, result.Limit, "Limit should match expected for "+tc.name)
-		})
-	}
 }
 
 // mockResolver lets us test both the nil-resolver golden path and the

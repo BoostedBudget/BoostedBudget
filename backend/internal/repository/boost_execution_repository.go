@@ -32,9 +32,6 @@ type BoostExecutionRepository interface {
 	// Issue #38: Boosts API Endpoints - Execution history with filtering.
 	GetByBoostIDWithFilter(ctx context.Context, boostID string, status *domain.ExecutionStatus, limit, offset int) ([]*domain.BoostExecution, int, error)
 
-	// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
-	GetTodayExecutionCount(ctx context.Context, userID string) (int, error)
-
 	// GetLastExecutionForBoost retrieves the most recent execution for a boost.
 	GetLastExecutionForBoost(ctx context.Context, boostID string) (*domain.BoostExecution, error)
 
@@ -207,31 +204,6 @@ func (r *boostExecutionRepository) GetByBoostIDWithFilter(ctx context.Context, b
 	}
 
 	return executions, total, nil
-}
-
-// GetTodayExecutionCount counts executions for a user today (since midnight UTC).
-// Joins with boosts table to get user_id.
-func (r *boostExecutionRepository) GetTodayExecutionCount(ctx context.Context, userID string) (int, error) {
-	query := `
-		SELECT COUNT(*)
-		FROM boost_executions re
-		JOIN boosts r ON re.boost_id = r.id
-		WHERE r.user_id = $1
-			AND re.started_at >= $2
-			AND re.status IN ('completed', 'running')
-	`
-
-	// Get start of today in UTC
-	now := time.Now().UTC()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-
-	var count int
-	err := r.db.QueryRow(ctx, query, userID, todayStart).Scan(&count)
-	if err != nil {
-		return 0, err
-	}
-
-	return count, nil
 }
 
 // GetLastExecutionForBoost retrieves the most recent execution for a rule.

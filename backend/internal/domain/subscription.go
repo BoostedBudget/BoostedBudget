@@ -56,9 +56,6 @@ func (s SubscriptionStatus) IsReadOnlySubscription() bool {
 	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled || s == SubscriptionStatusPastDue
 }
 
-// Unlimited represents unlimited resources (stored as -1 in config)
-const Unlimited = -1
-
 // SubscriptionTier represents the full definition of a subscription tier
 // Loaded from config/subscription_tiers.yaml (centralized config directory)
 type SubscriptionTier struct {
@@ -73,7 +70,6 @@ type SubscriptionTier struct {
 // SubscriptionLimits defines resource limits for a tier
 type SubscriptionLimits struct {
 	TransactionHistoryDays int `yaml:"transaction_history_days" json:"transaction_history_days"`
-	ExecutionsPerDay       int `yaml:"executions_per_day" json:"executions_per_day"`
 }
 
 // SubscriptionFeatures defines feature flags for a tier
@@ -96,10 +92,6 @@ type SubscriptionPricing struct {
 	PaddlePriceIDYearly  *string `yaml:"paddle_price_id_yearly" json:"paddle_price_id_yearly,omitempty"`
 }
 
-// IsUnlimited checks if a limit value represents unlimited resources
-func IsUnlimited(value int) bool {
-	return value == Unlimited || value == 999999
-}
 
 // UserSubscriptionOverride represents a custom limit override for a specific user
 // Stored in database table: user_subscription_overrides
@@ -107,7 +99,7 @@ func IsUnlimited(value int) bool {
 type UserSubscriptionOverride struct {
 	ID           int64      `json:"id" db:"id"`
 	UserID       string     `json:"user_id" db:"user_id"`
-	ResourceType string     `json:"resource_type" db:"resource_type"`     // see ResourceType constants: "transaction_history_days", "executions_per_day"
+	ResourceType string     `json:"resource_type" db:"resource_type"`     // see ResourceType constants: "transaction_history_days"
 	LimitValue   int        `json:"limit_value" db:"limit_value"`         // -1 for unlimited
 	Reason       *string    `json:"reason,omitempty" db:"reason"`         // "enterprise_deal", "addon_purchase", "promo"
 	ExpiresAt    *time.Time `json:"expires_at,omitempty" db:"expires_at"` // null for permanent
@@ -133,7 +125,6 @@ type ResourceType string
 
 const (
 	ResourceTransactionHistoryDays ResourceType = "transaction_history_days"
-	ResourceExecutionsPerDay       ResourceType = "executions_per_day"
 )
 
 // AllResourceTypes is the canonical list of override-able resource types.
@@ -141,7 +132,6 @@ const (
 // The admin override endpoint's enum tag is tested against this slice (issue #1288).
 var AllResourceTypes = []ResourceType{
 	ResourceTransactionHistoryDays,
-	ResourceExecutionsPerDay,
 }
 
 // GetLimit returns the limit value for a specific resource type
@@ -149,8 +139,6 @@ func (l *SubscriptionLimits) GetLimit(resourceType ResourceType) int {
 	switch resourceType {
 	case ResourceTransactionHistoryDays:
 		return l.TransactionHistoryDays
-	case ResourceExecutionsPerDay:
-		return l.ExecutionsPerDay
 	default:
 		return 0
 	}
@@ -161,8 +149,6 @@ func (l *SubscriptionLimits) SetLimit(resourceType ResourceType, value int) {
 	switch resourceType {
 	case ResourceTransactionHistoryDays:
 		l.TransactionHistoryDays = value
-	case ResourceExecutionsPerDay:
-		l.ExecutionsPerDay = value
 	}
 }
 
@@ -192,16 +178,6 @@ type UserAddOn struct {
 	CancelledAt  *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at" db:"updated_at"`
-}
-
-// LimitCheckResult represents the result of checking if a user is within limits
-type LimitCheckResult struct {
-	Allowed        bool   `json:"allowed"`
-	CurrentUsage   int    `json:"current_usage"`
-	Limit          int    `json:"limit"`
-	IsUnlimited    bool   `json:"is_unlimited"`
-	ResourceType   string `json:"resource_type"`
-	RemainingUsage int    `json:"remaining_usage"`
 }
 
 // ─── SubscriptionEntitlement ─────────────────────────────────────────────────
@@ -297,28 +273,4 @@ type HouseholdEntitlementSummary struct {
 	SeatsPending  int               `json:"seats_pending"`
 	IsOwner       bool              `json:"is_owner"`
 	Source        EntitlementSource `json:"source"`
-}
-
-// NewLimitCheckResult creates a new limit check result
-func NewLimitCheckResult(resourceType ResourceType, currentUsage, limit int) *LimitCheckResult {
-	isUnlimited := IsUnlimited(limit)
-	var remaining int
-	var allowed bool
-
-	if isUnlimited {
-		remaining = -1
-		allowed = true
-	} else {
-		remaining = limit - currentUsage
-		allowed = currentUsage < limit
-	}
-
-	return &LimitCheckResult{
-		Allowed:        allowed,
-		CurrentUsage:   currentUsage,
-		Limit:          limit,
-		IsUnlimited:    isUnlimited,
-		ResourceType:   string(resourceType),
-		RemainingUsage: remaining,
-	}
 }
