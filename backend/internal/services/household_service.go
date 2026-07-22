@@ -642,8 +642,20 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 	// paddle_checkout.go's checkDowngradeSeatCapacity — Task 5), so an owner manually
 	// removing members during grace gets immediate credit without waiting for the next
 	// daily household_over_capacity_check worker run (Task 6, Part C).
+	//
+	// #1389: the owner is read via lockAndGetUser (FOR UPDATE), not a plain
+	// userRepo.GetUserByID — mirroring Round 9's identical fix to OffboardExcessMembers's
+	// own owner read (see OffboardExcessMembers's doc comment above its lockAndGetUser
+	// call). This branch is reached by all 3 callers of removeMemberTx (RemoveMember,
+	// ForceDisband, and OffboardExcessMembers's own removal loop), so locking it here once
+	// makes every caller self-protected against the same stale-tier race Round 9 fixed,
+	// rather than requiring each caller to lock the owner itself. For OffboardExcessMembers
+	// specifically, the owner is already locked earlier in the same transaction — the FOR
+	// UPDATE here is a harmless, reentrant no-op on the same tx, accepted as a small
+	// redundant cost (an extra query per removed member) in exchange for removeMemberTx no
+	// longer depending on caller discipline.
 	if household.OverCapacitySince != nil {
-		owner, err := s.userRepo.GetUserByID(ctx, household.OwnerUserID)
+		owner, err := s.lockAndGetUser(ctx, tx, household.OwnerUserID)
 		if err != nil {
 			return nil, err
 		}
@@ -1192,11 +1204,17 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	// Even in the theoretical edge case where they coincide (e.g. the owner's email later
 	// changes to match a still-pending invite's invitee_email), re-acquiring the same row's
 	// FOR UPDATE lock twice within one transaction is a safe, idempotent no-op in Postgres —
-	// not a double-lock bug. Verified this introduces no new deadlock cycle: no other
-	// household-write path (DeleteHousehold, CreateInvite, RevokeInvite,
-	// RemoveMember, DeclineInvite) ever takes a FOR UPDATE lock on the owner's own users
-	// row, so this can only ever put AcceptInvite in a one-directional wait against
-	// unrelated single-lock writers (profile updates, Paddle webhooks) — never a cycle.
+	// not a double-lock bug. Verified this introduces no new deadlock cycle: every
+	// household-write path that locks a user's row always locks its household (or invite)
+	// row FIRST in the same transaction — this method (household, then caller, then
+	// owner), OffboardExcessMembers (household, then owner), and removeMemberTx's
+	// grace-clear branch, reached by RemoveMember/ForceDisband/OffboardExcessMembers
+	// (household already locked by the caller, then owner — #1389). DeclineInvite locks an
+	// invite row then the caller's own user row, never a household row, so it can't be
+	// part of a household-vs-user cycle either. No path locks a users row before a
+	// households row, so this can only ever put AcceptInvite in a one-directional wait
+	// against unrelated single-lock writers (profile updates, Paddle webhooks) — never a
+	// cycle.
 	owner, cerr := s.lockAndGetUser(ctx, tx, ownerUserID)
 	if cerr != nil {
 		return nil, cerr
