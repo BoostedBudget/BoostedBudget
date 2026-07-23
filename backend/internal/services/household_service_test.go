@@ -748,6 +748,8 @@ func TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity(t *tes
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// #1389: owner-row lock (lockAndGetUser) before grace-clear check.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	// Grace-clear: post-removal count is back within the owner's 2-seat plan.
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
@@ -792,6 +794,8 @@ func TestHouseholdService_RemoveMember_DoesNotClearGrace_WhenStillOverCapacity(t
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// #1389: owner-row lock (lockAndGetUser) before grace-clear check.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	// Grace-clear check: post-removal count is STILL over the owner's 2-seat plan —
 	// no ExpectExec for ClearOverCapacity should follow.
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
@@ -801,6 +805,124 @@ func TestHouseholdService_RemoveMember_DoesNotClearGrace_WhenStillOverCapacity(t
 	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
 	require.NoError(t, err)
 	require.NoError(t, pool.ExpectationsWereMet(), "ClearOverCapacity must not be called while still over capacity")
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_LocksOwnerBeforeGraceClear is a dedicated lock-ordering
+// regression test for #1389 (follow-up from Round 9/10 Gap Analysis on PR #1387): the
+// grace-clear branch inside removeMemberTx reads the owner via the SAME unlocked-read
+// pattern OffboardExcessMembers had before its Round 9 fix, reached here through
+// RemoveMember (and, unlocked, ForceDisband) rather than through
+// OffboardExcessMembers's own lockAndGetUser call. The owner's users row must now be
+// locked (lockAndGetUser's `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`) BEFORE the
+// post-removal CountActiveMembers/ClearOverCapacity decision — mirroring
+// TestHouseholdService_OffboardExcessMembers_LocksOwnerBeforeTierAndRemoval's identical
+// rationale. pgxmock enforces expectations in declaration order by default, so declaring
+// the owner-lock ExpectExec AFTER the member-removal mutations (RemoveMember/
+// ExpireActiveEntitlement/RevokeSharesForUser — which must run first, per removeMemberTx's
+// own sequencing) but BEFORE the CountActiveMembers query proves the lock is taken exactly
+// where the grace-clear decision needs it. If the implementation regressed to a plain,
+// unlocked userRepo.GetUserByID, pgxmock would see the unexpected `SELECT COUNT` query
+// arrive before the owner-lock Exec it's still waiting on, and fail with a clear ordering
+// mismatch, not a false pass. This is the pgxmock-level complement to Round 9's real-
+// Postgres concurrency proof (household_service_integration_test.go:726) — per this
+// codebase's established rule (memory feedback_pgxmock_integration_coverage.md), pgxmock
+// alone can prove query SHAPE/ORDER but never a genuine row-lock/concurrency guarantee, and
+// lockAndGetUser's actual serialization is already proven end-to-end by that same SQL
+// there — no new real-Postgres test is added for this narrower, lower-severity call site.
+func TestHouseholdService_RemoveMember_LocksOwnerBeforeGraceClear(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member@example.com"}, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").
+		Return(&domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}, nil) // 2 seats
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days), false).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	// Household-row lock — always taken first.
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil))
+	// Member-removal mutations — must run BEFORE the owner lock below (removeMemberTx's own
+	// sequencing: soft-remove, expire entitlement, revoke shares, THEN grace-clear).
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Owner-row lock (lockAndGetUser) — must precede the CountActiveMembers query below.
+	// This is the query whose declaration position this test exists to pin down. The
+	// pattern requires FOR UPDATE explicitly (not just "SELECT 1 FROM users"), so a
+	// regression that dropped the lock clause but kept a plain SELECT would still fail
+	// this test rather than passing on a substring-only match.
+	pool.ExpectExec("SELECT 1 FROM users.*FOR UPDATE").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(),
+		"owner-row lock must be acquired before the CountActiveMembers/ClearOverCapacity decision — see the numbered comments above")
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_RemoveMember_GraceClearOwnerLockFails_RollsBackNoEmail is a
+// regression test for #1389 (Codex adversarial review, Low finding): if the grace-clear
+// branch's new owner-lock Exec (lockAndGetUser's `SELECT 1 FROM users ... FOR UPDATE`)
+// fails AFTER the member/entitlement/share mutations have already been issued on this
+// transaction, removeMemberTx must return the error, RemoveMember's deferred
+// tx.Rollback(ctx) must undo everything (pgxmock's ExpectRollback pins this), and — since
+// the removal never committed — no removal email may be queued or sent. This pins the
+// existing deferred-rollback + no-email-on-error contract against the NEW failure point
+// this change introduces (lockAndGetUser can fail where the old unlocked GetUserByID read
+// could also fail, but this proves the contract holds for the locked variant specifically).
+func TestHouseholdService_RemoveMember_GraceClearOwnerLockFails_RollsBackNoEmail(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{} // no stubs: the failure occurs inside lockAndGetUser's
+	// own FOR UPDATE Exec, before it ever calls userRepo.GetUserByID — so no owner or
+	// target GetUserByID call should happen at all on this path.
+	emailSvc := &MockEmailService{} // no stubs: a rolled-back removal must never send email.
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	lockErr := errors.New("simulated lock timeout")
+	pool.ExpectBegin()
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil, "owner"))
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", time.Now(), time.Now(), &graceStart, nil, nil))
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// The owner-lock Exec fails here — AFTER the mutations above, proving they get rolled
+	// back rather than left dangling.
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnError(lockErr)
+	pool.ExpectRollback()
+
+	err := svc.RemoveMember(context.Background(), "owner-1", "member-1")
+	require.ErrorIs(t, err, lockErr)
+	require.NoError(t, pool.ExpectationsWereMet(), "the tx must roll back after the owner-lock failure, with no further queries issued")
 	userRepo.AssertExpectations(t)
 	emailSvc.AssertExpectations(t)
 }
@@ -981,6 +1103,12 @@ func TestHouseholdService_OffboardExcessMembers_RemovesMostRecentlyJoinedFirst(t
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// #1389: removeMemberTx's own grace-clear branch now re-locks the owner (lockAndGetUser)
+	// before its CountActiveMembers/ClearOverCapacity decision, even though the owner is
+	// already locked (above) for the remainder of this transaction — a harmless, reentrant
+	// FOR UPDATE on the same tx, accepted as a small redundant cost for a self-protecting
+	// removeMemberTx (see #1389's PR description for the full rationale).
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	// removeMemberTx's own Task 6 Part D grace-clear check (see RemoveMember's identical
 	// pattern in TestHouseholdService_RemoveMember_ClearsGrace_WhenBackWithinCapacity)
 	// fires here too: household.OverCapacitySince is now realistically non-nil (it must
@@ -1051,8 +1179,8 @@ func TestHouseholdService_OffboardExcessMembers_EmailSendFails_StillReturnsNoErr
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	// removeMemberTx's own Task 6 Part D grace-clear check fires here too — see the
-	// identical comment in RemovesMostRecentlyJoinedFirst above for why.
+	// #1389: owner re-lock + grace-clear (see RemovesMostRecentlyJoinedFirst).
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
 	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
@@ -1196,6 +1324,11 @@ func TestHouseholdService_OffboardExcessMembers_LocksOwnerBeforeTierAndRemoval(t
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// 5. #1389: removeMemberTx's own grace-clear branch re-locks the owner (lockAndGetUser)
+	// before its own CountActiveMembers/ClearOverCapacity decision — reentrant on the same
+	// tx as the owner lock from (2) above, harmless, accepted as a small redundant cost so
+	// removeMemberTx is self-protecting for every caller (#1389).
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
 	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
@@ -1506,6 +1639,127 @@ func TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves(t *t
 	assert.WithinDuration(t, time.Now().Add(30*24*time.Hour), queued[1].PurgeDate, time.Minute)
 	assert.True(t, queued[1].Disbanded)
 	require.NoError(t, pool.ExpectationsWereMet())
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
+// TestHouseholdService_ForceDisband_SucceedsWithGraceActive closes a coverage gap
+// surfaced by a Codex adversarial review during a /requirements-gap-analysis pass on
+// #1389: the #1389 fix made removeMemberTx's grace-clear branch (household.
+// OverCapacitySince != nil) lock the owner via lockAndGetUser before reading it, and that
+// branch is reached by 3 callers (RemoveMember, ForceDisband, OffboardExcessMembers's own
+// removal loop) — but only RemoveMember and OffboardExcessMembers had dedicated tests that
+// actually exercise the branch (over_capacity_since != nil). ForceDisband's own existing
+// test, TestHouseholdService_ForceDisband_RemovesAllActiveMembersThenDissolves above, sets
+// over_capacity_since = nil in its household fixture row, so the grace-clear branch never
+// runs via the ForceDisband caller path in any test before this one.
+//
+// This matters because ForceDisband commits ALL its removals plus DeleteHousehold/
+// ExpireActiveEntitlement in ONE shared transaction (see removeMemberTx's own doc comment):
+// if the grace-clear branch's owner lock, tier lookup, or CountActiveMembers query ever
+// errors, that error propagates out of removeMemberTx and aborts the entire ForceDisband
+// transaction — a failure mode specific to this caller (RemoveMember/OffboardExcessMembers
+// only ever abort their own single-member-removal transaction, never a whole
+// disband-in-progress). This test doesn't assert on that failure path (a rollback test
+// would just re-prove TestHouseholdService_RemoveMember_GraceClearOwnerLockFails_RollsBackNoEmail's
+// contract) — it instead proves the mainline success path: ForceDisband still returns no
+// error and the expected 2 queued removal emails when the household IS in grace and the
+// branch's owner-lock/tier/count machinery genuinely runs on every loop iteration (household
+// is passed unchanged into every removeMemberTx call, per ForceDisband's own loop, so the
+// branch fires for member-1 AND member-2, not just once).
+//
+// Owner is fixed at "household_2" (2 seats) for the whole test, so CountActiveMembers's
+// post-removal count (2, then 1) is always <= the seat limit — ClearOverCapacity fires on
+// both iterations. That's an intentionally simpler fixture than trying to keep the
+// household over capacity across the entire loop (impossible here regardless of tier: the
+// household only has 3 members total, so the count necessarily drops to 1 after the second
+// removal, which is <= any real tier's seat count) — the seat-count arithmetic itself is
+// already covered by the RemoveMember/OffboardExcessMembers tests referenced above; this
+// test only needs the branch to execute without erroring.
+func TestHouseholdService_ForceDisband_SucceedsWithGraceActive(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").
+		Return(&domain.User{ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active"}, nil) // 2 seats
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "m1@example.com"}, nil)
+	userRepo.On("GetUserByID", mock.Anything, "member-2").
+		Return(&domain.User{ID: "member-2", Email: "m2@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m1@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days), true).
+		Return(nil)
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "m2@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days), true).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+	now := time.Now()
+	graceStart := now.Add(-2 * 24 * time.Hour)
+
+	pool.ExpectBegin()
+	// Household fixture is in over-capacity grace (over_capacity_since != nil) — this is
+	// the row that flows unchanged into removeMemberTx for every loop iteration below.
+	pool.ExpectQuery("household_members hm").WithArgs("owner-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at", "role"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &graceStart, nil, nil, "owner"))
+	// LockHouseholdForUpdate — only returns a bare owner-ID string, irrelevant to the grace
+	// fixture (see task facts: OverCapacitySince only matters on the row read above).
+	pool.ExpectQuery("FOR UPDATE").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"owner_user_id"}).AddRow("owner-1"))
+	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+		}).
+			AddRow("mem-owner", "hh-1", "owner-1", "owner", "active", now, nil, nil, nil, now, now).
+			AddRow("mem-1", "hh-1", "member-1", "member", "active", now, nil, nil, nil, now, now).
+			AddRow("mem-2", "hh-1", "member-2", "member", "active", now, nil, nil, nil, now, now))
+	// --- Loop iteration 1: member-1 ---
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Grace-clear branch fires (household.OverCapacitySince != nil): owner-lock, then
+	// tier/count decision, then ClearOverCapacity since post-removal count (2) <= seats (2).
+	pool.ExpectExec("SELECT 1 FROM users.*FOR UPDATE").WithArgs("owner-1").
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(2))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// --- Loop iteration 2: member-2 ---
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-2").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// Grace-clear branch fires again — household is passed unchanged into every iteration,
+	// so OverCapacitySince is still non-nil here even though the branch already cleared it
+	// (in-memory) on iteration 1.
+	pool.ExpectExec("SELECT 1 FROM users.*FOR UPDATE").WithArgs("owner-1").
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// --- Dissolve ---
+	pool.ExpectExec("DELETE FROM households").WithArgs("hh-1", "owner-1").
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("owner-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	queued, err := svc.ForceDisband(context.Background(), "owner-1")
+	require.NoError(t, err)
+	require.Len(t, queued, 2)
+	assert.Equal(t, "m1@example.com", queued[0].ToEmail)
+	assert.True(t, queued[0].Disbanded)
+	assert.Equal(t, "m2@example.com", queued[1].ToEmail)
+	assert.True(t, queued[1].Disbanded)
+	require.NoError(t, pool.ExpectationsWereMet(),
+		"ForceDisband must succeed end-to-end even when the grace-clear branch's owner-lock/tier/count machinery runs on every removal in the loop")
 	userRepo.AssertExpectations(t)
 	emailSvc.AssertExpectations(t)
 }
