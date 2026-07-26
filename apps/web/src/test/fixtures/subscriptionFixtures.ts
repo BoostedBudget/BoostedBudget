@@ -34,7 +34,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         transaction_history_days: 730,
       },
       features: {
-        ai_insights: true,
         api_access: true,
         priority_support: true,
         custom_categories: true,
@@ -56,7 +55,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         transaction_history_days: 730,
       },
       features: {
-        ai_insights: true,
         api_access: true,
         priority_support: true,
         custom_categories: true,
@@ -78,7 +76,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         transaction_history_days: 730,
       },
       features: {
-        ai_insights: true,
         api_access: true,
         priority_support: true,
         custom_categories: true,
@@ -100,7 +97,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         transaction_history_days: 730,
       },
       features: {
-        ai_insights: true,
         api_access: true,
         priority_support: true,
         custom_categories: true,
@@ -122,7 +118,6 @@ export const mockSubscriptionTiersResponse: SubscriptionTiersResponse = {
         transaction_history_days: 730,
       },
       features: {
-        ai_insights: true,
         api_access: true,
         priority_support: true,
         custom_categories: true,
@@ -165,7 +160,6 @@ export function createMockLimits(overrides: Partial<SubscriptionLimits> = {}): S
  */
 export function createMockFeatures(overrides: Partial<SubscriptionFeatures> = {}): SubscriptionFeatures {
   return {
-    ai_insights: false,
     api_access: false,
     priority_support: false,
     custom_categories: true,

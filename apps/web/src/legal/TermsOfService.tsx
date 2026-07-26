@@ -15,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: July 18, 2026</p>
+        <p className="last-updated">Last Updated: July 26, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>
@@ -189,7 +189,7 @@ export function TermsOfService() {
             <li>No new transaction syncing will occur</li>
             <li>You cannot create, edit, or run automation rules</li>
             <li>You cannot connect new financial accounts</li>
-            <li>Premium features (AI insights, advanced reports, API access) are unavailable</li>
+            <li>Premium features (advanced reports, API access) are unavailable</li>
           </ul>
           <p>
             Your data is preserved in read-only mode. If you do not request deletion, we may retain

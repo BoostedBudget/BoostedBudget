@@ -76,7 +76,6 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText(/unlimited bank accounts/i)).toBeInTheDocument()
       expect(screen.getByText(/unlimited automation rules/i)).toBeInTheDocument()
       expect(screen.getByText(/for 5 household members/i)).toBeInTheDocument()
-      expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
       expect(screen.getByRole('link', { name: /manage subscription/i })).toBeInTheDocument()
     })
   })
@@ -241,9 +240,9 @@ describe('SubscriptionCard', () => {
   })
 
   describe('Feature display based on tier', () => {
-    it('should show AI insights for all premium tiers', () => {
+    it('should not render an AI feature claim (BoostedBudget has no AI)', () => {
       renderWithRouter(<SubscriptionCard tier="premium" status="active" />)
-      expect(screen.getByText(/ai-powered insights/i)).toBeInTheDocument()
+      expect(screen.queryByText(/ai-powered insights/i)).not.toBeInTheDocument()
     })
 
     it('should show unlimited bank accounts for all tiers', () => {

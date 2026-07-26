@@ -323,10 +323,10 @@ describe('PricingPage', () => {
   })
 
   describe('Feature display', () => {
-    it('should show AI insights feature for household_3+ tiers', () => {
+    it('should not render an AI feature claim (BoostedBudget has no AI)', () => {
       renderWithProviders(<PricingPage />)
 
-      expect(screen.getAllByText('AI-powered insights').length).toBeGreaterThan(0)
+      expect(screen.queryByText(/ai-powered insights/i)).not.toBeInTheDocument()
     })
 
     it('should not show execution frequency (all tiers have unlimited executions)', () => {
