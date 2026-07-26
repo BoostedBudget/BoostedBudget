@@ -281,7 +281,7 @@ export function McpPage() {
                 </li>
                 <li className="flex items-start gap-2 text-foreground">
                   <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  Save and run named recipes for repeatable analysis
+                  Save named recipes and run them through execute for repeatable analysis
                 </li>
               </ul>
 
@@ -379,8 +379,8 @@ export function McpPage() {
                     &ldquo;Review my unreviewed transactions.&rdquo;
                   </p>
                   <p className="mt-1 text-foreground">
-                    The agent pulls your review inbox, flags anything that looks miscategorized,
-                    and asks before bulk-approving the rest.
+                    The agent pulls your review inbox, flags anything it thinks looks
+                    miscategorized, and asks before bulk-approving the rest.
                   </p>
                 </li>
                 <li className="rounded-lg border border-border bg-card p-4">
@@ -467,6 +467,10 @@ export function McpPage() {
                 <li>
                   60 requests/minute and 5 concurrent calls, enforced per session, not per
                   account — a second agent session against the same account gets its own limit.
+                  That covers <code>execute</code> and the account-touching{' '}
+                  <code>recipe.*</code> tools (<code>recipe.list</code>,{' '}
+                  <code>recipe.save</code>, <code>recipe.run</code>) — <code>search</code> and{' '}
+                  <code>recipe.templates</code> don&apos;t go through the limiter at all.
                 </li>
                 <li>
                   <code>execute</code> accepts at most 25 calls per invocation.
@@ -485,8 +489,10 @@ export function McpPage() {
                 </li>
                 <li>
                   <code>execute</code> calls a typed API client from a declared list of
-                  operations. A broader code-execution sandbox is scaffolded in the codebase but
-                  not enabled in production today.
+                  operations — a simplified Code Mode, not agent-authored code running in a
+                  sandboxed isolate. A Dynamic Worker Loader for isolate-based sandboxing is
+                  referenced in the Worker config as a commented-out stub; it hasn&apos;t been
+                  built.
                 </li>
                 <li>
                   Whether Cursor&apos;s remote MCP support performs Dynamic Client Registration
