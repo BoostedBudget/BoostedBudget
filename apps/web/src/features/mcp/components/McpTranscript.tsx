@@ -39,7 +39,7 @@ export function McpTranscript({ turns, showsStatusMarkers = false, className }: 
       className={cn('rounded-2xl border border-border bg-card p-6', className)}
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">
           Agent session
         </span>
         <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
