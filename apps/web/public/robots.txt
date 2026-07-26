@@ -1,0 +1,26 @@
+# BoostedBudget robots.txt
+#
+# Allows general crawling of the public marketing/legal surface and blocks
+# the authenticated application areas, which only render meaningful content
+# behind Clerk auth and offer nothing for a crawler to index.
+#
+# The disallowed paths below are derived from the routes wrapped in
+# <ProtectedRoute> in apps/web/src/App.tsx (issue #1411) -- not guessed.
+
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /oauth-callback
+Disallow: /accounts
+Disallow: /transactions
+Disallow: /review
+Disallow: /insights
+Disallow: /planning
+Disallow: /budgets
+Disallow: /auto-categorization
+Disallow: /boosts
+Disallow: /profile
+Disallow: /billing
+Disallow: /admin
+
+Sitemap: https://boostedbudget.com/sitemap.xml
