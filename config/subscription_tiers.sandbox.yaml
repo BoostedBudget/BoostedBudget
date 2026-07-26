@@ -42,7 +42,6 @@ tiers:
       transaction_history_days: 730
 
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true
@@ -63,7 +62,6 @@ tiers:
       transaction_history_days: 730
 
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true
@@ -84,7 +82,6 @@ tiers:
       transaction_history_days: 730
 
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true
@@ -105,7 +102,6 @@ tiers:
       transaction_history_days: 730
 
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true
@@ -126,7 +122,6 @@ tiers:
       transaction_history_days: 730
 
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true

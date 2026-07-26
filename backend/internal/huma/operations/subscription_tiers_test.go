@@ -107,7 +107,6 @@ func TestSubscriptionTiersHandler_GetSubscriptionTiers_TierFields(t *testing.T) 
 	assert.Equal(t, "Premium", premiumTier.DisplayName)
 	assert.NotEmpty(t, premiumTier.Description)
 	assert.Equal(t, 730, premiumTier.Limits.TransactionHistoryDays)
-	assert.True(t, premiumTier.Features.AIInsights)
 	assert.Equal(t, 8.99, premiumTier.Pricing.PriceMonthly)
 }
 
