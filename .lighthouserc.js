@@ -3,9 +3,11 @@ const port = process.env.LHCI_PORT || 9222;
 module.exports = {
   ci: {
     collect: {
-      url: [`http://localhost:${port}/`],
+      url: [`http://localhost:${port}/`, `http://localhost:${port}/mcp`],
       numberOfRuns: 3,
-      startServerCommand: `npx serve apps/web/dist -l ${port} --no-clipboard`,
+      // --single: SPA fallback so deep links (e.g. /mcp) don't 404 — `serve` has no
+      // fallback by default and ignores public/_redirects (that file is Cloudflare-only).
+      startServerCommand: `npx serve apps/web/dist -l ${port} --no-clipboard --single`,
       startServerReadyPattern: 'Accepting connections',
       // Let LHCI use system Chrome (Google Chrome installed on Mac Mini).
       // Do NOT reuse Playwright's Chromium — it's a patched non-stock build

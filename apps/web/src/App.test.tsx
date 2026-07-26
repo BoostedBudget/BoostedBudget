@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -280,6 +280,44 @@ describe('App', () => {
           expect(transactionsLink).not.toBeInTheDocument()
         })
       })
+    })
+  })
+
+  describe('MCP page routing (issue #1411)', () => {
+    beforeEach(() => {
+      // Signed-out, but Clerk finished loading — AuthReadyGate-equivalent state.
+      // /mcp must render without authentication.
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
+      mockUseClerk.mockReturnValue(createMockClerk())
+    })
+
+    it('renders the MCP page at /mcp without authentication, inside the app shell', async () => {
+      const Wrapper = createMemoryWrapper(['/mcp'])
+      const { container } = render(<App />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+          /your finances, in the agent you already use/i
+        )
+      })
+
+      // Prove this is the non-landing app shell, not just "some banner/footer exist"
+      // (LandingHeader also has role="banner", and AppFooter renders unconditionally
+      // in both branches — see App.tsx). The `landing-page` class is only applied when
+      // isLandingPage is true, and the shared <main> wrapper only exists in the
+      // non-landing branch — so asserting the h1 lives inside it, and that the root
+      // never got the landing-page class, pins down which branch actually rendered.
+      expect(container.querySelector('.landing-page')).not.toBeInTheDocument()
+      const main = screen.getByRole('main')
+      expect(within(main).getByRole('heading', { level: 1 })).toHaveTextContent(
+        /your finances, in the agent you already use/i
+      )
+
+      // Shared Header + AppFooter render alongside that shared <main> (App.tsx
+      // non-landing branch), confirming the app shell — not the landing shell.
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+      expect(screen.getByRole('contentinfo')).toBeInTheDocument()
     })
   })
 })

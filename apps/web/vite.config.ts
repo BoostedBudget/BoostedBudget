@@ -188,6 +188,12 @@ export default defineConfig({
               test: /\/apps\/web\/src\/features\/household\//,
               priority: 5,
             },
+            // Issue #1411: public /mcp marketing + docs page
+            {
+              name: 'mcp',
+              test: /\/apps\/web\/src\/features\/mcp\//,
+              priority: 5,
+            },
           ],
         },
       },
