@@ -115,11 +115,17 @@ describe('LandingPage', () => {
 
     it('should display feature items', () => {
       renderWithProviders(<LandingPage />)
-      // Current 4 features in 2x2 grid
+      // Current 4 features in 2x2 grid, plus new 5th household card (#1411)
       expect(screen.getByRole('heading', { name: /all your accounts in one place/i })).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: /customizable dashboard/i })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: /smart categorization/i })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: /powerful automation/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /categorization that follows your rules/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /automation you can audit/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /shared household budgeting/i })).toBeInTheDocument()
+    })
+
+    it('should not overclaim AI/learning capabilities the product does not have (#1411)', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.queryByText(/learns from your corrections/i)).not.toBeInTheDocument()
     })
   })
 
@@ -197,8 +203,11 @@ describe('LandingPage', () => {
 
     it('should display risk reversal messaging', () => {
       renderWithProviders(<LandingPage />)
-      // These messages appear in multiple places on the page
-      expect(screen.getAllByText(/2-month free trial/i).length).toBeGreaterThanOrEqual(1)
+      // These messages appear in multiple places on the page.
+      // Note: PricingPreview.tsx (owned by a different #1411 task) still says
+      // "2-month free trial" as of this change, so this assertion intentionally
+      // uses >= 1 rather than asserting an exact count.
+      expect(screen.getAllByText(/60-day free trial/i).length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText(/cancel anytime/i).length).toBeGreaterThanOrEqual(1)
     })
   })
