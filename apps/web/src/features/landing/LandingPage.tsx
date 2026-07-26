@@ -20,6 +20,7 @@ import { useRef, useCallback } from 'react'
 import { LandingHeader } from './components/LandingHeader'
 import { HeroSection } from './components/HeroSection'
 import { FeaturesSection } from './components/FeaturesSection'
+import { McpBand } from './components/McpBand'
 import { SocialProof } from './components/SocialProof'
 import { HowItWorks } from './components/HowItWorks'
 import { PricingPreview } from './components/PricingPreview'
@@ -74,6 +75,9 @@ export function LandingPage() {
         <div id="features">
           <FeaturesSection />
         </div>
+
+        {/* MCP Band - Introduces the remote MCP server and links to /mcp (#1411) */}
+        <McpBand />
 
         {/* Compact Trust Bar with hover tooltips */}
         <SocialProof />
