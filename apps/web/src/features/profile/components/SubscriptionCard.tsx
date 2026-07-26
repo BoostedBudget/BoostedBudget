@@ -51,7 +51,6 @@ function buildFeatureList(tierData: SubscriptionTier): string[] {
     'Unlimited automation rules',
   ]
 
-  if (featureFlags.ai_insights) features.push('AI-powered insights')
   if (featureFlags.priority_support) features.push('Priority support')
   if (featureFlags.advanced_reports) features.push('Advanced reports')
   if (featureFlags.api_access) features.push('API access')

@@ -101,7 +101,7 @@ describe('useSubscriptionTiers', () => {
 
       const household5 = result.current.tiers?.tiers.household_5
       expect(household5?.limits.transaction_history_days).toBe(730)
-      expect(household5?.features.ai_insights).toBe(true)
+      expect(household5?.features.api_access).toBe(true)
     })
   })
 
