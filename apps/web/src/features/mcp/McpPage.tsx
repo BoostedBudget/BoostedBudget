@@ -24,6 +24,15 @@
  * that recipes can run automatically (no scheduler — #1220), that a paid
  * plan is required (api_access is unenforced), or any unfalsifiable security
  * adjective ("bank-grade", "military-grade", "zero-trust").
+ *
+ * Round 2 (#1430): must never say a saved-recipe confirmation is re-invoked via
+ * `execute` (recipes.ts:163-190 — the challenge names `recipe.save`), that "every
+ * call" is proxied to the Go backend (search and recipe.templates are handled
+ * locally against the static spec index / template list — agent.ts:144-150,
+ * agent.ts:279-290), or that "the agent never stores" credentials (the Durable
+ * Object's props do store the raw OAuth token via updateProps() — agent.ts:45-55,
+ * 64-84; the true, narrower claim from README.md is "never visible in tool inputs
+ * or outputs").
  */
 
 import { useEffect, useLayoutEffect } from 'react'
@@ -344,10 +353,12 @@ export function McpPage() {
             <Section id="write-safety" title="Every write waits for you">
               <p className="text-foreground">
                 Every write goes through the same confirmation flow, whether it&apos;s a single
-                tag update or a saved recipe: the agent calls <code>execute</code>, the server
-                describes what would happen and returns a one-time confirmation token, the
-                agent presents that to you, and only after you say yes does the agent re-invoke{' '}
-                <code>execute</code> with the token to actually make the change.
+                tag update via <code>execute</code> or a saved recipe via{' '}
+                <code>recipe.save</code>: the write tool describes what would happen and
+                returns a one-time confirmation token, the agent presents that to you, and
+                only after you say yes does the agent re-invoke that same tool —{' '}
+                <code>execute</code> or <code>recipe.save</code> — with the token to
+                actually make the change.
               </p>
               <p className="text-foreground">
                 Each token is single-use and expires after 5 minutes. It&apos;s tied to your
@@ -435,16 +446,19 @@ export function McpPage() {
 
             <Section id="data-and-access" title="Data handling and access control">
               <p className="text-foreground">
-                The Worker that handles MCP requests never connects to the database. Every call
-                is proxied to the same Go backend that powers the BoostedBudget web app, which
+                The Worker that handles MCP requests never connects to the database.{' '}
+                <code>execute</code> and the account-touching <code>recipe.*</code> tools —{' '}
+                <code>recipe.list</code>, <code>recipe.save</code>, <code>recipe.run</code> — are
+                proxied to the same Go backend that powers the BoostedBudget web app, which
                 enforces account ownership and validates every request the same way it would
-                from a browser.
+                from a browser. <code>search</code> and <code>recipe.templates</code> don&apos;t
+                touch the backend at all — they run locally against a static spec index and
+                template list.
               </p>
               <p className="text-foreground">
                 Your BoostedBudget credentials are injected server-side after you sign in —
-                they&apos;re never visible in a tool&apos;s input or output, and the agent never
-                stores them. Tool calls, successful or not, are recorded to an audit log on a
-                best-effort basis.
+                they&apos;re never visible in a tool&apos;s input or output. Tool calls,
+                successful or not, are recorded to an audit log on a best-effort basis.
               </p>
               <p className="text-foreground">
                 Access is revoked from the Clerk dashboard today — an in-app disconnect page is

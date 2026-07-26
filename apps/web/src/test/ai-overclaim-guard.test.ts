@@ -39,7 +39,7 @@
  *   better served by actually being repo-wide for this one pattern.
  */
 import { describe, it, expect } from 'bun:test'
-import { readdirSync, readFileSync, statSync } from 'fs'
+import { readdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'fs'
 import { join, relative } from 'path'
 
 // import.meta.dir === apps/web/src/test — walk up to apps/web/src, apps/web, and repo root
@@ -256,6 +256,35 @@ describe('ai-overclaim guard (#1411)', () => {
     const reason = 'the trial is 60 days (config/subscription_tiers.yaml: trial.duration_days: 60) — use "60-day" instead'
     const hits = scanForPattern(STALE_TRIAL_PATTERN, [...scanTargets(), ...docScanTargets()])
     expect(hits, `Stale trial wording found:\n${formatReport(hits, reason)}`).toHaveLength(0)
+  })
+
+  // Positive-fixture proof (#1430 branch review, task G7): the "no stale 2-month wording"
+  // test above only ever proves the current tree is clean — exactly the vacuous-pass trap
+  // this branch already hit once for conductor/product.md:19. A regression in
+  // docScanTargets() (e.g. someone drops 'conductor' from DOC_SCAN_RECURSE_DIRS, or breaks
+  // the recursive walk) would make that test pass just as cleanly as a correct scanner
+  // would. This test writes a real, intentionally-violating fixture file under conductor/,
+  // proves docScanTargets() actually discovers it and scanForPattern actually flags it at
+  // the right line, then deletes the fixture — nothing violating is committed to the repo.
+  it('docScanTargets() actually detects a violation under conductor/ (proves the widened doc scan is not vacuous)', () => {
+    const fixturePath = join(
+      REPO_ROOT,
+      'conductor',
+      `ai-overclaim-guard-fixture-${Date.now()}-${Math.random().toString(36).slice(2)}.md`,
+    )
+    // Deliberately violates STALE_TRIAL_PATTERN on line 1 — never committed, removed in `finally`.
+    writeFileSync(fixturePath, 'Synthetic test fixture: this mentions a 2-month trial.\n')
+
+    try {
+      const targets = docScanTargets()
+      expect(targets).toContain(fixturePath)
+
+      const hits = scanForPattern(STALE_TRIAL_PATTERN, targets)
+      const fixtureRelPath = relative(REPO_ROOT, fixturePath)
+      expect(hits).toContainEqual({ file: fixtureRelPath, line: 1, match: '2-month' })
+    } finally {
+      rmSync(fixturePath, { force: true })
+    }
   })
 
   it('has no AI-capability overclaims once whitespace/line-wrapping is normalized (catches Prettier-wrapped phrases the per-line scan misses)', () => {

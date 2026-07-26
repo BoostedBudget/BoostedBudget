@@ -256,9 +256,64 @@ describe('McpPage', () => {
     expect(document.body.textContent).not.toMatch(/let your agent move money/i)
   })
 
-  it('states the rate limits are per session, not per account', () => {
+  it('states the rate limits are per session, not per account, and excludes search/recipe.templates', () => {
     render(<McpPage />)
     expect(screen.getByText(/60 requests\/minute/)).toBeInTheDocument()
     expect(document.body.textContent).toMatch(/per session, not per account/i)
+    // Regression pin (#1430 round 2, pinning test item 2): without this assertion, the
+    // limiter carve-out for search/recipe.templates could be deleted and this test would
+    // keep passing on the generic "60 requests/minute" + "per session" text alone. The
+    // carve-out is real: host-proxy.ts's rate limiter is only invoked from proxy.invoke(),
+    // and agent.ts never routes search (agent.ts:144-150) or recipe.templates
+    // (agent.ts:279-290) through the proxy at all.
+    expect(document.body.textContent).toMatch(
+      /search.*and.*recipe\.templates.*don.t go through the limiter at all/i
+    )
+  })
+
+  // Claim 1 pinning test (#1430 round 2): recipes.ts:163-190 shows recipe.save's
+  // confirmation challenge tells the agent to re-invoke recipe.save(), not execute() —
+  // "Recipe creation requires confirmation. Re-invoke recipe.save() with confirmationToken:
+  // ...". The write-safety section previously hardcoded `execute` as the tool re-invoked
+  // for BOTH a single tag update and a saved recipe, contradicting the recipes section
+  // (:415-420) which correctly calls recipe.save a confirmation-gated write.
+  it('describes the recipe-save confirmation as re-invoking recipe.save, not execute', () => {
+    render(<McpPage />)
+    const heading = screen.getByRole('heading', { level: 2, name: 'Every write waits for you' })
+    const section = heading.closest('section')
+    const text = normalize(section?.textContent ?? null)
+
+    expect(text).toMatch(/saved recipe via recipe\.save/i)
+    expect(text).not.toMatch(/re-invoke execute with the token to actually make the change/i)
+  })
+
+  // Claim 2 pinning test (#1430 round 2): agent.ts:144-150 handles `search` directly against
+  // the statically-loaded spec index (search.ts:4-8, "requires no credentials — it operates
+  // on the statically-built spec index"); agent.ts:279-290 handles `recipe.templates`
+  // directly via a pure local function (recipes.ts templates(), no proxy.invoke call).
+  // Neither goes through host-proxy.ts, so "every call is proxied to the same Go backend"
+  // is false. Scoped to match the register of the already-correct rate-limit carve-out above.
+  it('scopes "proxied to the Go backend" to execute/recipe.* and excludes search/recipe.templates', () => {
+    render(<McpPage />)
+    const heading = screen.getByRole('heading', { level: 2, name: 'Data handling and access control' })
+    const section = heading.closest('section')
+    const text = normalize(section?.textContent ?? null)
+
+    expect(text).toMatch(/execute.*recipe\.list.*recipe\.save.*recipe\.run.*proxied to the same Go backend/i)
+    expect(text).toMatch(/search.*recipe\.templates.*don.t touch the backend/i)
+    expect(text).not.toMatch(/every call\s+is proxied to the same Go backend/i)
+  })
+
+  // Claim 3 pinning test (#1430 round 2): agent.ts:64-84's fetch() override calls
+  // this.updateProps() on every request to persist the raw Clerk OAuth accessToken
+  // (agent.ts:45-55, McpAgentProps.accessToken) into the Durable Object's props — so
+  // "the agent never stores" the credential is false; something does store it, just not
+  // anywhere visible to the model. README.md:301 makes the accurate, narrower claim
+  // ("injected server-side and never visible in tool inputs or outputs") — align to that.
+  it('states credentials are injected server-side and never visible in tool input/output, without an absolute "never stores" claim', () => {
+    render(<McpPage />)
+    const text = document.body.textContent ?? ''
+    expect(text).toMatch(/credentials are injected server-side.*never visible in a tool.s input or output/i)
+    expect(text).not.toMatch(/the agent never stores them/i)
   })
 })
