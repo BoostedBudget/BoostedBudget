@@ -168,10 +168,12 @@ export default defineConfig({
   // Comment this out if you want to run tests against already running servers
   webServer: [
     {
-      // Pass PORT, E2E_BACKEND_PORT, and VITE_CLERK_PUBLISHABLE_KEY env vars to Vite.
+      // Pass PORT, E2E_BACKEND_PORT, VITE_CLERK_PUBLISHABLE_KEY, and VITE_MCP_URL env vars to Vite.
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration.
       // VITE_CLERK_PUBLISHABLE_KEY enables Clerk authentication (Vite only exposes VITE_* vars).
-      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} bun run dev`,
+      // VITE_MCP_URL points at the staging MCP Worker so /mcp e2e tests exercise the
+      // configured branch, not just the fail-closed ('development') branch — see mcpUrl.ts.
+      command: `PORT=${frontendPort} E2E_BACKEND_PORT=${backendPort} VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || ''} VITE_MCP_URL=https://staging-mcp.boostedbudget.com bun run dev`,
       url: `http://localhost:${frontendPort}`,
       reuseExistingServer: !process.env.CI,
       timeout: 120 * 1000,

@@ -8,4 +8,5 @@ window.ENV = {
   ENVIRONMENT: 'development',
   POSTHOG_KEY: undefined,
   POSTHOG_HOST: undefined,
+  MCP_URL: undefined, // Let mcpUrl.ts use import.meta.env.VITE_MCP_URL / VITE_ENVIRONMENT
 };
