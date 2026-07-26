@@ -260,6 +260,10 @@ describe('McpSetupTabs', () => {
     ).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/unverified/i)
     expect(document.body.textContent).not.toMatch(/#1421/)
+    // The regression this test guards against: the unverified config snippet
+    // referenced ~/.cursor/mcp.json directly. Assert it's gone, not just the
+    // warning language around it — otherwise the snippet could return silently.
+    expect(document.body.textContent).not.toMatch(/\.cursor\/mcp\.json/)
   })
 
   it('tells VS Code Claude Code extension users that it does not read .vscode/mcp.json', async () => {

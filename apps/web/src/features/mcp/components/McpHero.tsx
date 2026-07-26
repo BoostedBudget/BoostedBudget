@@ -71,7 +71,7 @@ export function McpHero({ allowedOperationsCount }: McpHeroProps) {
       <p className="mx-auto mt-10 flex max-w-2xl items-center justify-center gap-2 text-sm text-muted-foreground">
         <Shield className="h-4 w-4 shrink-0" aria-hidden="true" />
         The Worker never touches the database. Your credentials are injected
-        server-side. Tool calls are recorded to an audit log.
+        server-side. Tool calls are recorded to an audit log on a best-effort basis.
       </p>
     </div>
   )
