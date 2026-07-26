@@ -55,13 +55,20 @@ describe('McpHero', () => {
     ).toBeInTheDocument()
   })
 
-  it('renders the trust strip (softened from the brief\'s draft — "every" overclaimed fire-and-forget audit delivery per Codex review)', () => {
+  it('renders the trust strip with best-effort audit language matching McpPage.tsx\'s detailed copy (audit-client.ts is a no-op when unconfigured and swallows failures; agent.ts fires audit.record without awaiting it, so a write can commit with no audit entry — round 3 of Codex review on this claim)', () => {
     renderHero()
     expect(
       screen.getByText(
-        /The Worker never touches the database\. Your credentials are injected server-side\. Tool calls are recorded to an audit log\./
+        /The Worker never touches the database\. Your credentials are injected server-side\. Tool calls are recorded to an audit log on a best-effort basis\./
       )
     ).toBeInTheDocument()
+    // Reject the unconditional form ("...audit log." with no best-effort qualifier) —
+    // that overstates a guarantee the code doesn't provide.
+    expect(
+      screen.queryByText(
+        /Tool calls are recorded to an audit log\.(?! on a best-effort basis)/
+      )
+    ).not.toBeInTheDocument()
   })
 
   it('renders the proof chips, including the generated allowed-operations count', () => {

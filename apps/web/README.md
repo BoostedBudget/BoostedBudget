@@ -21,7 +21,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 **Budget policy:**
 - Per-feature chunks are budgeted at their gzipped baseline + 20%.
-- The shared `vendor` chunk sits at **~99.5% of its 410 kB limit** (407.97 kB measured, ~2 kB headroom — see the stamped table below). Treat `vendor` as budget-saturated, not comfortable: a single new dependency landing in this chunk will fail CI, and it will fail on whichever PR happens to add it rather than the one that used up the room. Raising the limit requires a measured before/after in the PR description — and measure on a clean `bun install`, because a stale `node_modules` can carry duplicate copies of a package and inflate this figure by double digits.
+- The shared `vendor` chunk sits at **~99.5% of its 410 kB limit** (407.97 kB measured, ~2 kB headroom — see the stamped table below). Treat `vendor` as budget-saturated, not comfortable: with only ~2 kB of headroom left, a new dependency whose gzipped contribution exceeds that headroom will fail CI — and, because of the shared-chunk model, it will fail on whichever PR happens to push it over rather than the one that used up the room. Raising the limit requires a measured before/after in the PR description — and measure on a clean `bun install`, because a stale `node_modules` can carry duplicate copies of a package and inflate this figure by double digits.
 - Initial budgets were set at the time lazy-loading was introduced (issue #1126); updated to Rolldown baselines in issue #1225.
 
 **If CI fails on bundle size:**
