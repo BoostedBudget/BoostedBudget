@@ -148,6 +148,57 @@ describe('getMcpBaseUrl', () => {
 
     expect(getMcpBaseUrl()).toBe('https://x.test')
   })
+
+  // Finding 1: `environment in MCP_URL_BY_ENVIRONMENT` walks the prototype chain, so
+  // Object.prototype member names test true via `in` even though they are not own keys
+  // of the map. Each of these must resolve to null, not to an inherited function/object.
+  test("VITE_ENVIRONMENT='toString' returns null (prototype-chain leak guard)", () => {
+    setViteEnvironment('toString')
+
+    expect(getMcpBaseUrl()).toBeNull()
+  })
+
+  test("VITE_ENVIRONMENT='constructor' returns null (prototype-chain leak guard)", () => {
+    setViteEnvironment('constructor')
+
+    expect(getMcpBaseUrl()).toBeNull()
+  })
+
+  test("VITE_ENVIRONMENT='hasOwnProperty' returns null (prototype-chain leak guard)", () => {
+    setViteEnvironment('hasOwnProperty')
+
+    expect(getMcpBaseUrl()).toBeNull()
+  })
+
+  test("VITE_ENVIRONMENT='__proto__' returns null (prototype-chain leak guard)", () => {
+    setViteEnvironment('__proto__')
+
+    expect(getMcpBaseUrl()).toBeNull()
+  })
+
+  // Finding 2: pairing a malformed VITE_MCP_URL with a *valid* window.ENV.MCP_URL (rather
+  // than with the environment map only) proves step 2 was actually consulted and won, not
+  // merely skipped on the way to step 3.
+  test('malformed VITE_MCP_URL falls through to a valid window.ENV.MCP_URL (proves step 2 is consulted, not skipped)', () => {
+    setViteMcpUrl('not-a-url')
+    window.ENV = { MCP_URL: 'https://runtime-mcp.example.com' }
+
+    expect(getMcpBaseUrl()).toBe('https://runtime-mcp.example.com')
+  })
+
+  test('whitespace-only VITE_MCP_URL falls through to a valid window.ENV.MCP_URL', () => {
+    setViteMcpUrl('   ')
+    window.ENV = { MCP_URL: 'https://runtime-mcp.example.com' }
+
+    expect(getMcpBaseUrl()).toBe('https://runtime-mcp.example.com')
+  })
+
+  test('wrong-protocol VITE_MCP_URL (http, not https) falls through to a valid window.ENV.MCP_URL', () => {
+    setViteMcpUrl('http://mcp.boostedbudget.com')
+    window.ENV = { MCP_URL: 'https://runtime-mcp.example.com' }
+
+    expect(getMcpBaseUrl()).toBe('https://runtime-mcp.example.com')
+  })
 })
 
 describe('getMcpEndpoint', () => {
@@ -165,6 +216,13 @@ describe('getMcpEndpoint', () => {
 
   test('returns null when the base is null', () => {
     expect(getMcpBaseUrl()).toBeNull()
+    expect(getMcpEndpoint()).toBeNull()
+  })
+
+  // Finding 1: same prototype-chain leak guard, verified through getMcpEndpoint too.
+  test("VITE_ENVIRONMENT='toString' returns null (prototype-chain leak guard)", () => {
+    setViteEnvironment('toString')
+
     expect(getMcpEndpoint()).toBeNull()
   })
 })
