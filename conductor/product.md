@@ -16,7 +16,7 @@ BoostedBudget is a smart personal finance application designed to turn budgeting
 
 ## 4. Monetization Strategy
 - **Premium Subscription:** A paid SaaS model ensuring user privacy and data security.
-- **Extended Trial:** A generous 2-month free trial to allow users to experience the full "rollover" cycle and see the value.
+- **Extended Trial:** A generous 60-day free trial to allow users to experience the full "rollover" cycle and see the value.
 - **Referral Program:** Incentivized growth where users earn 2 additional free months for every successful paid referral.
 - **No Ads/Data Selling:** Strict commitment to user privacy; revenue comes solely from subscriptions.
 
