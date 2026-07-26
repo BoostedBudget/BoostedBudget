@@ -508,17 +508,6 @@ export function McpPage() {
                   referenced in the Worker config as a commented-out stub; it hasn&apos;t been
                   built.
                 </li>
-                <li>
-                  Whether Cursor&apos;s remote MCP support performs Dynamic Client Registration
-                  automatically is unverified — see the Cursor tab above (
-                  <a
-                    href="https://github.com/BoostedBudget/BoostedBudget/issues/1421"
-                    className="text-primary underline underline-offset-2"
-                  >
-                    #1421
-                  </a>
-                  ).
-                </li>
               </ul>
             </Section>
 
@@ -548,11 +537,6 @@ export function McpPage() {
                     Data and access
                   </a>
                   ). If it&apos;s been longer, contact support.
-                </li>
-                <li>
-                  <span className="font-medium">Cursor asks for a Client ID/Secret: </span>
-                  Cursor&apos;s Dynamic Client Registration support is unverified — see the
-                  Cursor tab above.
                 </li>
               </ul>
               <p className="text-muted-foreground">

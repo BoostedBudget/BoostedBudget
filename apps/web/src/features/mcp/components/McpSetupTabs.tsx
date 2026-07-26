@@ -33,7 +33,7 @@ interface ClientMeta {
 const CLIENTS: ClientMeta[] = [
   { id: 'claude_desktop', label: 'Claude Desktop', hashSlug: 'claude-desktop' },
   { id: 'claude_code', label: 'Claude Code CLI', hashSlug: 'claude-code' },
-  { id: 'cursor', label: 'Cursor', hashSlug: 'cursor' },
+  { id: 'cursor', label: 'Cursor & other clients', hashSlug: 'cursor' },
   { id: 'vscode', label: 'VS Code', hashSlug: 'vscode' },
 ]
 
@@ -245,47 +245,34 @@ function ClaudeCodePanel({ serverUrl, onCopy }: TabPanelProps) {
   )
 }
 
-function CursorPanel({ serverUrl, onCopy }: TabPanelProps) {
-  const json = serverUrl
-    ? `{"mcpServers":{"boostedbudget":{"url":"${serverUrl}"}}}`
-    : null
-
+function OtherClientsPanel({ serverUrl, onCopy }: TabPanelProps) {
   return (
     <div className="space-y-4">
-      <p
-        role="note"
-        className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-foreground"
-      >
-        Whether Cursor supports Dynamic Client Registration (automatic sign-in, like Claude
-        Desktop and Claude Code above) is unverified — Cursor&apos;s own docs describe a
-        static auth block with a pre-registered Client ID and Secret for remote servers
-        instead (tracked in #1421). If Cursor prompts for a Client ID/Secret rather than
-        opening a sign-in window, this integration doesn&apos;t fully support Cursor yet.
-      </p>
       <Steps>
         <li>
-          Create or open <code>~/.cursor/mcp.json</code> (all projects) or{' '}
-          <code>.cursor/mcp.json</code> (this project only).
-        </li>
-        <li>
-          Add the server. There is no <code>type</code> key for remote servers — that&apos;s
-          only needed for local (stdio) servers.
+          This server speaks the Model Context Protocol over Streamable HTTP at:
           <CodeSection
-            value={json}
-            blockLabel="Cursor configuration"
-            copyLabel="Copy Cursor configuration"
+            value={serverUrl}
+            blockLabel="MCP server URL"
+            copyLabel="Copy MCP server URL"
             client="cursor"
             onCopy={onCopy}
+            isInline
           />
         </li>
         <li>
-          Restart Cursor. The first time an agent uses a boostedbudget tool, a browser
-          window should open for you to sign in with your BoostedBudget account.
+          Add it as a remote MCP server, following your client&apos;s own documentation —
+          setup steps vary by client, but the URL above is the one thing every client
+          needs.
+        </li>
+        <li>
+          The server handles authentication itself: the first time your agent calls a
+          boostedbudget tool, a browser window should open for you to sign in with your
+          BoostedBudget account and authorize access.
         </li>
       </Steps>
       <WorksWhen>
-        Cursor lists boostedbudget as connected in its MCP settings, and a sign-in window
-        has completed.
+        your client lists boostedbudget as connected, and a sign-in window has completed.
       </WorksWhen>
     </div>
   )
@@ -382,7 +369,7 @@ export function McpSetupTabs() {
           <ClaudeCodePanel serverUrl={serverUrl} onCopy={handleCopy} />
         </TabsContent>
         <TabsContent value="cursor">
-          <CursorPanel serverUrl={serverUrl} onCopy={handleCopy} />
+          <OtherClientsPanel serverUrl={serverUrl} onCopy={handleCopy} />
         </TabsContent>
         <TabsContent value="vscode">
           <VsCodePanel serverUrl={serverUrl} onCopy={handleCopy} />

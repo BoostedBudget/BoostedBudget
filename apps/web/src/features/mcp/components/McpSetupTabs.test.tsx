@@ -2,11 +2,18 @@
  * McpSetupTabs Component Tests (Issue #1411)
  *
  * Per task-P8-brief.md §4 "client setup tabs": four tabs (Claude Desktop, Claude
- * Code CLI, Cursor, VS Code), each with numbered steps, a code block, a sign-in
- * step, and a "you'll know it worked when" line. The server URL is resolved via
- * getMcpBaseUrl()/getMcpEndpoint() (never hardcoded) — when that resolves to
- * `null`, a clear "not configured" state renders instead of a broken URL. Tab
- * state persists to localStorage and reflects in the URL hash.
+ * Code CLI, Cursor & other clients, VS Code), each with numbered steps, a code
+ * block, a sign-in step, and a "you'll know it worked when" line. The server URL
+ * is resolved via getMcpBaseUrl()/getMcpEndpoint() (never hardcoded) — when that
+ * resolves to `null`, a clear "not configured" state renders instead of a broken
+ * URL. Tab state persists to localStorage and reflects in the URL hash.
+ *
+ * #1430 round: the "Cursor" tab was genericized to "Cursor & other clients" —
+ * the config-shape snippet (`~/.cursor/mcp.json`) was never verified against a
+ * live Cursor build, and the DCR-unverified warning note it carried is gone
+ * with it. The panel now gives generic remote-MCP-client guidance instead. The
+ * tab's `id`/`hashSlug` stay `'cursor'` so `#connect-cursor` deep links keep
+ * working — only the visible label changed.
  */
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
@@ -59,7 +66,7 @@ describe('McpSetupTabs', () => {
     const tabList = screen.getByRole('tablist', { name: 'MCP client' })
     expect(within(tabList).getByRole('tab', { name: 'Claude Desktop' })).toBeInTheDocument()
     expect(within(tabList).getByRole('tab', { name: 'Claude Code CLI' })).toBeInTheDocument()
-    expect(within(tabList).getByRole('tab', { name: 'Cursor' })).toBeInTheDocument()
+    expect(within(tabList).getByRole('tab', { name: 'Cursor & other clients' })).toBeInTheDocument()
     expect(within(tabList).getByRole('tab', { name: 'VS Code' })).toBeInTheDocument()
   })
 
@@ -79,7 +86,7 @@ describe('McpSetupTabs', () => {
     it('shows the "not configured" state on every tab, not just the default one', async () => {
       const user = userEvent.setup()
       render(<McpSetupTabs />)
-      await user.click(screen.getByRole('tab', { name: 'Cursor' }))
+      await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
       expect(screen.getByText(/not configured in this environment/i)).toBeInTheDocument()
     })
   })
@@ -98,13 +105,11 @@ describe('McpSetupTabs', () => {
       ).toBeInTheDocument()
     })
 
-    it('interpolates the resolved endpoint into the Cursor JSON config with no "type" key', async () => {
+    it('interpolates the resolved endpoint into the "Cursor & other clients" server URL', async () => {
       const user = userEvent.setup()
       render(<McpSetupTabs />)
-      await user.click(screen.getByRole('tab', { name: 'Cursor' }))
-      const json = screen.getByText(/"mcpServers"/)
-      expect(json.textContent).toContain('"url":"https://mcp.test.example.com/mcp"')
-      expect(json.textContent).not.toContain('"type"')
+      await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
+      expect(screen.getByText('https://mcp.test.example.com/mcp')).toBeInTheDocument()
     })
 
     it('interpolates the resolved endpoint into the VS Code config under the "servers" key (not "mcpServers")', async () => {
@@ -126,7 +131,7 @@ describe('McpSetupTabs', () => {
     const user = userEvent.setup()
     render(<McpSetupTabs />)
 
-    await user.click(screen.getByRole('tab', { name: 'Cursor' }))
+    await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
 
     expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.MCP_SETUP_TAB_CHANGED, {
       client: 'cursor',
@@ -155,25 +160,25 @@ describe('McpSetupTabs', () => {
   it('persists the active tab to localStorage and restores it on remount', async () => {
     const user = userEvent.setup()
     const { unmount } = render(<McpSetupTabs />)
-    await user.click(screen.getByRole('tab', { name: 'Cursor' }))
+    await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe('cursor')
     unmount()
 
     render(<McpSetupTabs />)
-    expect(screen.getByRole('tab', { name: 'Cursor' })).toHaveAttribute('data-state', 'active')
+    expect(screen.getByRole('tab', { name: 'Cursor & other clients' })).toHaveAttribute('data-state', 'active')
   })
 
   it('reflects the active tab in the URL hash after switching', async () => {
     const user = userEvent.setup()
     render(<McpSetupTabs />)
-    await user.click(screen.getByRole('tab', { name: 'Cursor' }))
+    await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
     expect(window.location.hash).toBe('#connect-cursor')
   })
 
   it('honors an existing URL hash on initial mount', () => {
     window.history.replaceState(null, '', '/mcp#connect-cursor')
     render(<McpSetupTabs />)
-    expect(screen.getByRole('tab', { name: 'Cursor' })).toHaveAttribute('data-state', 'active')
+    expect(screen.getByRole('tab', { name: 'Cursor & other clients' })).toHaveAttribute('data-state', 'active')
   })
 
   describe('copy buttons', () => {
@@ -182,8 +187,8 @@ describe('McpSetupTabs', () => {
       mutableEnv().VITE_MCP_URL = 'https://mcp.test.example.com'
       render(<McpSetupTabs />)
 
-      await user.click(screen.getByRole('tab', { name: 'Cursor' }))
-      const copyButton = screen.getByRole('button', { name: /copy cursor configuration/i })
+      await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
+      const copyButton = screen.getByRole('button', { name: /copy mcp server url/i })
       await user.click(copyButton)
 
       await waitFor(() => {
@@ -206,8 +211,8 @@ describe('McpSetupTabs', () => {
       })
       render(<McpSetupTabs />)
 
-      await user.click(screen.getByRole('tab', { name: 'Cursor' }))
-      const copyButton = screen.getByRole('button', { name: /copy cursor configuration/i })
+      await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
+      const copyButton = screen.getByRole('button', { name: /copy mcp server url/i })
       await user.click(copyButton)
 
       // Give the rejected promise a tick to settle before asserting the negative.
@@ -239,11 +244,22 @@ describe('McpSetupTabs', () => {
     })
   })
 
-  it('includes a visible caveat that Cursor DCR support is unverified (#1421)', async () => {
+  // #1430 round: the Cursor-specific config snippet and its "DCR is unverified"
+  // warning note (role="note") were replaced with generic remote-MCP-client
+  // guidance — nothing on this tab should claim Cursor is unverified/incomplete,
+  // and nothing should claim it definitely works either.
+  it('gives generic remote-MCP-client guidance on the "Cursor & other clients" tab, with no unverified/DCR caveat', async () => {
     const user = userEvent.setup()
     render(<McpSetupTabs />)
-    await user.click(screen.getByRole('tab', { name: 'Cursor' }))
-    expect(screen.getByText(/unverified/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
+
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    expect(screen.getByText(/Model Context Protocol over Streamable HTTP/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/following your client.s own documentation/i)
+    ).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/unverified/i)
+    expect(document.body.textContent).not.toMatch(/#1421/)
   })
 
   it('tells VS Code Claude Code extension users that it does not read .vscode/mcp.json', async () => {
