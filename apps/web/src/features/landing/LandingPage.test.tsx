@@ -127,6 +127,23 @@ describe('LandingPage', () => {
       renderWithProviders(<LandingPage />)
       expect(screen.queryByText(/learns from your corrections/i)).not.toBeInTheDocument()
     })
+
+    it('should not claim "no black box, no surprises" for categorization — every synced transaction arrives pre-categorized by Plaid, an opaque third-party classifier; only rules that actually match an eligible transaction override that default (#1411 B3 fix)', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.queryByText(/no black box, no surprises/i)).not.toBeInTheDocument()
+      // Must not attribute the default category to the bank (it's Plaid's PersonalFinanceCategory
+      // classifier — see backend/internal/services/plaid_mapper.go). Note: this card's own text
+      // must not claim rules "always" override the default (rule_application_service.go skips
+      // manually-categorized and already-reviewed transactions), but "always" legitimately
+      // appears elsewhere on the page (card 4's "you always know why it fired"), so that's
+      // asserted via the exact-string match below rather than a page-wide absence check.
+      expect(screen.queryByText(/your bank's own category/i)).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          /Every transaction arrives with a category from Plaid\. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself\./
+        )
+      ).toBeInTheDocument()
+    })
   })
 
   describe('How It Works Section', () => {

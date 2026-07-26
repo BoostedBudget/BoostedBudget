@@ -38,7 +38,7 @@ import capabilitySummary from './data/capabilitySummary.json'
 
 const PAGE_TITLE = 'MCP Server — BoostedBudget'
 const PAGE_DESCRIPTION =
-  'Connect Claude, Cursor, or VS Code to your BoostedBudget account through a remote MCP server. Read your accounts, transactions, budgets, and portfolio — every change waits for your confirmation.'
+  'Connect Claude or VS Code to your BoostedBudget account through a remote MCP server. Read your accounts, transactions, budgets, and portfolio — every change waits for your confirmation.'
 const CANONICAL_URL = 'https://boostedbudget.com/mcp'
 
 const TOC_SECTIONS = [
@@ -237,7 +237,7 @@ export function McpPage() {
             <Section id="overview" title="What the MCP server is">
               <p className="text-foreground">
                 BoostedBudget runs a remote MCP (Model Context Protocol) server at a single
-                URL. Connect Claude Desktop, Claude Code, Cursor, or VS Code, sign in with your
+                URL. Connect Claude Desktop, Claude Code, or VS Code, sign in with your
                 BoostedBudget account, and your agent can read your accounts, transactions,
                 budgets, and portfolio directly — no exporting statements, no copy-pasting
                 numbers into a chat window.

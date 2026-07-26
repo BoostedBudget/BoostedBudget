@@ -37,7 +37,7 @@ describe('McpBand', () => {
     renderMcpBand()
     expect(
       screen.getByText(
-        'BoostedBudget runs a remote MCP server, so Claude, Cursor, or VS Code can read your finances directly — and change them only when you confirm.'
+        'BoostedBudget runs a remote MCP server, so Claude or VS Code can read your finances directly — and change them only when you confirm.'
       )
     ).toBeInTheDocument()
   })
