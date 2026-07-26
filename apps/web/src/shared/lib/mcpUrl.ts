@@ -66,8 +66,13 @@ export function getMcpBaseUrl(): string | null {
   const runtime = normalizeCandidate(window.ENV?.MCP_URL)
   if (runtime) return runtime
 
+  // Object.hasOwn would be the idiomatic guard here, but it needs an ES2022 lib and this
+  // package's tsconfig targets ES2020 (shared config, out of scope for this fix). The
+  // ES2020-safe equivalent below has identical own-property-only semantics: unlike the
+  // `in` operator, it does not walk the prototype chain, so values like 'toString' or
+  // '__proto__' correctly fail this check instead of matching an inherited member.
   const environment = import.meta.env.VITE_ENVIRONMENT
-  if (environment && environment in MCP_URL_BY_ENVIRONMENT) {
+  if (environment && Object.prototype.hasOwnProperty.call(MCP_URL_BY_ENVIRONMENT, environment)) {
     return MCP_URL_BY_ENVIRONMENT[environment]
   }
 

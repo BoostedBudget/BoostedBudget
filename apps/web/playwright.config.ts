@@ -182,7 +182,7 @@ export default defineConfig({
     // Builds the Rolldown production bundle and serves via `vite preview` — the only way
     // to exercise rolldownOptions.codeSplitting. `vite dev` bypasses chunking entirely.
     ...(prodPort ? [{
-      command: `VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || 'pk_test_e2e_placeholder'} bun run build && bunx vite preview --port ${prodPort} --strictPort`,
+      command: `VITE_CLERK_PUBLISHABLE_KEY=${process.env.CLERK_PUBLISHABLE_KEY || 'pk_test_e2e_placeholder'} VITE_MCP_URL=https://staging-mcp.boostedbudget.com bun run build && bunx vite preview --port ${prodPort} --strictPort`,
       url: `http://localhost:${prodPort}`,
       reuseExistingServer: false, // always rebuild: command includes the build step
       timeout: 180 * 1000, // ~60s for tsc+rolldown build + preview startup
