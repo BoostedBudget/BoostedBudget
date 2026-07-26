@@ -30,9 +30,14 @@ const SRC_ROOT = join(import.meta.dir, '..')
 const WEB_ROOT = join(SRC_ROOT, '..')
 const REPO_ROOT = join(WEB_ROOT, '..', '..')
 
-const SCAN_DIRS = ['features/landing', 'features/pricing', 'features/profile', 'features/billing', 'legal'].map(d =>
-  join(SRC_ROOT, d)
-)
+const SCAN_DIRS = [
+  'features/landing',
+  'features/pricing',
+  'features/profile',
+  'features/billing',
+  'legal',
+  'components/layout',
+].map(d => join(SRC_ROOT, d))
 const INDEX_HTML = join(WEB_ROOT, 'index.html')
 
 // Pattern 1: claims that the product's OWN automation/system is intelligent or learning.
@@ -107,8 +112,43 @@ function scanForPattern(pattern: RegExp): Violation[] {
   return hits
 }
 
+// N1 fix (#1411 branch review): the per-line scan above is whitespace-fragile. A banned
+// phrase long enough for Prettier to wrap across two lines (e.g. "...and learns from your
+// corrections over time") slips through it undetected, because neither resulting line
+// contains the full phrase on its own. `findIgnoringWhitespace` collapses all whitespace
+// (including newlines) to single spaces before matching, so a wrapped phrase is still
+// caught — it's factored out as a standalone function (rather than inlined in the scan
+// loop below) so it can be exercised directly against an in-memory fixture string in the
+// test suite, without needing a real wrapped-phrase file on disk to prove it works.
+function findIgnoringWhitespace(contents: string, pattern: RegExp): string | null {
+  const match = contents.replace(/\s+/g, ' ').match(pattern)
+  return match ? match[0] : null
+}
+
+// This second pass over the whole file intentionally does not report a line number
+// (collapsing whitespace makes that imprecise) — the per-line pass above remains the
+// actionable, line-numbered report; this pass is a whitespace-insensitive safety net
+// layered on top of it.
+function scanForPatternIgnoringWhitespace(pattern: RegExp): Violation[] {
+  const hits: Violation[] = []
+
+  for (const filePath of scanTargets()) {
+    const relPath = relative(REPO_ROOT, filePath)
+    const contents = readFileSync(filePath, 'utf-8')
+
+    const match = findIgnoringWhitespace(contents, pattern)
+    if (match) {
+      hits.push({ file: relPath, line: 0, match })
+    }
+  }
+
+  return hits
+}
+
 function formatReport(hits: Violation[], reason: string): string {
-  return hits.map(h => `  ${h.file}:${h.line}: matched "${h.match}" — ${reason}`).join('\n')
+  return hits
+    .map(h => (h.line > 0 ? `  ${h.file}:${h.line}: matched "${h.match}" — ${reason}` : `  ${h.file}: matched "${h.match}" — ${reason}`))
+    .join('\n')
 }
 
 describe('ai-overclaim guard (#1411)', () => {
@@ -123,5 +163,34 @@ describe('ai-overclaim guard (#1411)', () => {
     const reason = 'the trial is 60 days (config/subscription_tiers.yaml: trial.duration_days: 60) — use "60-day" instead'
     const hits = scanForPattern(STALE_TRIAL_PATTERN)
     expect(hits, `Stale trial wording found:\n${formatReport(hits, reason)}`).toHaveLength(0)
+  })
+
+  it('has no AI-capability overclaims once whitespace/line-wrapping is normalized (catches Prettier-wrapped phrases the per-line scan misses)', () => {
+    const reason =
+      'same rule as the per-line scan above, but a phrase wrapped across multiple lines by Prettier only shows up once runs of whitespace are collapsed'
+    const hits = scanForPatternIgnoringWhitespace(AI_OVERCLAIM_PATTERN)
+    expect(hits, `AI overclaim(s) found (whitespace-normalized scan):\n${formatReport(hits, reason)}`).toHaveLength(0)
+  })
+
+  // Regression test for the whitespace-normalized pass itself (#1411 branch review): the
+  // test above only proves the current tree is clean, which a broken `findIgnoringWhitespace`
+  // (e.g. one that always returns null) would also satisfy. This proves the mechanism
+  // actually detects a phrase Prettier-wrapped across a line break, using the exact banned
+  // phrase called out in the branch review ("...and learns from your corrections over time").
+  it('findIgnoringWhitespace catches a banned phrase wrapped across a line break, which the per-line pattern alone cannot see', () => {
+    // The line break falls *inside* the two-word banned phrase itself ("learns" / "from"),
+    // matching what Prettier's line-wrapping actually does to prose — it wraps between
+    // words, not around them. Neither resulting line contains "learns from" on its own.
+    const wrappedAcrossTwoLines =
+      'Our system automatically categorizes your transactions and learns\nfrom your corrections over time, so it gets smarter with every edit.'
+
+    expect(findIgnoringWhitespace(wrappedAcrossTwoLines, AI_OVERCLAIM_PATTERN)).toBe('learns from')
+
+    // Prove the per-line check genuinely misses it — justifying why the whitespace-
+    // normalized pass needs to exist at all, not just that it happens to work.
+    const anyLineMatchesAlone = wrappedAcrossTwoLines
+      .split('\n')
+      .some(line => AI_OVERCLAIM_PATTERN.test(line))
+    expect(anyLineMatchesAlone).toBe(false)
   })
 })

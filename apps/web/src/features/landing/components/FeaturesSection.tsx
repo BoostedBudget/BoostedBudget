@@ -25,7 +25,7 @@ const features = [
     icon: BarChart3,
     title: 'Categorization That Follows Your Rules',
     description:
-      'You define the rules — merchant, amount, description — and every matching transaction is categorized the same way, every time. No black box, no surprises.',
+      "Every transaction arrives with a category from Plaid. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself.",
   },
   {
     icon: Zap,

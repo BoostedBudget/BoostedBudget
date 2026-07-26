@@ -83,6 +83,17 @@ describe('McpPage', () => {
     )
   })
 
+  // #1411 B2 fix: Cursor's remote-MCP auto-auth support is unverified (see the Cursor tab
+  // and Limits section below) — the meta description must not promise it unqualified.
+  // `stringContaining('MCP')` above would still pass for the old Cursor-containing
+  // description, so this asserts its absence directly.
+  it('does not name Cursor in the meta description (#1411 B2 fix)', () => {
+    render(<McpPage />)
+    const description = document.querySelector('meta[name="description"]')?.getAttribute('content')
+    expect(description).not.toBeNull()
+    expect(description).not.toContain('Cursor')
+  })
+
   it('restores document.title, meta description, and canonical link on unmount', () => {
     const { unmount } = render(<McpPage />)
     unmount()

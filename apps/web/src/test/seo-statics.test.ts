@@ -40,10 +40,27 @@ describe('robots.txt', () => {
     expect(content).toMatch(/^Disallow:\s*\/dashboard\s*$/m)
     expect(content).toMatch(/^Disallow:\s*\/admin\s*$/m)
   })
+
+  // #1411 N2 fix: these three routes (/cancel-deletion/:token, /households/invites/:token,
+  // /household/invite/:token in apps/web/src/App.tsx) are unprotected (no <ProtectedRoute>
+  // wrapper) but carry a one-time token in the path. A crawlable, indexable tokenized URL
+  // (an invite link, a deletion-cancellation link) is exactly the kind of leak robots.txt
+  // exists to prevent, even though the routes aren't auth-gated. (Deliberately not citing
+  // line numbers here -- they drift every time App.tsx is edited.)
+  it('disallows unprotected routes that carry a one-time token in the path', () => {
+    const content = readFileSync(robotsPath, 'utf-8')
+    expect(content).toMatch(/^Disallow:\s*\/cancel-deletion\s*$/m)
+    expect(content).toMatch(/^Disallow:\s*\/households\/\s*$/m)
+    expect(content).toMatch(/^Disallow:\s*\/household\/\s*$/m)
+  })
 })
 
 describe('sitemap.xml', () => {
   const content = readFileSync(sitemapPath, 'utf-8')
+  const robotsContent = readFileSync(robotsPath, 'utf-8')
+  const disallowedPaths = Array.from(robotsContent.matchAll(/^Disallow:\s*(\S+)\s*$/gm)).map(
+    (m) => m[1]
+  )
 
   it('exists and parses as XML with a urlset root', () => {
     expect(existsSync(sitemapPath)).toBe(true)
@@ -70,9 +87,29 @@ describe('sitemap.xml', () => {
     expect(content).not.toMatch(/<priority>/)
   })
 
-  it('contains no authenticated route', () => {
-    expect(content).not.toContain('/dashboard')
+  it('lists at least one Disallow entry to check the sitemap against (guards against an empty/broken robots.txt parse silently no-op-ing the loop below)', () => {
+    expect(disallowedPaths.length).toBeGreaterThan(0)
   })
+
+  // Path-prefix match (mirroring robots.txt's own Disallow semantics), not a raw substring
+  // check against the whole <loc> string: a substring check would false-fail on a
+  // hypothetical future legitimate URL that merely *contains* a disallowed segment later in
+  // its path (e.g. a blog post at /blog/about-households/history would contain the string
+  // "/households/" without actually being under the disallowed /households/ path).
+  const sitemapPaths = Array.from(content.matchAll(/<loc>(.*?)<\/loc>/g)).map(
+    (m) => new URL(m[1]).pathname
+  )
+
+  it.each(disallowedPaths)(
+    'contains no <loc> whose path is disallowed by robots.txt: %s',
+    (disallowedPath) => {
+      const prefix = disallowedPath.endsWith('/') ? disallowedPath : `${disallowedPath}/`
+      const violating = sitemapPaths.filter(
+        (path) => path === disallowedPath || path.startsWith(prefix)
+      )
+      expect(violating, `sitemap contains disallowed path(s): ${violating.join(', ')}`).toHaveLength(0)
+    }
+  )
 })
 
 describe('index.html metadata corrections (#1411)', () => {

@@ -31,7 +31,7 @@ describe('McpHero', () => {
     renderHero()
     expect(
       screen.getByText(
-        /BoostedBudget runs a remote MCP server\. Point Claude, Cursor, or VS Code at one URL, sign in once, and your agent can read across your accounts, transactions, budgets, and portfolio — and change things only after you confirm each change\./
+        /BoostedBudget runs a remote MCP server\. Point Claude or VS Code at one URL, sign in once, and your agent can read across your accounts, transactions, budgets, and portfolio — and change things only after you confirm each change\./
       )
     ).toBeInTheDocument()
   })

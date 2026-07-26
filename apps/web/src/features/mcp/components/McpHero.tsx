@@ -30,9 +30,9 @@ export function McpHero({ allowedOperationsCount }: McpHeroProps) {
       </h1>
 
       <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-        BoostedBudget runs a remote MCP server. Point Claude, Cursor, or VS Code at one
-        URL, sign in once, and your agent can read across your accounts, transactions,
-        budgets, and portfolio — and change things only after you confirm each change.
+        BoostedBudget runs a remote MCP server. Point Claude or VS Code at one URL, sign
+        in once, and your agent can read across your accounts, transactions, budgets,
+        and portfolio — and change things only after you confirm each change.
       </p>
 
       <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
