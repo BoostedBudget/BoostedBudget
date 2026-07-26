@@ -15,6 +15,11 @@ export function FinalCTA() {
   const { openSignUp } = useClerk()
   const trackEvent = useTrackEvent()
 
+  const handleSignUpClick = () => {
+    trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED)
+    openSignUp()
+  }
+
   return (
     <section
       className="final-cta-section relative overflow-hidden bg-gradient-to-br from-blue-600 to-blue-700 py-24 sm:py-32"
@@ -47,7 +52,7 @@ export function FinalCTA() {
         <div className="mt-10">
           <Button
             size="lg"
-            onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
+            onClick={handleSignUpClick}
             className="bg-white px-12 py-7 text-lg font-semibold text-blue-600 shadow-lg shadow-blue-900/20 hover:bg-blue-50 hover:shadow-xl"
           >
             Start Free Today
@@ -58,7 +63,7 @@ export function FinalCTA() {
         <div className="mt-12 flex flex-wrap items-center justify-center gap-8 text-sm text-blue-100">
           <div className="flex items-center gap-2">
             <Calendar className="h-4 w-4" aria-hidden="true" />
-            <span>2-month free trial</span>
+            <span>60-day free trial</span>
           </div>
           <div className="flex items-center gap-2">
             <CreditCard className="h-4 w-4" aria-hidden="true" />

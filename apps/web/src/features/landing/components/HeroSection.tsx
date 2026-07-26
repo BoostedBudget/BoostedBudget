@@ -19,6 +19,11 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
   const { openSignUp } = useClerk()
   const trackEvent = useTrackEvent()
 
+  const handleSignUpClick = () => {
+    trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED)
+    openSignUp()
+  }
+
   const handleScrollToHowItWorks = () => {
     if (onScrollToHowItWorks) {
       onScrollToHowItWorks()
@@ -82,7 +87,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
           <div className="mt-12 flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Button
               size="lg"
-              onClick={() => { trackEvent(ANALYTICS_EVENTS.LANDING_CTA_CLICKED); openSignUp() }}
+              onClick={handleSignUpClick}
               className="w-full bg-blue-600 px-10 py-6 text-lg font-semibold shadow-lg shadow-blue-500/25 hover:bg-blue-500 hover:shadow-blue-500/30 sm:w-auto"
             >
               Start Free Today
@@ -108,7 +113,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
               <span>GDPR compliant</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-emerald-400">2-month</span>
+              <span className="font-semibold text-emerald-400">60-day</span>
               <span>free trial</span>
             </div>
           </div>

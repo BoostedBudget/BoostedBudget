@@ -27,7 +27,7 @@ const steps = [
     icon: Sparkles,
     title: 'Automate',
     description:
-      'Create automation rules that work while you sleep. Get smart suggestions, alerts, and stay on track effortlessly.',
+      'Write rules that run on every new transaction — categorize, tag, flag budget risks, suggest transfers. You define them; they run without you.',
   },
 ]
 
