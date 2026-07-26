@@ -74,7 +74,7 @@ export function McpTranscript({ turns, showsStatusMarkers = false, className }: 
         ))}
       </div>
 
-      <figcaption className="mt-6 text-xs text-muted-foreground">{figcaption}</figcaption>
+      <figcaption className="mt-6 text-xs text-foreground">{figcaption}</figcaption>
     </figure>
   )
 }

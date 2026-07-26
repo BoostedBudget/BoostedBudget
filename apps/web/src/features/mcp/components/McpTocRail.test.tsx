@@ -119,4 +119,19 @@ describe('McpTocRail', () => {
     unmount()
     expect(instance.disconnect).toHaveBeenCalled()
   })
+
+  it('still renders the rail, without active-section highlighting, when IntersectionObserver is unsupported', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    window.IntersectionObserver = undefined as any
+
+    expect(() => renderWithSectionTargets()).not.toThrow()
+    expect(FakeIntersectionObserver.instances).toHaveLength(0)
+
+    const nav = screen.getByRole('navigation', { name: 'On this page' })
+    const links = within(nav).getAllByRole('link')
+    expect(links).toHaveLength(sections.length)
+    links.forEach((link) => {
+      expect(link).not.toHaveAttribute('aria-current')
+    })
+  })
 })

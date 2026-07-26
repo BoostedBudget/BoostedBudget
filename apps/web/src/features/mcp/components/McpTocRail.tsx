@@ -33,6 +33,7 @@ function useActiveSection(sections: McpTocSection[]): string | null {
       .filter((el): el is HTMLElement => el !== null)
 
     if (targets.length === 0) return
+    if (typeof IntersectionObserver === 'undefined') return
 
     const observer = new IntersectionObserver(
       (entries) => {

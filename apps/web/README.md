@@ -60,5 +60,6 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 | `net-worth` | 6 kB | 5 kB | 1 kB |
 | `reports` | 6 kB | 4 kB | 2 kB |
 | `household` | 9 kB | 7.66 kB | 1.34 kB |
+| `mcp` | 13 kB | 10.14 kB | 2.86 kB |
 
 Budgets were significantly tightened in issue #1225 after migrating from Vite 7 (Rollup `manualChunks`) to Vite 8 (Rolldown `codeSplitting.groups`). The new chunk taxonomy splits node_modules more precisely: `tanstack` (~44 kB) and `charts` (~215 kB) are now isolated from the `vendor` catch-all, reducing `vendor` from 700 kB to 357 kB gzip. Two new source-level chunks — `shared` (app-wide utilities/hooks/UI primitives) and `api-client` (generated React Query hooks) — consolidate what would otherwise be dozens of small orphan chunks.

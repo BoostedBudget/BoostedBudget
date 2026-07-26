@@ -369,7 +369,7 @@ export function McpPage() {
                   <p className="font-mono text-sm text-foreground">
                     &ldquo;What&apos;s my dining spend this month, and is it trending up?&rdquo;
                   </p>
-                  <p className="mt-1 text-muted-foreground">
+                  <p className="mt-1 text-foreground">
                     The agent finds the right analytics operations and answers in one message —
                     no dashboard required.
                   </p>
@@ -378,7 +378,7 @@ export function McpPage() {
                   <p className="font-mono text-sm text-foreground">
                     &ldquo;Review my unreviewed transactions.&rdquo;
                   </p>
-                  <p className="mt-1 text-muted-foreground">
+                  <p className="mt-1 text-foreground">
                     The agent pulls your review inbox, flags anything that looks miscategorized,
                     and asks before bulk-approving the rest.
                   </p>
@@ -387,7 +387,7 @@ export function McpPage() {
                   <p className="font-mono text-sm text-foreground">
                     &ldquo;What should I do with my extra cash this month?&rdquo;
                   </p>
-                  <p className="mt-1 text-muted-foreground">
+                  <p className="mt-1 text-foreground">
                     The agent checks your budgets, savings goals, and any pending Boosts
                     transfer suggestions, then explains the options — it won&apos;t move
                     anything without your confirmation.
@@ -397,7 +397,7 @@ export function McpPage() {
                   <p className="font-mono text-sm text-foreground">
                     &ldquo;Save a recipe that summarizes my cash flow every week.&rdquo;
                   </p>
-                  <p className="mt-1 text-muted-foreground">
+                  <p className="mt-1 text-foreground">
                     The agent saves a named, reusable set of read calls you can re-run anytime.
                   </p>
                 </li>
