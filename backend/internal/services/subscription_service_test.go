@@ -52,7 +52,6 @@ func TestGetTierLimits_Household5(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 730, tier.Limits.TransactionHistoryDays, "Household5 should have 730 transaction history days")
-	assert.True(t, tier.Features.AIInsights, "Household5 should have AI insights")
 	assert.True(t, tier.Features.APIAccess, "Household5 should have API access")
 }
 

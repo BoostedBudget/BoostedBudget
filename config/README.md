@@ -47,7 +47,6 @@ tiers:
     limits:
       transaction_history_days: 730  # Unlimited: -1
     features:
-      ai_insights: true
       api_access: true
       priority_support: true
       custom_categories: true

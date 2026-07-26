@@ -17,7 +17,7 @@ func NewAPIConfig(version, environment string) huma.Config {
 	}
 
 	// API description with subscription tier info
-	config.Info.Description = `BoostedBudget API - Global budgeting platform with intelligent automation rules and GDPR compliance.
+	config.Info.Description = `BoostedBudget API - Global budgeting platform with user-defined automation rules and GDPR compliance.
 
 ## Authentication
 
