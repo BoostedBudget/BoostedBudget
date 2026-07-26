@@ -66,7 +66,7 @@ describe('McpPage', () => {
   })
 
   it('does not render a <main> element (App.tsx already provides one)', () => {
-    render(<McpPage />);
+    render(<McpPage />)
     expect(document.querySelector('main')).toBeNull()
   })
 
@@ -83,10 +83,11 @@ describe('McpPage', () => {
     )
   })
 
-  // #1411 B2 fix: Cursor's remote-MCP auto-auth support is unverified (see the Cursor tab
-  // and Limits section below) — the meta description must not promise it unqualified.
-  // `stringContaining('MCP')` above would still pass for the old Cursor-containing
-  // description, so this asserts its absence directly.
+  // #1411 B2 fix, still true after the #1430 genericization of the setup tab: the meta
+  // description names specific verified clients (Claude, VS Code) and must not overclaim
+  // to unnamed others by mentioning Cursor specifically. `stringContaining('MCP')` above
+  // would still pass for the old Cursor-containing description, so this asserts its
+  // absence directly.
   it('does not name Cursor in the meta description (#1411 B2 fix)', () => {
     render(<McpPage />)
     const description = document.querySelector('meta[name="description"]')?.getAttribute('content')

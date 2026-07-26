@@ -88,26 +88,29 @@ test.describe('MCP Page - Unauthenticated', () => {
 
     test('switching client tabs swaps the visible panel', async ({ page }) => {
       const claudeDesktopTab = page.getByRole('tab', { name: 'Claude Desktop' });
-      const cursorTab = page.getByRole('tab', { name: 'Cursor' });
+      // #1430: the former Cursor-specific tab (with its own untested config snippet
+      // and unverified-DCR warning) was genericized into "Cursor & other clients" —
+      // the tab's id/hashSlug stayed 'cursor', so #connect-cursor deep links still work.
+      const otherClientsTab = page.getByRole('tab', { name: 'Cursor & other clients' });
       // Each tab's panel content carries its own accessible `role="region"` — distinct
       // from the panel's role="tabpanel" wrapper — so we can pin exactly which panel is
       // mounted without asserting on marketing copy.
       const claudeDesktopUrlRegion = page.getByRole('region', { name: 'Claude Desktop server URL' });
-      const cursorConfigRegion = page.getByRole('region', { name: 'Cursor configuration' });
+      const otherClientsUrlRegion = page.getByRole('region', { name: 'MCP server URL' });
 
       // Default tab (no #connect-<slug> hash, fresh localStorage) is Claude Desktop.
       await expect(claudeDesktopTab).toHaveAttribute('aria-selected', 'true');
-      await expect(cursorTab).toHaveAttribute('aria-selected', 'false');
+      await expect(otherClientsTab).toHaveAttribute('aria-selected', 'false');
       await expect(claudeDesktopUrlRegion).toBeVisible();
       // Radix TabsContent unmounts inactive panels by default (no forceMount), so the
-      // Cursor panel isn't just visually hidden — it isn't in the DOM at all yet.
-      await expect(cursorConfigRegion).toBeHidden();
+      // other-clients panel isn't just visually hidden — it isn't in the DOM at all yet.
+      await expect(otherClientsUrlRegion).toBeHidden();
 
-      await cursorTab.click();
+      await otherClientsTab.click();
 
-      await expect(cursorTab).toHaveAttribute('aria-selected', 'true');
+      await expect(otherClientsTab).toHaveAttribute('aria-selected', 'true');
       await expect(claudeDesktopTab).toHaveAttribute('aria-selected', 'false');
-      await expect(cursorConfigRegion).toBeVisible();
+      await expect(otherClientsUrlRegion).toBeVisible();
       await expect(claudeDesktopUrlRegion).toBeHidden();
     });
 
