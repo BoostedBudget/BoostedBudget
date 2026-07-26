@@ -167,7 +167,7 @@ function Steps({ children }: { children: React.ReactNode }) {
 
 function WorksWhen({ children }: { children: React.ReactNode }) {
   return (
-    <p className="rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+    <p className="rounded-md border border-border bg-card px-4 py-3 text-sm text-foreground">
       <span className="font-medium text-foreground">You&apos;ll know it worked when: </span>
       {children}
     </p>
