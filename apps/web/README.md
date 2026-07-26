@@ -21,7 +21,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 **Budget policy:**
 - Per-feature chunks are budgeted at their gzipped baseline + 20%.
-- The shared `vendor` chunk's budget has drifted from a clean "baseline + 10%" formula — it's been bumped ad hoc for new dependencies (410→425 kB to accommodate react-router v8) and now sits at ~96% of its 425 kB limit (407.97 kB measured, ~17 kB headroom — see the stamped table below). Treat `vendor` as budget-saturated, not comfortable: a dependency that lands in this chunk is one bump away from failing CI.
+- The shared `vendor` chunk sits at **~99.5% of its 410 kB limit** (407.97 kB measured, ~2 kB headroom — see the stamped table below). Treat `vendor` as budget-saturated, not comfortable: a single new dependency landing in this chunk will fail CI, and it will fail on whichever PR happens to add it rather than the one that used up the room. Raising the limit requires a measured before/after in the PR description — and measure on a clean `bun install`, because a stale `node_modules` can carry duplicate copies of a package and inflate this figure by double digits.
 - Initial budgets were set at the time lazy-loading was introduced (issue #1126); updated to Rolldown baselines in issue #1225.
 
 **If CI fails on bundle size:**
@@ -42,7 +42,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
-| `vendor` | 425 kB | 407.97 kB | 17.03 kB |
+| `vendor` | 410 kB | 407.97 kB | 2.03 kB |
 | `charts` | 230 kB | 222.44 kB | 7.56 kB |
 | `shared` | 40 kB | 35.62 kB | 4.38 kB |
 | `api-client` | 10 kB | 6.86 kB | 3.14 kB |
@@ -71,4 +71,4 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 *Excludes `rolldown-runtime`, `preload-helper`, and `css` — framework/runtime and global-stylesheet budgets, not per-feature or vendor-family chunks. All three sit at ≤34% of their limit as of the same measurement, so they're omitted here as low-risk; they're still enforced in `.size-limit.json`.*
 *The `tanstack` and `rules` rows from earlier revisions of this table no longer correspond to real chunks: the `tanstack` split was reverted in #1288 (folded back into `vendor`), and `rules` was renamed to `boosts` in #1283.*
 
-Budgets were significantly tightened in issue #1225 after migrating from Vite 7 (Rollup `manualChunks`) to Vite 8 (Rolldown `codeSplitting.groups`). The new chunk taxonomy split node_modules more precisely: an isolated `tanstack` chunk (~44 kB) and `charts` (~215 kB) were carved out of the `vendor` catch-all, briefly taking `vendor` down to 357 kB gzip. That reduction didn't stick: the `tanstack` split was reverted in #1288 ("Fix staging blank page — drop Rolldown tanstack chunk split") for chunk-init stability, folding `@tanstack/*` back into `vendor`, and subsequent dependency growth (most recently react-router v8) pushed it further. `vendor` now measures 407.97 kB gzip against a 425 kB budget — see the stamped table above for current, single-source-of-truth numbers; don't reuse the 357 kB figure as a current value. Two new source-level chunks — `shared` (app-wide utilities/hooks/UI primitives) and `api-client` (generated React Query hooks) — consolidate what would otherwise be dozens of small orphan chunks.
+Budgets were significantly tightened in issue #1225 after migrating from Vite 7 (Rollup `manualChunks`) to Vite 8 (Rolldown `codeSplitting.groups`). The new chunk taxonomy split node_modules more precisely: an isolated `tanstack` chunk (~44 kB) and `charts` (~215 kB) were carved out of the `vendor` catch-all, briefly taking `vendor` down to 357 kB gzip. That reduction didn't stick: the `tanstack` split was reverted in #1288 ("Fix staging blank page — drop Rolldown tanstack chunk split") for chunk-init stability, folding `@tanstack/*` back into `vendor`, and subsequent dependency growth pushed it further. `vendor` now measures 407.97 kB gzip against a 410 kB budget — see the stamped table above for current, single-source-of-truth numbers; don't reuse the 357 kB figure as a current value. Two new source-level chunks — `shared` (app-wide utilities/hooks/UI primitives) and `api-client` (generated React Query hooks) — consolidate what would otherwise be dozens of small orphan chunks.
