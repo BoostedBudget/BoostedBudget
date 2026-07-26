@@ -204,6 +204,17 @@ export const ANALYTICS_EVENTS = {
   INVESTMENT_ACTIVITY_TYPE_FILTER_APPLIED: 'investment_activity_type_filter_applied',
   INVESTMENT_DETAIL_DRAWER_OPENED: 'investment_detail_drawer_opened',
 
+  // Issue #1411: public MCP marketing page + landing band
+  // MCP_SETUP_TAB_CHANGED and MCP_CONFIG_COPIED fire with
+  // { client: 'claude_desktop' | 'claude_code' | 'cursor' | 'vscode' } — a fixed
+  // discriminator, never free text and never user data, per the `before_send`
+  // property denylist rule in docs/security/posthog-pii-masking.md.
+  MCP_PAGE_VIEWED: 'mcp_page_viewed',
+  MCP_BAND_CTA_CLICKED: 'mcp_band_cta_clicked',
+  MCP_PAGE_CTA_CLICKED: 'mcp_page_cta_clicked',
+  MCP_SETUP_TAB_CHANGED: 'mcp_setup_tab_changed',
+  MCP_CONFIG_COPIED: 'mcp_config_copied',
+
   // Issue #1215: MCP analytics helper endpoints — analytics views
   ANALYTICS_FINANCIAL_SUMMARY_VIEWED: 'analytics_financial_summary_viewed',
   ANALYTICS_SAVINGS_RATE_VIEWED: 'analytics_savings_rate_viewed',
