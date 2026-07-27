@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { ReadOnlyProvider } from '@/auth/ReadOnlyContext'
 import { BoostBuilder } from './BoostBuilder'
 import type { Boost } from '@boostedbudget/api-client/models'
@@ -25,7 +26,6 @@ import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetSubscriptionTiers } from '@/test/mocks/subscription-api'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
 import { mockUseGetSavingsGoals } from '@/test/mocks/budgets-api'
-import { mockNavigate } from '@/test/mocks/react-router'
 import { mockUseBudgets } from '@/test/mocks/budgets-wrapper'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -69,6 +69,8 @@ const mockUser = {
   updated_at: '2024-01-01T00:00:00Z',
 }
 
+const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
+
 function renderWithProviders(
   ui: React.ReactElement,
   { route = '/boosts/new' } = {}
@@ -82,6 +84,7 @@ function renderWithProviders(
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[route]}>
+        <LocationProbe />
         <Routes>
           <Route path="/boosts/new" element={ui} />
           <Route path="/boosts/:id/edit" element={ui} />
@@ -94,7 +97,7 @@ function renderWithProviders(
 describe('BoostBuilder', () => {
   beforeEach(() => {
     // Clear all mocks
-    mockNavigate.mockClear()
+    resetLocationProbe()
     mockTrackEvent.mockClear()
     mockCreateBoostMutateAsync.mockClear()
     mockUpdateBoostMutateAsync.mockClear()
@@ -347,7 +350,7 @@ describe('BoostBuilder', () => {
       fireEvent.click(saveButton)
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/boosts')
+        expect(locationRef.current.pathname).toBe('/boosts')
       })
     })
 
@@ -414,7 +417,7 @@ describe('BoostBuilder', () => {
       const cancelButton = screen.getByRole('button', { name: /cancel/i })
       fireEvent.click(cancelButton)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/boosts')
+      expect(locationRef.current.pathname).toBe('/boosts')
     })
   })
 

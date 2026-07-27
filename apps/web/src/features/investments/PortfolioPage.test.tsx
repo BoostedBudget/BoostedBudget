@@ -9,6 +9,7 @@ import { render, screen } from '@testing-library/react'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router'
 import type { ReactNode } from 'react'
 import { PortfolioPage } from './PortfolioPage'
 import {
@@ -26,7 +27,13 @@ import type { GetPortfolioHistoryOutputBody } from '@boostedbudget/api-client/mo
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    return (
+      <QueryClientProvider client={queryClient}>
+        {/* PlaidLinkButton (rendered in the empty-state CTA) calls useNavigate()
+            unconditionally, so it needs a real Router ancestor. */}
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    )
   }
 }
 
