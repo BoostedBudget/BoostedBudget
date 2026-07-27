@@ -202,6 +202,22 @@ func (m *MockProfileRepoForWorker) ExpireTrialIfNoOverride(ctx context.Context, 
 	return false, nil
 }
 
+// ClaimForDeletion, ClaimRetentionNotice30dSent, ClaimRetentionNotice7dSent (Issue #1413 Codex
+// review round 2) are not exercised by these deletion-worker tests (ExecuteDeletion itself is
+// mocked at the DeletionService level here, not ProfileRepository); stubbed to satisfy the
+// widened ProfileRepository interface.
+func (m *MockProfileRepoForWorker) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
 }

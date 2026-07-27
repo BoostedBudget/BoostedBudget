@@ -264,11 +264,36 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// comp. So this guard is deliberately conditional on DeletionRequestedAt == nil — do NOT
 	// "simplify" it into an unconditional comp check. A blanket guard would illegally strand
 	// a comped user who has explicitly asked to be deleted, which is a GDPR compliance
-	// problem, not just a bug. This closes the race the worker-level guards in
-	// retention_cleanup_check.go cannot: an admin comp granted after the retention worker
-	// selected its candidates but before this method runs.
+	// problem, not just a bug.
+	//
+	// This read-only check is kept as a cheap belt-and-braces short-circuit against the
+	// GetUserByID snapshot above (avoids an extra round-trip in the common already-comped
+	// case), NOT the source of correctness — it cannot, by itself, protect the irreversible
+	// work below from a comp granted in the window between this check and that work actually
+	// running. The real enforcement is ClaimForDeletion just below: a conditional UPDATE
+	// evaluated against committed state at the moment of the claim (Issue #1413 Critical
+	// finding C2, Codex review round 2).
 	if user.HasActiveManualOverride() && user.DeletionRequestedAt == nil {
 		slog.Default().Info("skipping auto-deletion for actively comped user",
+			"user_id", userID)
+		return nil
+	}
+
+	// Issue #1413 Critical finding C2 (Codex review round 2): claim atomically BEFORE any
+	// irreversible work. Ordering matters — Paddle/Plaid cleanup below must still run before
+	// DeleteUserCascade (their IDs must be readable), so the claim has to come first as its
+	// own step, or an admin comp granted after Paddle/Plaid cleanup already ran would still be
+	// overtaken by the time DeleteUserCascade's own guard could catch it.
+	claimed, err := s.profileRepo.ClaimForDeletion(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to claim user for deletion: %w", err)
+	}
+	if !claimed {
+		// An admin granted or extended a comp between the GetUserByID read above and this
+		// claim, and the user has no outstanding GDPR deletion request of their own to
+		// override it. This is a legitimate, expected outcome — not an error. The daily
+		// retention job will simply not re-select this user while the comp remains live.
+		slog.Default().Info("skipping auto-deletion — claim not granted (comped since last read)",
 			"user_id", userID)
 		return nil
 	}

@@ -35,10 +35,17 @@ type RetentionProfileRepository interface {
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
 	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed and are not deleted/pending.
 	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
-	// SetRetentionNotice30dSent marks the 30-day notice as sent for a user.
-	SetRetentionNotice30dSent(ctx context.Context, userID string) error
-	// SetRetentionNotice7dSent marks the 7-day notice as sent for a user.
-	SetRetentionNotice7dSent(ctx context.Context, userID string) error
+	// ClaimRetentionNotice30dSent atomically stamps the 30-day notice as sent, but only if it
+	// is still unsent AND the user carries no manual_tier_override at all (live or lapsed) —
+	// the same rule GetUsersNeedingRetention30dNotice's own query enforces. Returns
+	// (true, nil) if the claim succeeded (safe to send the notice email), (false, nil) if a
+	// comp was granted since the candidate query ran, or a concurrent worker/retry already
+	// claimed this notice. Issue #1413 Medium finding M9 (Codex review round 2): replaces the
+	// old unconditional SetRetentionNotice30dSent — send now follows a successful claim,
+	// closing both the comp race and the pre-existing double-send window.
+	ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error)
+	// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling.
+	ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -176,15 +183,35 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 	const subject = "Your BoostedBudget data will be deleted in 30 days"
 	const body = "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access."
 
-	var sentCount, errorCount int
+	var sentCount, errorCount, skippedCount int
 	for _, user := range users {
 		// #1413: belt-and-braces — a comped user grants access and must not be warned about,
-		// or slated for, deletion. Task 4 additionally excludes comped users at the SQL level;
-		// this worker-level guard protects against a stale candidate list when a comp lands
-		// between the query and this loop.
+		// or slated for, deletion. This is a cheap short-circuit against the candidate list
+		// snapshot (avoids an extra DB round-trip in the common already-comped case), NOT the
+		// source of correctness: it only catches a LIVE comp visible on this snapshot, and
+		// cannot by itself protect against a comp granted (or a lapsed-but-uncleared override)
+		// between the query and this loop. The real enforcement is the claim just below.
 		if user.HasActiveManualOverride() {
 			w.logger.Info("skipping 30d retention notice for actively comped user",
 				"job_id", jobID, "user_id", user.ID)
+			continue
+		}
+
+		// Issue #1413 Medium finding M9 (Codex review round 2): claim the notice atomically
+		// BEFORE sending — the previous order (send, then mark) left a comp-race and a
+		// double-send window open (two workers, or a retry, could both send). A lost claim is
+		// a legitimate, expected outcome, not an error.
+		claimed, claimErr := w.profileRepo.ClaimRetentionNotice30dSent(ctx, user.ID)
+		if claimErr != nil {
+			w.logger.Warn("failed to claim 30d retention notice",
+				"job_id", jobID, "user_id", user.ID, "error", claimErr)
+			errorCount++
+			continue
+		}
+		if !claimed {
+			w.logger.Info("skipping 30d retention notice — claim not granted (comped since query, or already sent)",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
 			continue
 		}
 
@@ -195,18 +222,11 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 			continue
 		}
 
-		if markErr := w.profileRepo.SetRetentionNotice30dSent(ctx, user.ID); markErr != nil {
-			w.logger.Warn("failed to mark 30d retention notice sent",
-				"job_id", jobID, "user_id", user.ID, "error", markErr)
-			errorCount++
-			continue
-		}
-
 		sentCount++
 	}
 
 	w.logger.Info("30d retention notices processed",
-		"job_id", jobID, "sent", sentCount, "errors", errorCount)
+		"job_id", jobID, "sent", sentCount, "errors", errorCount, "skipped", skippedCount)
 	return nil
 }
 
@@ -227,12 +247,28 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 	const subject = "Final notice: BoostedBudget data deletion in 7 days"
 	const body = "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data."
 
-	var sentCount, errorCount int
+	var sentCount, errorCount, skippedCount int
 	for _, user := range users {
 		// #1413: belt-and-braces — see send30dNotices for rationale.
 		if user.HasActiveManualOverride() {
 			w.logger.Info("skipping 7d retention notice for actively comped user",
 				"job_id", jobID, "user_id", user.ID)
+			continue
+		}
+
+		// Issue #1413 Medium finding M9 (Codex review round 2) — see send30dNotices for the
+		// full rationale: claim atomically before sending.
+		claimed, claimErr := w.profileRepo.ClaimRetentionNotice7dSent(ctx, user.ID)
+		if claimErr != nil {
+			w.logger.Warn("failed to claim 7d retention notice",
+				"job_id", jobID, "user_id", user.ID, "error", claimErr)
+			errorCount++
+			continue
+		}
+		if !claimed {
+			w.logger.Info("skipping 7d retention notice — claim not granted (comped since query, or already sent)",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
 			continue
 		}
 
@@ -243,18 +279,11 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 			continue
 		}
 
-		if markErr := w.profileRepo.SetRetentionNotice7dSent(ctx, user.ID); markErr != nil {
-			w.logger.Warn("failed to mark 7d retention notice sent",
-				"job_id", jobID, "user_id", user.ID, "error", markErr)
-			errorCount++
-			continue
-		}
-
 		sentCount++
 	}
 
 	w.logger.Info("7d retention notices processed",
-		"job_id", jobID, "sent", sentCount, "errors", errorCount)
+		"job_id", jobID, "sent", sentCount, "errors", errorCount, "skipped", skippedCount)
 	return nil
 }
 

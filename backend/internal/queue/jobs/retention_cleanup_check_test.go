@@ -47,14 +47,14 @@ func (m *MockRetentionProfileRepository) GetUsersWithExpiredRetention(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) SetRetentionNotice30dSent(ctx context.Context, userID string) error {
+func (m *MockRetentionProfileRepository) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) SetRetentionNotice7dSent(ctx context.Context, userID string) error {
+func (m *MockRetentionProfileRepository) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
 // MockRetentionDeletionService mocks the RetentionDeletionService interface.
@@ -122,8 +122,8 @@ func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
 	mockEmail := new(MockRetentionEmailService)
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
-	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-1").Return(nil)
-	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-2").Return(nil)
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-1").Return(true, nil)
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-2").Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
@@ -158,7 +158,7 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
-	mockRepo.On("SetRetentionNotice7dSent", ctx, "user-3").Return(nil)
+	mockRepo.On("ClaimRetentionNotice7dSent", ctx, "user-3").Return(true, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
 	const subject7 = "Final notice: BoostedBudget data deletion in 7 days"
@@ -273,7 +273,7 @@ func TestRetentionCleanupCheck_EmailServiceNil_SkipsSending(t *testing.T) {
 	mockDeletion := new(MockRetentionDeletionService)
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
-	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-1").Return(nil)
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-1").Return(true, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
@@ -350,7 +350,7 @@ func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
 }
 
 // TestRetentionCleanupCheck_CompedUser_No30dNotice proves a comped user does not receive the
-// 30-day pre-deletion warning. SetRetentionNotice30dSent is deliberately left unstubbed.
+// 30-day pre-deletion warning. ClaimRetentionNotice30dSent is deliberately left unstubbed.
 func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 	ctx := context.Background()
 
@@ -380,11 +380,11 @@ func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 
 	require.NoError(t, err)
 	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped30@example.com", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "SetRetentionNotice30dSent", mock.Anything, "user-comped-30d")
+	mockRepo.AssertNotCalled(t, "ClaimRetentionNotice30dSent", mock.Anything, "user-comped-30d")
 }
 
 // TestRetentionCleanupCheck_CompedUser_No7dNotice proves a comped user does not receive the
-// 7-day final warning. SetRetentionNotice7dSent is deliberately left unstubbed.
+// 7-day final warning. ClaimRetentionNotice7dSent is deliberately left unstubbed.
 func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	ctx := context.Background()
 
@@ -414,7 +414,7 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 
 	require.NoError(t, err)
 	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped7@example.com", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "SetRetentionNotice7dSent", mock.Anything, "user-comped-7d")
+	mockRepo.AssertNotCalled(t, "ClaimRetentionNotice7dSent", mock.Anything, "user-comped-7d")
 }
 
 // TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally proves a user whose manual override
@@ -449,6 +449,112 @@ func TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally(t *testing.T) {
 
 	require.NoError(t, err)
 	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-expired-override")
+}
+
+// ─── Issue #1413 Medium finding M9 (Codex review round 2): ClaimRetentionNotice30dSent/7dSent
+// close the comp race AND the double-send window ──
+//
+// The belt-and-braces HasActiveManualOverride() check above only catches a LIVE comp visible
+// on the candidate-list snapshot. These tests use a user with NO override visible on that
+// snapshot (so the short-circuit does not fire), forcing execution through to the claim —
+// proving the claim itself, not the earlier snapshot check, is what gates the email send. A
+// lost claim represents either a comp granted since the query ran, a lapsed-but-uncleared
+// override (which the belt-and-braces check cannot see), or a concurrent worker/retry that
+// already claimed the notice.
+
+// TestRetentionCleanupCheck_30dClaimLost_NoEmailSent proves the race is actually closed: even
+// though the snapshot looked eligible, a lost claim must prevent the email send entirely.
+// SendRetentionNoticeEmail is deliberately left unstubbed — an unstubbed testify mock call
+// panics, a stronger proof than AssertNotCalled alone.
+func TestRetentionCleanupCheck_30dClaimLost_NoEmailSent(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(25 * 24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-race-30d", Email: "race30@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-race-30d").Return(false, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// SendRetentionNoticeEmail intentionally left unstubbed.
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a lost claim is a legitimate skip, not a job failure")
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "race30@example.com", mock.Anything, mock.Anything)
+}
+
+// TestRetentionCleanupCheck_7dClaimLost_NoEmailSent mirrors the 30-day test for the 7-day
+// notice.
+func TestRetentionCleanupCheck_7dClaimLost_NoEmailSent(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(5 * 24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-race-7d", Email: "race7@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
+	mockRepo.On("ClaimRetentionNotice7dSent", ctx, "user-race-7d").Return(false, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// SendRetentionNoticeEmail intentionally left unstubbed.
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a lost claim is a legitimate skip, not a job failure")
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "race7@example.com", mock.Anything, mock.Anything)
+}
+
+// TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing proves a claim-level error (as
+// opposed to a lost claim) is logged and counted, but does not stop the loop from processing
+// remaining candidates or fail the overall job (notices are best-effort, like sends).
+func TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(25 * 24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-claimerr", Email: "claimerr@example.com", RetentionExpiresAt: &retentionExpiresAt},
+		{ID: "user-claimok", Email: "claimok@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-claimerr").Return(false, errors.New("db unavailable"))
+	mockRepo.On("ClaimRetentionNotice30dSent", ctx, "user-claimok").Return(true, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	const subject30 = "Your BoostedBudget data will be deleted in 30 days"
+	mockEmail.On("SendRetentionNoticeEmail", ctx, "claimok@example.com", subject30, mock.AnythingOfType("string")).Return(nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a per-user claim error does not fail the overall job")
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "claimerr@example.com", mock.Anything, mock.Anything)
+	mockEmail.AssertCalled(t, "SendRetentionNoticeEmail", ctx, "claimok@example.com", subject30, mock.AnythingOfType("string"))
 }
 
 // TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths tests that 0 months uses default (6).

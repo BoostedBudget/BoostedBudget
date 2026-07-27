@@ -165,6 +165,40 @@ type ProfileRepository interface {
 	// read-only check cannot, by itself, protect the write against a comp granted in that window).
 	ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error)
 
+	// ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
+	// eligible for ExecuteDeletion's irreversible external cleanup (Paddle cancel, Plaid
+	// disconnect) and cascade delete: not already deleted, and either carrying no currently-
+	// active manual tier override OR having an outstanding GDPR deletion request of their own
+	// (deletion_requested_at IS NOT NULL — the ratified rule that a user's own deletion request
+	// beats an admin comp). Returns (true, nil) if the claim succeeded (safe to proceed with
+	// the destructive work), (false, nil) if an admin granted/extended a comp between the
+	// caller's earlier GetUserByID read and this call, with no outstanding GDPR request to
+	// override it — a legitimate skip, not an error; the daily retention job will simply not
+	// re-select this user while the comp is live. Issue #1413 Critical finding C2 (Codex review
+	// round 2): the destructive work must not run on a decision made off a stale snapshot.
+	//
+	// Ordering note for callers: this claim must run BEFORE any external cleanup, not folded
+	// into DeleteUserCascade's own final write — Plaid/Paddle IDs must still be readable when
+	// the external calls run, so the claim has to come first as its own step, or the external
+	// work would already be irreversibly done by the time a later guard could catch a comp
+	// granted in the race window.
+	ClaimForDeletion(ctx context.Context, userID string) (bool, error)
+
+	// ClaimRetentionNotice30dSent atomically stamps retention_notice_30d_sent_at as sent, but
+	// only if it is still unsent AND the user carries no manual_tier_override at all (live or
+	// lapsed) — reusing noManualOverrideAtAllPredicate, the same rule
+	// GetUsersNeedingRetention30dNotice's own query already enforces (Issue #1413 Critical
+	// finding C1). Returns (true, nil) if the claim succeeded (safe to send the notice email
+	// now), (false, nil) if a comp was granted since the candidate query ran, or a concurrent
+	// worker/retry already claimed this notice. Issue #1413 Medium finding M9 (Codex review
+	// round 2): closes both the comp race and the pre-existing double-send window (two workers,
+	// or a retry, could previously both send).
+	ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error)
+
+	// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling. See that
+	// method's doc for the full rationale.
+	ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error)
+
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
 	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
@@ -875,6 +909,40 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	return nil
 }
 
+// claimForDeletionPredicate expresses the ratified product rule that a user's own GDPR
+// deletion request beats an admin comp: the claim succeeds when EITHER there is no
+// currently-active manual tier override, OR the user has an outstanding deletion request of
+// their own. It reuses noActiveManualOverridePredicate unmodified — wrapping it in
+// "TRUE <fragment>" converts its leading "AND NOT (...)" into a standalone boolean usable
+// inside this OR — so there remains exactly one SQL expression of "is there a currently-active
+// override" (a parity test guards that expression against domain.User.HasActiveManualOverride()).
+// Issue #1413 Critical finding C2, Codex review round 2.
+const claimForDeletionPredicate = `
+	  AND (
+	    deletion_requested_at IS NOT NULL
+	    OR (TRUE` + noActiveManualOverridePredicate + `)
+	  )
+`
+
+// ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
+// eligible for ExecuteDeletion's irreversible work. See the ProfileRepository interface doc for
+// the full rationale and ordering requirement (Issue #1413 Critical finding C2, Codex review
+// round 2). This is a self-assigning no-op write (updated_at only) purely to obtain an atomic,
+// row-level check via a single UPDATE ... WHERE statement, mirroring
+// ClaimPlaidDisconnectIfPastDue's shape — without adding a new "claimed" column.
+func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET updated_at = NOW()
+		WHERE id = $1 AND is_deleted = FALSE
+	`+claimForDeletionPredicate,
+		userID)
+	if err != nil {
+		return false, fmt.Errorf("ClaimForDeletion: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
 // UpdateTrialStatus updates trial-related fields for a user
 // Issue #679: Trial service and auto-grant logic
 func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
@@ -1077,6 +1145,40 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+// ClaimRetentionNotice30dSent atomically stamps retention_notice_30d_sent_at as sent, but only
+// if it is still unsent AND the user carries no manual_tier_override at all (live or lapsed —
+// noManualOverrideAtAllPredicate, the same rule GetUsersNeedingRetention30dNotice's own query
+// enforces). Returns (true, nil) if the claim succeeded (safe to send the notice email now),
+// (false, nil) if a comp was granted since the candidate query ran, or a concurrent
+// worker/retry already claimed this notice. Issue #1413 Medium finding M9, Codex review round 2.
+func (r *profileRepository) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_notice_30d_sent_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND is_deleted = FALSE AND retention_notice_30d_sent_at IS NULL
+	`+noManualOverrideAtAllPredicate,
+		userID)
+	if err != nil {
+		return false, fmt.Errorf("ClaimRetentionNotice30dSent: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling. See that method's
+// doc for the full rationale.
+func (r *profileRepository) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_notice_7d_sent_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND is_deleted = FALSE AND retention_notice_7d_sent_at IS NULL
+	`+noManualOverrideAtAllPredicate,
+		userID)
+	if err != nil {
+		return false, fmt.Errorf("ClaimRetentionNotice7dSent: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
 }
 
 // noActiveManualOverridePredicate excludes users with a currently-active admin manual tier
