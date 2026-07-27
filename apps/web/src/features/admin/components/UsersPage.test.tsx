@@ -239,6 +239,125 @@ describe('UsersPage', () => {
 
       expect(screen.getByText('Expired')).toBeInTheDocument()
     })
+
+    it('should NOT show an expired override tier as the effective tier (falls back to base tier)', () => {
+      // Issue #1413 Fix 1: an expired comp must not still read as the user's tier — the
+      // "Override Status" column already (correctly) says "Expired" right next to it.
+      const usersWithExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: {
+          ...mockListResponse,
+          users: usersWithExpiredOverride,
+          total_count: 1,
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // Falls back to the base subscription_tier, not the expired 'premium' override.
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+    })
+  })
+
+  describe('Comped chip (Fix 2)', () => {
+    it('renders a "Comped" chip when an override is live', () => {
+      const usersWithLiveOverride = [
+        {
+          ...mockUsers[1],
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithLiveOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const chip = screen.getByText('Comped')
+      expect(chip).toBeInTheDocument()
+      // Fix 2: state must not be conveyed by colour alone.
+      expect(chip).toHaveAttribute('aria-label', 'Effective status: active (manual override)')
+    })
+
+    it('does not render a "Comped" chip when the override has expired', () => {
+      const usersWithExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithExpiredOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+    })
+
+    it('does not render a "Comped" chip when there is no override', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: [mockUsers[0]], total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Status column regression', () => {
+    it('still renders the raw subscription_status text', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // mockUsers[0] is 'active', mockUsers[1] is 'trial' — both raw, unmodified.
+      expect(screen.getByText('active')).toBeInTheDocument()
+      expect(screen.getByText('trial')).toBeInTheDocument()
+    })
+
+    it('still sorts on the subscription_status column id', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Status' }))
+
+      expect(mockUseListAdminUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort_by: 'subscription_status', sort_dir: 'asc' })
+      )
+    })
   })
 
   describe('override button', () => {

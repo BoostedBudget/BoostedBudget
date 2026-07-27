@@ -10,6 +10,7 @@ import { useState, useEffect } from 'react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useListAdminUsers, useGetAdminUserDetail } from '@boostedbudget/api-client/endpoints/admin/admin'
+import type { AdminUserListItem } from '@boostedbudget/api-client/models'
 import {
   Search,
   Users,
@@ -28,6 +29,8 @@ import { UserDetailModal } from './UserDetailModal'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import { DataTable, TablePagination, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef } from '@/shared/components/DataTable'
+import { getSubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
+import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -62,32 +65,25 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   return 'secondary'
 }
 
-const statusBadgeVariant = (status: string): BadgeProps['variant'] => {
-  if (status === 'active') return 'success'
-  if (status === 'trial' || status === 'trialing') return 'info'
-  if (status === 'past_due') return 'destructive'
-  return 'secondary'
-}
+// The backend will eventually add a server-computed `effective_status` to AdminUserListItem
+// (mirroring domain.User.ComputeEffectiveStatus — see backend/internal/domain/user.go),
+// which forces 'active' whenever a manual override is currently in effect. Typed here as an
+// intersection on top of the generated shape (not an edit to the generated model) so this
+// keeps compiling whether or not that field has landed yet — same defensive-adapter pattern
+// as subscriptionPresentation.ts's `UserWithCompFields`.
+type AdminUserWithEffectiveStatus = AdminUserListItem & { effective_status?: string }
 
-interface OverrideStatus {
-  label: string
-  variant: string
-}
-
-function getOverrideStatus(
-  manualTierOverride: string | null | undefined,
-  manualTierEndsAt: string | null | undefined
-): OverrideStatus | null {
-  if (!manualTierOverride) return null
-  if (!manualTierEndsAt) return { label: 'Permanent', variant: 'permanent' }
-
-  const expiresAt = new Date(manualTierEndsAt)
-  const now = new Date()
-
-  if (expiresAt < now) return { label: 'Expired', variant: 'expired' }
-
-  const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
-  return { label: `Expires in ${daysLeft}d`, variant: 'expiring' }
+/**
+ * Whether a manual tier override is currently live for this row. A single source of truth
+ * shared by the Tier column and the Status column's "Comped" chip — the original bug was
+ * exactly these two cells disagreeing about override liveness, so they must derive it the
+ * same way. Prefers the server-computed `effective_status` when present; falls back to the
+ * local `isOverrideActive` liveness check otherwise.
+ */
+function hasLiveOverride(user: AdminUserWithEffectiveStatus): boolean {
+  if (!user.manual_tier_override) return false
+  if (user.effective_status !== undefined) return user.effective_status === 'active'
+  return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at)
 }
 
 const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
@@ -174,7 +170,11 @@ export function UsersPage() {
       minSize: 90,
       maxSize: 140,
       render: (user) => {
-        const effectiveTier = user.manual_tier_override ?? user.subscription_tier
+        // An expired override must NOT be shown as the effective tier — it falls back to the
+        // raw subscription_tier, same as the backend's ComputeEffectiveTier (Issue #1413).
+        const effectiveTier = hasLiveOverride(user)
+          ? (user.manual_tier_override as string)
+          : user.subscription_tier
         return (
           <Badge variant={tierBadgeVariant(effectiveTier)}>
             {TIER_DISPLAY[effectiveTier] ?? effectiveTier}
@@ -189,12 +189,28 @@ export function UsersPage() {
       defaultSize: 110,
       minSize: 90,
       maxSize: 140,
-      render: (user) => (
-        <Badge variant={statusBadgeVariant(user.subscription_status)} className="capitalize">
-          {STATUS_ICON[user.subscription_status]}
-          {user.subscription_status}
-        </Badge>
-      ),
+      render: (user) => {
+        const presentation = getSubscriptionPresentation({ status: user.subscription_status })
+        const comped = hasLiveOverride(user)
+        return (
+          <div className="flex items-center gap-1.5">
+            <Badge variant={presentation.badgeVariant} className="capitalize">
+              {STATUS_ICON[user.subscription_status]}
+              {user.subscription_status}
+            </Badge>
+            {comped && (
+              <Badge
+                variant="info"
+                size="sm"
+                title="Effective status: active (manual override)"
+                aria-label="Effective status: active (manual override)"
+              >
+                Comped
+              </Badge>
+            )}
+          </div>
+        )
+      },
     },
     {
       id: 'override_status',
