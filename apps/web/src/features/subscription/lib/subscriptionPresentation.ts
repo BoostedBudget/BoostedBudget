@@ -186,6 +186,7 @@ export function presentationFromSubscription(
   return getSubscriptionPresentation({
     status: subscription.status,
     isComped: subscription.is_comped,
+    compEndsAt: subscription.comp_ends_at,
     trialDaysRemaining: subscription.trial_days_remaining,
   })
 }
