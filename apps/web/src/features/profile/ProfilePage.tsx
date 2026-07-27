@@ -16,6 +16,7 @@ const CustomCategoryManager = lazy(() =>
 )
 import { useIsAdmin, useAdminMode, AdminSettingsSection } from '@/features/admin'
 import { useHousehold, HouseholdTab } from '@/features/household'
+import { presentationFromUser } from '../subscription/lib/subscriptionPresentation'
 import { useRegions } from '../../shared/hooks/useRegions'
 import { useTabState, useCopyToClipboard } from '../../shared/hooks'
 import { abbreviateUUID } from '../../shared/utils'
@@ -204,8 +205,7 @@ export function ProfilePage({ onPrivacySettingsChange }: ProfilePageProps) {
             <h2 className="text-2xl font-semibold text-foreground mt-0 mb-6 border-b-2 border-muted pb-2">Subscription</h2>
             <SubscriptionCard
               tier={user.effective_tier ?? user.subscription_tier}
-              status={user.subscription_status}
-              trialDaysRemaining={user.trial_days_remaining}
+              presentation={presentationFromUser(user)}
               seatUsage={seatUsage}
             />
           </Card>
