@@ -2521,3 +2521,22 @@ func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
 	mockHHRepo.AssertExpectations(t)
 	require.NoError(t, pool.ExpectationsWereMet(), "no transaction/Exec should occur for a non-owner")
 }
+
+// TestSyncClerkMetadata_ReReadFailure_NoClerkCall pins Issue #1413 Task 9 Part B's simplified
+// syncClerkMetadata: the fallback-to-raw-tier/status branch was unreachable dead code (clerkUserID
+// stayed "" whenever the re-read failed, so the function always returned before using the
+// fallback scratch value) and has been removed along with the tier/status parameters. This test
+// proves the ACTUAL (and now honestly-documented) behavior survives the simplification: when the
+// post-commit re-read fails, the sync attempt is abandoned entirely and UpdateUserMetadata is
+// never called.
+func TestSyncClerkMetadata_ReReadFailure_NoClerkCall(t *testing.T) {
+	worker, _, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockProfileRepo.On("GetUserByID", ctx, "user-reread-fail").Return(nil, errors.New("db unavailable"))
+
+	worker.syncClerkMetadata(ctx, "user-reread-fail")
+
+	mockClerk.AssertNotCalled(t, "UpdateUserMetadata")
+	mockProfileRepo.AssertExpectations(t)
+}

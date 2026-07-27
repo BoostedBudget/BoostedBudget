@@ -196,38 +196,33 @@ func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, para
 // stringPtr returns a pointer to a string value.
 func stringPtr(s string) *string { return &s }
 
-// syncClerkMetadata updates a user's Clerk public metadata with their current tier and status.
-// Logs and swallows errors so Clerk failures don't abort webhook processing.
+// syncClerkMetadata updates a user's Clerk public metadata with their current EFFECTIVE tier and
+// status. Logs and swallows errors so Clerk failures don't abort webhook processing.
 //
-// Re-reads the user AFTER the caller's UpdateSubscriptionFromPaddle write commits, so the row
-// is fresh, and builds the payload from ClerkPublicMetadata() — the EFFECTIVE tier/status —
-// rather than the raw tier/status this webhook just wrote. This matters because a comped user
-// (active manual_tier_override) must not have their comp clobbered by a Paddle webhook's raw
-// values (Issue #1413 Defect 3). The raw tier/status parameters are kept as the fallback for
-// the rare case where this re-read itself fails.
-func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID, tier, status string) {
+// Re-reads the user AFTER the caller's UpdateSubscriptionFromPaddle write commits, so the row is
+// fresh, and builds the payload from ClerkPublicMetadata() — the EFFECTIVE tier/status —
+// computed from that fresh row, rather than from whatever raw values this webhook just wrote.
+// This matters because a comped user (active manual_tier_override) must not have their comp
+// clobbered by a Paddle webhook's raw values (Issue #1413 Defect 3).
+//
+// If the re-read fails, the sync attempt is abandoned for this call: without a fresh row we know
+// neither the user's clerk_user_id nor their current effective tier/status, so there is nothing
+// safe to sync. The next webhook or sync opportunity retries.
+func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID string) {
 	if w.clerkService == nil {
 		return
 	}
-	// Default to the raw values this webhook is trying to write; overwritten below if the
-	// post-commit re-read succeeds. This is the fallback for a re-read failure — we don't
-	// skip the sync attempt entirely just because the fresh read didn't come back.
-	scratch := &domain.User{SubscriptionTier: tier, SubscriptionStatus: status}
-	clerkUserID := ""
 
-	if fresh, err := w.profileRepo.GetUserByID(ctx, userID); err != nil {
-		w.logger.Error("failed to get user for Clerk sync; falling back to raw tier/status", "user_id", userID, "error", err)
-	} else {
-		scratch = fresh
-		clerkUserID = fresh.ClerkUserID
+	fresh, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		w.logger.Error("failed to get user for Clerk sync; skipping sync", "user_id", userID, "error", err)
+		return
 	}
-
-	if clerkUserID == "" {
-		// Without a successful re-read we don't know which Clerk user to sync to.
+	if fresh.ClerkUserID == "" {
 		return
 	}
 
-	if err := w.clerkService.UpdateUserMetadata(ctx, clerkUserID, scratch.ClerkPublicMetadata()); err != nil {
+	if err := w.clerkService.UpdateUserMetadata(ctx, fresh.ClerkUserID, fresh.ClerkPublicMetadata()); err != nil {
 		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
 	}
 }
@@ -588,7 +583,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
 	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
@@ -662,7 +657,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 			w.logger.Warn("failed to clear past_due_started_at on activation", "user_id", userID, "error", clearErr)
 		}
 	}
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
 	// tier write above has already landed. Logged, never propagated — see
@@ -714,7 +709,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	}
 
 	// Issues #747 #748: Sync Clerk metadata on subscription updates
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Clear retention clock if the updated status is non-read-only (e.g., user resubscribed)
 	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() && status != "" {
@@ -787,7 +782,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	}
 
 	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
-	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, "cancelled")
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion.
 	// #1413: skipped for comped users — see guard above.
@@ -861,7 +856,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		actionLabel:        stringPtr("Update Payment"),
 		interactionPattern: "action_required",
 	})
-	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
+	w.syncClerkMetadata(ctx, userID)
 
 	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — past_due
 	// is a read-only status, so grace is moot (members already fall back to their own
@@ -910,7 +905,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionTrialing(ctx context.Cont
 		message:            "Your BoostedBudget trial is now active. Enjoy full access during your trial period!",
 		interactionPattern: "informational",
 	})
-	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing))
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Clear retention clock — trialing is an active state, user should not be auto-deleted
 	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
@@ -981,10 +976,7 @@ func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.
 		interactionPattern: "action_required",
 	})
 
-	user, err := w.profileRepo.GetUserByID(ctx, txn.UserID)
-	if err == nil {
-		w.syncClerkMetadata(ctx, txn.UserID, user.SubscriptionTier, user.SubscriptionStatus)
-	}
+	w.syncClerkMetadata(ctx, txn.UserID)
 
 	if w.analytics != nil {
 		w.analytics.Capture(txn.UserID, phclient.EventPaymentFailed, map[string]interface{}{
