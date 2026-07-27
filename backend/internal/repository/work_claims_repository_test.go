@@ -107,6 +107,26 @@ func TestWorkClaimsRepository_Claim_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestWorkClaimsRepository_Claim_RejectsNonPositiveLease covers a bug an
+// adversarial review surfaced: a zero or negative lease.Seconds() would make
+// make_interval produce a zero/negative interval, so the freshly "claimed" row
+// would already be expired — letting a caller re-claim (and re-run destructive
+// work) on every subsequent call. Claim must reject this before touching the DB.
+func TestWorkClaimsRepository_Claim_RejectsNonPositiveLease(t *testing.T) {
+	for _, lease := range []time.Duration{0, -time.Second, -time.Hour} {
+		mock, repo := setupWorkClaimsMockDB(t)
+
+		ctx := context.Background()
+		claimed, err := repo.Claim(ctx, ResourceTypeUser, "user-1", ActionAccountDeletion, lease)
+
+		assert.Error(t, err, "lease=%s must be rejected", lease)
+		assert.False(t, claimed)
+		// No SQL should have been attempted at all.
+		assert.NoError(t, mock.ExpectationsWereMet())
+		mock.Close()
+	}
+}
+
 // --- Complete ---
 
 func TestWorkClaimsRepository_Complete_Success(t *testing.T) {
@@ -132,6 +152,25 @@ func TestWorkClaimsRepository_Complete_Error(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE work_claims`)).
 		WithArgs(ResourceTypeUser, "user-1", ActionRetentionNotice30d).
 		WillReturnError(errors.New("db error"))
+
+	err := repo.Complete(ctx, ResourceTypeUser, "user-1", ActionRetentionNotice30d)
+
+	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkClaimsRepository_Complete_NotFound covers the not-found signal: Complete
+// on a tuple with no matching row (e.g. a mismatched action from a typo) must
+// return an error rather than silently succeeding, since Complete is only ever
+// expected to run right after a successful Claim.
+func TestWorkClaimsRepository_Complete_NotFound(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE work_claims`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionRetentionNotice30d).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.Complete(ctx, ResourceTypeUser, "user-1", ActionRetentionNotice30d)
 
@@ -168,5 +207,27 @@ func TestWorkClaimsRepository_Release_Error(t *testing.T) {
 	err := repo.Release(ctx, ResourceTypeUser, "user-1", ActionPastDueGraceCancel, "plaid call failed")
 
 	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestWorkClaimsRepository_Release_NoOpWhenNoMatchingRow documents the deliberate
+// asymmetry with Complete: Release stays silent (nil error) when zero rows match,
+// whether because the claim never existed or because it was already Completed by
+// another worker (Release's WHERE clause excludes completed_at IS NOT NULL rows).
+// Release's return value is discarded by the design doc's own call shape
+// (`_ = claims.Release(...)`), so surfacing "not found" here would only be a
+// false alarm for the benign "someone else already finished it" case.
+func TestWorkClaimsRepository_Release_NoOpWhenNoMatchingRow(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE work_claims`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionPastDueGraceCancel, "plaid call failed").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.Release(ctx, ResourceTypeUser, "user-1", ActionPastDueGraceCancel, "plaid call failed")
+
+	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
