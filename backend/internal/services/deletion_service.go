@@ -291,6 +291,15 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// running. The real enforcement is ClaimForDeletion just below: a conditional UPDATE
 	// evaluated against committed state at the moment of the claim (Issue #1413 Critical
 	// finding C2, Codex review round 2).
+	// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride — even though
+	// the authoritative claimForDeletionPredicate below uses the all-overrides rule. That
+	// asymmetry is intentional: this cheap check only short-circuits the case it can be certain
+	// about (a currently-live comp). A LAPSED comp is left to fall through to the authoritative
+	// claim, which refuses it. Both routes reach the same outcome — the user is not deleted —
+	// but routing the lapsed case through the claim keeps the DB predicate the single source of
+	// truth and keeps it exercised. Widening this check to all-overrides would short-circuit
+	// before the authoritative predicate ran, masking any future divergence between them.
+	// Pinned by TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShortCircuit.
 	if user.HasActiveManualOverride() && user.DeletionRequestedAt == nil {
 		slog.Default().Info("skipping auto-deletion for actively comped user",
 			"user_id", userID)
