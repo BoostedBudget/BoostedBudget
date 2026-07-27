@@ -58,9 +58,11 @@ func NewHouseholdEntitlementService(
 // active entitlement row, or an own_subscription row) resolve to their own computed
 // tier/status — identical to what SubscriptionService computed before this resolver
 // existed. Household members resolve to the owner's live tier/status, unless the owner
-// has lost active coverage (past_due/cancelled/inactive), in which case the member falls
-// back to their own tier. Real repository/lookup errors propagate; the caller
-// (SubscriptionService) decides the fail-open policy.
+// has lost active coverage (past_due/cancelled/inactive) AND isn't currently comped via an
+// active manual_tier_override (#1413 — an admin comp must keep covering the owner's
+// members, not just the owner), in which case the member falls back to their own tier.
+// Real repository/lookup errors propagate; the caller (SubscriptionService) decides the
+// fail-open policy.
 //
 // Precedence (ratified decision — Gap Analysis Round 2, GT-2, #1367): while the owner is
 // active, household coverage ALWAYS wins over a covered member's own
@@ -76,7 +78,7 @@ func NewHouseholdEntitlementService(
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
 	own := domain.EffectiveEntitlement{
 		Tier:   user.ComputeEffectiveTier(),
-		Status: user.SubscriptionStatus,
+		Status: user.ComputeEffectiveStatus(),
 		Source: domain.EntitlementSourceOwn,
 	}
 
@@ -97,8 +99,9 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		return domain.EffectiveEntitlement{}, err
 	}
 
-	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
-		// Owner lost active coverage (past_due/cancelled/inactive) — member reverts to own tier.
+	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+		// Owner lost active coverage (past_due/cancelled/inactive), and isn't currently
+		// comped via an active manual_tier_override — member reverts to own tier (#1413).
 		return own, nil
 	}
 

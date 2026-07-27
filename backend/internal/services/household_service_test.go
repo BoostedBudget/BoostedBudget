@@ -1260,6 +1260,121 @@ func TestHouseholdService_OffboardExcessMembers_OwnerFreshlyReadOnly_NoRemovals(
 	userRepo.AssertExpectations(t)
 }
 
+// TestHouseholdService_OffboardExcessMembers_CompedOwnerRawInactive_RunsCapacityMachine
+// proves the #1413 fix's mirror image of OwnerFreshlyReadOnly_NoRemovals above: a comped
+// owner whose REAL subscription has lapsed (raw "inactive") must NOT be treated as
+// read-only here either — the capacity machine must run (ListMembers is queried, excess is
+// computed from the owner's COMP tier), not short-circuit into an early commit. This
+// household has exactly enough active members for the comp tier's seat count, so no
+// removal is expected — the point of this test is that the machine RAN at all (reached
+// ListMembers), not that it removed anyone.
+func TestHouseholdService_OffboardExcessMembers_CompedOwnerRawInactive_RunsCapacityMachine(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	owner := &domain.User{
+		ID: "owner-1", SubscriptionTier: "premium", SubscriptionStatus: "inactive", // real subscription lapsed
+		ManualTierOverride: strPtr("household_2"), ManualTierEndsAt: &futureEnd, // admin comp, still active — 2 seats
+	}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+	now := time.Now()
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, &anchor, nil, nil))
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	// The critical assertion: ListMembers IS queried (unlike the read-only-owner
+	// short-circuit test above) — if the implementation regressed to reading raw status,
+	// this query would never be reached and pgxmock would fail with an unmet expectation.
+	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+		}).
+			AddRow("mem-owner", "hh-1", "owner-1", "owner", "active", now, nil, nil, nil, now, now).
+			AddRow("mem-1", "hh-1", "member-1", "member", "active", now, nil, nil, nil, now, now))
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
+	require.NoError(t, err)
+	assert.Empty(t, queued, "2 active members on the comp tier's 2-seat limit is not excess")
+	require.NoError(t, pool.ExpectationsWereMet(), "the capacity machine must run (ListMembers reached) for a comped owner, not short-circuit on raw status")
+	userRepo.AssertExpectations(t)
+}
+
+// TestHouseholdService_OffboardExcessMembers_CompedOwnerDownToSmallerTier_RemovesExcessMember
+// documents the consequence #1413's fix unlocks: once the owner-lapse gate stops
+// short-circuiting on raw status, a comp that moves the owner DOWN to a smaller tier than
+// their real one now reaches the seat-capacity machine for the first time — comping a
+// household owner down to a 1-seat tier while they have more active members than that
+// starts (and, once its grace period is exhausted, executes) real LIFO removal, exactly as
+// it would for a genuine downgrade. This test uses a single excess member for a tractable,
+// focused proof of the mechanism (the same mechanism scales to any excess count, e.g. the
+// household_4 -> premium, 3-members-removed scenario called out in the issue).
+func TestHouseholdService_OffboardExcessMembers_CompedOwnerDownToSmallerTier_RemovesExcessMember(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	owner := &domain.User{
+		ID: "owner-1", SubscriptionTier: "household_4", SubscriptionStatus: "inactive", // real tier: 4 seats, real subscription lapsed
+		ManualTierOverride: strPtr("premium"), ManualTierEndsAt: &futureEnd, // admin comp DOWN to 1 seat, still active
+	}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+	userRepo.On("GetUserByID", mock.Anything, "member-1").
+		Return(&domain.User{ID: "member-1", Email: "member1@example.com"}, nil)
+	emailSvc := &MockEmailService{}
+	emailSvc.On("SendHouseholdMemberRemoved", mock.Anything, "member1@example.com", "The Smiths", mock.MatchedBy(purgeDateWithin30Days), false).
+		Return(nil)
+	pool, svc := newTxTestService(t, userRepo, emailSvc)
+	defer pool.Close()
+
+	joinedOwner := time.Now().Add(-72 * time.Hour)
+	joined1 := time.Now().Add(-48 * time.Hour) // the household's only non-owner member
+	anchor := time.Now().Add(-2 * 24 * time.Hour)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", joinedOwner, joinedOwner, &anchor, nil, nil))
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectQuery("status = 'active' ORDER BY joined_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "household_id", "user_id", "role", "status", "joined_at", "removed_at",
+			"prior_subscription_tier", "prior_subscription_status", "created_at", "updated_at",
+		}).
+			AddRow("mem-owner", "hh-1", "owner-1", "owner", "active", joinedOwner, nil, nil, nil, joinedOwner, joinedOwner).
+			AddRow("mem-1", "hh-1", "member-1", "member", "active", joined1, nil, nil, nil, joined1, joined1))
+	// Excess = 2 active members - 1 comp seat (premium, NOT the owner's real household_4
+	// 4-seat tier) = 1 -> the only non-owner member is removed.
+	pool.ExpectExec("UPDATE household_members SET status = 'removed'").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements").WithArgs("member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectExec("UPDATE household_account_shares").WithArgs("hh-1", "member-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	// removeMemberTx's own grace-clear branch: post-removal activeCount (1, just the
+	// owner) is back within the comp tier's 1-seat limit, so this in-flight removal
+	// clears over-capacity itself (mirrors RemovesMostRecentlyJoinedFirst's identical tail).
+	pool.ExpectExec("SELECT 1 FROM users").WithArgs("owner-1").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	pool.ExpectExec("over_capacity_since = NULL, over_capacity_start_notice_sent_at = NULL").WithArgs("hh-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	queued, err := svc.OffboardExcessMembers(context.Background(), "hh-1", anchor)
+	require.NoError(t, err)
+	require.Len(t, queued, 1, "the owner's COMP tier (1 seat) — not their real household_4 tier (4 seats) — must drive the excess computation")
+	assert.Equal(t, "member1@example.com", queued[0].ToEmail)
+	require.NoError(t, pool.ExpectationsWereMet())
+	userRepo.AssertExpectations(t)
+	emailSvc.AssertExpectations(t)
+}
+
 // TestHouseholdService_OffboardExcessMembers_LocksOwnerBeforeTierAndRemoval is a dedicated
 // lock-ordering regression test for the Round 9 Gap Analysis fix (6th round-9 fix, a later
 // Codex adversarial pass than the anchor-mismatch check above): the owner's users row must
@@ -2244,6 +2359,26 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 	}
 }
 
+// TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleSub_PinnedRaw is a #1413 pin
+// test: callerHasLivePaddleSubscription is about Paddle BILLING truth (refund/double-charge
+// risk when someone joins a household while paying) — NOT about access — and its doc
+// comment already states comps join freely. It is deliberately NOT converted to effective
+// status/tier by this task's otherwise-consistent sweep; this test locks in that a comped
+// user with no PaddleSubscriptionID still returns false, so a future "make everything
+// effective" sweep doesn't accidentally convert this site too.
+func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleSub_PinnedRaw(t *testing.T) {
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	comped := &domain.User{
+		ID:                 "user-1",
+		SubscriptionStatus: "inactive", // real subscription lapsed
+		ManualTierOverride: strPtr("household_4"),
+		ManualTierEndsAt:   &futureEnd, // admin comp, still active
+		// PaddleSubscriptionID intentionally nil: no Paddle billing relationship at all.
+	}
+	assert.False(t, callerHasLivePaddleSubscription(comped),
+		"a comped user with no PaddleSubscriptionID has no refund/double-charge risk and must join freely, regardless of effective status/tier")
+}
+
 func TestHouseholdService_AcceptInvite_OwnerMarkedForDeletion_RollsBack(t *testing.T) {
 	t.Parallel()
 	userRepo := &mockUserLoader{}
@@ -2320,6 +2455,73 @@ func TestHouseholdService_AcceptInvite_HiddenAccountIDsForeignID_RollsBack(t *te
 	_, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, []string{"someone-elses-account"})
 	require.ErrorIs(t, err, domain.ErrInvalidConsent)
 	require.NoError(t, pool.ExpectationsWereMet())
+}
+
+// TestHouseholdService_AcceptInvite_CompedOwnerRawInactive_SucceedsAndPersistsEffectiveStatus
+// proves the #1413 fix at two sites in the same flow: (1) the owner-lapse gate
+// (`owner.DeletionRequestedAt != nil || ...IsReadOnlySubscription()`) must read the OWNER's
+// EFFECTIVE status, not raw — a comped owner whose real subscription lapsed (raw
+// "inactive") must NOT be treated as ErrOwnerPlanInactive; and (2)
+// CreateHouseholdEntitlement must persist the owner's EFFECTIVE status ("active") onto the
+// entitlement row, not the raw "inactive" — otherwise the stored row would be
+// self-inconsistent with the comp tier stored alongside it. Mirrors
+// TestHouseholdService_AcceptInvite_Success's flow exactly, with the owner comped instead
+// of genuinely active.
+func TestHouseholdService_AcceptInvite_CompedOwnerRawInactive_SucceedsAndPersistsEffectiveStatus(t *testing.T) {
+	t.Parallel()
+	userRepo := &mockUserLoader{}
+	caller := &domain.User{ID: "caller-1", Email: "friend@example.com", EmailVerified: true, SubscriptionTier: "premium", SubscriptionStatus: "cancelled"}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	owner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "inactive", // real subscription lapsed
+		ManualTierOverride: strPtr("household_4"), ManualTierEndsAt: &futureEnd, // admin comp, still active
+	}
+	userRepo.On("GetUserByID", mock.Anything, "caller-1").Return(caller, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+
+	pool, svc := newTxTestService(t, userRepo, &MockEmailService{})
+	defer pool.Close()
+	mask := "mask-blind-1"
+
+	pool.ExpectBegin()
+	expectHouseholdIDLookupAndLock(pool, "hh-1", "owner-1")
+	pool.ExpectQuery("household_invites").WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(acceptInviteRow("pending", time.Now().Add(48*time.Hour)))
+	expectLockCallerRow(pool, "caller-1")
+	expectLockCallerRow(pool, "owner-1") // GT-8: owner row is now locked before its status is checked
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
+	expectNoRemovedMember(pool, "hh-1", "caller-1")
+	pool.ExpectQuery("INSERT INTO household_members").
+		WithArgs("hh-1", "caller-1", domain.HouseholdRoleMember, domain.HouseholdMemberStatusActive, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "joined_at", "created_at", "updated_at"}).AddRow("mem-1", time.Now(), time.Now(), time.Now()))
+	pool.ExpectQuery("user_accounts").WithArgs("caller-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "institution_id_blind_idx", "mask_blind_idx"}).
+			AddRow("acct-1", "inst-1", &mask).
+			AddRow("acct-2", "inst-2", nil))
+	pool.ExpectQuery("INSERT INTO household_share_consents").
+		WithArgs("hh-1", "caller-1", domain.HouseholdShareConsentVersion, pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "consented_at", "created_at"}).AddRow("consent-1", time.Now(), time.Now()))
+	pool.ExpectExec("INSERT INTO household_account_shares").
+		WithArgs("hh-1", "acct-1", pgxmock.AnyArg(), domain.ShareVisibilityShared).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("INSERT INTO household_account_shares").
+		WithArgs("hh-1", "acct-2", (*string)(nil), domain.ShareVisibilityShared).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("UPDATE subscription_entitlements SET effective_until").WithArgs("caller-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	// The critical assertion: "active" (owner's EFFECTIVE status), never "inactive" (raw).
+	pool.ExpectExec("INSERT INTO subscription_entitlements").
+		WithArgs("caller-1", "household_4", "active", "owner-1", "hh-1").
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	pool.ExpectExec("UPDATE household_invites SET status = 'accepted'").WithArgs("caller-1", "inv-1").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	pool.ExpectCommit()
+
+	result, err := svc.AcceptInvite(context.Background(), "caller-1", "rawtoken", true, nil)
+	require.NoError(t, err, "a comped owner's raw-inactive status must not block AcceptInvite with ErrOwnerPlanInactive")
+	require.Equal(t, "hh-1", result.Household.ID)
+	require.NoError(t, pool.ExpectationsWereMet(), "the persisted entitlement status must be the owner's EFFECTIVE status")
 }
 
 // ─── AcceptInvite — re-invite-within-window restore path (#1371 Task 4) ──────
