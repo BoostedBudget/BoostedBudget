@@ -1,8 +1,18 @@
 /**
  * SubscriptionOverrideModal tests
  * Issue #646: Admin Subscription Management UI
- * 
- * Tests the form logic and display in the override modal.
+ * Issue #1413/#1414 Fix 5/6/7: PII-mask the email, warn on deletion-requested users, and
+ * migrate off mock.module() for the app hook.
+ *
+ * Issue #1413 Fix 7: this file previously did `mock.module('../hooks/useAdminSubscription', ...)`
+ * — mocking an *app hook* with bun:test's process-global mock.module(), the exact pattern this
+ * repo's rules forbid because it leaks across test files (see
+ * feedback_bun_test_mock_module_global.md). It only coexisted with useAdminSubscription.test.tsx
+ * because that file re-mocks the api-client module underneath it. Now it consumes the
+ * centralized api-client mocks in src/test/mocks/admin-subscriptions-api.ts (preloaded via
+ * bunfig.toml) instead, one abstraction layer below the app hook — the real
+ * useAdminSubscriptionDetail/useUpdateUserTier hooks run for real and simply call through to
+ * these mocked api-client functions.
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
@@ -13,14 +23,10 @@ import { ReactNode } from 'react'
 // Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
 // Inline mock.module('sonner') would clobber the global mock and pollute other tests.
 import { mockToastSuccess } from '@/test/mocks/sonner'
-
-// Mock the hook module directly (local admin hook, no centralized preload)
-mock.module('../hooks/useAdminSubscription', () => ({
-    useAdminSubscriptionDetail: mock(() => ({})),
-    useUpdateUserTier: mock(() => ({})),
-}))
-
-import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
+import {
+    mockUseGetAdminUserSubscription,
+    mockUseUpdateAdminUserTier,
+} from '@/test/mocks/admin-subscriptions-api'
 
 function wrapper({ children }: { children: ReactNode }) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -45,17 +51,14 @@ const SUB_DETAIL = {
 
 describe('SubscriptionOverrideModal', () => {
     beforeEach(() => {
-        // @ts-expect-error mock method added by bun:test mock.module
-        useAdminSubscriptionDetail.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module
-        useUpdateUserTier.mockClear()
-        // @ts-expect-error mock method added by bun:test mock.module
+        mockUseGetAdminUserSubscription.mockClear()
+        mockUseUpdateAdminUserTier.mockClear()
+        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastSuccess.mockClear()
     })
 
     it('renders date picker for expires at field', () => {
-        // @ts-expect-error mock method added by bun:test mock.module
-        useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
         render(
             <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
             { wrapper }
@@ -64,8 +67,7 @@ describe('SubscriptionOverrideModal', () => {
     })
 
     it('renders loading state', () => {
-        // @ts-expect-error mock method added by bun:test mock.module
-        useAdminSubscriptionDetail.mockReturnValue({ isLoading: true, data: undefined })
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: true, data: undefined })
         render(
             <SubscriptionOverrideModal userId="u1" open={true} onClose={() => { }} />,
             { wrapper }
@@ -74,8 +76,7 @@ describe('SubscriptionOverrideModal', () => {
     })
 
     it('renders current subscription info', async () => {
-        // @ts-expect-error mock method added by bun:test mock.module
-        useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
         render(
             <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
             { wrapper }
@@ -87,14 +88,48 @@ describe('SubscriptionOverrideModal', () => {
         expect(screen.getByText('730d')).toBeInTheDocument()
     })
 
+    it('masks the user email for PostHog session replay (Fix 5)', async () => {
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+
+        const emailEl = await screen.findByText('test@example.com')
+        expect(emailEl).toHaveAttribute('data-ph-mask')
+    })
+
+    it('warns when the target user has requested account deletion (Fix 6)', async () => {
+        mockUseGetAdminUserSubscription.mockReturnValue({
+            isLoading: false,
+            data: { ...SUB_DETAIL, deletion_requested_at: '2026-08-01T00:00:00Z' },
+        })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+
+        expect(await screen.findByText(/requested account deletion/i)).toBeInTheDocument()
+        expect(screen.getByText(/will not cancel it/i)).toBeInTheDocument()
+    })
+
+    it('does not show the deletion warning when no deletion has been requested', async () => {
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+
+        expect(await screen.findByText(/test@example\.com/i)).toBeInTheDocument()
+        expect(screen.queryByText(/requested account deletion/i)).not.toBeInTheDocument()
+    })
+
     it('submits override when form is valid', async () => {
         const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
             if (options?.onSuccess) options.onSuccess()
         })
-        // @ts-expect-error mock method added by bun:test mock.module
-        useAdminSubscriptionDetail.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
-        // @ts-expect-error mock method added by bun:test mock.module
-        useUpdateUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+        mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+        mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
 
         const onClose = mock(() => { })
 
@@ -114,7 +149,7 @@ describe('SubscriptionOverrideModal', () => {
 
         await waitFor(() => {
             expect(mockMutate).toHaveBeenCalled()
-            // @ts-expect-error mock method added by bun:test mock.module
+            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
             expect(mockToastSuccess).toHaveBeenCalled()
             expect(onClose).toHaveBeenCalled()
         })

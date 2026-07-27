@@ -19,6 +19,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import {
     Loader2,
     CreditCard,
@@ -32,6 +33,18 @@ import {
 import { cn } from '@/lib/utils'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier } from '../hooks/useAdminSubscription'
+
+// The backend deliberately leaves a user's own GDPR deletion request alone when an admin comps
+// their tier — the deletion path is untouched, so a comp will NOT cancel it (a ratified product
+// decision, Issue #1413 Fix 6). Neither `deletion_requested_at` nor `deletion_scheduled_at` is
+// exposed on AdminSubscriptionDetailOutputBody yet (codegen for the admin endpoint hasn't added
+// them), so this is typed as a defensive intersection on top of the generated shape — same
+// pattern as subscriptionPresentation.ts's `UserWithCompFields` — rather than editing the
+// generated model. It activates automatically once the backend/codegen add the field.
+type SubDetailWithDeletion = NonNullable<ReturnType<typeof useAdminSubscriptionDetail>['data']> & {
+    deletion_requested_at?: string
+    deletion_scheduled_at?: string
+}
 
 const TIER_DISPLAY: Record<string, string> = {
     premium: 'Premium',
@@ -122,6 +135,13 @@ function SubscriptionOverrideForm({
     const isExpired =
         sub?.manual_tier_ends_at && new Date(sub.manual_tier_ends_at) < new Date()
 
+    // Fix 6: a user's own GDPR deletion request beats an admin comp — the backend deliberately
+    // leaves the deletion path alone, so comping will NOT cancel it. Prefer the scheduled date
+    // (when the notice period has resolved into a firm date) over the originally-requested one.
+    const subWithDeletion = sub as SubDetailWithDeletion | undefined
+    const deletionDate =
+        subWithDeletion?.deletion_scheduled_at ?? subWithDeletion?.deletion_requested_at
+
     const inputClass = 'w-full px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60 disabled:cursor-not-allowed'
 
     return (
@@ -135,7 +155,7 @@ function SubscriptionOverrideForm({
                     <DialogDescription id="sub-override-desc">
                         {userEmail ? (
                             <>
-                                Managing subscription for <strong>{userEmail}</strong>
+                                Managing subscription for <strong data-ph-mask>{userEmail}</strong>
                             </>
                         ) : (
                             "Manually override this user's subscription tier"
@@ -192,6 +212,17 @@ function SubscriptionOverrideForm({
                                 </div>
                             )}
                         </div>
+
+                        {deletionDate && (
+                            <Alert variant="warning">
+                                <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                                <AlertTitle>Account deletion requested</AlertTitle>
+                                <AlertDescription>
+                                    This user has requested account deletion (scheduled {formatDate(deletionDate)}).
+                                    A comp will NOT cancel it.
+                                </AlertDescription>
+                            </Alert>
+                        )}
 
                         {/* Limits summary */}
                         {sub.limits && (
