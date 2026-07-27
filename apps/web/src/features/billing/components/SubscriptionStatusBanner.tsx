@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { presentationFromUser } from '@/features/subscription/lib/subscriptionPresentation'
 import { useGetBillingPortalUrl } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { useSessionDismiss } from '@/shared/hooks/useSessionDismiss'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
@@ -20,40 +21,71 @@ const SUBSCRIPTION_BANNER_CONFIG: Record<string, BannerConfig> = {
   inactive: { variant: 'info', dismissible: false },
 }
 
+/**
+ * Issue #1413: a complimentary access grant that's ending within this many days surfaces a calm
+ * heads-up banner. A permanent comp (or one ending further out) stays silent — a persistent banner
+ * announcing a good state is a nag, not a service (calm confidence).
+ */
+const COMP_ENDING_SOON_THRESHOLD_DAYS = 14
+
+function isCompEndingSoon(compEndsAt: string | undefined): boolean {
+  if (!compEndsAt) return false
+  const daysRemaining = (new Date(compEndsAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+  return daysRemaining <= COMP_ENDING_SOON_THRESHOLD_DAYS
+}
+
 export function SubscriptionStatusBanner() {
   const { user } = useProfile()
   const track = useTrackEvent()
 
-  const status = user?.subscription_status ?? ''
-  const config = SUBSCRIPTION_BANNER_CONFIG[status]
+  const rawStatus = user?.subscription_status ?? ''
+  const presentation = user ? presentationFromUser(user) : null
+  const isComped = presentation?.isComped ?? false
+  const compEndsAt = presentation?.compEndsAt
+  const compEndingSoon = isComped && isCompEndingSoon(compEndsAt)
+
+  // Comped users get their own single-purpose banner slot ('comped'); everything else keys off
+  // the raw subscription_status exactly as before.
+  const trackedStatus = isComped ? 'comped' : rawStatus
+
+  const config: BannerConfig | null = isComped
+    ? (compEndingSoon ? { variant: 'info', dismissible: true } : null)
+    : (SUBSCRIPTION_BANNER_CONFIG[rawStatus] ?? null)
 
   const billingPortalQuery = useGetBillingPortalUrl({
-    query: { enabled: status === 'past_due' },
+    query: { enabled: !isComped && rawStatus === 'past_due' },
   })
 
-  const { isDismissed, dismiss } = useSessionDismiss(user?.id ?? '', status)
+  const { isDismissed, dismiss } = useSessionDismiss(user?.id ?? '', trackedStatus)
 
   useEffect(() => {
     if (config) {
-      track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_VIEWED, { status })
+      track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_VIEWED, { status: trackedStatus })
     }
-  }, [status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [trackedStatus]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!user || !config || isDismissed) return null
 
   const handleCtaClick = () => {
-    track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_CTA_CLICKED, { status })
+    track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_CTA_CLICKED, { status: trackedStatus })
   }
 
   const handleDismiss = () => {
-    track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_DISMISSED, { status })
+    track(ANALYTICS_EVENTS.SUBSCRIPTION_BANNER_DISMISSED, { status: trackedStatus })
     dismiss()
   }
 
-  const isPastDue = status === 'past_due'
-  const isCancelled = status === 'cancelled'
+  const isPastDue = rawStatus === 'past_due'
+  const isCancelled = rawStatus === 'cancelled'
 
   const getMessage = () => {
+    // Only reachable when config is non-null, i.e. isComped implies "ending soon" here.
+    if (isComped) {
+      const date = compEndsAt?.slice(0, 10)
+      return date
+        ? `Complimentary access ends ${date}.`
+        : 'Complimentary access is ending soon.'
+    }
     if (isPastDue) {
       return "Your payment didn't go through. Update your payment method to restore access."
     }
@@ -67,6 +99,17 @@ export function SubscriptionStatusBanner() {
   }
 
   const renderCta = () => {
+    if (isComped) {
+      return (
+        <a
+          href="/pricing"
+          onClick={handleCtaClick}
+          className={bannerCtaVariants({ variant: 'primary' })}
+        >
+          View plans
+        </a>
+      )
+    }
     if (isPastDue) {
       const portalUrl = billingPortalQuery.data?.portal_url
       if (portalUrl) {

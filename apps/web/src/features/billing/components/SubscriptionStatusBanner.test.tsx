@@ -282,4 +282,115 @@ describe('SubscriptionStatusBanner', () => {
       expect.objectContaining({ status: 'past_due' })
     )
   })
+
+  // Issue #1413: comped users get real access — a permanent comp is a good state (no nag banner);
+  // a comp ending soon gets a calm heads-up instead of the "expired" copy other statuses use.
+  describe('Comped users (#1413)', () => {
+    const inFuture = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+
+    it('renders nothing for a permanent comp (no end date)', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      const { container } = render(<SubscriptionStatusBanner />)
+      expect(container.firstChild).toBeNull()
+    })
+
+    it('renders nothing for a comp ending more than 14 days out', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(30) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      const { container } = render(<SubscriptionStatusBanner />)
+      expect(container.firstChild).toBeNull()
+    })
+
+    it('renders a dismissible info banner when the comp ends within 14 days', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(5) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      const alert = screen.getByRole('alert')
+      expect(alert.className).toContain('bg-info/10')
+      expect(screen.getByRole('button', { name: /Dismiss banner/i })).toBeInTheDocument()
+    })
+
+    it('comp-ending copy never says "expired"', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(5) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      expect(screen.queryByText(/expired/i)).not.toBeInTheDocument()
+    })
+
+    it('names the comp end date in the banner copy', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: '2026-08-10T00:00:00Z' }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      expect(screen.getByText(/2026-08-10/)).toBeInTheDocument()
+    })
+
+    it('does not enable the billing-portal query for a comped user', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'past_due', is_comped: true, comp_ends_at: inFuture(5) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      expect(mockUseGetBillingPortalUrl).toHaveBeenCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ enabled: false }) })
+      )
+    })
+
+    it('fires SUBSCRIPTION_BANNER_VIEWED with status "comped" for the ending-soon banner', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(5) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      expect(mockTrackEvent).toHaveBeenCalledWith('subscription_banner_viewed', { status: 'comped' })
+    })
+
+    it('uses the shared bannerCtaVariants primary variant for its CTA', () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(5) }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      render(<SubscriptionStatusBanner />)
+      const links = screen.getAllByRole('link')
+      expect(links.some((link) => link.className === bannerCtaVariants({ variant: 'primary' }))).toBe(true)
+    })
+  })
+
+  // Regression: non-comped inactive users still see the existing "expired" banner unchanged.
+  it('regression: expired banner still shows for non-comped inactive', () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: makeUser({ subscription_status: 'inactive', is_comped: false }),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    render(<SubscriptionStatusBanner />)
+    expect(screen.getByText(/Your subscription has expired/i)).toBeInTheDocument()
+  })
 })
