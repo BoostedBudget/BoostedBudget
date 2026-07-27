@@ -747,6 +747,11 @@ func main() {
 					Logger:        logger,
 				})
 				subscriptionWebhookWorker.SetAnalytics(phClient)
+				// Issue #1413 High finding H7 (Codex review round 4): required for
+				// processSubscriptionCanceled to gain EXCLUSIVITY on
+				// ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-clock
+				// side effects — replaces the old plain-read comp check, which reserved nothing.
+				subscriptionWebhookWorker.SetWorkClaimsRepo(workClaimsRepo)
 				appLogger.Info("Subscription webhook worker created (River)")
 			}
 		} else {
@@ -788,6 +793,11 @@ func main() {
 		// #1413: exempt actively covered household members from past_due dunning, closing an
 		// asymmetry with TrialService's #1367 household exemption (wired identically above).
 		pastDueService.SetHouseholdChecker(householdEntitlementService)
+		// Issue #1413 High findings H6a/H6b (Codex review round 4): required for
+		// processPlaidDisconnectWindow/processGraceExpiry to gain EXCLUSIVITY on
+		// ActionPlaidDisconnectPastDue/ActionPastDueGraceCancel before any irreversible Plaid/Paddle
+		// call — replaces the old self-assigning-update guards, which reserved nothing.
+		pastDueService.SetWorkClaimsRepo(workClaimsRepo)
 		appLogger.Info("Past-due service initialized",
 			"grace_days", pastDueCfg.GraceDays,
 			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,

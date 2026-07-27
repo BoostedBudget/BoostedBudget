@@ -147,16 +147,6 @@ type ProfileRepository interface {
 	// check of HasActiveManualOverride() cannot, by itself, protect the final status flip.
 	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
 
-	// ClaimPlaidDisconnectIfPastDue atomically verifies, at the moment of the claim, that a user
-	// is still 'past_due' and carries no currently-active manual tier override, before the day-14
-	// pre-emptive Plaid disconnect proceeds. Unlike CancelIfPastDue, this path has no state
-	// transition of its own to hang a CAS on, so the claim self-assigns past_due_started_at to
-	// its own current value purely to obtain the same atomic, row-level check via a single
-	// UPDATE ... WHERE statement, without adding a new column. Returns (true, nil) if the claim
-	// succeeded (safe to disconnect), (false, nil) if the user has recovered or been comped since
-	// the caller's last read (Issue #1413 High finding H6, Codex review round 3).
-	ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error)
-
 	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
 	// user is still 'trial' AND carries no currently-active manual tier override. Returns
 	// (true, nil) if the flip happened, (false, nil) if an admin granted/extended a comp between
@@ -1221,9 +1211,11 @@ func (r *profileRepository) ClaimRetentionNotice7dSent(ctx context.Context, user
 // TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary kept exercising it purely
 // so the exact production string wouldn't silently drift from a hand-copied restatement. As of
 // the Issue #1413 Codex review round 3 fix (High findings H5/H6), it now has real production
-// callers too — CancelIfPastDue, ClaimPlaidDisconnectIfPastDue, and ExpireTrialIfNoOverride all
-// splice this constant into a conditional UPDATE's WHERE clause, per the
-// claim-then-act pattern: this is the one place the "still live right now" rule (as opposed to
+// callers too — CancelIfPastDue and ExpireTrialIfNoOverride splice this constant into a
+// conditional UPDATE's WHERE clause, per the claim-then-act pattern (a third former caller,
+// ClaimPlaidDisconnectIfPastDue, was deleted in round 4 — see past_due_service.go's H6a fix,
+// which replaced its self-assigning-update "claim" with a real work_claims claim): this is the
+// one place the "still live right now" rule (as opposed to
 // noManualOverrideAtAllPredicate's "not even a lapsed one") is actually the correct rule to
 // enforce, because these are point-in-time transitions guarded against a comp granted in a race
 // window, not the retention-notice/hard-delete queries' cross-job-ordering hazard.
@@ -1496,28 +1488,6 @@ func (r *profileRepository) CancelIfPastDue(ctx context.Context, userID string) 
 		userID)
 	if err != nil {
 		return false, fmt.Errorf("CancelIfPastDue: %w", err)
-	}
-	return ct.RowsAffected() > 0, nil
-}
-
-// ClaimPlaidDisconnectIfPastDue atomically verifies — at the moment of the claim — that a user is
-// still 'past_due' and carries no currently-active manual tier override, before the day-14
-// pre-emptive Plaid disconnect (processPlaidDisconnectWindow) proceeds. This path has no
-// persisted state transition of its own to hang a CAS on the way CancelIfPastDue's cancellation
-// flip does, so the claim SETs past_due_started_at to its own current value — a no-op write that
-// still takes a row-level lock and evaluates the WHERE predicate atomically against committed
-// state — rather than adding a new column purely to serve as a claim marker. Returns (true, nil)
-// if the claim succeeded (safe to disconnect), (false, nil) if the user has recovered or been
-// comped since the caller's last read. Issue #1413 High finding H6, Codex review round 3.
-func (r *profileRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET past_due_started_at = past_due_started_at, updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at IS NOT NULL
-	`+noActiveManualOverridePredicate,
-		userID)
-	if err != nil {
-		return false, fmt.Errorf("ClaimPlaidDisconnectIfPastDue: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
 }
