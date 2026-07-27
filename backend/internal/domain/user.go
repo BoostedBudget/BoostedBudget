@@ -29,6 +29,13 @@ type User struct {
 	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty" db:"manual_tier_ends_at"`
 	EffectiveTier      string     `json:"effective_tier,omitempty"` // Computed field, not stored in DB
 
+	// Effective status/comp fields (Issue #1413) — computed, not stored in DB.
+	// Populated by a later task (see EffectiveTier precedent above).
+	EffectiveStatus string     `json:"effective_status,omitempty"`
+	IsComped        bool       `json:"is_comped"` // No omitempty: frontend must always see this key, never distinguish false from absent.
+	CompTier        string     `json:"comp_tier,omitempty"`
+	CompEndsAt      *time.Time `json:"comp_ends_at,omitempty"`
+
 	// Trial information (Issue #679)
 	TrialStartedAt     *time.Time `json:"trial_started_at,omitempty" db:"trial_started_at"`
 	TrialEndsAt        *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`
@@ -98,16 +105,79 @@ func (u *User) ComputeTrialDaysRemaining() {
 	u.TrialDaysRemaining = &daysRemaining
 }
 
+// hasActiveManualOverrideAt reports whether a manual tier override is set and has not expired
+// as of the given timestamp. Extracted, character-for-character, from the original
+// ComputeEffectiveTier condition, so that ComputeEffectiveTier and ComputeEffectiveStatus share
+// a single predicate and can never disagree about whether an override is currently active.
+func (u *User) hasActiveManualOverrideAt(now time.Time) bool {
+	if u.ManualTierOverride != nil && *u.ManualTierOverride != "" {
+		if u.ManualTierEndsAt == nil || !u.ManualTierEndsAt.Before(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasActiveManualOverride reports whether the user currently has a non-expired manual tier
+// override in effect, evaluated against the current time.
+func (u *User) HasActiveManualOverride() bool {
+	return u.hasActiveManualOverrideAt(time.Now())
+}
+
+// computeEffectiveTierAt returns the effective tier for the user as of the given timestamp.
+// If an active manual override is in effect at that instant, its tier is returned; otherwise
+// the base SubscriptionTier is returned.
+func (u *User) computeEffectiveTierAt(now time.Time) string {
+	if u.hasActiveManualOverrideAt(now) {
+		return *u.ManualTierOverride
+	}
+	return u.SubscriptionTier
+}
+
 // ComputeEffectiveTier returns the effective tier for the user.
 // If a non-expired manual override is set, that tier is returned.
 // Otherwise the base SubscriptionTier is returned.
 func (u *User) ComputeEffectiveTier() string {
-	if u.ManualTierOverride != nil && *u.ManualTierOverride != "" {
-		if u.ManualTierEndsAt == nil || !u.ManualTierEndsAt.Before(time.Now()) {
-			return *u.ManualTierOverride
-		}
+	return u.computeEffectiveTierAt(time.Now())
+}
+
+// computeEffectiveStatusAt returns the effective subscription status for the user as of the
+// given timestamp. An active manual override forces the status to active — an admin "comp"
+// must actually unlock access, not just relabel the tier while every access gate keeps reading
+// the stale, untouched SubscriptionStatus (Issue #1413).
+func (u *User) computeEffectiveStatusAt(now time.Time) string {
+	if u.hasActiveManualOverrideAt(now) {
+		return string(SubscriptionStatusActive)
 	}
-	return u.SubscriptionTier
+	return u.SubscriptionStatus
+}
+
+// ComputeEffectiveStatus returns the effective subscription status for the user.
+// If an active manual tier override is set, the status is forced to active (Issue #1413).
+// Otherwise the base SubscriptionStatus is returned unchanged.
+func (u *User) ComputeEffectiveStatus() string {
+	return u.computeEffectiveStatusAt(time.Now())
+}
+
+// ClerkPublicMetadata returns the canonical Clerk publicMetadata payload for this user.
+//
+// The "tier" key is deliberately included with an explicit nil value rather than being
+// omitted. Clerk's PATCH /v1/users/{id}/metadata endpoint performs a shallow merge of the
+// supplied map into existing publicMetadata; passing an explicit null for a key deletes that
+// key server-side, whereas omitting the key entirely would leave any existing value untouched.
+// A pre-existing bug wrote an orphaned "tier" key into Clerk metadata, and this payload
+// retroactively cleans it up on every sync.
+//
+// Note: no backend access gate reads Clerk metadata today — auth.ExtractSubscriptionTier's
+// only callers are tests. Staleness of this payload (e.g. before a later task wires up sync)
+// is therefore a UI/analytics concern, not a security one; the backend's authoritative source
+// is ComputeEffectiveTier/ComputeEffectiveStatus evaluated directly against the database row.
+func (u *User) ClerkPublicMetadata() map[string]interface{} {
+	return map[string]interface{}{
+		"subscription_tier":   u.ComputeEffectiveTier(),
+		"subscription_status": u.ComputeEffectiveStatus(),
+		"tier":                nil,
+	}
 }
 
 // NewUser creates a new user with default values (premium trial, default region)
