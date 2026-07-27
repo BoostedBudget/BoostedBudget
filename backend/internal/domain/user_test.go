@@ -212,6 +212,249 @@ func TestComputeEffectiveTier_FutureExpiry(t *testing.T) {
 	assert.Equal(t, "household_2", result)
 }
 
+// TestHasActiveManualOverride tests the extracted override predicate across the same matrix
+// used for ComputeEffectiveTier: nil override, empty-string override, no expiry, future expiry,
+// and past expiry.
+func TestHasActiveManualOverride(t *testing.T) {
+	override := "household_2"
+	empty := ""
+	future := time.Now().Add(24 * time.Hour)
+	past := time.Now().Add(-24 * time.Hour)
+
+	tests := []struct {
+		name     string
+		user     *User
+		expected bool
+	}{
+		{"nil override", &User{ManualTierOverride: nil}, false},
+		{"empty string override", &User{ManualTierOverride: &empty}, false},
+		{"no expiry (permanent override)", &User{ManualTierOverride: &override, ManualTierEndsAt: nil}, true},
+		{"future expiry", &User{ManualTierOverride: &override, ManualTierEndsAt: &future}, true},
+		{"past expiry", &User{ManualTierOverride: &override, ManualTierEndsAt: &past}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, tc.user.HasActiveManualOverride())
+		})
+	}
+}
+
+// TestHasActiveManualOverrideAt_BoundarySemantics locks in the `!ManualTierEndsAt.Before(now)`
+// semantics at the exact expiry boundary. We deliberately never construct a literal "exactly
+// now" timestamp (flaky); instead we nudge ManualTierEndsAt one millisecond to either side of a
+// fixed `now` passed explicitly to the -At variant.
+func TestHasActiveManualOverrideAt_BoundarySemantics(t *testing.T) {
+	override := "household_2"
+	now := time.Now()
+
+	t.Run("ends_at 1ms after now is still active", func(t *testing.T) {
+		endsAt := now.Add(time.Millisecond)
+		user := &User{ManualTierOverride: &override, ManualTierEndsAt: &endsAt}
+		assert.True(t, user.hasActiveManualOverrideAt(now))
+	})
+
+	t.Run("ends_at 1ms before now is expired", func(t *testing.T) {
+		endsAt := now.Add(-time.Millisecond)
+		user := &User{ManualTierOverride: &override, ManualTierEndsAt: &endsAt}
+		assert.False(t, user.hasActiveManualOverrideAt(now))
+	})
+}
+
+// TestComputeEffectiveTier_Characterization is a characterization test proving the
+// ComputeEffectiveTier refactor (delegating onto HasActiveManualOverride) is
+// behaviour-preserving across the same matrix already covered by the individual
+// TestComputeEffectiveTier_* tests above. 12 production call sites depend on this method
+// keeping identical behaviour.
+func TestComputeEffectiveTier_Characterization(t *testing.T) {
+	override := "household_2"
+	empty := ""
+	future := time.Now().Add(24 * time.Hour)
+	past := time.Now().Add(-24 * time.Hour)
+
+	tests := []struct {
+		name     string
+		user     *User
+		expected string
+	}{
+		{
+			name:     "nil override returns base tier",
+			user:     &User{SubscriptionTier: "premium", ManualTierOverride: nil},
+			expected: "premium",
+		},
+		{
+			name:     "empty string override returns base tier",
+			user:     &User{SubscriptionTier: "premium", ManualTierOverride: &empty},
+			expected: "premium",
+		},
+		{
+			name:     "permanent override returns override tier",
+			user:     &User{SubscriptionTier: "premium", ManualTierOverride: &override, ManualTierEndsAt: nil},
+			expected: "household_2",
+		},
+		{
+			name:     "future expiry returns override tier",
+			user:     &User{SubscriptionTier: "premium", ManualTierOverride: &override, ManualTierEndsAt: &future},
+			expected: "household_2",
+		},
+		{
+			name:     "past expiry returns base tier",
+			user:     &User{SubscriptionTier: "premium", ManualTierOverride: &override, ManualTierEndsAt: &past},
+			expected: "premium",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, tc.user.ComputeEffectiveTier())
+		})
+	}
+}
+
+// TestComputeEffectiveStatus_NoOverride verifies that with no active override, every known
+// subscription status (plus the empty-string edge case) passes through unchanged.
+func TestComputeEffectiveStatus_NoOverride(t *testing.T) {
+	statuses := []string{"active", "inactive", "trial", "trialing", "cancelled", "past_due", ""}
+
+	for _, status := range statuses {
+		name := status
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			user := &User{SubscriptionStatus: status}
+			assert.Equal(t, status, user.ComputeEffectiveStatus())
+		})
+	}
+}
+
+// TestComputeEffectiveStatus_WithActiveOverride verifies that any active manual tier override
+// forces the effective status to "active", regardless of the underlying raw status — this is
+// the core fix for Issue #1413 (a comped user must not stay locked out by a stale status).
+func TestComputeEffectiveStatus_WithActiveOverride(t *testing.T) {
+	override := "household_2"
+	statuses := []string{"inactive", "cancelled", "past_due", "trial"}
+
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			user := &User{
+				SubscriptionStatus: status,
+				ManualTierOverride: &override,
+				ManualTierEndsAt:   nil,
+			}
+			assert.Equal(t, string(SubscriptionStatusActive), user.ComputeEffectiveStatus())
+		})
+	}
+}
+
+// TestComputeEffectiveStatus_WithExpiredOverride verifies an expired override falls back to
+// the raw status, mirroring ComputeEffectiveTier's expiry behaviour.
+func TestComputeEffectiveStatus_WithExpiredOverride(t *testing.T) {
+	override := "household_2"
+	expired := time.Now().Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionStatus: "past_due",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	assert.Equal(t, "past_due", user.ComputeEffectiveStatus())
+}
+
+// TestEffectiveTierAndStatusAt_AgreeAtSharedBoundary proves the -At() variants make tier and
+// status agree at a shared boundary timestamp. Evaluating both against the SAME `now` value
+// (rather than each calling time.Now() independently) guarantees they can never disagree about
+// whether the override is active, even nanoseconds from expiry.
+func TestEffectiveTierAndStatusAt_AgreeAtSharedBoundary(t *testing.T) {
+	override := "household_2"
+	now := time.Now()
+
+	t.Run("1ms before expiry: both see the override as active", func(t *testing.T) {
+		endsAt := now.Add(time.Millisecond)
+		user := &User{
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "past_due",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &endsAt,
+		}
+
+		assert.Equal(t, "household_2", user.computeEffectiveTierAt(now))
+		assert.Equal(t, string(SubscriptionStatusActive), user.computeEffectiveStatusAt(now))
+	})
+
+	t.Run("1ms after expiry: both see the override as expired", func(t *testing.T) {
+		endsAt := now.Add(-time.Millisecond)
+		user := &User{
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "past_due",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &endsAt,
+		}
+
+		assert.Equal(t, "premium", user.computeEffectiveTierAt(now))
+		assert.Equal(t, "past_due", user.computeEffectiveStatusAt(now))
+	})
+}
+
+// TestClerkPublicMetadata_Comped verifies a comped user's payload reflects the override tier
+// and the forced "active" status.
+func TestClerkPublicMetadata_Comped(t *testing.T) {
+	override := "household_2"
+	user := &User{
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil,
+	}
+
+	metadata := user.ClerkPublicMetadata()
+
+	assert.Equal(t, "household_2", metadata["subscription_tier"])
+	assert.Equal(t, string(SubscriptionStatusActive), metadata["subscription_status"])
+}
+
+// TestClerkPublicMetadata_NotComped verifies a non-comped user's payload reflects the raw tier
+// and raw status unchanged.
+func TestClerkPublicMetadata_NotComped(t *testing.T) {
+	user := &User{
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		ManualTierOverride: nil,
+	}
+
+	metadata := user.ClerkPublicMetadata()
+
+	assert.Equal(t, "premium", metadata["subscription_tier"])
+	assert.Equal(t, "trial", metadata["subscription_status"])
+}
+
+// TestClerkPublicMetadata_TierKeyPresentAndNil asserts the "tier" key is present with an
+// explicit nil value (not omitted). Clerk's PATCH /v1/users/{id}/metadata performs a merge, and
+// an explicit null deletes the key server-side — omitting it entirely would leave the orphaned
+// legacy "tier" key untouched. This is the easy-to-get-wrong case: a `map[string]interface{}`
+// built without explicitly setting the key would silently fail to include it.
+func TestClerkPublicMetadata_TierKeyPresentAndNil(t *testing.T) {
+	user := &User{SubscriptionTier: "premium", SubscriptionStatus: "active"}
+
+	metadata := user.ClerkPublicMetadata()
+
+	tierValue, exists := metadata["tier"]
+	assert.True(t, exists, `"tier" key must be present (even though nil) so Clerk's metadata merge deletes it`)
+	assert.Nil(t, tierValue)
+}
+
+// TestUser_IsComped_AlwaysSerializes locks in that IsComped has no `omitempty` tag: the
+// frontend must always receive `is_comped` in the JSON payload and never have to distinguish
+// `false` from "field absent".
+func TestUser_IsComped_AlwaysSerializes(t *testing.T) {
+	user := &User{IsComped: false}
+
+	jsonData, err := json.Marshal(user)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(jsonData), `"is_comped":false`)
+}
+
 // TestUser_PaddleSubscriptionID_EmptyString tests empty string handling
 func TestUser_PaddleSubscriptionID_EmptyString(t *testing.T) {
 	emptyString := ""
