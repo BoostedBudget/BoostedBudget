@@ -461,6 +461,11 @@ func TestResolveEffectiveEntitlement_CompedOwnerRawInactive_MemberCoveredAtCompT
 	require.NoError(t, err)
 	assert.Equal(t, domain.EntitlementSourceHousehold, eff.Source, "a comped owner's raw-inactive status must not fall the member back to their own tier")
 	assert.Equal(t, "household_4", eff.Tier, "member should resolve to the owner's COMP tier, not the owner's real (lapsed) tier")
+	// The returned Status must agree with the returned Tier. Reporting "tier household_4,
+	// status inactive" is self-contradictory, and a Tier-effective/Status-raw pairing is the
+	// exact asymmetry that caused #1413. No consumer reads Status today, which is precisely
+	// why it would rot unnoticed until one did.
+	assert.Equal(t, "active", eff.Status, "a comped owner's coverage must report an effective status consistent with its effective tier")
 }
 
 // TestResolveEffectiveEntitlement_OwnerOverrideExpired_MemberFallsBackToOwnTier proves an
