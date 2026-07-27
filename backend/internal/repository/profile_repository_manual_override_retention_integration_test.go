@@ -178,7 +178,7 @@ func TestGetUsersWithExpiredRetention_Integration_ExcludesActiveComp(t *testing.
 // override predicate now has two independent expressions of the SAME rule — Go
 // (domain.User.HasActiveManualOverride, used for row-level reads) and SQL
 // (noActiveManualOverridePredicate, used for these set-based queries). This test inserts the
-// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/”/'premium' x
+// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/''/'premium' x
 // manual_tier_ends_at: NULL/past/future) and asserts the SQL predicate's verdict equals the Go
 // predicate's verdict for every one of the 9 rows. This is the guard against the two
 // definitions drifting apart in a future edit.
