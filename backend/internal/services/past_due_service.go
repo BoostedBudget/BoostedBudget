@@ -68,6 +68,15 @@ type PastDueNotificationRepository interface {
 	Create(ctx context.Context, n *domain.Notification) error
 }
 
+// householdCoverageCheckerForPastDue is the narrow capability PastDueService needs to detect an
+// active household-sourced entitlement, so the daily past_due dunning job doesn't cancel a
+// covered member's subscription or disconnect their Plaid items despite being actively covered
+// (#1413 — mirrors householdCoverageCheckerForTrial in trial_service.go). Satisfied structurally
+// by *HouseholdEntitlementService.
+type householdCoverageCheckerForPastDue interface {
+	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
+}
+
 // PastDueService manages the dunning lifecycle for users with past_due subscriptions.
 // It is called daily by the dunning cron job.
 //
@@ -85,6 +94,7 @@ type PastDueService struct {
 	clerkClient         PastDueClerkClient
 	notificationRepo    PastDueNotificationRepository
 	analytics           phclient.Analytics
+	householdChecker    householdCoverageCheckerForPastDue // #1413: nil skips the exemption
 	graceDays           int
 	plaidDisconnectDays int
 	retentionMonths     int
@@ -126,6 +136,13 @@ func (s *PastDueService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
 }
 
+// SetHouseholdChecker wires the household-coverage exemption for past_due dunning.
+// #1413 — mirrors TrialService.SetHouseholdChecker. Nil-safe: an unset checker preserves
+// pre-#1413 behavior.
+func (s *PastDueService) SetHouseholdChecker(c householdCoverageCheckerForPastDue) {
+	s.householdChecker = c
+}
+
 // GetUsersInPastDue returns users whose subscription_status is 'past_due'
 // and whose past_due_started_at is non-nil.
 func (s *PastDueService) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
@@ -139,6 +156,35 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 	if user.PastDueStartedAt == nil {
 		// Guard: nothing to do for users without a stamp.
 		return nil
+	}
+
+	// #1413: an active manual override ("comp") grants access and must not be undermined by
+	// the daily dunning job — a comped user can still carry a past_due status and a live
+	// PaddleSubscriptionID (the admin comp never clears it), so every destructive branch below
+	// is reachable unless gated here. The domain.User passed in is populated via
+	// userSelectQuery, which already includes the override columns, so this check is free —
+	// no DB round-trip. Checked before the household-coverage lookup below for the same
+	// pure-and-cheap-first reason as TrialService.ExpireTrial.
+	if user.HasActiveManualOverride() {
+		s.logger.Info("skipping past_due processing for actively comped user", "user_id", user.ID)
+		return nil
+	}
+
+	// #1413: closes an asymmetry with TrialService — exempt actively covered household
+	// members. Fail closed on an uncertain check (skip processing this run) but PROPAGATE the
+	// error rather than swallowing it — see trial_service.go:197-204 for why swallowing would
+	// hide an operational failure. The job retries, so this self-heals.
+	if s.householdChecker != nil {
+		covered, err := s.householdChecker.IsCoveredByHousehold(ctx, user.ID)
+		if err != nil {
+			s.logger.Warn("failed to check household coverage during past_due processing; skipping this run",
+				"user_id", user.ID, "error", err)
+			return fmt.Errorf("failed to check household coverage: %w", err)
+		}
+		if covered {
+			s.logger.Info("skipping past_due processing for actively covered household member", "user_id", user.ID)
+			return nil
+		}
 	}
 
 	age := now.Sub(*user.PastDueStartedAt)
@@ -261,6 +307,15 @@ func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) 
 		s.logger.Info("past_due user recovered before dunning action; skipping",
 			"user_id", userID,
 			"current_status", current.SubscriptionStatus,
+		)
+		return false, nil
+	}
+	// #1413: comp applied mid-run — closes the race between GetUsersInPastDue's batch read and
+	// this per-user re-read. Both the grace-expiry and Plaid-disconnect paths call this helper,
+	// so this one check closes the race for both.
+	if current.HasActiveManualOverride() {
+		s.logger.Info("past_due user comped mid-run; skipping destructive action",
+			"user_id", userID,
 		)
 		return false, nil
 	}

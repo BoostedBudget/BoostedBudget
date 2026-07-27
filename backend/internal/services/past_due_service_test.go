@@ -113,6 +113,27 @@ func userWithPastDue(userID string, pastDueStartedAt time.Time) domain.User {
 	}
 }
 
+// mockHouseholdCheckerForPastDue mocks the household-coverage exemption hook (#1413),
+// mirroring mockHouseholdCheckerForTrial in trial_service_test.go.
+type mockHouseholdCheckerForPastDue struct{ mock.Mock }
+
+func (m *mockHouseholdCheckerForPastDue) IsCoveredByHousehold(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+// userWithPastDueOverride returns a past_due user carrying a manual tier override ending at
+// overrideEndsAt. A zero overrideEndsAt means "no end date" (override never expires).
+func userWithPastDueOverride(userID string, pastDueStartedAt time.Time, overrideEndsAt time.Time) domain.User {
+	u := userWithPastDue(userID, pastDueStartedAt)
+	override := "household_2"
+	u.ManualTierOverride = &override
+	if !overrideEndsAt.IsZero() {
+		u.ManualTierEndsAt = &overrideEndsAt
+	}
+	return u
+}
+
 // ---- Tests ----
 
 // Test 1: Full grace expiry flow — all steps called in correct order
@@ -429,4 +450,201 @@ func TestPastDueService_GetUsersInPastDue(t *testing.T) {
 	assert.Len(t, result, 2)
 	assert.Equal(t, "user-a", result[0].ID)
 	assert.Equal(t, "user-b", result[1].ID)
+}
+
+// ─── #1413: comped users are exempt from past_due destructive actions ──
+
+// Test 10: comped user at the grace threshold — no Paddle cancel, no Plaid disconnect, no CAS flip.
+func TestPastDueService_ProcessUser_GraceExpiry_ActiveOverride_Skipped(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-comped-grace"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDueOverride(userID, pastDueStarted, now.Add(24*time.Hour)) // active override
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	repo.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Test 11: comped user at the Plaid-disconnect threshold — no disconnect.
+func TestPastDueService_ProcessUser_PlaidDisconnect_ActiveOverride_Skipped(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-comped-plaid-window"
+	now := time.Now()
+	pastDueStarted := now.Add(-15 * 24 * time.Hour) // in plaid-disconnect window
+	user := userWithPastDueOverride(userID, pastDueStarted, now.Add(24*time.Hour))
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+}
+
+// Test 12: comp applied mid-run — the batch-read user was not comped, but reReadStillPastDue's
+// re-read shows the user was comped between GetUsersInPastDue and this call. Grace expiry must abort.
+func TestPastDueService_ProcessUser_GraceExpiry_CompedMidRun_Aborts(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-comped-mid-run"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted) // NOT comped at batch-read time
+
+	// Re-read shows the user was comped in the meantime.
+	compedUser := userWithPastDueOverride(userID, pastDueStarted, now.Add(24*time.Hour))
+	repo.On("GetUserByID", mock.Anything, userID).Return(&compedUser, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Test 13: expired override — proceeds to grace expiry normally.
+func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-expired-override-grace"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDueOverride(userID, pastDueStarted, now.Add(-24*time.Hour)) // expired override
+	subID := *user.PaddleSubscriptionID
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	repo.AssertCalled(t, "CancelIfPastDue", mock.Anything, userID)
+	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
+}
+
+// Test 14: household-covered user is skipped entirely (the new hook, mirroring TrialService).
+func TestPastDueService_ProcessUser_CoveredByHousehold_Skipped(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	checker := &mockHouseholdCheckerForPastDue{}
+	svc.SetHouseholdChecker(checker)
+
+	userID := "user-household-covered"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	checker.On("IsCoveredByHousehold", mock.Anything, userID).Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	repo.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+}
+
+// Test 15: household checker not covered — proceeds normally.
+func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	checker := &mockHouseholdCheckerForPastDue{}
+	svc.SetHouseholdChecker(checker)
+
+	userID := "user-household-not-covered"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+	checker.On("IsCoveredByHousehold", mock.Anything, userID).Return(false, nil)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	repo.AssertCalled(t, "CancelIfPastDue", mock.Anything, userID)
+}
+
+// Test 16: household checker fails — fail closed (skip destructive action) but propagate the
+// error, mirroring TrialService.ExpireTrial's fail-closed-with-error-propagation semantics
+// (see trial_service.go:197-204 for why swallowing would hide an operational failure).
+func TestPastDueService_ProcessUser_HouseholdCheckFails_SkipsDefensivelyButPropagatesError(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	checker := &mockHouseholdCheckerForPastDue{}
+	svc.SetHouseholdChecker(checker)
+
+	userID := "user-household-check-fails"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	checker.On("IsCoveredByHousehold", mock.Anything, userID).Return(false, errors.New("lookup failed"))
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.Error(t, err, "the failure must be visible to the caller's error/retry accounting, not silently swallowed")
+
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
 }

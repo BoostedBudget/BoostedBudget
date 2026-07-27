@@ -758,6 +758,9 @@ func main() {
 			pastDueCfg.PlaidDisconnectDays,
 		)
 		pastDueService.SetAnalytics(phClient)
+		// #1413: exempt actively covered household members from past_due dunning, closing an
+		// asymmetry with TrialService's #1367 household exemption (wired identically above).
+		pastDueService.SetHouseholdChecker(householdEntitlementService)
 		appLogger.Info("Past-due service initialized",
 			"grace_days", pastDueCfg.GraceDays,
 			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,
