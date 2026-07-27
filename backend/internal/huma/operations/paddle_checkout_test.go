@@ -161,7 +161,7 @@ func (m *mockProfileRepo) UpdateUser(ctx context.Context, user *domain.User) err
 func (m *mockProfileRepo) GetUsersWithActivePaddleSubscriptions(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *mockProfileRepo) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+func (m *mockProfileRepo) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	return "", nil
 }
 func (m *mockProfileRepo) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {

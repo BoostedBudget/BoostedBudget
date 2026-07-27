@@ -502,8 +502,9 @@ func (m *MockUserRepository) GetUsersWithActivePaddleSubscriptions(ctx context.C
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-// GetSubscriptionStatusByUserID returns subscription status for the read-only middleware (#930)
-func (m *MockUserRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+// GetEffectiveSubscriptionStatusByUserID returns the effective subscription status for the
+// read-only middleware (#930, #1413)
+func (m *MockUserRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }
