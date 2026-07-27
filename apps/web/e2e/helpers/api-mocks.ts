@@ -8,15 +8,31 @@ import type { Page } from '@playwright/test'
  * their actual data APIs are fully intercepted.
  *
  * Call this from every test file that uses page.route() to mock data APIs.
+ *
+ * Issue #1413: `effectiveStatus` / `isComped` / `compTier` / `compEndsAt` let a spec present a
+ * comped or frozen user without hand-rolling the profile route. All four are additive with
+ * defaults matching pre-#1413 behavior (`isComped: false`, the rest absent from the JSON body via
+ * `JSON.stringify` dropping `undefined`) — existing callers are unaffected.
  */
 export async function mockAuthDependencies(
   page: Page,
   overrides?: {
     subscriptionStatus?: string
     isAdmin?: boolean
+    effectiveStatus?: string
+    isComped?: boolean
+    compTier?: string
+    compEndsAt?: string
   }
 ) {
-  const { subscriptionStatus = 'active', isAdmin = false } = overrides ?? {}
+  const {
+    subscriptionStatus = 'active',
+    isAdmin = false,
+    effectiveStatus,
+    isComped = false,
+    compTier,
+    compEndsAt,
+  } = overrides ?? {}
 
   await page.route('**/api/v1/user/profile*', (route) => {
     route.fulfill({
@@ -28,6 +44,10 @@ export async function mockAuthDependencies(
         email: 'test@example.com',
         subscription_status: subscriptionStatus,
         subscription_tier: 'premium',
+        effective_status: effectiveStatus,
+        is_comped: isComped,
+        comp_tier: compTier,
+        comp_ends_at: compEndsAt,
         primary_region: 'us-east-1',
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
