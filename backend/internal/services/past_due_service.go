@@ -29,9 +29,21 @@ type PastDueProfileRepository interface {
 	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
 
 	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is
-	// still 'past_due'. Returns (true, nil) if the flip happened, (false, nil) if the user
-	// has already recovered (payment arrived between Plaid disconnect and this point).
+	// still 'past_due' AND carries no currently-active manual tier override. Returns (true, nil)
+	// if the flip happened, (false, nil) if the user has already recovered (payment arrived
+	// between Plaid disconnect and this point) or an admin granted/extended a comp in that same
+	// window (Issue #1413 High finding H6, Codex review round 3: predicate extended to also
+	// close the comp race).
 	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
+
+	// ClaimPlaidDisconnectIfPastDue atomically verifies, at the moment of the claim, that a user
+	// is still 'past_due' and carries no currently-active manual tier override, before the
+	// day-14 pre-emptive Plaid disconnect proceeds. Unlike CancelIfPastDue, this path has no
+	// state transition of its own to hang a CAS on — see the repository implementation's doc
+	// comment for how it closes the race without a schema change. Returns (true, nil) if the
+	// claim succeeded (safe to disconnect), (false, nil) if the user has recovered or been
+	// comped since reReadStillPastDue's check (Issue #1413 High finding H6, Codex review round 3).
+	ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error)
 
 	// SetRetentionDates starts the 6-month retention clock.
 	SetRetentionDates(ctx context.Context, userID string, started, expires time.Time) error
@@ -330,6 +342,22 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 		return fmt.Errorf("failed to re-read user %s for Plaid disconnect check: %w", user.ID, err)
 	}
 	if !stillPastDue {
+		return nil
+	}
+
+	// #1413 High finding H6 (Codex review round 3): reReadStillPastDue's check above is a plain
+	// read and is NOT atomic with the Plaid disconnect call below — an admin can still grant a
+	// comp in that window. Claim the right to disconnect via a conditional update that
+	// re-verifies "still past_due, still no live override" against committed state at the moment
+	// of the claim. A lost claim is a legitimate skip (the comp already granted access, or the
+	// user recovered), not a failure.
+	claimed, err := s.repo.ClaimPlaidDisconnectIfPastDue(ctx, user.ID)
+	if err != nil {
+		return fmt.Errorf("failed to claim Plaid disconnect for user %s: %w", user.ID, err)
+	}
+	if !claimed {
+		s.logger.Info("past_due Plaid disconnect claim lost — user recovered or comped concurrently, skipping",
+			"user_id", user.ID)
 		return nil
 	}
 

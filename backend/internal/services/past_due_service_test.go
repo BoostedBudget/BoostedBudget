@@ -38,6 +38,11 @@ func (m *mockPastDueProfileRepo) CancelIfPastDue(ctx context.Context, userID str
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *mockPastDueProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *mockPastDueProfileRepo) SetRetentionDates(ctx context.Context, userID string, started, expires time.Time) error {
 	args := m.Called(ctx, userID, started, expires)
 	return args.Error(0)
@@ -258,16 +263,48 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 
 	// Re-read confirms still past_due
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	// #1413 High finding H6: the Plaid disconnect claim must succeed for the disconnect to proceed.
+	repo.On("ClaimPlaidDisconnectIfPastDue", mock.Anything, userID).Return(true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
+	repo.AssertCalled(t, "ClaimPlaidDisconnectIfPastDue", mock.Anything, userID)
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+}
+
+// Test 4b (H6): reReadStillPastDue passes, but the atomic claim itself fails — e.g. an admin
+// granted a comp, or the user recovered, in the narrow window between the re-read and this call.
+// Proves the race reReadStillPastDue alone cannot close: DisconnectAllUserItems must NOT run.
+func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-plaid-claim-lost"
+	now := time.Now()
+	pastDueStarted := now.Add(-15 * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	// The claim reports false — the comp/recovery landed after reReadStillPastDue's read.
+	repo.On("ClaimPlaidDisconnectIfPastDue", mock.Anything, userID).Return(false, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
+
+	repo.AssertCalled(t, "ClaimPlaidDisconnectIfPastDue", mock.Anything, userID)
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
 // Test 5: Plaid-only window but re-read shows recovered — no-op

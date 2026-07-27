@@ -194,6 +194,14 @@ func (m *MockProfileRepoForWorker) CancelIfPastDue(ctx context.Context, userID s
 	return false, nil
 }
 
+func (m *MockProfileRepoForWorker) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepoForWorker) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
 }

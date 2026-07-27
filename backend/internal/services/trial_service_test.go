@@ -31,9 +31,9 @@ func (m *mockTrialRepository) UpdateTrialStatus(ctx context.Context, userID stri
 	return args.Error(0)
 }
 
-func (m *mockTrialRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	args := m.Called(ctx, userID, status)
-	return args.Error(0)
+func (m *mockTrialRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *mockTrialRepository) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
@@ -220,7 +220,7 @@ func TestTrialService_ExpireTrial_Success(t *testing.T) {
 	}
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
@@ -244,7 +244,7 @@ func TestTrialService_ExpireTrial_DisconnectsPlaidItems(t *testing.T) {
 	}
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
@@ -279,7 +279,7 @@ func TestTrialService_ExpireTrial_CoveredByHousehold_Skipped(t *testing.T) {
 	err := service.ExpireTrial(ctx, userID)
 
 	require.NoError(t, err)
-	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
 	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
@@ -294,7 +294,7 @@ func TestTrialService_ExpireTrial_NotCoveredByHousehold_Proceeds(t *testing.T) {
 	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	checker.On("IsCoveredByHousehold", ctx, userID).Return(false, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
@@ -313,7 +313,7 @@ func TestTrialService_ExpireTrial_NoHouseholdCheckerConfigured_Proceeds(t *testi
 	trialEndsAt := time.Now().Add(-1 * time.Hour)
 	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
@@ -343,7 +343,7 @@ func TestTrialService_ExpireTrial_HouseholdCheckFails_SkipsDefensivelyButPropaga
 	err := service.ExpireTrial(ctx, userID)
 
 	require.Error(t, err, "the failure must be visible to the caller's error/retry accounting, not silently swallowed")
-	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
 	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
@@ -369,7 +369,7 @@ func TestTrialService_ExpireTrial_ActiveOverride_Skipped(t *testing.T) {
 	err := service.ExpireTrial(ctx, userID)
 
 	require.NoError(t, err)
-	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
@@ -390,7 +390,7 @@ func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
 		ManualTierEndsAt:   &overrideEndsAt,
 	}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
 
@@ -399,6 +399,33 @@ func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
 	require.NoError(t, err)
 	repo.AssertExpectations(t)
 	plaidCleanup.AssertExpectations(t)
+}
+
+// TestTrialService_ExpireTrial_ClaimLost_SkipsWithoutTouchingRetentionOrPlaid proves Issue #1413
+// High finding H5 (Codex review round 3) is actually closed: the HasActiveManualOverride() guard
+// at the top of ExpireTrial is a plain read and is NOT atomic with the status-flip write below
+// it — an admin can grant/extend a comp in that exact window. Here the initial read shows no
+// override (the guard passes), but ExpireTrialIfNoOverride reports claimed=false, simulating a
+// comp landing between the guard and the atomic write. Retention and Plaid must NOT run.
+func TestTrialService_ExpireTrial_ClaimLost_SkipsWithoutTouchingRetentionOrPlaid(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{
+		ID:                 userID,
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+	}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(false, nil)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
 func TestTrialService_CanGrantTrial_True(t *testing.T) {
@@ -462,7 +489,7 @@ func TestTrialService_ExpireTrial_NilPlaidCleanup(t *testing.T) {
 	}
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
-	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
 	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
 
 	// Should not panic and should succeed — plaidCleanup nil-guard in ExpireTrial
