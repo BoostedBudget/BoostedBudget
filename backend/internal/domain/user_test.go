@@ -241,12 +241,27 @@ func TestHasActiveManualOverride(t *testing.T) {
 }
 
 // TestHasActiveManualOverrideAt_BoundarySemantics locks in the `!ManualTierEndsAt.Before(now)`
-// semantics at the exact expiry boundary. We deliberately never construct a literal "exactly
-// now" timestamp (flaky); instead we nudge ManualTierEndsAt one millisecond to either side of a
-// fixed `now` passed explicitly to the -At variant.
+// semantics at the exact expiry boundary, using a fixed `now` passed explicitly to the -At
+// variant. Because -At takes the timestamp as a parameter rather than reading the clock, an
+// exact tie (ends_at == now) is fully deterministic here — the flakiness that would come from
+// trying to hit "exactly now" against a live clock does not apply.
+//
+// The exact-tie case is the one that matters: the ±1ms cases below pass identically whether the
+// comparison is `>=` or `>`, so they cannot pin down which semantic is intended. Only the tie
+// distinguishes them. This mirrors, on the Go side, what
+// TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary pins on the SQL side —
+// together they are what keeps the two expressions of this rule from drifting apart.
 func TestHasActiveManualOverrideAt_BoundarySemantics(t *testing.T) {
 	override := "household_2"
 	now := time.Now()
+
+	t.Run("ends_at exactly equal to now is still active", func(t *testing.T) {
+		endsAt := now
+		user := &User{ManualTierOverride: &override, ManualTierEndsAt: &endsAt}
+		assert.True(t, user.hasActiveManualOverrideAt(now),
+			"an override ending exactly at now must still count as active: "+
+				"!Before(now) is true on a tie, which is why the SQL predicate uses >= and not >")
+	})
 
 	t.Run("ends_at 1ms after now is still active", func(t *testing.T) {
 		endsAt := now.Add(time.Millisecond)
