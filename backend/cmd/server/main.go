@@ -392,6 +392,7 @@ func main() {
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
 		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
+		workClaimsRepo := repository.NewWorkClaimsRepository(db)                                              // Issue #1413: durable leased claims for destructive actions
 
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
@@ -632,6 +633,11 @@ func main() {
 			deletionService.SetHouseholdReader(householdRepo)
 			deletionService.SetHouseholdInviteRevoker(householdInviteRepo)
 			deletionService.SetDB(db)
+			// Issue #1413 Critical finding C2: required for ExecuteDeletion to gain
+			// EXCLUSIVITY on ActionAccountDeletion before any irreversible Paddle/Plaid
+			// cleanup or cascade delete — replaces the old self-assigning ClaimForDeletion
+			// guard, which reserved nothing. See work_claims_repository.go's package doc.
+			deletionService.SetWorkClaimsRepo(workClaimsRepo)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Register Huma deletion routes (Issue #559: Huma migration)
@@ -1209,6 +1215,12 @@ func main() {
 			}
 
 			// Issue #930: Retention cleanup check (daily)
+			// Issue #1413: RetentionCleanupCheckUniqueOpts (retention_cleanup_check.go)
+			// documents the same shape below as the source of truth this must stay in sync
+			// with. UniqueOpts constrains to one check job in any non-terminal state AT
+			// ALL within a 23-hour window (job-level defense in depth only — the real
+			// correctness mechanism is ExecuteDeletion's work_claims claim, not this) so
+			// concurrent River clients/schedulers can't double-run the daily check.
 			if retentionCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
@@ -1217,6 +1229,17 @@ func main() {
 								TriggerSource: "periodic",
 							}, &river.InsertOpts{
 								Queue: "low",
+								UniqueOpts: river.UniqueOpts{
+									ByArgs:   false,
+									ByPeriod: 23 * time.Hour,
+									ByState: []rivertype.JobState{
+										rivertype.JobStateAvailable,
+										rivertype.JobStateScheduled,
+										rivertype.JobStateRunning,
+										rivertype.JobStateRetryable,
+										rivertype.JobStatePending,
+									},
+								},
 							}
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},

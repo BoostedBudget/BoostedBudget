@@ -19,8 +19,8 @@ type User struct {
 	EmailVerified bool   `json:"email_verified" db:"email_verified"`
 
 	// Subscription information
-	SubscriptionTier      string     `json:"subscription_tier" db:"subscription_tier"`             // premium, household_2, household_3, household_4, household_5
-	SubscriptionStatus    string     `json:"subscription_status" db:"subscription_status"`         // active, inactive, trial, cancelled, past_due
+	SubscriptionTier      string     `json:"subscription_tier" db:"subscription_tier"`     // premium, household_2, household_3, household_4, household_5
+	SubscriptionStatus    string     `json:"subscription_status" db:"subscription_status"` // active, inactive, trial, cancelled, past_due
 	SubscriptionStartedAt *time.Time `json:"subscription_started_at,omitempty" db:"subscription_started_at"`
 	SubscriptionEndsAt    *time.Time `json:"subscription_ends_at,omitempty" db:"subscription_ends_at"`
 

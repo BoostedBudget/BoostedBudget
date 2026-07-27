@@ -55,6 +55,16 @@ type DeletionService interface {
 	// (or HouseholdReader/HouseholdInviteRevoker are unset), falls back to the
 	// non-transactional sequence.
 	SetDB(db repository.DB)
+
+	// SetWorkClaimsRepo wires the durable work-claims mechanism (Issue #1413 Critical
+	// finding C2) that ExecuteDeletion uses to gain EXCLUSIVITY on ActionAccountDeletion
+	// before any irreversible work — replacing ClaimForDeletion's self-assigning UPDATE,
+	// which is an atomic guard (proves the predicate held at one instant) rather than a
+	// claim (reserves nothing, so two retention workers could both proceed). Required for
+	// ExecuteDeletion to run at all: unlike the other Set* methods above, this is not an
+	// optional capability — a nil claims repo makes ExecuteDeletion fail loudly rather
+	// than silently falling back to the old, race-prone guard-only behavior.
+	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
 }
 
 // HouseholdReader is the narrow household-read capability DeletionService needs.
@@ -80,15 +90,23 @@ type deletionService struct {
 	emailService     EmailService
 	clerkService     ClerkService
 	auditLogger      AuditLogger
-	plaidCleanupSvc  PlaidItemCleanupService // Issue #668: Remove Plaid items before DB deletion
-	paddleCleanupSvc PaddleDeletionCleaner   // Issue #1006: nil if Paddle not configured
-	analytics        phclient.Analytics      // Optional PostHog analytics client
-	householdReader  HouseholdReader         // #1367 — Phase 3: nil skips the owner guard
-	inviteRevoker    HouseholdInviteRevoker  // #1367 — Phase 3: nil skips invite revocation
-	db               repository.DB           // #1367 — Phase 3: nil falls back to non-transactional guard
+	plaidCleanupSvc  PlaidItemCleanupService         // Issue #668: Remove Plaid items before DB deletion
+	paddleCleanupSvc PaddleDeletionCleaner           // Issue #1006: nil if Paddle not configured
+	analytics        phclient.Analytics              // Optional PostHog analytics client
+	householdReader  HouseholdReader                 // #1367 — Phase 3: nil skips the owner guard
+	inviteRevoker    HouseholdInviteRevoker          // #1367 — Phase 3: nil skips invite revocation
+	db               repository.DB                   // #1367 — Phase 3: nil falls back to non-transactional guard
+	claimsRepo       repository.WorkClaimsRepository // Issue #1413 C2: required for ExecuteDeletion
 	gracePeriodDays  int
 	tokenSecret      string
 }
+
+// accountDeletionClaimLease is the lease duration ExecuteDeletion requests for
+// ActionAccountDeletion. 15 minutes is deliberately generous: deletion involves Paddle and
+// Plaid calls, both of which can be slow, and the fencing token (see
+// repository.WorkClaimsRepository) makes a lease over-run detectable rather than silently
+// double-executing external work, so there is no correctness reason to size this tightly.
+const accountDeletionClaimLease = 15 * time.Minute
 
 // AuditLogger defines the interface for audit logging
 type AuditLogger interface {
@@ -279,40 +297,99 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return nil
 	}
 
-	// Issue #1413 Critical finding C2 (Codex review round 2): claim atomically BEFORE any
-	// irreversible work. Ordering matters — Paddle/Plaid cleanup below must still run before
-	// DeleteUserCascade (their IDs must be readable), so the claim has to come first as its
-	// own step, or an admin comp granted after Paddle/Plaid cleanup already ran would still be
-	// overtaken by the time DeleteUserCascade's own guard could catch it.
-	claimed, err := s.profileRepo.ClaimForDeletion(ctx, userID)
+	// Issue #1413 Critical finding C2 (closed for real, round 3): gain EXCLUSIVITY via a
+	// durable work claim BEFORE re-verifying eligibility or doing any irreversible work.
+	// ClaimForDeletion's self-assigning UPDATE below is an atomic GUARD — it proves the
+	// predicate held at THIS instant but reserves nothing, so two retention workers (or a
+	// worker and a user-initiated deletion) could both pass it concurrently. The work claim
+	// closes that: exactly one caller can hold ActionAccountDeletion's lease for this user at
+	// a time. This is not optional — a nil claimsRepo means the exclusivity mechanism this
+	// whole branch exists to add is unavailable, so fail loudly rather than silently falling
+	// back to guard-only behavior.
+	if s.claimsRepo == nil {
+		return fmt.Errorf("ExecuteDeletion: work claims repository not configured")
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, accountDeletionClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim user for deletion: %w", err)
 	}
 	if !claimed {
+		// Another worker already holds this lease, or the action was already completed.
+		// This is a legitimate, expected outcome — not an error.
+		slog.Default().Info("skipping auto-deletion — another worker holds the deletion claim, or it was already completed",
+			"user_id", userID)
+		return nil
+	}
+
+	// The work claim gives EXCLUSIVITY; ClaimForDeletion's conditional UPDATE still
+	// re-verifies CORRECTNESS ("is this user still eligible") against committed state at the
+	// moment of the claim — e.g. an admin comp granted between the GetUserByID read above and
+	// this call. The two are complementary, not redundant (see the #1413 design doc's required
+	// call shape): the claim alone cannot know whether deletion is still authorised.
+	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID)
+	if err != nil {
+		if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
+			slog.Default().Warn("failed to release deletion claim after predicate error", "user_id", userID, "error", releaseErr)
+		}
+		return fmt.Errorf("failed to claim user for deletion: %w", err)
+	}
+	if !eligible {
 		// An admin granted or extended a comp between the GetUserByID read above and this
-		// claim, and the user has no outstanding GDPR deletion request of their own to
-		// override it. This is a legitimate, expected outcome — not an error. The daily
-		// retention job will simply not re-select this user while the comp remains live.
+		// check, and the user has no outstanding GDPR deletion request of their own to
+		// override it. Release immediately so a later run (once the comp lapses and is
+		// cleared) doesn't have to wait out the full lease. Legitimate outcome, not an error.
+		if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, "precondition lost — comp granted or extended since last read"); releaseErr != nil {
+			slog.Default().Warn("failed to release deletion claim after predicate denial", "user_id", userID, "error", releaseErr)
+		}
 		slog.Default().Info("skipping auto-deletion — claim not granted (comped since last read)",
 			"user_id", userID)
 		return nil
 	}
 
-	// Issue #1006: Paddle cleanup before Plaid and DB deletion (Paddle IDs must be readable)
+	// Issue #1413 Critical finding C2: external cleanup failure now ABORTS the deletion
+	// instead of being swallowed. DeleteUserCascade (below) clears paddle_subscription_id and
+	// Plaid references, so proceeding to the cascade after a cleanup failure would destroy the
+	// local record of the very external resources that failed to clean up — orphaning them
+	// with nothing left to retry. Releasing the claim lets the NEXT run retry the whole
+	// sequence from scratch instead.
 	if s.paddleCleanupSvc != nil {
-		s.cleanupPaddleResources(ctx, userID, user)
+		if err := s.cleanupPaddleResources(ctx, userID, user); err != nil {
+			if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
+				slog.Default().Warn("failed to release deletion claim after Paddle cleanup failure", "user_id", userID, "error", releaseErr)
+			}
+			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
+		}
 	}
 
-	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing
-	// This is critical for cost control - Plaid charges monthly per Item
-	// Errors are logged but don't stop deletion (graceful degradation)
+	// Issue #668: Remove Plaid items BEFORE database deletion to stop billing. This is
+	// critical for cost control — Plaid charges monthly per Item. A failure here now also
+	// aborts (see the Paddle cleanup comment above for why) rather than proceeding to a
+	// cascade that would strand an un-removed, still-billing Plaid item with no local record.
 	if s.plaidCleanupSvc != nil {
-		_ = s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID)
+		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
+			if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
+				slog.Default().Warn("failed to release deletion claim after Plaid cleanup failure", "user_id", userID, "error", releaseErr)
+			}
+			return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
+		}
 	}
 
 	// Execute cascade deletion in database
 	if err := s.profileRepo.DeleteUserCascade(ctx, userID); err != nil {
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
+	}
+
+	// Mark the claim durably complete. A false ok (with no error) means our lease was
+	// reclaimed by another worker while we were doing the work above — i.e. the external
+	// cleanup and cascade we just ran may have ALSO been run by whoever holds the claim now.
+	// That is precisely the failure mode this whole mechanism exists to make visible instead
+	// of silent, so it is logged at Error with enough context to investigate, not swallowed.
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token)
+	if err != nil {
+		slog.Default().Error("failed to mark deletion claim complete", "user_id", userID, "action", repository.ActionAccountDeletion, "error", err)
+	} else if !completed {
+		slog.Default().Error("deletion claim lease lost mid-flight — external cleanup and cascade may have run twice",
+			"user_id", userID, "action", repository.ActionAccountDeletion)
 	}
 
 	// Delete user from Clerk (non-critical)
@@ -444,9 +521,23 @@ func (s *deletionService) SetDB(db repository.DB) {
 	s.db = db
 }
 
-// cleanupPaddleResources cancels subscriptions and archives customer for GDPR compliance.
-// Errors are logged but don't stop deletion (graceful degradation).
-func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) {
+// SetWorkClaimsRepo wires the durable work-claims mechanism ExecuteDeletion requires. See the
+// DeletionService interface doc for why this is not treated as an optional capability like the
+// other Set* methods. Issue #1413 Critical finding C2.
+func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+	s.claimsRepo = repo
+}
+
+// cleanupPaddleResources cancels subscriptions and archives the customer for GDPR compliance.
+//
+// Issue #1413 Critical finding C2 (closed for real, round 3): errors here now ABORT the
+// deletion rather than being logged and swallowed. The previous graceful-degradation behavior
+// let ExecuteDeletion proceed to DeleteUserCascade even after a failed Paddle call — which then
+// clears paddle_subscription_id/paddle_customer_id, permanently destroying the only record of
+// the resource that needs cleanup. Nothing would ever retry it. Returning the first failure lets
+// the caller Release the claim so the whole sequence retries on the next run, while the IDs are
+// still present in the database to retry against.
+func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID string, user *domain.User) error {
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
 
 	// Cancel active subscriptions
@@ -454,14 +545,10 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
 			if err := s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID); err != nil {
-				slog.Default().Warn("failed to cancel Paddle subscription during deletion",
-					"user_id", userID,
-					"subscription_id", *user.PaddleSubscriptionID,
-					"error", err,
-				)
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
 				}
+				return fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
 			}
 		}
 	}
@@ -469,14 +556,12 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	// Archive customer and anonymize email (GDPR PII erasure)
 	if user.PaddleCustomerID != nil {
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
-			slog.Default().Warn("failed to archive Paddle customer during deletion",
-				"user_id", userID,
-				"customer_id", *user.PaddleCustomerID,
-				"error", err,
-			)
 			if s.analytics != nil {
 				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
 			}
+			return fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
 		}
 	}
+
+	return nil
 }
