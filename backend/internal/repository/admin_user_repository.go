@@ -143,7 +143,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 	// Main query with counts via subqueries
 	query := fmt.Sprintf(`
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
-		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
+		       u.manual_tier_override, u.manual_tier_ends_at,
+		       u.deletion_requested_at, u.deletion_scheduled_at, u.primary_region,
 		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as boosts_count,
@@ -187,6 +188,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 			&user.SubscriptionStatus,
 			&user.ManualTierOverride,
 			&user.ManualTierEndsAt,
+			&user.DeletionRequestedAt,
+			&user.DeletionScheduledAt,
 			&user.PrimaryRegion,
 			&user.CreatedAt,
 			&user.LastLoginAt,
@@ -219,7 +222,8 @@ func (r *adminUserRepository) ListUsers(ctx context.Context, filters domain.Admi
 func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error) {
 	query := `
 		SELECT u.id, u.email, u.subscription_tier, u.subscription_status,
-		       u.manual_tier_override, u.manual_tier_ends_at, u.primary_region,
+		       u.manual_tier_override, u.manual_tier_ends_at,
+		       u.deletion_requested_at, u.deletion_scheduled_at, u.primary_region,
 		       u.created_at, u.last_login_at, u.is_active,
 		       COALESCE(la.count, 0) as linked_accounts_count,
 		       COALESCE(r.count, 0) as boosts_count,
@@ -265,6 +269,8 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 		&detail.SubscriptionStatus,
 		&detail.ManualTierOverride,
 		&detail.ManualTierEndsAt,
+		&detail.DeletionRequestedAt,
+		&detail.DeletionScheduledAt,
 		&detail.PrimaryRegion,
 		&detail.CreatedAt,
 		&detail.LastLoginAt,

@@ -262,6 +262,88 @@ func TestGetUserSubscription_Success(t *testing.T) {
 	assert.NotNil(t, api)
 }
 
+// getUserSubscriptionResponseBody is the subset of AdminSubscriptionDetailOutput.Body relevant
+// to the effective_status assertions below.
+type getUserSubscriptionResponseBody struct {
+	SubscriptionStatus string `json:"subscription_status"`
+	EffectiveTier      string `json:"effective_tier"`
+	EffectiveStatus    string `json:"effective_status"`
+}
+
+// TestGetUserSubscription_ReturnsEffectiveStatus proves the response body carries
+// effective_status alongside the existing raw subscription_status and effective_tier (Issue
+// #1413) — the modal previously had only raw status, so an admin could not see whether a comp
+// actually unlocks access. The handler surfaces AdminUserService's already-computed
+// EffectiveStatus (single source of truth) rather than recomputing it.
+func TestGetUserSubscription_ReturnsEffectiveStatus(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	tierOverride := "household_2"
+	futureEnd := time.Now().Add(24 * time.Hour)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			EffectiveStatus:    "active", // as already computed by AdminUserService.enrichAdminUser
+			ManualTierOverride: &tierOverride,
+			ManualTierEndsAt:   &futureEnd,
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "inactive", body.SubscriptionStatus, "raw status must still be present")
+	assert.Equal(t, "active", body.EffectiveStatus, "effective_status must reflect the live override")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus proves that with no
+// override, effective_status mirrors the raw subscription_status.
+func TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "past_due",
+			EffectiveStatus:    "past_due",
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "past_due", body.EffectiveStatus)
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
 func TestCreateSubscriptionOverride_RouteRegistered(t *testing.T) {
 	api, _, mockAdminSvc := setupAdminSubscriptionsAPI(t)
 
