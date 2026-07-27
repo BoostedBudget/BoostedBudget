@@ -2987,6 +2987,9 @@ components:
         cancel_at_period_end:
           description: Whether the subscription is scheduled to cancel at end of current period
           type: boolean
+        comp_ends_at:
+          description: RFC 3339 datetime when complimentary access ends; absent means indefinite
+          type: string
         currency:
           description: Currency code
           examples:
@@ -2997,6 +3000,9 @@ components:
           examples:
             - "2026-03-01"
           type: string
+        is_comped:
+          description: True when access is granted by an admin comp rather than a paid subscription
+          type: boolean
         next_billing_date:
           description: Next billing date
           examples:
@@ -3041,6 +3047,7 @@ components:
         - amount
         - currency
         - cancel_at_period_end
+        - is_comped
       type: object
     GetHoldingsOutputBody:
       additionalProperties: false
@@ -6802,6 +6809,11 @@ components:
           type: string
         clerk_user_id:
           type: string
+        comp_ends_at:
+          format: date-time
+          type: string
+        comp_tier:
+          type: string
         created_at:
           format: date-time
           type: string
@@ -6810,6 +6822,8 @@ components:
           type: string
         deletion_scheduled_at:
           format: date-time
+          type: string
+        effective_status:
           type: string
         effective_tier:
           type: string
@@ -6822,6 +6836,8 @@ components:
         id:
           type: string
         is_active:
+          type: boolean
+        is_comped:
           type: boolean
         is_deleted:
           type: boolean
@@ -6887,6 +6903,7 @@ components:
         - email_verified
         - subscription_tier
         - subscription_status
+        - is_comped
         - had_trial
         - primary_region
         - is_active
