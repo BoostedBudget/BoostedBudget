@@ -172,10 +172,15 @@ func (u *User) ComputeEffectiveStatus() string {
 // only callers are tests. Staleness of this payload (e.g. before a later task wires up sync)
 // is therefore a UI/analytics concern, not a security one; the backend's authoritative source
 // is ComputeEffectiveTier/ComputeEffectiveStatus evaluated directly against the database row.
+//
+// tier and status are computed from a single shared clock read rather than by calling the
+// public ComputeEffectiveTier/ComputeEffectiveStatus methods (which would each read time.Now()
+// independently), so the two fields can never disagree about whether an override is live.
 func (u *User) ClerkPublicMetadata() map[string]interface{} {
+	now := time.Now()
 	return map[string]interface{}{
-		"subscription_tier":   u.ComputeEffectiveTier(),
-		"subscription_status": u.ComputeEffectiveStatus(),
+		"subscription_tier":   u.computeEffectiveTierAt(now),
+		"subscription_status": u.computeEffectiveStatusAt(now),
 		"tier":                nil,
 	}
 }
