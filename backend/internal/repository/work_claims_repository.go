@@ -19,44 +19,64 @@ package repository
 // inside the same call, after the claim is won and before any irreversible
 // external work. See the required call shape in the #1413 design doc:
 //
-//	claimed, err := claims.Claim(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, 15*time.Minute)
+//	token, claimed, err := claims.Claim(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, 15*time.Minute)
 //	if err != nil { return err }
 //	if !claimed { return nil } // another worker holds it, or it's already done
 //
 //	ok, err := repo.SomeConditionalTransition(ctx, userID)
 //	if err != nil || !ok {
-//	    _ = claims.Release(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, "precondition lost")
+//	    _, _ = claims.Release(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, token, "precondition lost")
 //	    return err
 //	}
 //
 //	if err := externalWork(ctx); err != nil {
-//	    _ = claims.Release(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, err.Error())
+//	    _, _ = claims.Release(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, token, err.Error())
 //	    return err
 //	}
 //
-//	return claims.Complete(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue)
+//	completed, err := claims.Complete(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue, token)
+//	if err != nil {
+//	    return err
+//	}
+//	if !completed {
+//	    // We lost our lease while doing the external work: another worker's Claim
+//	    // reclaimed this tuple and may have performed the SAME external side effect
+//	    // concurrently. This must be visible, not silent — log at Error/Warn, page,
+//	    // whatever the caller's convention is. Do NOT treat this as a benign race
+//	    // the way claimed == false is; it means the at-most-once guarantee this
+//	    // table exists to provide may have just been violated for this action.
+//	    slog.Error("work claim lost mid-flight; external work may have run twice",
+//	        "resource_type", ResourceTypeUser, "resource_id", userID, "action", ActionPlaidDisconnectPastDue)
+//	}
 //
-// KNOWN LIMITATION (flagged by Codex adversarial review, issue #1413): this API has no
-// fencing token. Complete/Release identify a claim only by (resourceType, resourceID,
-// action), not by the specific lease instance Claim granted. If a claimant's external
-// work runs LONGER than the lease it was granted (not crashed, just slow — e.g. a GC
-// pause or a hung network call), another caller may legitimately reclaim and start
-// the same external work while the first is still in flight; if the first claimant
-// then calls Complete/Release, it is acting on whichever lease instance currently
-// occupies the row, not necessarily its own. This is a real, deliberate simplification
-// of the design doc's frozen 3-method signature (Claim/Complete/Release, no token) —
-// the mitigation is operational, not code-level: choose lease durations that are
-// generously longer than the expected external call, and treat "still not done after
-// the lease" as equivalent to "crashed." Release is hardened below to never resurrect
-// a claim another worker already Completed, which closes the most damaging half of
-// this gap (a stale Release can no longer un-complete finished work), but it does not
-// close the "both workers run the external side effect" half. Callers with unusually
-// slow or retried external calls (Paddle, Plaid) should size leases accordingly.
+// FENCING TOKEN (closes a gap flagged by Codex adversarial review, issue #1413):
+// Claim/Complete/Release originally identified a claim only by (resourceType,
+// resourceID, action), never by which lease INSTANCE Claim actually granted. If a
+// claimant's external work ran LONGER than the lease it was granted — not
+// crashed, just slow (a GC pause, a hung Plaid/Paddle call) — another caller could
+// legitimately reclaim and start the SAME external work while the first was still
+// in flight. The first claimant's eventual Complete/Release would then silently
+// act on whichever lease instance currently occupied the row, not necessarily its
+// own, and the record would show one execution when two actually happened.
+//
+// This is now closed rather than merely mitigated: Claim generates a fresh
+// lease_token (a UUID) on every successful claim, including reclaims of an
+// expired lease, and returns it to the caller. Complete and Release require that
+// token to match the row's CURRENT lease_token — via "AND lease_token = $n" in
+// their WHERE clause — to have any effect at all, and report via their ok return
+// value whether they matched. A stale caller's Complete/Release is therefore a
+// true no-op against the reclaimer's row: it cannot mark the reclaimer's lease
+// finished, and it cannot touch the reclaimer's lease_expires_at or last_error.
+// Lease sizing (choosing a duration generously longer than the expected external
+// call) remains good operational practice to minimize how often this happens at
+// all, but correctness no longer depends on it.
 
 import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Action constants for work_claims.action. Callers MUST use these rather than
@@ -85,35 +105,58 @@ const ResourceTypeUser = "user"
 // WorkClaimsRepository grants exclusive, durable, leased claims on
 // (resourceType, resourceID, action) tuples for destructive actions that must
 // run at most once in flight. See the package doc comment above for the
-// required call shape.
+// required call shape and the fencing-token contract.
 type WorkClaimsRepository interface {
 	// Claim attempts to exclusively reserve (resourceType, resourceID, action) for
 	// the caller, with a lease of the given duration. Returns claimed=false when
 	// another worker holds an unexpired, incomplete lease, or when the action was
-	// already completed. A lease that has expired (crashed worker) is reclaimable.
-	// A completed claim is never re-granted. lease must be positive; Claim returns
-	// an error without touching the database otherwise.
+	// already completed. A lease that has expired (crashed OR merely slow worker)
+	// is reclaimable. A completed claim is never re-granted. lease must be
+	// positive; Claim returns an error without touching the database otherwise.
+	//
+	// On success, token is a freshly generated fencing token identifying THIS
+	// lease instance — including on a reclaim of an expired lease, where it is
+	// always different from whatever token the previous (crashed/slow) holder
+	// was given. token must be presented to Complete/Release; a caller that
+	// forgets it can no longer act on this claim at all, by construction.
 	//
 	// claimed == false is a normal outcome, not an error — callers should log at
-	// Info and return nil rather than treating it as a failure.
-	Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (bool, error)
+	// Info and return nil rather than treating it as a failure. On claimed ==
+	// false, token is always empty.
+	Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (token string, claimed bool, err error)
 
-	// Complete marks the work durably finished. Idempotent: calling it again after
-	// the claim is already completed is a no-op (the original completion time is
-	// preserved). A completed claim is never re-granted by Claim. Returns an error
-	// if no claim exists for (resourceType, resourceID, action) — Complete should
-	// only ever be called after a successful Claim, so a "not found" result
-	// usually means a mismatched resourceType/resourceID/action (e.g. a typo)
-	// rather than a benign race.
-	Complete(ctx context.Context, resourceType, resourceID, action string) error
+	// Complete marks the work durably finished, but only if token matches the
+	// row's CURRENT lease_token. Idempotent for repeated calls with the SAME
+	// valid token: the original completed_at is preserved (COALESCE) and ok
+	// remains true. A completed claim is never re-granted by Claim.
+	//
+	// Returns ok=false (with err=nil) when no row matches (resourceType,
+	// resourceID, action, token) — either because no claim was ever made for
+	// that tuple (e.g. a caller bug/typo), or because token is stale: the
+	// caller's lease was reclaimed by another worker while this one was still
+	// doing external work. These two cases are deliberately not distinguished
+	// by return value, because the caller-side response is the same either
+	// way — do NOT treat the work as durably recorded — but a caller that gets
+	// ok == false after actually performing the external side effect MUST log
+	// that loudly: it means the effect may have just happened twice, which is
+	// the one thing this table exists to prevent, and it must be visible
+	// rather than silently swallowed.
+	Complete(ctx context.Context, resourceType, resourceID, action, token string) (ok bool, err error)
 
-	// Release abandons a claim so it becomes immediately reclaimable (rather than
-	// waiting out the remaining lease), recording reason for diagnostics. Use this
-	// when the external work failed and must be retried — never fall through to
-	// treat the work as done. Idempotent, and a no-op (nil error) both when no
-	// claim exists and when the claim was already Completed by someone else —
-	// Release can never resurrect completed work.
-	Release(ctx context.Context, resourceType, resourceID, action, reason string) error
+	// Release abandons a claim so it becomes immediately reclaimable (rather
+	// than waiting out the remaining lease), recording reason for diagnostics,
+	// but only if token matches the row's CURRENT lease_token. Use this when
+	// the external work failed and must be retried — never fall through to
+	// treat the work as done.
+	//
+	// Returns ok=false (with err=nil) — a genuine no-op, nothing is written —
+	// when no row matches (resourceType, resourceID, action, token): no claim
+	// exists, the claim was already Completed by someone else (Release can
+	// never resurrect completed work), or token is stale because another
+	// worker already reclaimed this tuple. A stale worker's Release must not
+	// disturb the reclaimer's in-progress lease or last_error, and it does
+	// not: the WHERE clause excludes that row entirely.
+	Release(ctx context.Context, resourceType, resourceID, action, token, reason string) (ok bool, err error)
 }
 
 type workClaimsRepository struct {
@@ -129,83 +172,96 @@ func NewWorkClaimsRepository(db DB) WorkClaimsRepository {
 // On no conflict (fresh tuple), the INSERT proceeds and the row count is 1 — claimed.
 // On conflict, the DO UPDATE's WHERE is evaluated against the existing row:
 //   - completed_at IS NULL AND lease_expires_at < NOW() (lease expired, not completed) → update
-//     applies, row count 1 — reclaimed.
+//     applies, row count 1 — reclaimed, with a freshly generated lease_token.
 //   - otherwise (still leased, or completed) → no update happens, row count 0 — not claimed.
 //
 // Concurrently, Postgres locks the conflicting row for the duration of each attempt, so
 // exactly one concurrent caller's statement can ever see row count 1 for a given tuple.
-func (r *workClaimsRepository) Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (bool, error) {
+//
+// The token is generated in Go (not via a SQL-side default or RETURNING) because the
+// caller needs to know it unconditionally BEFORE learning whether the claim was won —
+// it is simply discarded (returned as "") when RowsAffected() is 0.
+func (r *workClaimsRepository) Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (string, bool, error) {
 	if lease <= 0 {
-		return false, fmt.Errorf("claim %s/%s/%s: lease must be positive, got %s", resourceType, resourceID, action, lease)
+		return "", false, fmt.Errorf("claim %s/%s/%s: lease must be positive, got %s", resourceType, resourceID, action, lease)
 	}
+	token := uuid.New().String()
 	ct, err := r.db.Exec(ctx, `
-		INSERT INTO work_claims (resource_type, resource_id, action, claimed_at, lease_expires_at, completed_at, attempts, last_error)
-		VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4), NULL, 1, NULL)
+		INSERT INTO work_claims (resource_type, resource_id, action, claimed_at, lease_expires_at, completed_at, attempts, last_error, lease_token)
+		VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4), NULL, 1, NULL, $5)
 		ON CONFLICT (resource_type, resource_id, action) DO UPDATE
 		SET claimed_at = NOW(),
 		    lease_expires_at = NOW() + make_interval(secs => $4),
 		    attempts = work_claims.attempts + 1,
-		    last_error = NULL
+		    last_error = NULL,
+		    lease_token = $5
 		WHERE work_claims.completed_at IS NULL
 		  AND work_claims.lease_expires_at < NOW()
-	`, resourceType, resourceID, action, lease.Seconds())
+	`, resourceType, resourceID, action, lease.Seconds(), token)
 	if err != nil {
-		return false, fmt.Errorf("claim %s/%s/%s: %w", resourceType, resourceID, action, err)
+		return "", false, fmt.Errorf("claim %s/%s/%s: %w", resourceType, resourceID, action, err)
 	}
-	return ct.RowsAffected() > 0, nil
+	if ct.RowsAffected() == 0 {
+		return "", false, nil
+	}
+	return token, true, nil
 }
 
-// Complete marks the claim durably finished. COALESCE preserves the original
-// completed_at on repeat calls, making this a true no-op after the first
-// success rather than merely error-free. last_error is cleared so a claim that
-// was previously Released with a failure reason doesn't retain a stale reason
-// after it eventually succeeds. Returns an error if no row matched — Complete
-// is only ever expected to be called immediately after a successful Claim, so
-// "no matching claim" signals a caller bug (e.g. an action typo) rather than a
-// benign outcome, unlike Release below.
-func (r *workClaimsRepository) Complete(ctx context.Context, resourceType, resourceID, action string) error {
+// Complete marks the claim durably finished, but only for the row whose CURRENT
+// lease_token equals token — the fencing check. COALESCE preserves the original
+// completed_at on repeat calls with the same valid token, making this a true
+// no-op after the first success rather than merely error-free. last_error is
+// cleared so a claim that was previously Released with a failure reason doesn't
+// retain a stale reason after it eventually succeeds.
+//
+// ok is false, with no error, whenever the tuple+token doesn't match a row —
+// whether that's "never claimed" or "lease was reclaimed out from under us."
+// See the interface doc comment for why callers must treat ok == false as
+// significant rather than benign.
+func (r *workClaimsRepository) Complete(ctx context.Context, resourceType, resourceID, action, token string) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE work_claims
 		SET completed_at = COALESCE(completed_at, NOW()),
 		    last_error = NULL
-		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
-	`, resourceType, resourceID, action)
+		WHERE resource_type = $1 AND resource_id = $2 AND action = $3 AND lease_token = $4
+	`, resourceType, resourceID, action, token)
 	if err != nil {
-		return fmt.Errorf("complete %s/%s/%s: %w", resourceType, resourceID, action, err)
+		return false, fmt.Errorf("complete %s/%s/%s: %w", resourceType, resourceID, action, err)
 	}
-	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("complete %s/%s/%s: no matching claim (was Claim ever called for this exact resource_type/resource_id/action?)", resourceType, resourceID, action)
-	}
-	return nil
+	return ct.RowsAffected() > 0, nil
 }
 
 // Release pushes lease_expires_at into the past so the very next Claim call
 // reclaims it, rather than waiting out the original lease, and records reason
-// for diagnostics. Setting it to NOW() - 1 second rather than exactly NOW()
-// avoids any risk of a same-instant race with an immediately following Claim's
-// own NOW().
+// for diagnostics — but only for the row whose CURRENT lease_token equals
+// token. Setting it to NOW() - 1 second rather than exactly NOW() avoids any
+// risk of a same-instant race with an immediately following Claim's own NOW().
 //
-// The WHERE clause's "AND completed_at IS NULL" is the fix for a real defect an
-// adversarial review surfaced: without it, a stale/late Release call from a
-// worker that already lost its lease (see the KNOWN LIMITATION doc comment
-// above) could silently un-complete a claim a different worker had already
-// finished, resurrecting work that must never be re-granted. With the guard,
-// Release is a no-op (nil error, not an error) both when no claim exists at all
-// and when the claim was already completed — deliberately not surfaced as an
-// error, since Release's return value is meant to be discarded by callers per
-// the design doc's call shape (`_ = claims.Release(...)`), and "someone else
-// already finished it" is not a caller bug worth flagging the way Complete's
-// "never claimed" case is.
-func (r *workClaimsRepository) Release(ctx context.Context, resourceType, resourceID, action, reason string) error {
-	_, err := r.db.Exec(ctx, `
+// The WHERE clause's "AND completed_at IS NULL" guard predates the fencing
+// token and is kept deliberately even though the token check now makes most of
+// its original failure mode unreachable (a stale caller's OLD token can no
+// longer match a row a reclaimer has since completed, because Claim
+// regenerated lease_token on reclaim before that completion). It remains
+// cheap, defense-in-depth insurance against ever resurrecting a completed
+// claim, which the design explicitly calls out as a hardening to preserve.
+//
+// ok is false, with no error, whenever the tuple+token doesn't match a row —
+// no claim exists at all, the claim was already completed by someone else, or
+// token is stale because another worker's Claim has since reclaimed this
+// tuple. In every one of those cases nothing is written: a stale Release must
+// not disturb the reclaimer's in-progress lease_expires_at or last_error, and
+// excluding the row entirely from the WHERE clause is what guarantees that.
+func (r *workClaimsRepository) Release(ctx context.Context, resourceType, resourceID, action, token, reason string) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
 		UPDATE work_claims
 		SET lease_expires_at = NOW() - INTERVAL '1 second',
-		    last_error = $4
+		    last_error = $5
 		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+		  AND lease_token = $4
 		  AND completed_at IS NULL
-	`, resourceType, resourceID, action, reason)
+	`, resourceType, resourceID, action, token, reason)
 	if err != nil {
-		return fmt.Errorf("release %s/%s/%s: %w", resourceType, resourceID, action, err)
+		return false, fmt.Errorf("release %s/%s/%s: %w", resourceType, resourceID, action, err)
 	}
-	return nil
+	return ct.RowsAffected() > 0, nil
 }
