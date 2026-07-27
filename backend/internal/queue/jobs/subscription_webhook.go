@@ -753,21 +753,32 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	// Issue #896: Disconnect Plaid items to stop billing on cancellation
-	if w.plaidCleanupSvc != nil {
-		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
-			w.logger.Warn("failed to disconnect Plaid items on cancellation",
-				"user_id", userID, "error", err)
+	// #1413: a comped user can still carry a paddle_subscription_id (the admin comp never
+	// clears it), so this cancellation webhook is fully reachable for them. The comp is an
+	// access-layer overlay, not a rewriting of billing truth — gate the destructive side
+	// effects (Plaid disconnect, retention clock) on the comp, but keep the billing-truth
+	// write above, syncClerkMetadata, ClearPastDueStartedAt, and clearOverCapacityIfOwner
+	// below unconditional.
+	if !user.HasActiveManualOverride() {
+		// Issue #896: Disconnect Plaid items to stop billing on cancellation
+		if w.plaidCleanupSvc != nil {
+			if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+				w.logger.Warn("failed to disconnect Plaid items on cancellation",
+					"user_id", userID, "error", err)
+			}
 		}
 	}
 
 	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
 	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, "cancelled")
 
-	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion
-	now := time.Now()
-	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
-		w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)
+	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion.
+	// #1413: skipped for comped users — see guard above.
+	if !user.HasActiveManualOverride() {
+		now := time.Now()
+		if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
+			w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)
+		}
 	}
 
 	// #898: Clear past_due stamp on cancellation (user may have been in past_due before cancelling).
