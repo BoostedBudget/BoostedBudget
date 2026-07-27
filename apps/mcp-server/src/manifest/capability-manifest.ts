@@ -11,6 +11,15 @@
 
 export type OperationClass = 'read' | 'write'
 
+export const PUBLIC_BOUNDARY_IDS = [
+  'bank-connections',
+  'household-sharing',
+  'subscription-changes',
+  'account-deletion'
+] as const
+
+export type PublicBoundaryId = (typeof PUBLIC_BOUNDARY_IDS)[number]
+
 export interface CapabilityEntry {
   operationId: string
   /** 'read' for safe, non-mutating ops; 'write' for state-changing ops */
@@ -25,6 +34,8 @@ export interface CapabilityEntry {
   excluded: boolean
   /** Human-readable reason for exclusion */
   excludedReason?: string
+  /** Curated user-facing boundary category, when one should be shown publicly. */
+  publicBoundary?: PublicBoundaryId
 }
 
 // Shorthand helpers for compact manifest entries
@@ -34,22 +45,19 @@ const read = (operationId: string, idempotent = true): CapabilityEntry => ({
   destructive: false,
   confirmationRequired: false,
   idempotent,
-  excluded: false,
+  excluded: false
 })
 
-const write = (
-  operationId: string,
-  opts: { destructive?: boolean; idempotent?: boolean } = {},
-): CapabilityEntry => ({
+const write = (operationId: string, opts: { destructive?: boolean; idempotent?: boolean } = {}): CapabilityEntry => ({
   operationId,
   class: 'write',
   destructive: opts.destructive ?? false,
   confirmationRequired: true,
   idempotent: opts.idempotent ?? false,
-  excluded: false,
+  excluded: false
 })
 
-const excluded = (operationId: string, reason: string): CapabilityEntry => ({
+const excluded = (operationId: string, reason: string, publicBoundary?: PublicBoundaryId): CapabilityEntry => ({
   operationId,
   class: 'read',
   destructive: false,
@@ -57,6 +65,7 @@ const excluded = (operationId: string, reason: string): CapabilityEntry => ({
   idempotent: true,
   excluded: true,
   excludedReason: reason,
+  publicBoundary
 })
 
 // ── Exclusion reason constants ──────────────────────────────────────────────
@@ -68,8 +77,7 @@ const REASON_DASHBOARD_DEFERRED = 'Dashboard layout writes deferred to follow-up
 const REASON_SUBSCRIPTION_INAPP = 'Subscription management stays in-app'
 const REASON_DELETION_INAPP = 'Account deletion must be a deliberate in-app action'
 const REASON_PRIVACY_INAPP = 'Privacy/consent settings require deliberate in-app action (deferred)'
-const REASON_HOUSEHOLD_INAPP =
-  'Household membership, invites & consent management must be a deliberate in-app action'
+const REASON_HOUSEHOLD_INAPP = 'Household membership, invites & consent management must be a deliberate in-app action'
 const REASON_INTERNAL = 'Internal infrastructure endpoint'
 const REASON_WEBHOOK = 'Internal webhook endpoint'
 const REASON_QA = 'QA/testing endpoint, not for production MCP use'
@@ -94,15 +102,15 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('deleteMCPRecipe', { destructive: true }),
 
   // ── Investments (Issue #138: portfolio snapshots + API endpoints) ────────
-  read('getHoldings'),                        // holdings list with security metadata
-  read('getPortfolioSummary'),                // live portfolio summary + day_change
-  read('getPortfolioHistory'),                // portfolio value time series
-  read('getInvestmentTransactions'),          // keyset-paginated investment transactions
+  read('getHoldings'), // holdings list with security metadata
+  read('getPortfolioSummary'), // live portfolio summary + day_change
+  read('getPortfolioHistory'), // portfolio value time series
+  read('getInvestmentTransactions'), // keyset-paginated investment transactions
   // Analytics helpers (tagged "Analytics" — load-bearing for MCP parity test)
-  read('getPortfolioAllocationBreakdown'),    // allocation by security type; AI-tool-callable
-  read('getTopMovers'),                       // top N gainers/losers by day_change; AI-tool-callable
-  read('getInvestmentGainLossSummary'),       // unrealized gain/loss (realized unsupported)
-  read('getInvestmentIncomeSummary'),         // dividends + reinvested income; AI-tool-callable
+  read('getPortfolioAllocationBreakdown'), // allocation by security type; AI-tool-callable
+  read('getTopMovers'), // top N gainers/losers by day_change; AI-tool-callable
+  read('getInvestmentGainLossSummary'), // unrealized gain/loss (realized unsupported)
+  read('getInvestmentIncomeSummary'), // dividends + reinvested income; AI-tool-callable
 
   // ── Analytics (all read) ────────────────────────────────────────────────
   read('getCashFlowHistory'),
@@ -110,26 +118,26 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSpendingByCategory'),
   read('getSpendingByMerchant'),
   read('getSpendingTrends'),
-  read('getCategoryTotalForPeriod'),  // MCP analytics helper — Issue #1087
-  read('getTopExpense'),               // MCP analytics helper — Issue #1087
-  read('getAverageMonthlySpend'),              // MCP analytics helper — Issue #1215
-  read('getRecurringSubscriptions'),           // MCP analytics helper — Issue #1215
-  read('getSavingsRateForPeriod'),             // MCP analytics helper — Issue #1215 PR2
-  read('getMonthOverMonthSpendingChange'),     // MCP analytics helper — Issue #1215 PR2
-  read('getLargestTransactionsForPeriod'),     // MCP analytics helper — Issue #1215 PR2
-  read('getCategoryBreakdownForMerchant'),     // MCP analytics helper — Issue #1215 PR2
-  read('getIncomeSourceBreakdown'),            // MCP analytics helper — Issue #1215 PR2
-  read('getUnusualSpend'),                     // MCP analytics helper — Issue #1215 PR3
-  read('getNetWorthTrend'),                    // MCP analytics helper — Issue #1215 PR3
-  read('getBudgetVsActual'),                   // MCP analytics helper — Issue #1215 PR3
-  read('getFinancialSummary'),                 // MCP analytics composite — Issue #1215 PR4
+  read('getCategoryTotalForPeriod'), // MCP analytics helper — Issue #1087
+  read('getTopExpense'), // MCP analytics helper — Issue #1087
+  read('getAverageMonthlySpend'), // MCP analytics helper — Issue #1215
+  read('getRecurringSubscriptions'), // MCP analytics helper — Issue #1215
+  read('getSavingsRateForPeriod'), // MCP analytics helper — Issue #1215 PR2
+  read('getMonthOverMonthSpendingChange'), // MCP analytics helper — Issue #1215 PR2
+  read('getLargestTransactionsForPeriod'), // MCP analytics helper — Issue #1215 PR2
+  read('getCategoryBreakdownForMerchant'), // MCP analytics helper — Issue #1215 PR2
+  read('getIncomeSourceBreakdown'), // MCP analytics helper — Issue #1215 PR2
+  read('getUnusualSpend'), // MCP analytics helper — Issue #1215 PR3
+  read('getNetWorthTrend'), // MCP analytics helper — Issue #1215 PR3
+  read('getBudgetVsActual'), // MCP analytics helper — Issue #1215 PR3
+  read('getFinancialSummary'), // MCP analytics composite — Issue #1215 PR4
 
   // ── Accounts ────────────────────────────────────────────────────────────
   read('getAccounts'),
   write('reorderAccounts', { idempotent: true }),
   write('updateAccount', { idempotent: true }),
-  excluded('deleteAccount', REASON_PLAID_LINKING),
-  excluded('disconnectInstitution', REASON_PLAID_LINKING),
+  excluded('deleteAccount', REASON_PLAID_LINKING, 'bank-connections'),
+  excluded('disconnectInstitution', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Admin (all excluded) ─────────────────────────────────────────────────
   excluded('checkRole', REASON_ADMIN),
@@ -234,21 +242,21 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('listHouseholdMembers'),
   read('listHouseholdInvites'),
   read('getHouseholdInvitePreview'),
-  excluded('createHousehold', REASON_HOUSEHOLD_INAPP),
-  excluded('updateHouseholdName', REASON_HOUSEHOLD_INAPP),
-  excluded('deleteHousehold', REASON_HOUSEHOLD_INAPP),
-  excluded('createHouseholdInvite', REASON_HOUSEHOLD_INAPP),
-  excluded('revokeHouseholdInvite', REASON_HOUSEHOLD_INAPP),
-  excluded('removeHouseholdMember', REASON_HOUSEHOLD_INAPP),
-  excluded('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP),
-  excluded('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP),
+  excluded('createHousehold', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('updateHouseholdName', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('deleteHousehold', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('createHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('revokeHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('removeHouseholdMember', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('acceptHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
+  excluded('declineHouseholdInvite', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
 
   // ── Household (Issue #1368: account sharing grants, Phase 4) ──────────────
   // Reading the caller's own sharing state is safe; toggling what a household member's
   // financial account exposes to other members is a privacy/consent decision — same
   // deliberate-in-app-action policy as the rest of the household membership/consent surface.
   read('listMyAccountShares'),
-  excluded('setHouseholdShareVisibility', REASON_HOUSEHOLD_INAPP),
+  excluded('setHouseholdShareVisibility', REASON_HOUSEHOLD_INAPP, 'household-sharing'),
 
   // ── Notifications ────────────────────────────────────────────────────────
   read('getNotifications'),
@@ -257,13 +265,13 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('markAllNotificationsAsRead', { idempotent: true }),
 
   // ── Plaid (account-linking permanently non-MCP) ──────────────────────────
-  excluded('exchangePublicToken', REASON_PLAID_LINKING),
-  excluded('createLinkToken', REASON_PLAID_LINKING),
+  excluded('exchangePublicToken', REASON_PLAID_LINKING, 'bank-connections'),
+  excluded('createLinkToken', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
   read('getPrivacySettings'),
   read('getUserProfile'),
-  excluded('updatePrivacySettings', REASON_PRIVACY_INAPP),
+  excluded('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
   excluded('updateUserProfile', 'Profile mutations deferred to follow-up'),
 
   // ── Regions ─────────────────────────────────────────────────────────────
@@ -273,7 +281,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getSavingsGoals'),
   read('getActiveSavingsGoals'),
   read('getSavingsGoal'),
-  read('getSavingsProgressSummary'),  // #1300: basis-aware analytics (Codex C11)
+  read('getSavingsProgressSummary'), // #1300: basis-aware analytics (Codex C11)
   write('createSavingsGoal'),
   write('updateSavingsGoal', { idempotent: true }),
   write('deleteSavingsGoal', { destructive: true }),
@@ -288,10 +296,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('get-current-subscription'),
   read('getSubscriptionTiers'),
   read('get-billing-portal-url'),
-  excluded('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP),
-  excluded('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP),
-  excluded('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP),
-  excluded('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP),
+  excluded('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excluded('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excluded('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excluded('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
 
   // ── Merchants (Issue #957: merchant name handling + MCP exposure) ────────
   // Reads: always available for browsing and duplicate detection.
@@ -328,15 +336,15 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   write('rejectTransferSuggestion', { idempotent: true }),
   write('confirmTransferSuggestionMatch', { idempotent: true }), // #972: carries idempotency key
   write('declineTransferSuggestionMatch', { idempotent: true }), // #972: user-driven reservation release
-  write('cancelTransferSuggestion', { idempotent: true }),       // #1267: Boosts cancel accepted suggestion
+  write('cancelTransferSuggestion', { idempotent: true }), // #1267: Boosts cancel accepted suggestion
 
   // ── Savings Impact ────────────────────────────────────────────────────────
   read('getSavingsImpactAggregate'), // #972: public aggregate, read-only
-  read('getSavingsImpactMe'),        // #972: authed per-user, read-only
+  read('getSavingsImpactMe'), // #972: authed per-user, read-only
 
   // ── User ────────────────────────────────────────────────────────────────
-  excluded('requestDeletion', REASON_DELETION_INAPP),
-  excluded('cancelDeletion', REASON_DELETION_INAPP),
+  excluded('requestDeletion', REASON_DELETION_INAPP, 'account-deletion'),
+  excluded('cancelDeletion', REASON_DELETION_INAPP, 'account-deletion'),
 
   // ── User Accounts ────────────────────────────────────────────────────────
   read('getUserAccounts'),
@@ -346,14 +354,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── Webhooks + QA ────────────────────────────────────────────────────────
   excluded('paddle-webhook', REASON_WEBHOOK),
   excluded('handlePlaidWebhook', REASON_WEBHOOK),
-  excluded('qaAuthBypass', REASON_QA),
+  excluded('qaAuthBypass', REASON_QA)
 ]
 
 // ── Lookup map ─────────────────────────────────────────────────────────────
 
-const MANIFEST_MAP = new Map<string, CapabilityEntry>(
-  MANIFEST_ENTRIES.map((entry) => [entry.operationId, entry]),
-)
+const MANIFEST_MAP = new Map<string, CapabilityEntry>(MANIFEST_ENTRIES.map((entry) => [entry.operationId, entry]))
 
 /**
  * All known operationIds (used for completeness checks).
