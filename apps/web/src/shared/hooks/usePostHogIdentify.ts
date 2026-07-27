@@ -20,7 +20,11 @@ import { useProfile } from '@/features/profile/hooks/useProfile'
 export function usePostHogIdentify(): void {
   const { user } = useUser()
   const prevUserRef = useRef<typeof user>(undefined)
-  const { user: profile, loading: profileLoading } = useProfile()
+  // Gated on a signed-in Clerk user: this hook is mounted at the App root, so it also runs on
+  // public routes (landing, pricing). Ungated, it would fire GET /api/v1/user/profile on every
+  // anonymous page view and take a 401 — the profile was previously only fetched behind
+  // PremiumRoute. The person-property sync below has nothing to report when signed out anyway.
+  const { user: profile, loading: profileLoading } = useProfile({ enabled: !!user })
 
   useEffect(() => {
     const prevUser = prevUserRef.current
