@@ -47,19 +47,25 @@ type ManualTierOverrideProfileRepository interface {
 
 // ManualTierOverrideRemover is the single admin-repository method this job reuses to perform the
 // exact same idempotent clear-override/re-arm-retention/audit transition
-// AdminUserRepository.RemoveUserTierOverride implements for admin-initiated removal (Issue #1414
-// / Task 7) — this job is the time-triggered twin, not a new policy, so it calls the same method
-// rather than duplicating its CTE.
+// AdminUserRepository.RemoveUserTierOverrideIfMatches implements for the CAS-guarded removal path
+// (Issue #1414 / Task 7; Issue #1413 High finding H4, Codex review round 3) — this job is the
+// time-triggered twin, not a new policy, so it calls the same method rather than duplicating its
+// CTE. It uses the CAS-guarded variant (not the unconditional RemoveUserTierOverride the admin
+// "Remove Override" button calls) because this worker's candidate list can go stale between
+// GetUsersWithExpiredManualTierOverride's select and this call: an admin who extends or replaces
+// the override in that window must not have their fresh action clobbered by this worker's
+// now-stale decision.
 //
 // Known, deliberate limitation (documented rather than worked around by duplicating SQL): the
 // underlying query hardcodes the audit action as 'remove_manual_tier'. An expiry-specific action
 // (e.g. 'expire_manual_tier') would require adding an action parameter to
-// AdminUserRepository.RemoveUserTierOverride, which lives in admin_user_repository.go — a file
-// owned by a different, concurrently-in-flight task in this plan round, and out of this job's
-// scope fence. Every automatic expiry therefore audits as 'remove_manual_tier', distinguishable
-// from an admin-initiated removal only by its NULL actor (see expireManualTierOverrideReason).
+// AdminUserRepository.RemoveUserTierOverrideIfMatches, which lives in admin_user_repository.go —
+// a file owned by a different, concurrently-in-flight task in this plan round, and out of this
+// job's scope fence. Every automatic expiry therefore audits as 'remove_manual_tier',
+// distinguishable from an admin-initiated removal only by its NULL actor (see
+// expireManualTierOverrideReason).
 type ManualTierOverrideRemover interface {
-	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (repository.RemoveTierOverrideRow, error)
+	RemoveUserTierOverrideIfMatches(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int, expectedOverride *string, expectedEndsAt *time.Time) (repository.RemoveTierOverrideRow, bool, error)
 }
 
 // ManualTierOverrideExpiryCheckWorker processes manual tier override expiry check jobs.
@@ -109,15 +115,22 @@ func NewManualTierOverrideExpiryCheckWorker(deps ManualTierOverrideExpiryCheckWo
 //     retention_cleanup_check.go's comped-user guard) — protects against a stale candidate list
 //     when an admin extends/re-applies the override between the query and this loop, and keeps
 //     boundary agreement with the read path (an override ending exactly now is still active).
-//  2. Call the shared RemoveUserTierOverride repository method with a system (empty) actor,
-//     which the callee coerces to SQL NULL.
-//  3. Best-effort re-sync Clerk to the reverted tier/status.
+//  2. Call RemoveUserTierOverrideIfMatches with a system (empty) actor (coerced to SQL NULL) and
+//     the override/expiry values observed on THIS candidate at select time — the CAS-guarded
+//     sibling of RemoveUserTierOverride (Issue #1413 High finding H4, Codex review round 3). The
+//     guard in step 1 above is a cheap, in-memory pre-check; it cannot by itself close the race,
+//     since the query, the guard, and this call are not atomic with each other — an admin can
+//     still extend/replace the override in the gap between step 1 and this call landing. The CAS
+//     is what actually closes it: claimed=false means the row no longer matches what step 1 saw,
+//     so this iteration must skip rather than clobber a fresher admin action.
+//  3. Best-effort re-sync Clerk to the reverted tier/status — only when claimed.
 //
 // One user's failure is logged and does not stop the batch; a non-empty error count causes the
 // job to return an error so River retries (failed users are naturally re-selected next run).
+// claimed=false is NOT an error — it's a normal, expected skip per the claim-then-act pattern; the
+// user is left untouched and, if still genuinely expired, is re-selected and retried next run.
 // A second pass over an already-cleared user is a no-op: the repository query no longer returns
-// them (manual_tier_override is NULL), and even a concurrent duplicate call to
-// RemoveUserTierOverride is itself idempotent (FOR UPDATE-locked, Removed=false on a no-op).
+// them (manual_tier_override is NULL).
 func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *river.Job[ManualTierOverrideExpiryCheckArgs]) (err error) {
 	args := job.Args
 
@@ -160,11 +173,20 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 			continue
 		}
 
-		row, removeErr := w.remover.RemoveUserTierOverride(ctx, "", user.ID, expireManualTierOverrideReason, w.retentionMonths)
+		row, claimed, removeErr := w.remover.RemoveUserTierOverrideIfMatches(ctx, "", user.ID,
+			expireManualTierOverrideReason, w.retentionMonths, user.ManualTierOverride, user.ManualTierEndsAt)
 		if removeErr != nil {
 			w.logger.Error("failed to expire manual tier override",
 				"job_id", job.ID, "user_id", user.ID, "error", removeErr)
 			errorCount++
+			continue
+		}
+		if !claimed {
+			// An admin extended or replaced the override between the select and this call
+			// (Issue #1413 High finding H4) — a legitimate skip, not a failure. The user is
+			// re-selected and re-evaluated next run if still genuinely expired then.
+			w.logger.Info("manual tier override expiry claim lost — admin changed override concurrently, skipping",
+				"job_id", job.ID, "user_id", user.ID)
 			continue
 		}
 

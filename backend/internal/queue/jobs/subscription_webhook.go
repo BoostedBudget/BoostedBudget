@@ -765,13 +765,26 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
+	// #1413 High finding H7 (Codex review round 3): the `user` snapshot above was fetched BEFORE
+	// the "cancelled" write committed, so basing the Plaid-disconnect/retention decisions on it
+	// re-opens exactly the race the comp guard below exists to close — an admin's comp grant
+	// landing in the window between that read and this point would be overtaken by a decision
+	// computed against stale state. Re-read AFTER the write commits (mirrors
+	// PastDueService.reReadStillPastDue's established re-read-before-act convention) and base
+	// both destructive-side-effect decisions on the FRESH row instead. A failed re-read fails the
+	// whole webhook (River retries) rather than silently falling back to the stale `user`.
+	freshUser, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to re-read user after cancellation write: %w", err)
+	}
+
 	// #1413: a comped user can still carry a paddle_subscription_id (the admin comp never
 	// clears it), so this cancellation webhook is fully reachable for them. The comp is an
 	// access-layer overlay, not a rewriting of billing truth — gate the destructive side
 	// effects (Plaid disconnect, retention clock) on the comp, but keep the billing-truth
 	// write above, syncClerkMetadata, ClearPastDueStartedAt, and clearOverCapacityIfOwner
 	// below unconditional.
-	if !user.HasActiveManualOverride() {
+	if !freshUser.HasActiveManualOverride() {
 		// Issue #896: Disconnect Plaid items to stop billing on cancellation
 		if w.plaidCleanupSvc != nil {
 			if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
@@ -785,8 +798,9 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion.
-	// #1413: skipped for comped users — see guard above.
-	if !user.HasActiveManualOverride() {
+	// #1413: skipped for comped users — see guard above. Uses freshUser (post-write re-read),
+	// not the stale user snapshot — see the H7 comment above.
+	if !freshUser.HasActiveManualOverride() {
 		now := time.Now()
 		if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
 			w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)

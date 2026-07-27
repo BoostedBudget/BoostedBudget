@@ -199,6 +199,14 @@ func (m *mockProfileRepo) CancelIfPastDue(ctx context.Context, userID string) (b
 	return false, nil
 }
 
+func (m *mockProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockProfileRepo) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	args := m.Called(ctx, tx, userID, plainEmail)
 	return args.Error(0)

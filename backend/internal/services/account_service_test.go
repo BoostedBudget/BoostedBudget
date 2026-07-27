@@ -588,6 +588,16 @@ func (m *MockUserRepository) CancelIfPastDue(ctx context.Context, userID string)
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockUserRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockUserRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	args := m.Called(ctx, email)
 	if args.Get(0) == nil {

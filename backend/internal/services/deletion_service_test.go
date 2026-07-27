@@ -177,6 +177,14 @@ func (m *MockProfileRepositoryForDeletion) CancelIfPastDue(ctx context.Context, 
 	return false, nil
 }
 
+func (m *MockProfileRepositoryForDeletion) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return nil, nil
 }

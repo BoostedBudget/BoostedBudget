@@ -1394,6 +1394,197 @@ func TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered(t *testing
 	mockClerk.AssertExpectations(t)
 }
 
+// ─── #1413 High finding H7 (Codex review round 3): processSubscriptionCanceled must base the
+// Plaid-disconnect/retention decisions on a FRESH re-read taken AFTER the "cancelled" status
+// write commits, not the `user` snapshot fetched before it. ──
+
+// TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoPlaidDisconnect proves the race: the
+// INITIAL read (before the status write) shows no override, but the RE-READ (after the write)
+// shows an admin granted a comp in between. mockPlaid.DisconnectAllUserItems is deliberately left
+// unstubbed — if the fix regresses to using the stale initial `user` snapshot, the guard would
+// incorrectly see "no override" and call it, panicking on the unstubbed mock.
+func TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoPlaidDisconnect(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	staleUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	override := "household_4"
+	compedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// First call (before the write): no override yet.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(staleUser, nil).Once()
+	// Subsequent calls (the H7 re-read, plus syncClerkMetadata's own re-read): comped.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(compedUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoRetentionClock is the retention-side
+// twin of the test above: SetRetentionDates is deliberately left unstubbed on mockProfileRepo — a
+// regression that decides off the stale `user` snapshot would call it and panic.
+func TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoRetentionClock(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil).Maybe()
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	staleUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+	overrideEndsAt := time.Now().Add(24 * time.Hour)
+	override := "household_5"
+	compedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(staleUser, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(compedUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestructive proves the
+// negative direction (an over-tight fix that always skips once ANY snapshot ever showed a comp
+// would fail this): the INITIAL read shows an active override, but the RE-READ (after the write)
+// shows it has been removed/lapsed in the interim — the destructive side effects must proceed,
+// using the fresh state rather than the stale comped snapshot.
+func TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestructive(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	overrideEndsAt := time.Now().Add(24 * time.Hour)
+	override := "household_6"
+	staleCompedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+	freshUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+		// No override — removed/lapsed by the time of the re-read.
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(staleCompedUser, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(freshUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockPlaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
+}
+
+// TestWorker_SubscriptionCanceled_ReReadFails_PropagatesError proves that a failed post-write
+// re-read fails the whole webhook (so River retries) rather than silently falling back to the
+// stale initial `user` snapshot — which would re-open the exact race this fix closes.
+func TestWorker_SubscriptionCanceled_ReReadFails_PropagatesError(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, _, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(nil, errors.New("db unavailable"))
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "a failed re-read must fail the webhook so River retries")
+	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
+}
+
 // TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems tests that Plaid items are
 // disconnected when subscription.paused is received (maps to cancelled, #930).
 func TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems(t *testing.T) {

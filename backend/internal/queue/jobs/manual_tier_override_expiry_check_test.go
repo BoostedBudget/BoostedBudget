@@ -32,18 +32,18 @@ func (m *mockManualTierOverrideProfileRepository) GetUsersWithExpiredManualTierO
 }
 
 // mockManualTierOverrideRemover mocks ManualTierOverrideRemover — the single
-// AdminUserRepository.RemoveUserTierOverride method this job reuses instead of duplicating its
-// CTE (Issue #1414 / Task 7).
+// AdminUserRepository.RemoveUserTierOverrideIfMatches method this job reuses instead of
+// duplicating its CTE (Issue #1414 / Task 7; Issue #1413 High finding H4, Codex review round 3).
 type mockManualTierOverrideRemover struct {
 	mock.Mock
 }
 
-func (m *mockManualTierOverrideRemover) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (repository.RemoveTierOverrideRow, error) {
-	args := m.Called(ctx, actorUserID, targetUserID, reason, retentionMonths)
+func (m *mockManualTierOverrideRemover) RemoveUserTierOverrideIfMatches(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int, expectedOverride *string, expectedEndsAt *time.Time) (repository.RemoveTierOverrideRow, bool, error) {
+	args := m.Called(ctx, actorUserID, targetUserID, reason, retentionMonths, expectedOverride, expectedEndsAt)
 	if args.Get(0) == nil {
-		return repository.RemoveTierOverrideRow{}, args.Error(1)
+		return repository.RemoveTierOverrideRow{}, args.Bool(1), args.Error(2)
 	}
-	return args.Get(0).(repository.RemoveTierOverrideRow), args.Error(1)
+	return args.Get(0).(repository.RemoveTierOverrideRow), args.Bool(1), args.Error(2)
 }
 
 // Test helpers
@@ -82,7 +82,8 @@ func TestManualTierOverrideExpiryCheckArgs_Kind(t *testing.T) {
 // --- Core expiry behavior ---
 
 // TestManualTierOverrideExpiryCheck_ExpiredOverride_Cleared proves an expired override is
-// passed to the shared RemoveUserTierOverride repository method with a system (empty) actor.
+// passed to the shared RemoveUserTierOverrideIfMatches repository method with a system (empty)
+// actor, along with the override/expiry values observed at select time.
 func TestManualTierOverrideExpiryCheck_ExpiredOverride_Cleared(t *testing.T) {
 	ctx := context.Background()
 
@@ -96,8 +97,8 @@ func TestManualTierOverrideExpiryCheck_ExpiredOverride_Cleared(t *testing.T) {
 	mockRemover := new(mockManualTierOverrideRemover)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-expired", mock.AnythingOfType("string"), 6).
-		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
@@ -111,9 +112,10 @@ func TestManualTierOverrideExpiryCheck_ExpiredOverride_Cleared(t *testing.T) {
 
 // TestManualTierOverrideExpiryCheck_LiveOverride_LeftAlone proves the belt-and-braces guard:
 // a candidate whose override is still active (per domain.User.HasActiveManualOverride) at the
-// moment the worker processes it must NOT be passed to RemoveUserTierOverride — protects
-// against a stale candidate list when an admin extends/re-applies a comp between the query and
-// this loop. RemoveUserTierOverride is deliberately left unstubbed: a real call would panic.
+// moment the worker processes it must NOT be passed to RemoveUserTierOverrideIfMatches —
+// protects against a stale candidate list when an admin extends/re-applies a comp between the
+// query and this loop. RemoveUserTierOverrideIfMatches is deliberately left unstubbed: a real
+// call would panic.
 func TestManualTierOverrideExpiryCheck_LiveOverride_LeftAlone(t *testing.T) {
 	ctx := context.Background()
 
@@ -134,7 +136,42 @@ func TestManualTierOverrideExpiryCheck_LiveOverride_LeftAlone(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockRemover.AssertNotCalled(t, "RemoveUserTierOverride", mock.Anything, mock.Anything, "user-live", mock.Anything, mock.Anything)
+	mockRemover.AssertNotCalled(t, "RemoveUserTierOverrideIfMatches", mock.Anything, mock.Anything, "user-live", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManualTierOverrideExpiryCheck_ClaimLost_SkipsWithoutError proves Issue #1413 High finding
+// H4 (Codex review round 3) is actually closed: when RemoveUserTierOverrideIfMatches reports
+// claimed=false (an admin extended/replaced the override between the select and this call), the
+// worker must treat it as a normal skip — no error, no Clerk sync, no audit follow-up — rather
+// than acting as if the removal succeeded. The mock's row is deliberately non-zero (unlike the
+// real repository's actual claimed=false contract, which always returns a zero row) specifically
+// to isolate the WORKER's own gating on `claimed`, so a missing check can't hide behind
+// syncClerkMetadata's separate empty-ClerkUserID no-op.
+func TestManualTierOverrideExpiryCheck_ClaimLost_SkipsWithoutError(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour) // expired at select time
+	users := []*domain.User{
+		{ID: "user-extended", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockClerk := new(mockClerkService)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-extended", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{ClerkUserID: "should-not-sync", RevertedTier: "premium", RevertedStatus: "cancelled"}, false, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "should-not-sync", mock.Anything).Return(nil).Maybe()
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, mockClerk)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
+	mockClerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // Note on the "override ending exactly now" boundary: a literal, deterministic worker-level
@@ -158,8 +195,8 @@ func TestManualTierOverrideExpiryCheck_LiveOverride_LeftAlone(t *testing.T) {
 // --- Clerk sync ---
 
 // TestManualTierOverrideExpiryCheck_ClerkSyncAttempted_WithRevertedValues proves the worker
-// re-syncs Clerk using the REVERTED tier/status returned by RemoveUserTierOverride (not any
-// stale value), mirroring AdminUserService.RemoveUserTierOverride's own sync semantics.
+// re-syncs Clerk using the REVERTED tier/status returned by RemoveUserTierOverrideIfMatches (not
+// any stale value), mirroring AdminUserService.RemoveUserTierOverride's own sync semantics.
 func TestManualTierOverrideExpiryCheck_ClerkSyncAttempted_WithRevertedValues(t *testing.T) {
 	ctx := context.Background()
 
@@ -174,13 +211,13 @@ func TestManualTierOverrideExpiryCheck_ClerkSyncAttempted_WithRevertedValues(t *
 	mockClerk := new(mockClerkService)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-1", mock.AnythingOfType("string"), 6).
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-1", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{
 			Removed:        true,
 			RevertedTier:   "premium",
 			RevertedStatus: "cancelled",
 			ClerkUserID:    "clerk_user_1",
-		}, nil)
+		}, true, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.MatchedBy(func(metadata map[string]interface{}) bool {
 		return metadata["subscription_tier"] == "premium" && metadata["subscription_status"] == "cancelled"
 	})).Return(nil)
@@ -210,8 +247,8 @@ func TestManualTierOverrideExpiryCheck_ClerkFailure_DoesNotFailJob(t *testing.T)
 	mockClerk := new(mockClerkService)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-1", mock.AnythingOfType("string"), 6).
-		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled", ClerkUserID: "clerk_user_1"}, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-1", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled", ClerkUserID: "clerk_user_1"}, true, nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.Anything).Return(errors.New("clerk unavailable"))
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, mockClerk)
@@ -237,8 +274,8 @@ func TestManualTierOverrideExpiryCheck_NilClerkService_NoPanic(t *testing.T) {
 	mockRemover := new(mockManualTierOverrideRemover)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-1", mock.AnythingOfType("string"), 6).
-		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled", ClerkUserID: "clerk_user_1"}, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-1", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled", ClerkUserID: "clerk_user_1"}, true, nil)
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
@@ -252,7 +289,7 @@ func TestManualTierOverrideExpiryCheck_NilClerkService_NoPanic(t *testing.T) {
 // --- Error resilience ---
 
 // TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed proves one user's
-// RemoveUserTierOverride failure does not stall the batch — mirrors
+// RemoveUserTierOverrideIfMatches failure does not stall the batch — mirrors
 // retention_cleanup_check.go's deleteExpiredAccounts log-and-continue pattern.
 func TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed(t *testing.T) {
 	ctx := context.Background()
@@ -268,10 +305,10 @@ func TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed(t *test
 	mockRemover := new(mockManualTierOverrideRemover)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-fail", mock.AnythingOfType("string"), 6).
-		Return(nil, errors.New("db error"))
-	mockRemover.On("RemoveUserTierOverride", ctx, "", "user-ok", mock.AnythingOfType("string"), 6).
-		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-fail", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(nil, false, errors.New("db error"))
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-ok", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
@@ -280,7 +317,7 @@ func TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed(t *test
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1 of 2")
-	mockRemover.AssertNumberOfCalls(t, "RemoveUserTierOverride", 2)
+	mockRemover.AssertNumberOfCalls(t, "RemoveUserTierOverrideIfMatches", 2)
 }
 
 // TestManualTierOverrideExpiryCheck_NoUsers_NoOp tests the job succeeds when there's nothing to do.
@@ -298,7 +335,7 @@ func TestManualTierOverrideExpiryCheck_NoUsers_NoOp(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockRemover.AssertNotCalled(t, "RemoveUserTierOverride")
+	mockRemover.AssertNotCalled(t, "RemoveUserTierOverrideIfMatches")
 }
 
 // TestManualTierOverrideExpiryCheck_FetchError_ReturnsError proves a query failure surfaces as
@@ -317,7 +354,7 @@ func TestManualTierOverrideExpiryCheck_FetchError_ReturnsError(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err)
-	mockRemover.AssertNotCalled(t, "RemoveUserTierOverride")
+	mockRemover.AssertNotCalled(t, "RemoveUserTierOverrideIfMatches")
 }
 
 // TestNewManualTierOverrideExpiryCheckWorker_DefaultLogger tests nil logger uses default.

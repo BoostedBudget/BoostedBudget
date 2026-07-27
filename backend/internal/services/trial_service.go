@@ -21,8 +21,12 @@ type TrialRepository interface {
 	// UpdateTrialStatus updates the trial-related fields for a user
 	UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error
 
-	// UpdateSubscriptionStatus updates just the subscription status
-	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
+	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
+	// user is still 'trial' AND carries no currently-active manual tier override. Returns
+	// (true, nil) if the flip happened, (false, nil) if an admin granted/extended a comp between
+	// ExpireTrial's earlier HasActiveManualOverride() guard and this call — a legitimate skip,
+	// not an error (Issue #1413 High finding H5, Codex review round 3).
+	ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error)
 
 	// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 	GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)
@@ -227,10 +231,20 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		"previous_status", user.SubscriptionStatus,
 	)
 
-	// Update subscription status to inactive
-	err = s.repo.UpdateSubscriptionStatus(ctx, userID, string(domain.SubscriptionStatusInactive))
+	// #1413 High finding H5 (Codex review round 3): the HasActiveManualOverride() guard above is
+	// a plain read and is NOT atomic with this write — an admin can grant/extend a comp in the
+	// window between that check and here. Replace the unconditional status write with a
+	// conditional transition that re-verifies "still trial, still no live override" against
+	// committed state at the moment of the write itself. A lost claim is a legitimate skip (the
+	// comp already granted access), not a failure — retention and Plaid must NOT be touched.
+	claimed, err := s.repo.ExpireTrialIfNoOverride(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("failed to update subscription status: %w", err)
+		return fmt.Errorf("failed to expire trial status: %w", err)
+	}
+	if !claimed {
+		s.logger.Info("trial expiry claim lost — user comped concurrently, skipping",
+			"user_id", userID)
+		return nil
 	}
 
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion
