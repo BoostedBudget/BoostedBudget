@@ -152,7 +152,7 @@ func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx con
 }
 
 // Retention tracking stubs (#930)
-func (m *MockProfileRepoForWorker) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+func (m *MockProfileRepoForWorker) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	return "", nil
 }
 func (m *MockProfileRepoForWorker) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {

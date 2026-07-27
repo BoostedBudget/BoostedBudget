@@ -62,9 +62,13 @@ type ProfileRepository interface {
 	// UpdateSubscriptionStatus updates just the subscription status
 	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
 
-	// GetSubscriptionStatusByUserID retrieves only the subscription_status for a user.
-	// Used by read-only middleware (#930) to avoid a full user fetch on every request.
-	GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
+	// GetEffectiveSubscriptionStatusByUserID retrieves the user's EFFECTIVE subscription
+	// status — "active" when a non-expired manual tier override (admin comp) is in effect,
+	// otherwise the raw subscription_status (Issue #1413: an admin comp must actually unlock
+	// access, not just relabel the tier while every access gate keeps reading the stale,
+	// untouched status). Used by read-only middleware (#930) to avoid a full user fetch on
+	// every request.
+	GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
 
 	// Retention tracking methods (#930: 6-month read-only before auto-deletion)
 
@@ -897,21 +901,31 @@ func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID
 	return nil
 }
 
-// GetSubscriptionStatusByUserID retrieves only the subscription_status for a user.
-// Used by the read-only middleware (#930) for efficient per-request status checks.
-func (r *profileRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
-	var status string
+// GetEffectiveSubscriptionStatusByUserID retrieves the EFFECTIVE subscription status for a
+// user — "active" when a non-expired manual tier override (admin comp) is in effect,
+// otherwise the raw subscription_status (Issue #1413). Used by the read-only middleware
+// (#930) for efficient per-request status checks.
+//
+// The override predicate is computed in Go via domain.User.ComputeEffectiveStatus rather
+// than in SQL, so this row-level read shares exactly one definition of "is the override
+// active" with every other caller of ComputeEffectiveStatus/ComputeEffectiveTier.
+//
+// NOTE: this rename (from GetSubscriptionStatusByUserID) is deliberate, not cosmetic — the
+// old name described a raw column read; this method returns a computed value. Keeping the
+// old name would risk a future "simplification" silently reverting to the raw column.
+func (r *profileRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	var u domain.User
 	err := r.db.QueryRow(ctx,
-		`SELECT subscription_status FROM users WHERE id = $1 AND is_deleted = FALSE`,
+		`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`,
 		userID,
-	).Scan(&status)
+	).Scan(&u.SubscriptionStatus, &u.ManualTierOverride, &u.ManualTierEndsAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrUserNotFound
 	}
 	if err != nil {
 		return "", err
 	}
-	return status, nil
+	return u.ComputeEffectiveStatus(), nil
 }
 
 // GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at

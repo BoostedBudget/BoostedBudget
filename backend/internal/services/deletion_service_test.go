@@ -134,7 +134,7 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithActivePaddleSubscriptions
 }
 
 // Retention tracking stubs (#930)
-func (m *MockProfileRepositoryForDeletion) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+func (m *MockProfileRepositoryForDeletion) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }

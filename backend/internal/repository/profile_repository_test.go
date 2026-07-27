@@ -1412,3 +1412,103 @@ func TestCancelIfPastDue_WhenNotPastDue_NoFlip(t *testing.T) {
 	assert.False(t, flipped, "should return false when no row was updated (user recovered)")
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
+
+// ─── #1413: GetEffectiveSubscriptionStatusByUserID ──────────────────────────
+// An admin "comp" sets manual_tier_override/manual_tier_ends_at but leaves the raw
+// subscription_status column untouched. Every access gate must read the EFFECTIVE status
+// (override-aware) rather than the stale raw column, or a comped user stays locked out.
+
+// TestGetEffectiveSubscriptionStatusByUserID_NoOverride_ReturnsRawStatus verifies that a
+// user with no manual override gets back their raw subscription_status unchanged.
+func TestGetEffectiveSubscriptionStatusByUserID_NoOverride_ReturnsRawStatus(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("inactive", nil, nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "inactive", status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_ActiveOverride_ReturnsActive verifies that a
+// user with a non-expired manual tier override resolves to "active" even though the raw
+// subscription_status row says "inactive" — this is the #1413 regression case: an admin
+// comp must actually unlock access, not just relabel the tier.
+func TestGetEffectiveSubscriptionStatusByUserID_ActiveOverride_ReturnsActive(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	futureEnd := time.Now().Add(24 * time.Hour)
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("inactive", stringPtr("premium"), &futureEnd)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "active", status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_ExpiredOverride_ReturnsRawStatus verifies that
+// an expired manual tier override does NOT force the status to active — the raw status is
+// returned as-is once the comp period has lapsed.
+func TestGetEffectiveSubscriptionStatusByUserID_ExpiredOverride_ReturnsRawStatus(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	pastEnd := time.Now().Add(-24 * time.Hour)
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("cancelled", stringPtr("premium"), &pastEnd)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "cancelled", status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_NoRows_ReturnsErrUserNotFound verifies that a
+// missing/deleted user surfaces ErrUserNotFound rather than a raw pgx error.
+func TestGetEffectiveSubscriptionStatusByUserID_NoRows_ReturnsErrUserNotFound(t *testing.T) {
+	mock, repo := setupMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnError(pgx.ErrNoRows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.Error(t, err)
+	assert.Equal(t, ErrUserNotFound, err)
+	assert.Equal(t, "", status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
