@@ -35,6 +35,23 @@ package repository
 //	}
 //
 //	return claims.Complete(ctx, ResourceTypeUser, userID, ActionPlaidDisconnectPastDue)
+//
+// KNOWN LIMITATION (flagged by Codex adversarial review, issue #1413): this API has no
+// fencing token. Complete/Release identify a claim only by (resourceType, resourceID,
+// action), not by the specific lease instance Claim granted. If a claimant's external
+// work runs LONGER than the lease it was granted (not crashed, just slow — e.g. a GC
+// pause or a hung network call), another caller may legitimately reclaim and start
+// the same external work while the first is still in flight; if the first claimant
+// then calls Complete/Release, it is acting on whichever lease instance currently
+// occupies the row, not necessarily its own. This is a real, deliberate simplification
+// of the design doc's frozen 3-method signature (Claim/Complete/Release, no token) —
+// the mitigation is operational, not code-level: choose lease durations that are
+// generously longer than the expected external call, and treat "still not done after
+// the lease" as equivalent to "crashed." Release is hardened below to never resurrect
+// a claim another worker already Completed, which closes the most damaging half of
+// this gap (a stale Release can no longer un-complete finished work), but it does not
+// close the "both workers run the external side effect" half. Callers with unusually
+// slow or retried external calls (Paddle, Plaid) should size leases accordingly.
 
 import (
 	"context"
@@ -58,6 +75,11 @@ const (
 // ResourceTypeUser is the work_claims.resource_type value for all current
 // actions (all six claim on a user). The column stays a plain TEXT (not an
 // enum/FK) so the table can cover non-user resources in the future.
+//
+// Always use this constant, never a hand-typed literal: unlike action,
+// resource_type has no CHECK constraint (deliberately, for extensibility), so a
+// typo (e.g. "users" instead of "user") would silently create a second,
+// non-exclusive claim namespace instead of failing loudly.
 const ResourceTypeUser = "user"
 
 // WorkClaimsRepository grants exclusive, durable, leased claims on
@@ -69,7 +91,8 @@ type WorkClaimsRepository interface {
 	// the caller, with a lease of the given duration. Returns claimed=false when
 	// another worker holds an unexpired, incomplete lease, or when the action was
 	// already completed. A lease that has expired (crashed worker) is reclaimable.
-	// A completed claim is never re-granted.
+	// A completed claim is never re-granted. lease must be positive; Claim returns
+	// an error without touching the database otherwise.
 	//
 	// claimed == false is a normal outcome, not an error — callers should log at
 	// Info and return nil rather than treating it as a failure.
@@ -77,13 +100,19 @@ type WorkClaimsRepository interface {
 
 	// Complete marks the work durably finished. Idempotent: calling it again after
 	// the claim is already completed is a no-op (the original completion time is
-	// preserved). A completed claim is never re-granted by Claim.
+	// preserved). A completed claim is never re-granted by Claim. Returns an error
+	// if no claim exists for (resourceType, resourceID, action) — Complete should
+	// only ever be called after a successful Claim, so a "not found" result
+	// usually means a mismatched resourceType/resourceID/action (e.g. a typo)
+	// rather than a benign race.
 	Complete(ctx context.Context, resourceType, resourceID, action string) error
 
 	// Release abandons a claim so it becomes immediately reclaimable (rather than
 	// waiting out the remaining lease), recording reason for diagnostics. Use this
 	// when the external work failed and must be retried — never fall through to
-	// treat the work as done. Idempotent.
+	// treat the work as done. Idempotent, and a no-op (nil error) both when no
+	// claim exists and when the claim was already Completed by someone else —
+	// Release can never resurrect completed work.
 	Release(ctx context.Context, resourceType, resourceID, action, reason string) error
 }
 
@@ -106,6 +135,9 @@ func NewWorkClaimsRepository(db DB) WorkClaimsRepository {
 // Concurrently, Postgres locks the conflicting row for the duration of each attempt, so
 // exactly one concurrent caller's statement can ever see row count 1 for a given tuple.
 func (r *workClaimsRepository) Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (bool, error) {
+	if lease <= 0 {
+		return false, fmt.Errorf("claim %s/%s/%s: lease must be positive, got %s", resourceType, resourceID, action, lease)
+	}
 	ct, err := r.db.Exec(ctx, `
 		INSERT INTO work_claims (resource_type, resource_id, action, claimed_at, lease_expires_at, completed_at, attempts, last_error)
 		VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4), NULL, 1, NULL)
@@ -125,31 +157,52 @@ func (r *workClaimsRepository) Claim(ctx context.Context, resourceType, resource
 
 // Complete marks the claim durably finished. COALESCE preserves the original
 // completed_at on repeat calls, making this a true no-op after the first
-// success rather than merely error-free.
+// success rather than merely error-free. last_error is cleared so a claim that
+// was previously Released with a failure reason doesn't retain a stale reason
+// after it eventually succeeds. Returns an error if no row matched — Complete
+// is only ever expected to be called immediately after a successful Claim, so
+// "no matching claim" signals a caller bug (e.g. an action typo) rather than a
+// benign outcome, unlike Release below.
 func (r *workClaimsRepository) Complete(ctx context.Context, resourceType, resourceID, action string) error {
-	_, err := r.db.Exec(ctx, `
+	ct, err := r.db.Exec(ctx, `
 		UPDATE work_claims
-		SET completed_at = COALESCE(completed_at, NOW())
+		SET completed_at = COALESCE(completed_at, NOW()),
+		    last_error = NULL
 		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
 	`, resourceType, resourceID, action)
 	if err != nil {
 		return fmt.Errorf("complete %s/%s/%s: %w", resourceType, resourceID, action, err)
 	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("complete %s/%s/%s: no matching claim (was Claim ever called for this exact resource_type/resource_id/action?)", resourceType, resourceID, action)
+	}
 	return nil
 }
 
-// Release un-completes the claim (defensively — Release is meant to be called
-// on in-flight claims only) and pushes lease_expires_at into the past so the
-// very next Claim call reclaims it, rather than waiting out the original
-// lease. Setting it to NOW() - 1 second rather than exactly NOW() avoids any
-// risk of a same-instant race with an immediately following Claim's own NOW().
+// Release pushes lease_expires_at into the past so the very next Claim call
+// reclaims it, rather than waiting out the original lease, and records reason
+// for diagnostics. Setting it to NOW() - 1 second rather than exactly NOW()
+// avoids any risk of a same-instant race with an immediately following Claim's
+// own NOW().
+//
+// The WHERE clause's "AND completed_at IS NULL" is the fix for a real defect an
+// adversarial review surfaced: without it, a stale/late Release call from a
+// worker that already lost its lease (see the KNOWN LIMITATION doc comment
+// above) could silently un-complete a claim a different worker had already
+// finished, resurrecting work that must never be re-granted. With the guard,
+// Release is a no-op (nil error, not an error) both when no claim exists at all
+// and when the claim was already completed — deliberately not surfaced as an
+// error, since Release's return value is meant to be discarded by callers per
+// the design doc's call shape (`_ = claims.Release(...)`), and "someone else
+// already finished it" is not a caller bug worth flagging the way Complete's
+// "never claimed" case is.
 func (r *workClaimsRepository) Release(ctx context.Context, resourceType, resourceID, action, reason string) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE work_claims
-		SET completed_at = NULL,
-		    lease_expires_at = NOW() - INTERVAL '1 second',
+		SET lease_expires_at = NOW() - INTERVAL '1 second',
 		    last_error = $4
 		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+		  AND completed_at IS NULL
 	`, resourceType, resourceID, action, reason)
 	if err != nil {
 		return fmt.Errorf("release %s/%s/%s: %w", resourceType, resourceID, action, err)

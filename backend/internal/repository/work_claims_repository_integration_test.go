@@ -14,6 +14,7 @@ package repository
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,12 +56,19 @@ func TestWorkClaims_Claim_ExpiredLeaseIsReclaimable(t *testing.T) {
 	resourceID := setupTestResource(t, pool)
 	repo := NewWorkClaimsRepository(pool)
 
-	first, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionAccountDeletion, 10*time.Millisecond)
+	first, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionAccountDeletion, 15*time.Minute)
 	require.NoError(t, err)
 	require.True(t, first, "first claim must win")
 
-	// Simulate a crashed worker: nobody calls Complete or Release. Wait out the lease.
-	time.Sleep(100 * time.Millisecond)
+	// Simulate a crashed worker: nobody calls Complete or Release, and enough
+	// wall-clock time has passed that the lease has expired. Push the lease into
+	// the past directly via SQL rather than sleeping out a real lease — sleep-based
+	// timing assertions are flaky under CI load; this is deterministic.
+	_, err = pool.Exec(ctx, `
+		UPDATE work_claims SET lease_expires_at = NOW() - INTERVAL '1 hour'
+		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+	`, ResourceTypeUser, resourceID, ActionAccountDeletion)
+	require.NoError(t, err)
 
 	reclaimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionAccountDeletion, 15*time.Minute)
 	require.NoError(t, err)
@@ -73,19 +81,70 @@ func TestWorkClaims_Complete_NeverReGranted(t *testing.T) {
 	resourceID := setupTestResource(t, pool)
 	repo := NewWorkClaimsRepository(pool)
 
-	claimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice30d, 10*time.Millisecond)
+	claimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice30d, 15*time.Minute)
 	require.NoError(t, err)
 	require.True(t, claimed)
 
 	require.NoError(t, repo.Complete(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice30d))
 
-	// Even after the (short) lease would otherwise have expired, a completed
-	// claim must never be re-granted.
-	time.Sleep(100 * time.Millisecond)
+	// Deterministic stand-in for "the lease would eventually expire too" — a
+	// completed claim must never be re-granted regardless of lease state.
+	_, err = pool.Exec(ctx, `
+		UPDATE work_claims SET lease_expires_at = NOW() - INTERVAL '1 hour'
+		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+	`, ResourceTypeUser, resourceID, ActionRetentionNotice30d)
+	require.NoError(t, err)
 
 	reclaimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice30d, 15*time.Minute)
 	require.NoError(t, err)
 	assert.False(t, reclaimed, "a completed claim must never be re-granted, lease expiry notwithstanding")
+}
+
+// TestWorkClaims_Release_DoesNotResurrectCompletedClaim is the regression test for a
+// defect an adversarial review surfaced: Release originally unconditionally cleared
+// completed_at, so a stale/late Release call (e.g. from a worker that lost its lease
+// and doesn't know its work already succeeded via another path) could un-complete a
+// claim that must never be re-granted. Release must now be a no-op against an
+// already-completed claim.
+func TestWorkClaims_Release_DoesNotResurrectCompletedClaim(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	resourceID := setupTestResource(t, pool)
+	repo := NewWorkClaimsRepository(pool)
+
+	claimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.NoError(t, repo.Complete(ctx, ResourceTypeUser, resourceID, ActionPastDueGraceCancel))
+
+	// A stray Release call after completion must be a harmless no-op, not an error.
+	require.NoError(t, repo.Release(ctx, ResourceTypeUser, resourceID, ActionPastDueGraceCancel, "stale worker reporting failure"))
+
+	var completedAt *time.Time
+	err = pool.QueryRow(ctx,
+		`SELECT completed_at FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
+		ResourceTypeUser, resourceID, ActionPastDueGraceCancel,
+	).Scan(&completedAt)
+	require.NoError(t, err)
+	assert.NotNil(t, completedAt, "Release must not resurrect a completed claim by clearing completed_at")
+
+	reclaimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, reclaimed, "a completed claim must remain un-reclaimable even after a stray Release call")
+}
+
+// TestWorkClaims_Complete_ReturnsErrorWhenNeverClaimed proves Complete surfaces a
+// caller bug (e.g. a mismatched action from a typo) rather than silently succeeding
+// on a tuple with no matching row.
+func TestWorkClaims_Complete_ReturnsErrorWhenNeverClaimed(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	resourceID := setupTestResource(t, pool)
+	repo := NewWorkClaimsRepository(pool)
+
+	err := repo.Complete(ctx, ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup)
+	assert.Error(t, err, "Complete on a resource/action that was never Claimed must error")
 }
 
 func TestWorkClaims_Release_ImmediatelyReclaimableAndRecordsReason(t *testing.T) {
@@ -186,6 +245,13 @@ func TestWorkClaims_Release_Idempotent(t *testing.T) {
 // TestWorkClaims_Claim_ConcurrentRace is the falsifiability-critical test: it proves
 // exclusivity under genuine concurrency against the live DB, not just sequential calls
 // that could theoretically pass due to test ordering rather than real locking semantics.
+//
+// A sync.WaitGroup barrier holds every goroutine at the starting line until all of
+// them have been scheduled and are blocked on <-start, so closing start releases all
+// workers at once rather than however many happened to reach the receive by the time
+// the (unsynchronized) main goroutine closed it. Every result's error is asserted
+// nil — a test that silently maps DB errors to "not claimed" could report exactly
+// one winner even if the other 24 calls failed outright rather than lost fairly.
 func TestWorkClaims_Claim_ConcurrentRace(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -193,25 +259,31 @@ func TestWorkClaims_Claim_ConcurrentRace(t *testing.T) {
 	repo := NewWorkClaimsRepository(pool)
 
 	const workers = 25
-	results := make(chan bool, workers)
+	type claimResult struct {
+		claimed bool
+		err     error
+	}
+	results := make(chan claimResult, workers)
 
+	var ready sync.WaitGroup
+	ready.Add(workers)
 	start := make(chan struct{})
 	for i := 0; i < workers; i++ {
 		go func() {
-			<-start // release all goroutines as close to simultaneously as possible
+			ready.Done()
+			<-start // every goroutine waits here until all `workers` have arrived
 			claimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionAccountDeletion, 15*time.Minute)
-			if err != nil {
-				results <- false
-				return
-			}
-			results <- claimed
+			results <- claimResult{claimed: claimed, err: err}
 		}()
 	}
+	ready.Wait() // block until every goroutine is parked on <-start
 	close(start)
 
 	winners := 0
 	for i := 0; i < workers; i++ {
-		if <-results {
+		r := <-results
+		require.NoError(t, r.err, "a concurrent Claim call must not error")
+		if r.claimed {
 			winners++
 		}
 	}
