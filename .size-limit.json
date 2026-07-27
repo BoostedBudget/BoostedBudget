@@ -114,6 +114,12 @@
     "gzip": true
   },
   {
+    "name": "mcp",
+    "path": "apps/web/dist/assets/mcp-*.js",
+    "limit": "13 KB",
+    "gzip": true
+  },
+  {
     "name": "savings",
     "path": "apps/web/dist/assets/savings-*.js",
     "limit": "9 KB",

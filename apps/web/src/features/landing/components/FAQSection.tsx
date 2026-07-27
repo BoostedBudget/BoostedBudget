@@ -37,12 +37,17 @@ const faqs: FAQItem[] = [
   {
     question: 'Is there a free trial?',
     answer:
-      'Yes! All new accounts start with a 2-month free trial of our Premium features. No credit card is required to start. You can upgrade, downgrade, or cancel at any time during or after your trial.',
+      'Yes! All new accounts start with a 60-day free trial of our Premium features. No credit card is required to start. You can upgrade, downgrade, or cancel at any time during or after your trial.',
   },
   {
     question: 'Do you sell my financial data?',
     answer:
       'Never. Your financial data is yours and yours alone. We do not sell, share, or monetize your personal financial information. Our business model is simple: you pay for the service, and that is how we make money.',
+  },
+  {
+    question: 'Can my family share one subscription?',
+    answer:
+      'Yes. Household plans cover 2 to 5+ members on one subscription. Each member chooses which accounts to share, and can hide any account at any time. Accepting a household invite is always a deliberate action you take in the app.',
   },
 ]
 

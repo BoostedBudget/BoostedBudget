@@ -217,7 +217,7 @@ test.describe('Landing Page - Unauthenticated', () => {
     });
 
     test('should display risk reversal messaging', async ({ page }) => {
-      await expect(page.getByText(/2-month free trial/i).first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText(/60-day free trial/i).first()).toBeVisible({ timeout: 10000 });
       await expect(page.getByText(/cancel anytime/i).first()).toBeVisible({ timeout: 10000 });
     });
   });

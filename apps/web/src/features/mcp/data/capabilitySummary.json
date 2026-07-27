@@ -1,0 +1,89 @@
+{
+  "totalOperations": 192,
+  "allowedOperations": 133,
+  "readOperations": 87,
+  "writeOperations": 46,
+  "excludedOperations": 59,
+  "destructiveWriteOperations": 9,
+  "readCountByTag": {
+    "Accounts": 1,
+    "Analytics": 23,
+    "Auto-Categorization": 2,
+    "Boosts": 3,
+    "Budget": 1,
+    "Budgets": 5,
+    "Categories": 6,
+    "Contributions": 1,
+    "Dashboard": 8,
+    "Household": 6,
+    "Investments": 4,
+    "MCP Recipes": 3,
+    "Merchants": 3,
+    "Notifications": 2,
+    "Paddle": 2,
+    "Privacy": 1,
+    "Profile": 1,
+    "Regions": 1,
+    "Savings Goals": 5,
+    "SavingsImpact": 2,
+    "Subscription": 3,
+    "Tags": 2,
+    "Transactions": 3,
+    "TransferSuggestions": 1,
+    "User Accounts": 2
+  },
+  "exclusionGroups": [
+    {
+      "reason": "Admin endpoints are excluded from MCP",
+      "count": 22
+    },
+    {
+      "reason": "Household membership, invites & consent management must be a deliberate in-app action",
+      "count": 9
+    },
+    {
+      "reason": "Requires standing-auth model for unattended execution (follow-up issue)",
+      "count": 8
+    },
+    {
+      "reason": "Plaid account-linking is permanently non-MCP (app-only, owner directive)",
+      "count": 4
+    },
+    {
+      "reason": "Subscription management stays in-app",
+      "count": 4
+    },
+    {
+      "reason": "Account deletion must be a deliberate in-app action",
+      "count": 2
+    },
+    {
+      "reason": "Dashboard layout writes deferred to follow-up issue",
+      "count": 2
+    },
+    {
+      "reason": "Internal infrastructure endpoint",
+      "count": 2
+    },
+    {
+      "reason": "Internal webhook endpoint",
+      "count": 2
+    },
+    {
+      "reason": "Internal service endpoint; called by Worker service auth, not end-user MCP tools",
+      "count": 1
+    },
+    {
+      "reason": "Privacy/consent settings require deliberate in-app action (deferred)",
+      "count": 1
+    },
+    {
+      "reason": "Profile mutations deferred to follow-up",
+      "count": 1
+    },
+    {
+      "reason": "QA/testing endpoint, not for production MCP use",
+      "count": 1
+    }
+  ]
+}

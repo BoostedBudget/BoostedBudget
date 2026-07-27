@@ -219,7 +219,7 @@ async function mockAccountPage(page: Page) {
             name: 'premium',
             display_name: 'Premium',
             limits: { transaction_history_days: 365 },
-            features: { ai_insights: true, api_access: true, priority_support: true, custom_categories: true, custom_tags: true, advanced_reports: true },
+            features: { api_access: true, priority_support: true, custom_categories: true, custom_tags: true, advanced_reports: true },
           },
         },
       }),

@@ -41,7 +41,7 @@ describe('useAdminSubscriptionDetail', () => {
             effective_tier: 'premium',
             subscription_status: 'active',
             limits: { transaction_history_days: 730 },
-            features: { ai_insights: true },
+            features: { api_access: true },
             manual_tier_override: null,
             manual_tier_ends_at: null,
         }

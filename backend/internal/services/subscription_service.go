@@ -237,8 +237,6 @@ func (s *SubscriptionService) CanUserAccessFeature(
 
 	// Check feature availability
 	switch featureName {
-	case "ai_insights":
-		return effectiveSub.Features.AIInsights, nil
 	case "api_access":
 		return effectiveSub.Features.APIAccess, nil
 	case "priority_support":

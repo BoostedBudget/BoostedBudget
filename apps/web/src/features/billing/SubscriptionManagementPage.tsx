@@ -87,7 +87,6 @@ export function SubscriptionManagementPage() {
     if (!tierData) return []
 
     const featureLabels: Record<string, string> = {
-      ai_insights: 'AI-powered insights',
       priority_support: 'Priority support',
       advanced_reports: 'Advanced reports',
       api_access: 'API access',

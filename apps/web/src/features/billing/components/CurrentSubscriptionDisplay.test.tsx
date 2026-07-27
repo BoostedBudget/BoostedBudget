@@ -10,7 +10,7 @@ describe('CurrentSubscriptionDisplay', () => {
     billingInterval: 'month',
     amount: '19.99',
     currency: 'USD',
-    features: ['Unlimited rules', 'Unlimited accounts', 'AI insights', 'API access'],
+    features: ['Unlimited rules', 'Unlimited accounts', 'Advanced reports', 'API access'],
   }
 
   it('should render tier name', () => {
@@ -69,8 +69,8 @@ describe('CurrentSubscriptionDisplay', () => {
 
     expect(screen.getByText(/Unlimited rules/i)).toBeDefined()
     expect(screen.getByText(/Unlimited accounts/i)).toBeDefined()
-    const aiElements = screen.getAllByText(/AI insights/i)
-    expect(aiElements.length).toBeGreaterThan(0)
+    const reportsElements = screen.getAllByText(/Advanced reports/i)
+    expect(reportsElements.length).toBeGreaterThan(0)
     const apiElements = screen.getAllByText(/API access/i)
     expect(apiElements.length).toBeGreaterThan(0)
   })

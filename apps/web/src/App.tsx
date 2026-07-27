@@ -1,4 +1,4 @@
-import { useEffect, Suspense, lazy } from 'react'
+import { useEffect, useRef, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@clerk/react-router'
 import { Toaster } from 'sonner'
@@ -49,6 +49,9 @@ const ProfilePage = lazy(() =>
 )
 const PricingPage = lazy(() =>
   import('./features/pricing/PricingPage').then(m => ({ default: m.PricingPage }))
+)
+const McpPage = lazy(() =>
+  import('./features/mcp').then(m => ({ default: m.McpPage }))
 )
 const SubscriptionManagementPage = lazy(() =>
   import('./features/billing/SubscriptionManagementPage').then(m => ({ default: m.SubscriptionManagementPage }))
@@ -131,12 +134,68 @@ function App() {
   const location = useLocation()
   const { resolvedTheme } = useTheme()
   const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
+  const lastScrolledLocationKeyRef = useRef<string | null>(null)
 
   usePostHogIdentify()
 
   useEffect(() => {
     posthog.capture('$pageview')
   }, [location.pathname])
+
+  // Issue #1411 (B1 fix): react-router's <Link> only performs client-side navigation
+  // (history.pushState) — it never scrolls to a URL fragment. Without this effect,
+  // hash links like AppFooter's `/#features` changed the URL but left the viewport in
+  // place. This scrolls to the hash target on every location change, so it covers
+  // same-page hash links, cross-page fragment links, and hard loads/refreshes — for
+  // any current or future hash link, app-wide, not just the footer.
+  //
+  // Several routes below (e.g. /mcp) are lazy-loaded via `lazy(() => import(...))`.
+  // On a cold load of a fragment like `/mcp#capabilities`, this effect can run while
+  // only <PageSkeleton /> has rendered — the target isn't in the DOM yet. Rather than
+  // give up, poll briefly for it to appear, bounded to a fixed number of attempts so a
+  // genuinely-missing id doesn't retry forever.
+  useEffect(() => {
+    if (!location.hash) return
+
+    const targetId = location.hash.slice(1)
+
+    const scrollToTarget = (el: HTMLElement) => {
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      el.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth' })
+    }
+
+    // Returns true once the target exists (whether this call scrolled to it or a
+    // previous call already did), so the retry loop below knows when to stop.
+    const attemptScroll = (): boolean => {
+      const target = document.getElementById(targetId)
+      if (!target) return false
+
+      // Dev-only guard: React 18 StrictMode double-invokes this effect on mount
+      // (mount -> cleanup -> mount again) with the same `location.key`. Skip the
+      // repeat call so scrollIntoView doesn't fire twice for one real navigation.
+      // `location.key` (not pathname+hash) is what changes on every *real*
+      // navigation — including a later revisit to the same hash — so this never
+      // suppresses a legitimate scroll, only the StrictMode artifact.
+      if (lastScrolledLocationKeyRef.current !== location.key) {
+        lastScrolledLocationKeyRef.current = location.key
+        scrollToTarget(target)
+      }
+      return true
+    }
+
+    if (attemptScroll()) return
+
+    let attempts = 0
+    const MAX_ATTEMPTS = 20 // ~2s at 100ms intervals — generous for a lazy chunk to resolve
+    const intervalId = window.setInterval(() => {
+      attempts += 1
+      if (attemptScroll() || attempts >= MAX_ATTEMPTS) {
+        window.clearInterval(intervalId)
+      }
+    }, 100)
+
+    return () => window.clearInterval(intervalId)
+  }, [location.pathname, location.hash, location.key])
 
   // Use generated mutation hook for privacy settings
   const updatePrivacyMutation = useUpdatePrivacySettings()
@@ -431,6 +490,7 @@ function App() {
             <Route path="/legal/terms" element={<Suspense fallback={<PageSkeleton />}><TermsOfService /></Suspense>} />
             <Route path="/legal/cookie-policy" element={<Suspense fallback={<PageSkeleton />}><CookiePolicy /></Suspense>} />
             <Route path="/pricing" element={<Suspense fallback={<PageSkeleton />}><PricingPage /></Suspense>} />
+            <Route path="/mcp" element={<Suspense fallback={<PageSkeleton />}><McpPage /></Suspense>} />
             <Route
               path="/billing/manage"
               element={

@@ -13,7 +13,7 @@ describe('CancelConfirmationModal', () => {
     amount: '19.99',
     currency: 'USD',
     next_billing_date: '2024-03-15',
-    features: ['Unlimited rules', 'Unlimited accounts', 'AI insights', 'API access'],
+    features: ['Unlimited rules', 'Unlimited accounts', 'Advanced reports', 'API access'],
   }
 
   beforeEach(() => {
@@ -85,8 +85,8 @@ describe('CancelConfirmationModal', () => {
       />
     )
 
-    const aiElements = screen.getAllByText(/AI insights/i)
-    expect(aiElements.length).toBeGreaterThan(0)
+    const reportsElements = screen.getAllByText(/Advanced reports/i)
+    expect(reportsElements.length).toBeGreaterThan(0)
     const apiElements = screen.getAllByText(/API access/i)
     expect(apiElements.length).toBeGreaterThan(0)
   })
