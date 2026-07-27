@@ -453,6 +453,18 @@ describe('PricingPage', () => {
 
       expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
     })
+
+    // Design-hook finding: the frozen banner previously hand-rolled a "side-tab" pattern (a full
+    // border plus a thick one-sided accent border) plus a decorative gradient, instead of reusing
+    // the Alert primitive.
+    it('renders as a semantic alert with no bespoke side-tab or gradient styling', () => {
+      renderWithProviders(<PricingPage />, { frozen: true })
+
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent(/your subscription has expired/i)
+      expect(alert.className).not.toMatch(/border-l-4/)
+      expect(alert.className).not.toMatch(/bg-gradient-to-r/)
+    })
   })
 
   // Issue #772: Trial user detection (GAP 1)
@@ -541,6 +553,33 @@ describe('PricingPage', () => {
 
       expect(screen.getByText(/45 days remaining/i)).toBeInTheDocument()
       expect(screen.getByText(/you're on a free trial/i)).toBeInTheDocument()
+    })
+
+    // Design-hook finding: the trial banner previously hand-rolled a "side-tab" pattern (a
+    // full border plus a thick one-sided accent border) instead of reusing the Alert primitive.
+    it('renders the trial banner as a semantic status region with no bespoke side-tab styling', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'trial',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '0.00',
+          currency: 'USD',
+          current_period_end: '2026-04-08T00:00:00Z',
+          trial_ends_at: '2026-04-08T00:00:00Z',
+          trial_days_remaining: 45,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      const status = screen.getByRole('status')
+      expect(status).toHaveTextContent(/you're on a free trial/i)
+      expect(status.className).not.toMatch(/border-l-4/)
     })
 
     it('should show "Current Plan" badge for paid users (not trial)', () => {
