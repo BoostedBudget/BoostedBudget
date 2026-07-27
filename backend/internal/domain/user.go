@@ -124,6 +124,17 @@ func (u *User) HasActiveManualOverride() bool {
 	return u.hasActiveManualOverrideAt(time.Now())
 }
 
+// HasAnyManualOverride reports whether the user carries a manual tier override AT ALL — live or
+// already lapsed. Unlike HasActiveManualOverride, expiry is irrelevant here: this is the Go twin
+// of the SQL noManualOverrideAtAllPredicate (profile_repository.go), used by belt-and-braces
+// guards that must agree with the retention queries' "exclude on any override, live or lapsed"
+// rule (Issue #1413 Critical finding C1). A comp that lapsed but has not yet been cleared by the
+// daily manual_tier_override_expiry_check job must still block auto-deletion, not just a
+// currently-active one — using HasActiveManualOverride for that guard was the C1 bug.
+func (u *User) HasAnyManualOverride() bool {
+	return u.ManualTierOverride != nil && *u.ManualTierOverride != ""
+}
+
 // computeEffectiveTierAt returns the effective tier for the user as of the given timestamp.
 // If an active manual override is in effect at that instant, its tier is returned; otherwise
 // the base SubscriptionTier is returned.

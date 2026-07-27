@@ -303,12 +303,18 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 
 	var deletedCount, errorCount int
 	for _, user := range users {
-		// #1413: belt-and-braces hard-delete guard — a comped user must never be
-		// auto-deleted. Task 4 additionally excludes comped users at the SQL level; this
-		// worker-level guard protects against a stale candidate list when a comp lands
-		// between the query and this loop.
-		if user.HasActiveManualOverride() {
-			w.logger.Info("skipping retention deletion for actively comped user",
+		// #1413 Critical finding C1 (third round of remediation): belt-and-braces hard-delete
+		// guard — a user with ANY manual tier override, live or lapsed-but-uncleared, must never
+		// be auto-deleted. This MUST use HasAnyManualOverride (not HasActiveManualOverride) to
+		// agree with the retention queries (noManualOverrideAtAllPredicate) and with
+		// claimForDeletionPredicate, which ExecuteDeletion's own claim now enforces — using the
+		// live-only check here was exactly the bug this fix closes: a comp that lapsed moments
+		// before the independently-scheduled expiry job clears the column would pass this guard
+		// and reach ExecuteDeletion. The real enforcement is still ExecuteDeletion's claim; this
+		// worker-level guard protects against a stale candidate list when a comp lands (or
+		// lapses) between the query and this loop.
+		if user.HasAnyManualOverride() {
+			w.logger.Info("skipping retention deletion for user with a manual tier override (live or lapsed)",
 				"job_id", jobID, "user_id", user.ID)
 			continue
 		}
