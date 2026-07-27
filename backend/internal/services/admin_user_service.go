@@ -2,13 +2,12 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/clerk/clerk-sdk-go/v2/user"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
@@ -19,6 +18,12 @@ var (
 	ErrInvalidPageNumber     = errors.New("page must be at least 1")
 	ErrInvalidPageSizeNumber = errors.New("page_size must be between 1 and 100")
 	ErrUserIDRequired        = errors.New("user_id is required")
+	// ErrInvalidTierOverride indicates a requested tier is not a configured subscription tier
+	// (config/subscription_tiers.yaml is the single source of truth, not a hardcoded list).
+	// manual_tier_override is an unvalidated VARCHAR(50) column with no CHECK constraint, so
+	// this must be rejected here rather than reaching ComputeEffectiveTier() as a 500 at read
+	// time (Issue #1413 Defect 4). The handler maps this to huma.Error400BadRequest.
+	ErrInvalidTierOverride = errors.New("tier is not a configured subscription tier")
 )
 
 const (
@@ -36,8 +41,11 @@ type AdminUserService interface {
 	// GetUserDetail returns detailed user information with statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
 
-	// UpdateUserTier updates a user's subscription tier natively and in Clerk
-	UpdateUserTier(ctx context.Context, clerkUserID, userID, tier, reason string, expiresAt *time.Time) error
+	// UpdateUserTier updates a user's subscription tier natively and in Clerk.
+	//
+	// actorUserID is the acting admin's internal UUID (for the audit row; may be "").
+	// userID is the target user whose tier override is being set.
+	UpdateUserTier(ctx context.Context, actorUserID, userID, tier, reason string, expiresAt *time.Time) (UpdateUserTierResult, error)
 
 	// RemoveUserTierOverride clears an existing manual tier override for the target user and
 	// re-syncs Clerk metadata. Idempotent: a user with no existing override still returns
@@ -47,6 +55,15 @@ type AdminUserService interface {
 	// actorUserID is the acting admin's internal UUID (for the audit row; may be "").
 	// targetUserID is the user whose override is being cleared.
 	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (RemoveTierOverrideResult, error)
+}
+
+// UpdateUserTierResult communicates the outcome of setting a user's manual tier override
+// back to the caller (the HTTP handler).
+type UpdateUserTierResult struct {
+	// Warning is a non-blocking message surfaced in the HTTP response's message field when
+	// the target owns a household and the new tier's seat count is below their current
+	// active member count (Issue #1413 Defect 5). Empty when there's nothing to warn about.
+	Warning string
 }
 
 // RemoveTierOverrideResult communicates the outcome of clearing a user's manual tier
@@ -66,6 +83,7 @@ type adminUserService struct {
 	adminService    AdminService
 	clerkService    ClerkService
 	retentionMonths int
+	tierConfig      *config.TierConfig
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
@@ -75,12 +93,17 @@ type adminUserService struct {
 // way).
 // retentionMonths sizes the retention-clock re-arm window on tier-override removal
 // (config.Config.RetentionPeriodMonths — the same value trialService.SetRetentionMonths gets).
-func NewAdminUserService(repo repository.AdminUserRepository, adminService AdminService, clerkService ClerkService, retentionMonths int) AdminUserService {
+// tierConfig is the subscription tier configuration (config/subscription_tiers.yaml, the
+// single source of truth) used to validate manual tier overrides and to look up seat counts
+// for the household-downgrade warning (Issue #1413 Defects 4 and 5). Nil-safe: a nil
+// tierConfig skips both checks rather than panicking.
+func NewAdminUserService(repo repository.AdminUserRepository, adminService AdminService, clerkService ClerkService, retentionMonths int, tierConfig *config.TierConfig) AdminUserService {
 	return &adminUserService{
 		repo:            repo,
 		adminService:    adminService,
 		clerkService:    clerkService,
 		retentionMonths: retentionMonths,
+		tierConfig:      tierConfig,
 	}
 }
 
@@ -167,49 +190,83 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 	}
 }
 
-// UpdateUserTier manually overrides a user's subscription tier locally and updates Clerk JWT claims.
-func (s *adminUserService) UpdateUserTier(ctx context.Context, _, userID, tier, reason string, expiresAt *time.Time) error {
+// UpdateUserTier manually overrides a user's subscription tier locally and updates Clerk JWT
+// claims. actorUserID is the acting admin's internal UUID, threaded through to the repository
+// for the audit row (Issue #1413 Defect 2) — never the target.
+func (s *adminUserService) UpdateUserTier(ctx context.Context, actorUserID, userID, tier, reason string, expiresAt *time.Time) (UpdateUserTierResult, error) {
 	// Validate inputs
 	if userID == "" {
-		return ErrUserIDRequired
+		return UpdateUserTierResult{}, ErrUserIDRequired
 	}
 	if tier == "" {
-		return errors.New("tier is required")
+		return UpdateUserTierResult{}, errors.New("tier is required")
 	}
 	if reason == "" {
-		return errors.New("reason is required")
+		return UpdateUserTierResult{}, errors.New("reason is required")
 	}
 
-	// 1. Update the database via AdminUserRepository.
-	// The repo returns the target user's clerk_user_id for use in step 2.
-	targetClerkUserID, err := s.repo.UpdateUserTier(ctx, userID, tier, reason, expiresAt)
+	// Defect 4: reject a tier that isn't a configured tier name, using the tier config (the
+	// single source of truth) rather than a hardcoded list. manual_tier_override is an
+	// unvalidated VARCHAR(50) column with no CHECK constraint, so a malformed value must fail
+	// closed here rather than reaching ComputeEffectiveTier() as a 500 at read time.
+	var tierCfg domain.SubscriptionTier
+	if s.tierConfig != nil {
+		cfg, cfgErr := s.tierConfig.GetTier(domain.TierName(tier))
+		if cfgErr != nil {
+			return UpdateUserTierResult{}, fmt.Errorf("%w: %q", ErrInvalidTierOverride, tier)
+		}
+		tierCfg = cfg
+	}
+
+	// 1. Update the database via AdminUserRepository. The repo returns the target's clerk_user_id
+	// plus its raw (base) subscription_tier/subscription_status for step 2 below.
+	row, err := s.repo.UpdateUserTier(ctx, actorUserID, userID, tier, reason, expiresAt)
 	if err != nil {
-		return fmt.Errorf("failed to update user tier in database: %w", err)
+		return UpdateUserTierResult{}, fmt.Errorf("failed to update user tier in database: %w", err)
 	}
 
-	// 2. Update Clerk publicMetadata to reflect the new tier in the target user's JWT claims.
-	if targetClerkUserID != "" {
-		metadata := map[string]interface{}{
-			"tier": tier,
-		}
-		metadataJSON, err := json.Marshal(metadata)
-		if err != nil {
-			slog.ErrorContext(ctx, "failed to marshal clerk metadata", "user_id", userID, "error", err)
-			return nil
-		}
-		rawMetadata := json.RawMessage(metadataJSON)
+	result := UpdateUserTierResult{}
 
-		var params user.UpdateParams
-		params.PublicMetadata = &rawMetadata
+	// Defect 5: warn (never block) when the target owns a household and the new tier's seat
+	// count is below their current active member count. Task 5 made a comped owner's
+	// effective tier reach the seat-capacity machine, so comping someone down to a smaller
+	// tier can silently start the over-capacity grace clock and eventually LIFO-offboard
+	// members — a destructive side effect of what the admin intends as a gift. Best-effort:
+	// a failure here logs and is skipped, it never blocks the tier change itself.
+	if s.tierConfig != nil {
+		activeMembers, cErr := s.repo.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+		if cErr != nil {
+			slog.ErrorContext(ctx, "failed to check household seat capacity for tier override",
+				"user_id", userID, "error", cErr)
+		} else if activeMembers > tierCfg.Pricing.UsersIncluded {
+			slog.WarnContext(ctx, "admin tier override drops household owner below active seat count",
+				"user_id", userID, "tier", tier,
+				"seats_included", tierCfg.Pricing.UsersIncluded, "active_members", activeMembers)
+			result.Warning = fmt.Sprintf(
+				"Warning: %q includes %d seat(s), but this household has %d active member(s); "+
+					"excess members may eventually be offboarded unless the tier is increased or members are removed.",
+				tier, tierCfg.Pricing.UsersIncluded, activeMembers)
+		}
+	}
 
-		_, err = user.Update(ctx, targetClerkUserID, &params)
-		if err != nil {
+	// 2. Update Clerk publicMetadata to reflect the new EFFECTIVE tier/status in the target
+	// user's JWT claims, via the canonical merge-semantics helper (Issue #1413 Defect 1). The
+	// scratch user carries the just-applied override so ClerkPublicMetadata() computes the
+	// actual override tier (e.g. "household_4"), not a generic/raw value.
+	if s.clerkService != nil && row.ClerkUserID != "" {
+		scratch := &domain.User{
+			SubscriptionTier:   row.SubscriptionTier,
+			SubscriptionStatus: row.SubscriptionStatus,
+			ManualTierOverride: &tier,
+			ManualTierEndsAt:   expiresAt,
+		}
+		if syncErr := s.clerkService.UpdateUserMetadata(ctx, row.ClerkUserID, scratch.ClerkPublicMetadata()); syncErr != nil {
 			// Clerk sync is best-effort: the DB update already succeeded, so log and continue.
-			slog.ErrorContext(ctx, "failed to sync tier to clerk metadata", "clerk_user_id", targetClerkUserID, "tier", tier, "error", err)
+			slog.ErrorContext(ctx, "failed to sync tier to clerk metadata", "clerk_user_id", row.ClerkUserID, "tier", tier, "error", syncErr)
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
 // RemoveUserTierOverride clears an existing manual tier override for the target user,

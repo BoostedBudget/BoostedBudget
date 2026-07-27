@@ -75,16 +75,17 @@ type AdminSubscriptionDetailInput struct {
 
 // UpdateUserTier manually overrides a user's subscription tier. Requires admin privileges.
 //
+// input.UserID is the struct's own path-bound field, which SHADOWS the field promoted from
+// AdminAuthenticatedInput -> AuthenticatedInput at the top level. So:
+//
+//	input.UserID                          -> the TARGET user (path param)
+//	input.AdminAuthenticatedInput.UserID  -> the ACTING ADMIN (resolved from JWT/context)
+//
 // PUT /api/v1/admin/users/{user_id}/subscription/tier
 func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscriptionTierInput) (*AdminSubscriptionTierOutput, error) {
-	clerkUserID, ok := ctx.Value(inputs.ClerkUserIDKey).(string)
-	if !ok || clerkUserID == "" {
-		return nil, huma.Error401Unauthorized("unauthorized: missing clerk user id")
-	}
-
-	err := h.adminUserService.UpdateUserTier(
+	result, err := h.adminUserService.UpdateUserTier(
 		ctx,
-		clerkUserID,
+		input.AdminAuthenticatedInput.UserID,
 		input.UserID,
 		input.Body.Tier,
 		input.Body.Reason,
@@ -95,11 +96,17 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")
 		}
+		if errors.Is(err, services.ErrInvalidTierOverride) {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to update user tier: %w", err))
 	}
 
 	resp := &AdminSubscriptionTierOutput{}
 	resp.Body.Message = "User subscription tier updated successfully"
+	if result.Warning != "" {
+		resp.Body.Message += " " + result.Warning
+	}
 	return resp, nil
 }
 

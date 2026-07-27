@@ -198,19 +198,36 @@ func stringPtr(s string) *string { return &s }
 
 // syncClerkMetadata updates a user's Clerk public metadata with their current tier and status.
 // Logs and swallows errors so Clerk failures don't abort webhook processing.
+//
+// Re-reads the user AFTER the caller's UpdateSubscriptionFromPaddle write commits, so the row
+// is fresh, and builds the payload from ClerkPublicMetadata() — the EFFECTIVE tier/status —
+// rather than the raw tier/status this webhook just wrote. This matters because a comped user
+// (active manual_tier_override) must not have their comp clobbered by a Paddle webhook's raw
+// values (Issue #1413 Defect 3). The raw tier/status parameters are kept as the fallback for
+// the rare case where this re-read itself fails.
 func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID, tier, status string) {
 	if w.clerkService == nil {
 		return
 	}
-	user, err := w.profileRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		w.logger.Error("failed to get user for Clerk sync", "user_id", userID, "error", err)
+	// Default to the raw values this webhook is trying to write; overwritten below if the
+	// post-commit re-read succeeds. This is the fallback for a re-read failure — we don't
+	// skip the sync attempt entirely just because the fresh read didn't come back.
+	scratch := &domain.User{SubscriptionTier: tier, SubscriptionStatus: status}
+	clerkUserID := ""
+
+	if fresh, err := w.profileRepo.GetUserByID(ctx, userID); err != nil {
+		w.logger.Error("failed to get user for Clerk sync; falling back to raw tier/status", "user_id", userID, "error", err)
+	} else {
+		scratch = fresh
+		clerkUserID = fresh.ClerkUserID
+	}
+
+	if clerkUserID == "" {
+		// Without a successful re-read we don't know which Clerk user to sync to.
 		return
 	}
-	if err := w.clerkService.UpdateUserMetadata(ctx, user.ClerkUserID, map[string]interface{}{
-		"subscription_tier":   tier,
-		"subscription_status": status,
-	}); err != nil {
+
+	if err := w.clerkService.UpdateUserMetadata(ctx, clerkUserID, scratch.ClerkPublicMetadata()); err != nil {
 		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
 	}
 }

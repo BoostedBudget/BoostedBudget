@@ -252,10 +252,16 @@ func TestWorker_SubscriptionCreated_Success(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
+	// SubscriptionTier/SubscriptionStatus set to the same values UpdateSubscriptionFromPaddle
+	// just wrote — this stub stands in for the post-commit re-read, so it must reflect the
+	// fresh row (Issue #1413 Defect 3: syncClerkMetadata now pushes ClerkPublicMetadata()'s
+	// EFFECTIVE values computed from this user, not the raw tier/status parameters).
 	user := &domain.User{
-		ID:          "user_2abc123def456",
-		ClerkUserID: "user_2abc123def456",
-		Email:       "test@example.com",
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "user_2abc123def456",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -297,9 +303,13 @@ func TestWorker_SubscriptionCreated_UpdatesClerkMetadata(t *testing.T) {
 	}
 	job := createRiverJob(args)
 
+	// SubscriptionTier/SubscriptionStatus mirror the fresh row this stub stands in for
+	// (Issue #1413 Defect 3 — see the analogous comment in TestWorker_SubscriptionCreated_Success).
 	user := &domain.User{
-		ID:          "user_2abc123def456",
-		ClerkUserID: "clerk_user_123",
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
 	}
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -1334,6 +1344,54 @@ func TestWorker_SubscriptionCanceled_Comped_StatusStillWrittenCancelled(t *testi
 
 	require.NoError(t, err)
 	mockProfileRepo.AssertCalled(t, "UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil))
+}
+
+// TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered proves Defect 3 concretely:
+// a comped user's Clerk metadata push carries the EFFECTIVE (overridden) tier/status, not the
+// raw "premium"/"cancelled" values this webhook just wrote to the DB. The three tests above use
+// mock.Anything for the metadata argument (they're about Plaid/retention, not this); this test
+// pins the actual payload content.
+func TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	override := "household_3"
+	compedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(compedUser, nil)
+	// Billing truth still gets written as raw "cancelled" — the comp does not rewrite it.
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.MatchedBy(func(m map[string]interface{}) bool {
+		// Must be the comp's effective values, NOT the raw "premium"/"cancelled" just written.
+		return m["subscription_tier"] == "household_3" && m["subscription_status"] == "active"
+	})).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockClerk.AssertExpectations(t)
 }
 
 // TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems tests that Plaid items are

@@ -21,9 +21,22 @@ type AdminUserRepository interface {
 	// GetUserDetail returns detailed user information with full statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
 
-	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration.
-	// Returns the target user's clerk_user_id so the caller can sync Clerk metadata.
-	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error)
+	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration,
+	// and writes an audit log row — all inside a single transaction.
+	//
+	// actorUserID is the acting admin's internal UUID (audit_logs.user_id; may be "" — coerced
+	// to SQL NULL, mirroring RemoveUserTierOverride). userID is the target being modified.
+	//
+	// Returns the target's decrypted clerk_user_id plus its raw (base) subscription_tier/
+	// subscription_status — unaffected by this write — so the caller can build the correct
+	// EFFECTIVE Clerk metadata payload without a second DB read.
+	UpdateUserTier(ctx context.Context, actorUserID, userID, tier, reason string, expiresAt *time.Time) (UpdateTierRow, error)
+
+	// GetOwnedHouseholdActiveMemberCount returns the number of active members in the household
+	// owned by userID (0 if userID does not own a household). Used by the service to warn an
+	// admin when a tier override would drop a household owner below their current active
+	// member count (Issue #1413 Defect 5).
+	GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error)
 
 	// RemoveUserTierOverride clears a user's manual tier override (manual_tier_override,
 	// manual_tier_ends_at), re-arms the retention clock if the reverted subscription status
@@ -35,6 +48,24 @@ type AdminUserRepository interface {
 	//
 	// Returns ErrUserNotFound if targetUserID does not exist or is soft-deleted.
 	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error)
+}
+
+// UpdateTierRow is the result of setting a user's manual tier override in a single
+// UPDATE ... RETURNING statement: the target's decrypted Clerk user ID, its raw (base)
+// subscription_tier/subscription_status (unaffected by this write — these plus the
+// just-applied override are what the caller needs to build the correct EFFECTIVE Clerk
+// metadata payload without a second DB read), and the prior manual_tier_override value (for
+// the audit log).
+type UpdateTierRow struct {
+	// ClerkUserID is the decrypted clerk_user_id, for the caller's Clerk metadata sync.
+	ClerkUserID string
+	// SubscriptionTier is the user's raw (base) subscription_tier, unaffected by this write.
+	SubscriptionTier string
+	// SubscriptionStatus is the user's raw (base) subscription_status, unaffected by this write.
+	SubscriptionStatus string
+	// PriorManualTierOverride is the manual_tier_override value as it was immediately before
+	// this UPDATE (nil if no override was previously set).
+	PriorManualTierOverride *string
 }
 
 // RemoveTierOverrideRow is the result of clearing a user's manual tier override in a single
@@ -261,69 +292,116 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 	return &detail, nil
 }
 
-// UpdateUserTier updates the manual tier override fields inside the users table and creates an audit log.
-// Returns the target user's clerk_user_id so the caller can sync Clerk metadata for the correct user.
-func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
+// updateUserTierQuery sets a user's manual tier override and, in the same statement, locks
+// and reads the PRE-UPDATE manual_tier_override (via the "prior" CTE) so the caller can audit
+// the previous value without a second round trip. Mirrors removeUserTierOverrideQuery's
+// CTE + FOR UPDATE shape. The "prior" CTE's own is_deleted=FALSE guard is what causes a
+// missing/soft-deleted target to return zero rows from the join below (surfaced as
+// pgx.ErrNoRows -> ErrUserNotFound), so the outer UPDATE does not need to repeat that guard.
+const updateUserTierQuery = `
+	WITH prior AS (
+		SELECT manual_tier_override
+		FROM users
+		WHERE id = $3 AND is_deleted = FALSE
+		FOR UPDATE
+	)
+	UPDATE users u
+	SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
+	FROM prior
+	WHERE u.id = $3
+	RETURNING u.clerk_user_id, u.subscription_tier, u.subscription_status, prior.manual_tier_override
+`
+
+// UpdateUserTier sets a user's manual tier override, restarting the audit trail with the
+// ACTING ADMIN (not the target) recorded as the audit actor, and returns the target's raw
+// subscription state so the caller can push the correct EFFECTIVE tier to Clerk (Issue #1413
+// Defects 1 and 2). See the AdminUserRepository interface doc for the full contract.
+func (r *adminUserRepository) UpdateUserTier(ctx context.Context, actorUserID, userID, tier, reason string, expiresAt *time.Time) (UpdateTierRow, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to begin transaction: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// Update the user table and retrieve clerk_user_id for the Clerk metadata sync
-	updateQuery := `
-		UPDATE users
-		SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
-		WHERE id = $3 AND is_deleted = FALSE
-		RETURNING clerk_user_id
-	`
-	var clerkUserID string
-	err = tx.QueryRow(ctx, updateQuery, tier, expiresAt, userID).Scan(&clerkUserID)
+	var row UpdateTierRow
+	var clerkUserIDEnc string
+	err = tx.QueryRow(ctx, updateUserTierQuery, tier, expiresAt, userID).Scan(
+		&clerkUserIDEnc, &row.SubscriptionTier, &row.SubscriptionStatus, &row.PriorManualTierOverride,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", ErrUserNotFound
+			return UpdateTierRow{}, ErrUserNotFound
 		}
-		return "", fmt.Errorf("failed to update user tier: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to update user tier: %w", err)
 	}
 
 	// Decrypt the returned clerk_user_id (it is encrypted in the DB)
-	clerkUserID, err = r.enc.DecryptString(clerkUserID)
+	row.ClerkUserID, err = r.enc.DecryptString(clerkUserIDEnc)
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
 	}
 
-	// Insert into audit_logs using the correct column names
-	auditQuery := `
-		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
-		VALUES ($1, 'update_manual_tier', 'user', $1, $2)
-	`
+	// audit_logs.user_id -> the ACTING ADMIN; resource_id -> the TARGET (userID). Coerce an
+	// empty actor to SQL NULL — the column is nullable with FK ON DELETE SET NULL, and a
+	// missing actor must never abort a legitimate admin action (mirrors
+	// RemoveUserTierOverride).
+	var actorParam interface{}
+	if actorUserID != "" {
+		actorParam = actorUserID
+	}
 
 	detailsMap := map[string]interface{}{
-		"tier":   tier,
-		"reason": reason,
+		"tier":           tier,
+		"reason":         reason,
+		"target_user_id": userID,
+	}
+	if row.PriorManualTierOverride != nil {
+		detailsMap["prior_manual_tier_override"] = *row.PriorManualTierOverride
 	}
 	if expiresAt != nil {
 		detailsMap["expires_at"] = expiresAt.Format("2006-01-02T15:04:05Z")
 	}
 	detailsBytes, err := json.Marshal(detailsMap)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal audit details: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to marshal audit details: %w", err)
 	}
 
 	encryptedChanges, err := r.enc.EncryptJSON(json.RawMessage(detailsBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to encrypt audit changes: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to encrypt audit changes: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, auditQuery, userID, encryptedChanges)
+	auditQuery := `
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
+		VALUES ($1, 'update_manual_tier', 'user', $2, $3)
+	`
+	_, err = tx.Exec(ctx, auditQuery, actorParam, userID, encryptedChanges)
 	if err != nil {
-		return "", fmt.Errorf("failed to create audit log: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to create audit log: %w", err)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("failed to commit transaction: %w", err)
+		return UpdateTierRow{}, fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	return clerkUserID, nil
+	return row, nil
+}
+
+// GetOwnedHouseholdActiveMemberCount returns the number of active members in the household
+// owned by userID. A user who does not own a household always yields 0 — ownership implies
+// membership (the owner is always inserted as an active member at household creation), so 0
+// unambiguously means "not an owner" to callers.
+func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM household_members hm
+		JOIN households h ON h.id = hm.household_id
+		WHERE h.owner_user_id = $1 AND hm.status = 'active'
+	`, userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count owned household active members: %w", err)
+	}
+	return count, nil
 }
 
 // removeUserTierOverrideQuery clears a user's manual tier override and, in the same

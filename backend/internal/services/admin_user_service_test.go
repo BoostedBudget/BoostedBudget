@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
@@ -19,9 +20,17 @@ type MockAdminUserRepository struct {
 	mock.Mock
 }
 
-func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
-	args := m.Called(ctx, userID, tier, reason, expiresAt)
-	return args.String(0), args.Error(1)
+func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, actorUserID, userID, tier, reason string, expiresAt *time.Time) (repository.UpdateTierRow, error) {
+	args := m.Called(ctx, actorUserID, userID, tier, reason, expiresAt)
+	if args.Get(0) == nil {
+		return repository.UpdateTierRow{}, args.Error(1)
+	}
+	return args.Get(0).(repository.UpdateTierRow), args.Error(1)
+}
+
+func (m *MockAdminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
 }
 
 func (m *MockAdminUserRepository) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (repository.RemoveTierOverrideRow, error) {
@@ -51,7 +60,7 @@ func (m *MockAdminUserRepository) GetUserDetail(ctx context.Context, userID stri
 // TestAdminUserService_ListUsers_Success tests successful listing of users
 func TestAdminUserService_ListUsers_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -106,7 +115,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 // TestAdminUserService_ListUsers_WithPagination tests pagination calculations
 func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -143,7 +152,7 @@ func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 // TestAdminUserService_ListUsers_LastPage tests last page has no more
 func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 
@@ -163,7 +172,7 @@ func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 // TestAdminUserService_ListUsers_WithFilters tests filtering passes through
 func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 
@@ -187,7 +196,7 @@ func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 // TestAdminUserService_ListUsers_RepositoryError tests error propagation
 func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 
@@ -207,7 +216,7 @@ func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPage tests validation of page
 func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -224,7 +233,7 @@ func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPageSize tests validation of page size
 func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -241,7 +250,7 @@ func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 // TestAdminUserService_GetUserDetail_Success tests successful retrieval
 func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -282,7 +291,7 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 // TestAdminUserService_GetUserDetail_NotFound tests user not found
 func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -302,7 +311,7 @@ func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 // TestAdminUserService_GetUserDetail_EmptyUserID tests validation
 func TestAdminUserService_GetUserDetail_EmptyUserID(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 
@@ -346,7 +355,7 @@ func (m *MockAdminService) IsHardcodedAdmin(email string) bool {
 func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockAdminService := new(MockAdminService)
-	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0)
+	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -401,7 +410,7 @@ func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockAdminService := new(MockAdminService)
-	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0)
+	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0, nil)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -442,7 +451,7 @@ func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 // TestAdminUserService_ListUsers_NilAdminService tests graceful handling of nil AdminService
 func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0) // nil AdminService
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil) // nil AdminService
 
 	ctx := context.Background()
 	now := time.Now()
@@ -473,45 +482,64 @@ func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// fakeTierConfig returns a *config.TierConfig literal covering all five real tiers with their
+// real users_included seat counts (config/subscription_tiers.yaml). Per this plan's standing
+// rule, tests must build a literal rather than call config.LoadTierConfig() (a process-wide
+// sync.Once singleton).
+func fakeTierConfig() *config.TierConfig {
+	return &config.TierConfig{
+		Tiers: map[domain.TierName]domain.SubscriptionTier{
+			domain.TierPremium:    {Name: domain.TierPremium, Pricing: domain.SubscriptionPricing{UsersIncluded: 1}},
+			domain.TierHousehold2: {Name: domain.TierHousehold2, Pricing: domain.SubscriptionPricing{UsersIncluded: 2}},
+			domain.TierHousehold3: {Name: domain.TierHousehold3, Pricing: domain.SubscriptionPricing{UsersIncluded: 3}},
+			domain.TierHousehold4: {Name: domain.TierHousehold4, Pricing: domain.SubscriptionPricing{UsersIncluded: 4}},
+			domain.TierHousehold5: {Name: domain.TierHousehold5, Pricing: domain.SubscriptionPricing{UsersIncluded: 5}},
+		},
+	}
+}
+
 func TestAdminUserService_UpdateUserTier_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
+	actorID := uuid.New().String()
 	userID := uuid.New().String()
 	tier := "household_2"
 	reason := "manual override"
 
 	// Return empty clerk_user_id to skip Clerk API call (best-effort)
-	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return("", nil)
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
 
-	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	result, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
 	require.NoError(t, err)
+	assert.Empty(t, result.Warning)
 
 	mockRepo.AssertExpectations(t)
 }
 
 func TestAdminUserService_UpdateUserTier_MissingUserID(t *testing.T) {
-	service := NewAdminUserService(nil, nil, nil, 0)
-	err := service.UpdateUserTier(context.Background(), "", "", "tier", "reason", nil)
+	service := NewAdminUserService(nil, nil, nil, 0, nil)
+	_, err := service.UpdateUserTier(context.Background(), "", "", "tier", "reason", nil)
 	assert.Equal(t, ErrUserIDRequired, err)
 }
 
 func TestAdminUserService_UpdateUserTier_MissingTier(t *testing.T) {
-	service := NewAdminUserService(nil, nil, nil, 0)
-	err := service.UpdateUserTier(context.Background(), "", "user", "", "reason", nil)
+	service := NewAdminUserService(nil, nil, nil, 0, nil)
+	_, err := service.UpdateUserTier(context.Background(), "", "user", "", "reason", nil)
 	assert.ErrorContains(t, err, "tier is required")
 }
 
 func TestAdminUserService_UpdateUserTier_MissingReason(t *testing.T) {
-	service := NewAdminUserService(nil, nil, nil, 0)
-	err := service.UpdateUserTier(context.Background(), "", "user", "tier", "", nil)
+	service := NewAdminUserService(nil, nil, nil, 0, nil)
+	_, err := service.UpdateUserTier(context.Background(), "", "user", "tier", "", nil)
 	assert.ErrorContains(t, err, "reason is required")
 }
 
 func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
 
 	ctx := context.Background()
 	userID := "user"
@@ -519,10 +547,269 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 	reason := "promo"
 	repoErr := errors.New("db down")
 
-	mockRepo.On("UpdateUserTier", ctx, userID, tier, reason, (*time.Time)(nil)).Return("", repoErr)
+	mockRepo.On("UpdateUserTier", ctx, "", userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, repoErr)
 
-	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	_, err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
 	assert.ErrorContains(t, err, "failed to update user tier in database: db down")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Issue #1413 Defect 1: Clerk sync uses the injected ClerkService + canonical payload ---
+
+// TestAdminUserService_UpdateUserTier_PushesEffectiveOverrideTier_Household4 proves the Clerk
+// payload carries the ACTUAL override tier (a specific household level), not a generic value,
+// and matches the canonical subscription_tier/subscription_status/tier:nil shape.
+func TestAdminUserService_UpdateUserTier_PushesEffectiveOverrideTier_Household4(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockClerk := new(MockClerkService)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 0, nil)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "household_4"
+	reason := "comped to household_4"
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{
+			ClerkUserID:        "clerk_household4_user",
+			SubscriptionTier:   "premium", // raw base tier, unaffected by the override
+			SubscriptionStatus: "cancelled",
+		}, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_household4_user", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return hasTierKey && tierVal == "household_4" && // the OVERRIDE tier, not the raw "premium"
+			hasStatusKey && statusVal == "active" && // override forces status to active
+			hasNilTierKey && nilTierVal == nil // orphaned "tier" key retroactively cleaned up
+	})).Return(nil)
+
+	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
+	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_ClerkFailure_StillSucceeds proves Clerk sync is
+// best-effort — the DB write already succeeded, so a Clerk error must not fail the call.
+func TestAdminUserService_UpdateUserTier_ClerkFailure_StillSucceeds(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockClerk := new(MockClerkService)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 0, nil)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "comp"
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{ClerkUserID: "clerk_x", SubscriptionTier: "premium", SubscriptionStatus: "active"}, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_x", mock.Anything).Return(errors.New("clerk is down"))
+
+	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
+	require.NoError(t, err, "Clerk sync failure must not fail the overall call")
+
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_NilClerkService_NoPanic proves a nil ClerkService (not
+// configured) is handled gracefully, matching the RemoveUserTierOverride precedent.
+func TestAdminUserService_UpdateUserTier_NilClerkService_NoPanic(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil) // nil ClerkService
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, "premium", "reason", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{ClerkUserID: "clerk_x", SubscriptionTier: "premium", SubscriptionStatus: "active"}, nil)
+
+	assert.NotPanics(t, func() {
+		_, err := service.UpdateUserTier(ctx, actorID, userID, "premium", "reason", nil)
+		require.NoError(t, err)
+	})
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Issue #1413 Defect 2: actor threaded through to the repository, never the target ---
+
+// TestAdminUserService_UpdateUserTier_ActorAndTargetDiffer proves the service passes
+// actorUserID and targetUserID through to the repository in the right slots (not swapped).
+func TestAdminUserService_UpdateUserTier_ActorAndTargetDiffer(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	require.NotEqual(t, actorID, targetID)
+	reason := "actor/target must not swap"
+
+	// Exact positional match: if the service ever swaps actor/target, this expectation will
+	// not match and the mock will panic on an unexpected call.
+	mockRepo.On("UpdateUserTier", ctx, actorID, targetID, "premium", reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+
+	_, err := service.UpdateUserTier(ctx, actorID, targetID, "premium", reason, nil)
+	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Issue #1413 Defect 4: malformed tier fails closed ---
+
+func TestAdminUserService_UpdateUserTier_InvalidTier_Rejected(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	_, err := service.UpdateUserTier(context.Background(), uuid.New().String(), uuid.New().String(), "garbage_tier", "reason", nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidTierOverride), "error must unwrap to ErrInvalidTierOverride so the handler maps it to 400")
+
+	mockRepo.AssertNotCalled(t, "UpdateUserTier")
+}
+
+// TestAdminUserService_UpdateUserTier_ValidTiers_Accepted proves every real configured tier
+// name passes validation (table test over all five tiers, not a hardcoded allowlist check).
+func TestAdminUserService_UpdateUserTier_ValidTiers_Accepted(t *testing.T) {
+	for _, tier := range []string{"premium", "household_2", "household_3", "household_4", "household_5"} {
+		t.Run(tier, func(t *testing.T) {
+			mockRepo := new(MockAdminUserRepository)
+			service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+			ctx := context.Background()
+			actorID := uuid.New().String()
+			userID := uuid.New().String()
+
+			mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, "reason", (*time.Time)(nil)).
+				Return(repository.UpdateTierRow{}, nil)
+			mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(0, nil)
+
+			_, err := service.UpdateUserTier(ctx, actorID, userID, tier, "reason", nil)
+			require.NoError(t, err)
+
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation proves a nil tierConfig
+// (not configured) skips validation entirely rather than panicking — nil-safe, matching the
+// ClerkService/AdminService convention elsewhere in this constructor.
+func TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil) // nil tierConfig
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockRepo.On("UpdateUserTier", ctx, "", userID, "anything_at_all", "reason", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+
+	_, err := service.UpdateUserTier(ctx, "", userID, "anything_at_all", "reason", nil)
+	assert.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Issue #1413 Defect 5: household seat-capacity warning ---
+
+// TestAdminUserService_UpdateUserTier_SeatWarning_FiresWhenBelowActiveCount proves a warning
+// is surfaced (not an error, and never blocking) when the new tier's seat count is below the
+// household owner's current active member count.
+func TestAdminUserService_UpdateUserTier_SeatWarning_FiresWhenBelowActiveCount(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium" // 1 seat
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, "comp down", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(4, nil) // 4 active members, only 1 seat
+
+	result, err := service.UpdateUserTier(ctx, actorID, userID, tier, "comp down", nil)
+	require.NoError(t, err, "the operation must succeed — this is a warning, never a block")
+	assert.NotEmpty(t, result.Warning)
+	assert.Contains(t, result.Warning, "1 seat")
+	assert.Contains(t, result.Warning, "4 active member")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_SeatWarning_DoesNotFire_WhenSufficientSeats proves no
+// warning fires when the new tier has enough seats for the current active member count.
+func TestAdminUserService_UpdateUserTier_SeatWarning_DoesNotFire_WhenSufficientSeats(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "household_4" // 4 seats
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, "comp up", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(4, nil) // exactly at capacity
+
+	result, err := service.UpdateUserTier(ctx, actorID, userID, tier, "comp up", nil)
+	require.NoError(t, err)
+	assert.Empty(t, result.Warning)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_SeatWarning_DoesNotFire_WhenNotHouseholdOwner proves a
+// non-owner (GetOwnedHouseholdActiveMemberCount returns 0) never triggers the warning,
+// regardless of tier.
+func TestAdminUserService_UpdateUserTier_SeatWarning_DoesNotFire_WhenNotHouseholdOwner(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium"
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, "solo comp", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(0, nil)
+
+	result, err := service.UpdateUserTier(ctx, actorID, userID, tier, "solo comp", nil)
+	require.NoError(t, err)
+	assert.Empty(t, result.Warning)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_SeatCapacityCheckError_DoesNotBlock proves a failure in
+// the best-effort seat-count lookup is logged and swallowed, never surfaced as an error.
+func TestAdminUserService_UpdateUserTier_SeatCapacityCheckError_DoesNotBlock(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium"
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, "reason", (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(0, errors.New("db hiccup"))
+
+	result, err := service.UpdateUserTier(ctx, actorID, userID, tier, "reason", nil)
+	require.NoError(t, err, "a failed seat-capacity check must never block the tier change")
+	assert.Empty(t, result.Warning)
 
 	mockRepo.AssertExpectations(t)
 }
@@ -532,7 +819,7 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockClerk := new(MockClerkService)
-	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -562,7 +849,7 @@ func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillAuditsAndSyncs(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockClerk := new(MockClerkService)
-	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -592,7 +879,7 @@ func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillAuditsA
 
 func TestAdminUserService_RemoveUserTierOverride_UserNotFound(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 6)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -610,7 +897,7 @@ func TestAdminUserService_RemoveUserTierOverride_UserNotFound(t *testing.T) {
 
 func TestAdminUserService_RemoveUserTierOverride_EmptyReason(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 6)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
 
 	_, err := service.RemoveUserTierOverride(context.Background(), uuid.New().String(), uuid.New().String(), "")
 	assert.ErrorContains(t, err, "reason is required")
@@ -618,7 +905,7 @@ func TestAdminUserService_RemoveUserTierOverride_EmptyReason(t *testing.T) {
 }
 
 func TestAdminUserService_RemoveUserTierOverride_MissingTargetUserID(t *testing.T) {
-	service := NewAdminUserService(nil, nil, nil, 6)
+	service := NewAdminUserService(nil, nil, nil, 6, nil)
 	_, err := service.RemoveUserTierOverride(context.Background(), uuid.New().String(), "", "reason")
 	assert.Equal(t, ErrUserIDRequired, err)
 }
@@ -626,7 +913,7 @@ func TestAdminUserService_RemoveUserTierOverride_MissingTargetUserID(t *testing.
 func TestAdminUserService_RemoveUserTierOverride_ClerkFailure_StillSucceeds(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockClerk := new(MockClerkService)
-	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -653,7 +940,7 @@ func TestAdminUserService_RemoveUserTierOverride_ClerkFailure_StillSucceeds(t *t
 
 func TestAdminUserService_RemoveUserTierOverride_NilClerkService_NoPanic(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 6) // nil ClerkService
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil) // nil ClerkService
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -680,7 +967,7 @@ func TestAdminUserService_RemoveUserTierOverride_NilClerkService_NoPanic(t *test
 
 func TestAdminUserService_RemoveUserTierOverride_RepoError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 6)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()
@@ -703,7 +990,7 @@ func TestAdminUserService_RemoveUserTierOverride_RepoError(t *testing.T) {
 // the service-level contract the handler must honor.
 func TestAdminUserService_RemoveUserTierOverride_ActorAndTargetDiffer(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 6)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
 
 	ctx := context.Background()
 	actorID := uuid.New().String()

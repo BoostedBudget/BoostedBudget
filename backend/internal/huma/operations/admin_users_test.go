@@ -37,9 +37,14 @@ func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string)
 	return args.Get(0).(*domain.AdminUserDetail), args.Error(1)
 }
 
-func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, clerkUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) error {
-	args := m.Called(ctx, clerkUserID, targetUserID, tier, reason, expiresAt)
-	return args.Error(0)
+// UpdateUserTier satisfies services.AdminUserService for tests in this file that don't
+// exercise tier-override updates (Issue #1413 — see admin_subscriptions_test.go for coverage).
+func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, actorUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) (services.UpdateUserTierResult, error) {
+	args := m.Called(ctx, actorUserID, targetUserID, tier, reason, expiresAt)
+	if args.Get(0) == nil {
+		return services.UpdateUserTierResult{}, args.Error(1)
+	}
+	return args.Get(0).(services.UpdateUserTierResult), args.Error(1)
 }
 
 // RemoveUserTierOverride satisfies services.AdminUserService for tests in this file that don't

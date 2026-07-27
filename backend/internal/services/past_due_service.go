@@ -355,11 +355,22 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 
 // syncClerkMetadata updates the Clerk public metadata for the user's new subscription state.
 // Logs and swallows errors so Clerk failures don't abort the dunning flow.
+//
+// Builds the payload via ClerkPublicMetadata() rather than a hand-rolled map, aligning with
+// subscription_webhook.go's syncClerkMetadata (Issue #1413 Defect 3) — this also retroactively
+// clears the orphaned "tier" key. status is passed explicitly (not read from user.
+// SubscriptionStatus) because this call always races ahead of the DB write that will record
+// it. This path is unreachable for comped users after Task 3's comp guard (reReadStillPastDue
+// checks HasActiveManualOverride before any destructive action reaches here), so this is
+// consistency work, not a live bug fix.
 func (s *PastDueService) syncClerkMetadata(ctx context.Context, user domain.User, status string) {
-	if err := s.clerkClient.UpdateUserMetadata(ctx, user.ClerkUserID, map[string]interface{}{
-		"subscription_tier":   user.SubscriptionTier,
-		"subscription_status": status,
-	}); err != nil {
+	scratch := domain.User{
+		SubscriptionTier:   user.SubscriptionTier,
+		SubscriptionStatus: status,
+		ManualTierOverride: user.ManualTierOverride,
+		ManualTierEndsAt:   user.ManualTierEndsAt,
+	}
+	if err := s.clerkClient.UpdateUserMetadata(ctx, user.ClerkUserID, scratch.ClerkPublicMetadata()); err != nil {
 		s.logger.Error("failed to sync Clerk metadata on past_due auto-cancel",
 			"user_id", user.ID, "error", err)
 	}
