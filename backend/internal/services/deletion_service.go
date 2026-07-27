@@ -255,6 +255,24 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return nil
 	}
 
+	// Issue #1413: close the grant-vs-delete race. ExecuteDeletion is shared by two callers:
+	// the retention cleanup worker (auto-deletion of long-inactive accounts —
+	// DeletionRequestedAt is always nil there; all three retention queries in
+	// profile_repository.go filter on deletion_requested_at IS NULL) and the scheduled
+	// deletion worker (a user-requested GDPR deletion — DeletionRequestedAt is always set
+	// there). A ratified product decision: a user's own GDPR deletion request beats an admin
+	// comp. So this guard is deliberately conditional on DeletionRequestedAt == nil — do NOT
+	// "simplify" it into an unconditional comp check. A blanket guard would illegally strand
+	// a comped user who has explicitly asked to be deleted, which is a GDPR compliance
+	// problem, not just a bug. This closes the race the worker-level guards in
+	// retention_cleanup_check.go cannot: an admin comp granted after the retention worker
+	// selected its candidates but before this method runs.
+	if user.HasActiveManualOverride() && user.DeletionRequestedAt == nil {
+		slog.Default().Info("skipping auto-deletion for actively comped user",
+			"user_id", userID)
+		return nil
+	}
+
 	// Issue #1006: Paddle cleanup before Plaid and DB deletion (Paddle IDs must be readable)
 	if s.paddleCleanupSvc != nil {
 		s.cleanupPaddleResources(ctx, userID, user)

@@ -1299,3 +1299,140 @@ func TestDeletionService_SetAnalytics_DoesNotPanic(t *testing.T) {
 	}, "SetAnalytics with nil must not panic")
 	assert.Nil(t, ds.analytics, "analytics field should be nil after SetAnalytics(nil)")
 }
+
+// --- Issue #1413 Part C: the grant-vs-delete race guard ---
+//
+// ExecuteDeletion is shared by two callers: the retention cleanup worker (auto-deletion of
+// long-inactive accounts — DeletionRequestedAt is always nil there; all three
+// GetUsersNeedingRetention30dNotice/GetUsersNeedingRetention7dNotice/GetUsersWithExpiredRetention
+// queries filter on deletion_requested_at IS NULL) and the scheduled deletion worker (a
+// user-requested GDPR deletion — DeletionRequestedAt is always set there, via
+// GetUsersScheduledForDeletion). A ratified product decision: a user's own GDPR deletion
+// request beats an admin comp. The guard below is therefore conditional on
+// DeletionRequestedAt == nil, never a blanket comp check — a blanket guard would illegally
+// strand a comped user who has asked to be deleted.
+
+// compedUser builds a domain.User with an admin manual tier override, for Part C guard tests.
+func compedUser(endsAt *time.Time, deletionRequestedAt *time.Time) *domain.User {
+	tier := "premium"
+	return &domain.User{
+		ID:                  "user-123",
+		ClerkUserID:         "user_123",
+		Email:               "test@example.com",
+		IsDeleted:           false,
+		ManualTierOverride:  &tier,
+		ManualTierEndsAt:    endsAt,
+		DeletionRequestedAt: deletionRequestedAt,
+	}
+}
+
+// TestExecuteDeletion_ActiveComp_NoDeletionRequest_SkipsDeletion verifies the retention-worker
+// path: a comped user with no user-initiated deletion request must not be auto-deleted, and
+// the skip must be returned as a nil error (a legitimate outcome, not a failure).
+func TestExecuteDeletion_ActiveComp_NoDeletionRequest_SkipsDeletion(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+
+	user := compedUser(nil, nil) // no expiry, never requested deletion
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.NoError(t, err, "a skipped auto-deletion is a legitimate outcome, not an error")
+	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
+}
+
+// TestExecuteDeletion_ActiveComp_WithDeletionRequest_ProceedsAnyway verifies the GDPR case:
+// a user's own deletion request must proceed even while an admin comp is active. A blanket
+// comp guard would illegally strand this user (Part C requirement).
+func TestExecuteDeletion_ActiveComp_WithDeletionRequest_ProceedsAnyway(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+
+	requestedAt := time.Now().Add(-24 * time.Hour)
+	user := compedUser(nil, &requestedAt) // active comp, but user asked to be deleted
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.NoError(t, err)
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
+}
+
+// TestExecuteDeletion_ExpiredComp_NoDeletionRequest_ProceedsAnyway verifies that an expired
+// (no longer active) manual tier override does not block auto-deletion — the guard must key
+// off HasActiveManualOverride, not merely ManualTierOverride being non-nil.
+func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_ProceedsAnyway(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+
+	expired := time.Now().Add(-1 * time.Hour)
+	user := compedUser(&expired, nil)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.NoError(t, err)
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+}
+
+// TestExecuteDeletion_NonComped_ProceedsNormally verifies the new guard does not affect
+// ordinary (never-comped) deletions.
+func TestExecuteDeletion_NonComped_ProceedsNormally(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.NoError(t, err)
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+}
