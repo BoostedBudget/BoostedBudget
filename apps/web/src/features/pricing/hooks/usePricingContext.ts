@@ -71,20 +71,18 @@ export function usePricingContext(): UsePricingContextResult {
   const compedFallbackTier = (): TierName =>
     ((user?.effective_tier ?? user?.subscription_tier) as TierName) ?? 'premium'
 
+  // Shared by both "no subscription payload to read" branches below (404, and a non-404
+  // error/empty response) — a comped user still gets real access via the profile fallback;
+  // everyone else is simply inactive.
+  const compedOrInactive = (): PricingState =>
+    profilePresentation.isComped
+      ? { status: 'comped', tier: compedFallbackTier(), compEndsAt: profilePresentation.compEndsAt }
+      : { status: 'inactive' }
+
   if (getErrorStatus(subscriptionQuery.error) === 404) {
     // Resilience: if backend and frontend deploy separately, /subscription/current may still
     // 404 for a comped user. The profile query is already app-wide cached, so this costs nothing.
-    if (profilePresentation.isComped) {
-      return {
-        pricingState: {
-          status: 'comped',
-          tier: compedFallbackTier(),
-          compEndsAt: profilePresentation.compEndsAt,
-        },
-        tiers,
-      }
-    }
-    return { pricingState: { status: 'inactive' }, tiers }
+    return { pricingState: compedOrInactive(), tiers }
   }
 
   if (subscriptionQuery.isLoading) {
@@ -94,17 +92,7 @@ export function usePricingContext(): UsePricingContextResult {
   const sub = subscriptionQuery.data
   if (!sub) {
     // isLoading is false here — this means a non-404 error or empty response
-    if (profilePresentation.isComped) {
-      return {
-        pricingState: {
-          status: 'comped',
-          tier: compedFallbackTier(),
-          compEndsAt: profilePresentation.compEndsAt,
-        },
-        tiers,
-      }
-    }
-    return { pricingState: { status: 'inactive' }, tiers }
+    return { pricingState: compedOrInactive(), tiers }
   }
 
   // Route the raw sub.status handling through the shared derivation rather than re-deriving

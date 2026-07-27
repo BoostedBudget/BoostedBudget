@@ -144,20 +144,15 @@ export function getSubscriptionPresentation(signals: SubscriptionSignals): Subsc
 }
 
 // --- Adapters ---------------------------------------------------------------------------------
-// The backend contract landing in parallel (#1413) adds `effective_status` / `is_comped` /
-// `comp_ends_at` to the profile response, and `is_comped` to the subscription payload. Both are
-// typed here as an intersection on top of the generated shape rather than edits to the generated
-// models, so these adapters compile whether or not those fields have landed in the generated
-// client yet.
-
-type UserWithCompFields = User & {
-  effective_status?: string
-  is_comped?: boolean
-  comp_ends_at?: string
-}
+// `effective_status` / `is_comped` / `comp_ends_at` are part of the generated `User` and
+// `GetCurrentSubscriptionOutputBody` shapes (packages/api-client/src/models), so these adapters
+// read them directly. `effective_status` and `comp_ends_at` stay optional in those generated
+// types (the backend's `omitempty` genuinely omits them when empty/nil), so
+// `getSubscriptionPresentation` above still treats an absent value as "not reported" rather than
+// assuming it's always present.
 
 /** Adapter from the profile-endpoint (`GET /users/me`) shape. */
-export function presentationFromUser(user: UserWithCompFields): SubscriptionPresentation {
+export function presentationFromUser(user: User): SubscriptionPresentation {
   return getSubscriptionPresentation({
     status: user.subscription_status,
     effectiveStatus: user.effective_status,
@@ -167,16 +162,12 @@ export function presentationFromUser(user: UserWithCompFields): SubscriptionPres
   })
 }
 
-type SubscriptionWithCompFields = GetCurrentSubscriptionOutputBody & {
-  is_comped?: boolean
-}
-
 /**
  * Adapter from `GET /subscription/current`. A 404 (no subscription found) or a missing payload is
  * treated as inactive.
  */
 export function presentationFromSubscription(
-  subscription: SubscriptionWithCompFields | undefined,
+  subscription: GetCurrentSubscriptionOutputBody | undefined,
   opts?: { notFound?: boolean },
 ): SubscriptionPresentation {
   if (opts?.notFound || !subscription) {

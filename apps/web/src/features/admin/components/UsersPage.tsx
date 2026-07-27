@@ -65,12 +65,12 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   return 'secondary'
 }
 
-// The backend will eventually add a server-computed `effective_status` to AdminUserListItem
-// (mirroring domain.User.ComputeEffectiveStatus — see backend/internal/domain/user.go),
-// which forces 'active' whenever a manual override is currently in effect. Typed here as an
-// intersection on top of the generated shape (not an edit to the generated model) so this
-// keeps compiling whether or not that field has landed yet — same defensive-adapter pattern
-// as subscriptionPresentation.ts's `UserWithCompFields`.
+// AdminUserListItem carries a server-computed `effective_status` (mirroring
+// domain.User.ComputeEffectiveStatus — see backend/internal/domain/user.go), which forces
+// 'active' whenever a manual override is currently in effect. Typed here as an optional
+// intersection (rather than relying on the generated field's own required-ness) so
+// `hasLiveOverride` below still has a defined fallback — via `isOverrideActive` — for any
+// caller (e.g. tests) whose data omits it.
 type AdminUserWithEffectiveStatus = AdminUserListItem & { effective_status?: string }
 
 /**
