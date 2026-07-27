@@ -24,6 +24,39 @@ type AdminUserRepository interface {
 	// UpdateUserTier manually overrides a user's subscription tier, with an optional expiration.
 	// Returns the target user's clerk_user_id so the caller can sync Clerk metadata.
 	UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error)
+
+	// RemoveUserTierOverride clears a user's manual tier override (manual_tier_override,
+	// manual_tier_ends_at), re-arms the retention clock if the reverted subscription status
+	// is read-only, and writes an audit log row — all inside a single transaction.
+	//
+	// actorUserID is the acting admin's internal UUID (may be "" — coerced to SQL NULL).
+	// targetUserID is the user being modified. retentionMonths sizes the re-armed retention
+	// window when applicable.
+	//
+	// Returns ErrUserNotFound if targetUserID does not exist or is soft-deleted.
+	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error)
+}
+
+// RemoveTierOverrideRow is the result of clearing a user's manual tier override in a single
+// UPDATE ... RETURNING statement: the prior override value (read from the same pre-update
+// snapshot the CTE locked via FOR UPDATE) plus the reverted subscription state.
+//
+// Removed is computed here in Go — non-nil AND non-empty prior override — deliberately NOT
+// reusing domain.User.HasActiveManualOverride()'s expiry check: a present-but-expired override
+// still counts as "removed" because the columns are cleared either way.
+type RemoveTierOverrideRow struct {
+	// PriorManualTierOverride is the manual_tier_override value as it was immediately before
+	// this UPDATE (nil if no override was set).
+	PriorManualTierOverride *string
+	// Removed is true iff PriorManualTierOverride was non-nil and non-empty.
+	Removed bool
+	// RevertedTier is the user's base subscription_tier (unaffected by this UPDATE — this is
+	// what becomes "effective" now that the override is cleared).
+	RevertedTier string
+	// RevertedStatus is the user's raw subscription_status (unaffected by this UPDATE).
+	RevertedStatus string
+	// ClerkUserID is the decrypted clerk_user_id, for the caller's Clerk metadata sync.
+	ClerkUserID string
 }
 
 // adminUserRepository implements AdminUserRepository using PostgreSQL
@@ -291,6 +324,139 @@ func (r *adminUserRepository) UpdateUserTier(ctx context.Context, userID string,
 		return "", fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return clerkUserID, nil
+}
+
+// removeUserTierOverrideQuery clears a user's manual tier override and, in the same
+// statement, conditionally re-arms the retention clock.
+//
+// The "prior" CTE locks (FOR UPDATE) and reads the pre-UPDATE snapshot needed for two
+// purposes: (1) PriorManualTierOverride, so the caller can tell whether this call actually
+// removed anything, and (2) the read-only-status re-arm condition below, evaluated against
+// the state as it was *before* this statement touches anything.
+//
+// Retention re-arm rationale (Issue #1413): a comp *pauses* the retention clock — Task 4
+// excludes comped users from retention queries rather than clearing their dates, so the
+// database keeps the truth of when read-only status actually began. The hazard: comp someone
+// for 8 months against a 6-month clock, and at removal retention_expires_at is already in the
+// past — they'd be hard-deleted on the next daily run with no 30d/7d warning. So: if a
+// retention clock was running (retention_expires_at IS NOT NULL) AND the reverted raw status
+// is read-only ('inactive'/'cancelled'/'past_due' — the SQL-side twin of
+// domain.SubscriptionStatus.IsReadOnlySubscription()), restart the clock and clear both
+// notice-sent flags so the warnings fire again. If the reverted status is NOT read-only (the
+// user resubscribed while comped), retention is left untouched — the normal webhook path
+// already clears it. If the clock was never running (retention_expires_at IS NULL), it stays
+// NULL regardless of status.
+const removeUserTierOverrideQuery = `
+	WITH prior AS (
+		SELECT manual_tier_override, subscription_status, retention_expires_at
+		FROM users
+		WHERE id = $1 AND is_deleted = FALSE
+		FOR UPDATE
+	)
+	UPDATE users u
+	SET manual_tier_override = NULL,
+	    manual_tier_ends_at = NULL,
+	    updated_at = NOW(),
+	    retention_started_at = CASE
+	        WHEN prior.retention_expires_at IS NOT NULL
+	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
+	        THEN NOW()
+	        ELSE u.retention_started_at
+	    END,
+	    retention_expires_at = CASE
+	        WHEN prior.retention_expires_at IS NOT NULL
+	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
+	        THEN NOW() + make_interval(months => $2::int)
+	        ELSE u.retention_expires_at
+	    END,
+	    retention_notice_30d_sent_at = CASE
+	        WHEN prior.retention_expires_at IS NOT NULL
+	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
+	        THEN NULL
+	        ELSE u.retention_notice_30d_sent_at
+	    END,
+	    retention_notice_7d_sent_at = CASE
+	        WHEN prior.retention_expires_at IS NOT NULL
+	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
+	        THEN NULL
+	        ELSE u.retention_notice_7d_sent_at
+	    END
+	FROM prior
+	WHERE u.id = $1
+	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override
+`
+
+// RemoveUserTierOverride clears a user's manual tier override, re-arms the retention clock
+// when the reverted status is read-only, and writes an audit log row — in one transaction.
+// See the AdminUserRepository interface doc for the contract.
+func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// If the target is missing or is_deleted, the "prior" CTE returns no rows, the implicit
+	// join in "FROM prior" yields zero rows, and RETURNING is empty — surfaced below as
+	// pgx.ErrNoRows -> ErrUserNotFound.
+	var row RemoveTierOverrideRow
+	var clerkUserIDEnc string
+	err = tx.QueryRow(ctx, removeUserTierOverrideQuery, targetUserID, retentionMonths).Scan(
+		&row.RevertedTier, &row.RevertedStatus, &clerkUserIDEnc, &row.PriorManualTierOverride,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RemoveTierOverrideRow{}, ErrUserNotFound
+		}
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to remove user tier override: %w", err)
+	}
+	row.Removed = row.PriorManualTierOverride != nil && *row.PriorManualTierOverride != ""
+
+	// Decrypt the returned clerk_user_id (it is encrypted in the DB)
+	row.ClerkUserID, err = r.enc.DecryptString(clerkUserIDEnc)
+	if err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+	}
+
+	// Audit row inside the same transaction — even when Removed is false (idempotent no-op),
+	// this call is the natural repair hook for metadata #1413 may have corrupted, so it always
+	// audits and (in the service layer) always re-syncs Clerk.
+	// actor_user_id -> audit_logs.user_id (acting admin); targetUserID -> resource_id.
+	var actorParam interface{}
+	if actorUserID != "" {
+		actorParam = actorUserID
+	} // else: leave nil -> SQL NULL. Column is nullable with FK ON DELETE SET NULL; a missing
+	// actor must never abort a legitimate admin action.
+
+	detailsMap := map[string]interface{}{
+		"reason": reason,
+	}
+	if row.PriorManualTierOverride != nil {
+		detailsMap["prior_manual_tier_override"] = *row.PriorManualTierOverride
+	}
+	detailsBytes, err := json.Marshal(detailsMap)
+	if err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to marshal audit details: %w", err)
+	}
+
+	encryptedChanges, err := r.enc.EncryptJSON(json.RawMessage(detailsBytes))
+	if err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to encrypt audit changes: %w", err)
+	}
+
+	auditQuery := `
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
+		VALUES ($1, 'remove_manual_tier', 'user', $2, $3)
+	`
+	_, err = tx.Exec(ctx, auditQuery, actorParam, targetUserID, encryptedChanges)
+	if err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to create audit log: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return RemoveTierOverrideRow{}, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return row, nil
 }
 
 // buildFilterClause constructs the WHERE clause and arguments for admin user filters.

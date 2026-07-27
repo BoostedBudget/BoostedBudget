@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,14 @@ type MockAdminUserRepository struct {
 func (m *MockAdminUserRepository) UpdateUserTier(ctx context.Context, userID string, tier string, reason string, expiresAt *time.Time) (string, error) {
 	args := m.Called(ctx, userID, tier, reason, expiresAt)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockAdminUserRepository) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (repository.RemoveTierOverrideRow, error) {
+	args := m.Called(ctx, actorUserID, targetUserID, reason, retentionMonths)
+	if args.Get(0) == nil {
+		return repository.RemoveTierOverrideRow{}, args.Error(1)
+	}
+	return args.Get(0).(repository.RemoveTierOverrideRow), args.Error(1)
 }
 
 func (m *MockAdminUserRepository) ListUsers(ctx context.Context, filters domain.AdminUserFilters, limit, offset int) ([]domain.AdminUserListItem, int, error) {
@@ -42,7 +51,7 @@ func (m *MockAdminUserRepository) GetUserDetail(ctx context.Context, userID stri
 // TestAdminUserService_ListUsers_Success tests successful listing of users
 func TestAdminUserService_ListUsers_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -97,7 +106,7 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 // TestAdminUserService_ListUsers_WithPagination tests pagination calculations
 func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -134,7 +143,7 @@ func TestAdminUserService_ListUsers_WithPagination(t *testing.T) {
 // TestAdminUserService_ListUsers_LastPage tests last page has no more
 func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 
@@ -154,7 +163,7 @@ func TestAdminUserService_ListUsers_LastPage(t *testing.T) {
 // TestAdminUserService_ListUsers_WithFilters tests filtering passes through
 func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 
@@ -178,7 +187,7 @@ func TestAdminUserService_ListUsers_WithFilters(t *testing.T) {
 // TestAdminUserService_ListUsers_RepositoryError tests error propagation
 func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 
@@ -198,7 +207,7 @@ func TestAdminUserService_ListUsers_RepositoryError(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPage tests validation of page
 func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -215,7 +224,7 @@ func TestAdminUserService_ListUsers_InvalidPage(t *testing.T) {
 // TestAdminUserService_ListUsers_InvalidPageSize tests validation of page size
 func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	filters := domain.AdminUserFilters{}
@@ -232,7 +241,7 @@ func TestAdminUserService_ListUsers_InvalidPageSize(t *testing.T) {
 // TestAdminUserService_GetUserDetail_Success tests successful retrieval
 func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -273,7 +282,7 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 // TestAdminUserService_GetUserDetail_NotFound tests user not found
 func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -293,7 +302,7 @@ func TestAdminUserService_GetUserDetail_NotFound(t *testing.T) {
 // TestAdminUserService_GetUserDetail_EmptyUserID tests validation
 func TestAdminUserService_GetUserDetail_EmptyUserID(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 
@@ -337,7 +346,7 @@ func (m *MockAdminService) IsHardcodedAdmin(email string) bool {
 func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockAdminService := new(MockAdminService)
-	service := NewAdminUserService(mockRepo, mockAdminService)
+	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -392,7 +401,7 @@ func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockAdminService := new(MockAdminService)
-	service := NewAdminUserService(mockRepo, mockAdminService)
+	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -433,7 +442,7 @@ func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 // TestAdminUserService_ListUsers_NilAdminService tests graceful handling of nil AdminService
 func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil) // nil AdminService
+	service := NewAdminUserService(mockRepo, nil, nil, 0) // nil AdminService
 
 	ctx := context.Background()
 	now := time.Now()
@@ -466,7 +475,7 @@ func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 
 func TestAdminUserService_UpdateUserTier_Success(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -483,26 +492,26 @@ func TestAdminUserService_UpdateUserTier_Success(t *testing.T) {
 }
 
 func TestAdminUserService_UpdateUserTier_MissingUserID(t *testing.T) {
-	service := NewAdminUserService(nil, nil)
+	service := NewAdminUserService(nil, nil, nil, 0)
 	err := service.UpdateUserTier(context.Background(), "", "", "tier", "reason", nil)
 	assert.Equal(t, ErrUserIDRequired, err)
 }
 
 func TestAdminUserService_UpdateUserTier_MissingTier(t *testing.T) {
-	service := NewAdminUserService(nil, nil)
+	service := NewAdminUserService(nil, nil, nil, 0)
 	err := service.UpdateUserTier(context.Background(), "", "user", "", "reason", nil)
 	assert.ErrorContains(t, err, "tier is required")
 }
 
 func TestAdminUserService_UpdateUserTier_MissingReason(t *testing.T) {
-	service := NewAdminUserService(nil, nil)
+	service := NewAdminUserService(nil, nil, nil, 0)
 	err := service.UpdateUserTier(context.Background(), "", "user", "tier", "", nil)
 	assert.ErrorContains(t, err, "reason is required")
 }
 
 func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil)
+	service := NewAdminUserService(mockRepo, nil, nil, 0)
 
 	ctx := context.Background()
 	userID := "user"
@@ -514,6 +523,204 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 
 	err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
 	assert.ErrorContains(t, err, "failed to update user tier in database: db down")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- RemoveUserTierOverride tests (Issue #1414) ---
+
+func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockClerk := new(MockClerkService)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "no longer needed"
+	priorOverride := "household_3"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: &priorOverride,
+		Removed:                 true,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+		ClerkUserID:             "clerk_target_123",
+	}, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_123", mock.Anything).Return(nil)
+
+	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err)
+	assert.True(t, result.Removed)
+	assert.Equal(t, "premium", result.RevertedTier)
+	assert.Equal(t, "active", result.RevertedStatus)
+
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillAuditsAndSyncs(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockClerk := new(MockClerkService)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "repair stale metadata"
+
+	// No prior override (nil) -> Removed must be false, but the repo call (which writes the
+	// audit row internally) and the Clerk sync both still happen.
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: nil,
+		Removed:                 false,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+		ClerkUserID:             "clerk_target_456",
+	}, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_456", mock.Anything).Return(nil)
+
+	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err)
+	assert.False(t, result.Removed)
+	assert.Equal(t, "premium", result.RevertedTier)
+	assert.Equal(t, "active", result.RevertedStatus)
+
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_UserNotFound(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "cleanup"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(nil, ErrAdminUserNotFound)
+
+	_, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrAdminUserNotFound), "error must unwrap to ErrAdminUserNotFound so the handler maps it to 404")
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_EmptyReason(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6)
+
+	_, err := service.RemoveUserTierOverride(context.Background(), uuid.New().String(), uuid.New().String(), "")
+	assert.ErrorContains(t, err, "reason is required")
+	mockRepo.AssertNotCalled(t, "RemoveUserTierOverride")
+}
+
+func TestAdminUserService_RemoveUserTierOverride_MissingTargetUserID(t *testing.T) {
+	service := NewAdminUserService(nil, nil, nil, 6)
+	_, err := service.RemoveUserTierOverride(context.Background(), uuid.New().String(), "", "reason")
+	assert.Equal(t, ErrUserIDRequired, err)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_ClerkFailure_StillSucceeds(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockClerk := new(MockClerkService)
+	service := NewAdminUserService(mockRepo, nil, mockClerk, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "comp expired"
+	priorOverride := "premium"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: &priorOverride,
+		Removed:                 true,
+		RevertedTier:            "premium",
+		RevertedStatus:          "cancelled",
+		ClerkUserID:             "clerk_target_789",
+	}, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_789", mock.Anything).Return(errors.New("clerk is down"))
+
+	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err, "Clerk sync failure must not fail the overall call — DB update already succeeded")
+	assert.True(t, result.Removed)
+
+	mockRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_NilClerkService_NoPanic(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6) // nil ClerkService
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "cleanup"
+	priorOverride := "premium"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: &priorOverride,
+		Removed:                 true,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+		ClerkUserID:             "clerk_target_999",
+	}, nil)
+
+	assert.NotPanics(t, func() {
+		result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+		require.NoError(t, err)
+		assert.True(t, result.Removed)
+	})
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestAdminUserService_RemoveUserTierOverride_RepoError(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "cleanup"
+	repoErr := errors.New("db down")
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(nil, repoErr)
+
+	_, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	assert.ErrorContains(t, err, "failed to remove user tier override: db down")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_RemoveUserTierOverride_ActorAndTargetDiffer proves the service passes
+// actorUserID and targetUserID through to the repository in the right slots (not swapped).
+// The shadowing between AdminSubscriptionTierInput's own path-bound UserID and the promoted
+// AdminAuthenticatedInput.UserID is invisible on a skim at the handler layer; this test pins
+// the service-level contract the handler must honor.
+func TestAdminUserService_RemoveUserTierOverride_ActorAndTargetDiffer(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	require.NotEqual(t, actorID, targetID)
+	reason := "actor/target must not swap"
+
+	// mock.On with exact positional args: if the service ever swaps actor/target, this
+	// expectation will not match and the mock will panic on an unexpected call.
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		Removed:        false,
+		RevertedTier:   "premium",
+		RevertedStatus: "active",
+	}, nil)
+
+	_, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err)
 
 	mockRepo.AssertExpectations(t)
 }
