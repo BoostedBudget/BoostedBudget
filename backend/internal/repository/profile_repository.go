@@ -1053,6 +1053,28 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 	return nil
 }
 
+// noActiveManualOverridePredicate excludes users with a currently-active admin manual tier
+// override ("comp") from set-based retention queries (Issue #1413). A comped user must never
+// be warned about, or auto-deleted for, retention expiry.
+//
+// This is the SQL-side twin of domain.User.HasActiveManualOverride() — that Go predicate
+// governs row-level reads, this one governs set-based queries where fetching every candidate
+// row just to filter in Go would be wasteful. The two must agree on every case; see
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo (a real-database test) for the
+// guard that keeps them from drifting apart.
+//
+// Boundary note: `manual_tier_ends_at >= NOW()` deliberately matches Go's
+// `!ends_at.Before(now)` (i.e. "not yet expired" is true AT the expiry instant, not only
+// strictly before it). Using `>` here would disagree with the Go predicate at the exact
+// expiry instant.
+const noActiveManualOverridePredicate = `
+	  AND NOT (
+	      manual_tier_override IS NOT NULL
+	      AND manual_tier_override <> ''
+	      AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())
+	  )
+`
+
 // GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
 // and who have not yet received a 30-day pre-deletion warning (#930).
 func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Context) ([]*domain.User, error) {
@@ -1064,6 +1086,7 @@ func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Contex
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
+	` + noActiveManualOverridePredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
@@ -1087,6 +1110,7 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
+	` + noActiveManualOverridePredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
@@ -1108,6 +1132,7 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
+	` + noActiveManualOverridePredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
