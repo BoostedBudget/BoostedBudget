@@ -453,6 +453,27 @@
       ]
     },
     {
+      "operationId": "remove-admin-user-tier-override",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/subscription/tier/clear",
+      "summary": "Remove manual subscription tier override",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.",
+      "parameters": [
+        {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "description": "ID of the user whose manual tier override should be cleared",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "operationId": "listAdminPaddleWebhooks",
       "method": "GET",
       "path": "/api/v1/admin/webhooks/paddle",
