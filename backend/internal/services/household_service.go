@@ -788,14 +788,17 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	// household_over_capacity_check.go's processHousehold reads the owner once at the top
 	// of a run, then may call this method (via autoOffboard) some time later in that SAME
 	// run — if the owner's subscription lapses via a concurrent Paddle webhook in that
-	// window, the caller's cached owner would still look active. A read-only owner means
-	// the over-capacity grace is moot: members already fall back to their own tier via the
-	// (unchanged) entitlement resolver's owner-read-only branch, so there's nothing to
-	// LIFO-remove — skip straight to a normal commit instead of computing a seat limit and
-	// removing anyone. This is a legitimate "nothing to do" outcome, not an error; the
-	// caller (the daily worker's autoOffboard) already clears the over-capacity flag
-	// unconditionally after any successful call here, regardless of queue length.
-	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	// window, the caller's cached owner would still look active. A read-only owner who
+	// ISN'T currently comped via an active manual_tier_override means the over-capacity
+	// grace is moot: members already fall back to their own tier via the entitlement
+	// resolver's owner-read-only branch (#1413 — that branch now reads
+	// owner.ComputeEffectiveStatus(), same as this check, so the two can never disagree),
+	// so there's nothing to LIFO-remove — skip straight to a normal commit instead of
+	// computing a seat limit and removing anyone. This is a legitimate "nothing to do"
+	// outcome, not an error; the caller (the daily worker's autoOffboard) already clears
+	// the over-capacity flag unconditionally after any successful call here, regardless of
+	// queue length.
+	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if cerr = tx.Commit(ctx); cerr != nil {
 			return nil, cerr
 		}
@@ -1219,7 +1222,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	if cerr != nil {
 		return nil, cerr
 	}
-	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		cerr = domain.ErrOwnerPlanInactive
 		return nil, cerr
 	}
@@ -1347,7 +1350,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (10) Insert the household entitlement (payer == owner satisfies the composite FK).
-	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.SubscriptionStatus, ownerUserID, inv.HouseholdID); cerr != nil {
+	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.ComputeEffectiveStatus(), ownerUserID, inv.HouseholdID); cerr != nil {
 		return nil, cerr
 	}
 

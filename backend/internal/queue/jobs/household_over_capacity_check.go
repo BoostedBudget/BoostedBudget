@@ -273,10 +273,12 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return fmt.Errorf("failed to get owner %s: %w", h.OwnerUserID, err)
 	}
 
-	// Case 1: owner's own subscription is read-only (cancelled/past_due/inactive) —
-	// grace is moot, members already fall back to their own tier via the (unchanged)
-	// entitlement resolver's owner-read-only branch.
-	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	// Case 1: owner's own EFFECTIVE subscription status is read-only
+	// (cancelled/past_due/inactive) AND the owner isn't currently comped via an active
+	// manual_tier_override (#1413) — grace is moot, members already fall back to their own
+	// tier via the entitlement resolver's owner-read-only branch, which reads the same
+	// effective status so the two can never disagree.
+	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s: %w", h.ID, err)
@@ -323,7 +325,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
 	}
-	if domain.SubscriptionStatus(freshOwner.SubscriptionStatus).IsReadOnlySubscription() {
+	if domain.SubscriptionStatus(freshOwner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
