@@ -4,8 +4,8 @@
  * Reuses @/components/ui/tabs (Radix) rather than hand-rolling a switcher — it's
  * already in the vendor chunk with six existing consumers, so this costs zero
  * new bytes. The server URL is resolved via getMcpBaseUrl()/getMcpEndpoint()
- * (never hardcoded); when that resolves to `null` (development, QA — by
- * design, see @/shared/lib/mcpUrl), every tab renders a "not configured"
+ * (never hardcoded); when that resolves to `null` (development or preview
+ * environments — by design, see @/shared/lib/mcpUrl), every tab renders a "not configured"
  * notice instead of a broken URL.
  *
  * Tab selection persists to localStorage and reflects in the URL hash
@@ -34,7 +34,7 @@ const CLIENTS: ClientMeta[] = [
   { id: 'claude_desktop', label: 'Claude Desktop', hashSlug: 'claude-desktop' },
   { id: 'claude_code', label: 'Claude Code CLI', hashSlug: 'claude-code' },
   { id: 'cursor', label: 'Cursor & other clients', hashSlug: 'cursor' },
-  { id: 'vscode', label: 'VS Code', hashSlug: 'vscode' },
+  { id: 'vscode', label: 'VS Code', hashSlug: 'vscode' }
 ]
 
 const STORAGE_KEY = 'mcp-setup-client'
@@ -66,9 +66,8 @@ function NotConfiguredNotice() {
       role="status"
       className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-foreground"
     >
-      The MCP server address is not configured in this environment (for example, local
-      development or QA). The exact URL and commands below will appear once it is —
-      there is nothing to type in the meantime.
+      The MCP server address is not configured in this environment (for example, local development or a preview
+      environment). The exact URL and commands below will appear once it is — there is nothing to type in the meantime.
     </p>
   )
 }
@@ -152,11 +151,7 @@ function CodeSection({ value, blockLabel, copyLabel, client, onCopy, isInline }:
       ) : (
         <CodeBlock label={blockLabel} content={value} />
       )}
-      <CopyButton
-        label={copyLabel}
-        textToCopy={value}
-        onCopy={() => onCopy(client)}
-      />
+      <CopyButton label={copyLabel} textToCopy={value} onCopy={() => onCopy(client)} />
     </div>
   )
 }
@@ -186,8 +181,8 @@ function ClaudeDesktopPanel({ serverUrl, onCopy }: TabPanelProps) {
         <li>In Claude Desktop, open Settings → Connectors.</li>
         <li>Click Add, then Add custom connector.</li>
         <li>
-          Paste the server URL below, then click Add. Leave Advanced settings empty — the
-          server supports Dynamic Client Registration, so Claude registers itself automatically.
+          Paste the server URL below, then click Add. Leave Advanced settings empty — the server supports Dynamic Client
+          Registration, so Claude registers itself automatically.
           <CodeSection
             value={serverUrl}
             blockLabel="Claude Desktop server URL"
@@ -197,23 +192,17 @@ function ClaudeDesktopPanel({ serverUrl, onCopy }: TabPanelProps) {
             isInline
           />
         </li>
-        <li>
-          A browser window opens for you to sign in with your BoostedBudget account and
-          authorize access.
-        </li>
+        <li>A browser window opens for you to sign in with your BoostedBudget account and authorize access.</li>
       </Steps>
       <WorksWhen>
-        <code>boostedbudget</code> appears under Connectors with <code>search</code> and{' '}
-        <code>execute</code> listed.
+        <code>boostedbudget</code> appears under Connectors with <code>search</code> and <code>execute</code> listed.
       </WorksWhen>
     </div>
   )
 }
 
 function ClaudeCodePanel({ serverUrl, onCopy }: TabPanelProps) {
-  const command = serverUrl
-    ? `claude mcp add --transport http boostedbudget ${serverUrl}`
-    : null
+  const command = serverUrl ? `claude mcp add --transport http boostedbudget ${serverUrl}` : null
 
   return (
     <div className="space-y-4">
@@ -227,19 +216,17 @@ function ClaudeCodePanel({ serverUrl, onCopy }: TabPanelProps) {
             client="claude_code"
             onCopy={onCopy}
           />
-          Add <code>--scope user</code> instead of the default to make it available across
-          all your projects, not just the current one.
+          Add <code>--scope user</code> instead of the default to make it available across all your projects, not just
+          the current one.
         </li>
         <li>
-          Inside Claude Code, run <code>/mcp</code>, select <code>boostedbudget</code>, then
-          choose Authenticate. A browser window opens for you to sign in with your
-          BoostedBudget account.
+          Inside Claude Code, run <code>/mcp</code>, select <code>boostedbudget</code>, then choose Authenticate. A
+          browser window opens for you to sign in with your BoostedBudget account.
         </li>
       </Steps>
       <WorksWhen>
-        <code>claude mcp list</code> shows <code>✔ Connected</code> for boostedbudget. Before
-        you authenticate, it shows <code>! Needs authentication</code> — that&apos;s expected,
-        not an error.
+        <code>claude mcp list</code> shows <code>✔ Connected</code> for boostedbudget. Before you authenticate, it shows{' '}
+        <code>! Needs authentication</code> — that&apos;s expected, not an error.
       </WorksWhen>
     </div>
   )
@@ -261,41 +248,32 @@ function OtherClientsPanel({ serverUrl, onCopy }: TabPanelProps) {
           />
         </li>
         <li>
-          Add it as a remote MCP server, following your client&apos;s own documentation —
-          setup steps vary by client, but the URL above is the one thing every client
-          needs.
+          Add it as a remote MCP server, following your client&apos;s own documentation — setup steps vary by client,
+          but the URL above is the one thing every client needs.
         </li>
         <li>
-          The server handles authentication itself: the first time your agent calls a
-          boostedbudget tool, a browser window should open for you to sign in with your
-          BoostedBudget account and authorize access.
+          The server handles authentication itself: the first time your agent calls a boostedbudget tool, a browser
+          window should open for you to sign in with your BoostedBudget account and authorize access.
         </li>
       </Steps>
-      <WorksWhen>
-        your client lists boostedbudget as connected, and a sign-in window has completed.
-      </WorksWhen>
+      <WorksWhen>your client lists boostedbudget as connected, and a sign-in window has completed.</WorksWhen>
     </div>
   )
 }
 
 function VsCodePanel({ serverUrl, onCopy }: TabPanelProps) {
-  const json = serverUrl
-    ? `{"servers":{"boostedbudget":{"type":"http","url":"${serverUrl}"}}}`
-    : null
+  const json = serverUrl ? `{"servers":{"boostedbudget":{"type":"http","url":"${serverUrl}"}}}` : null
 
   return (
     <div className="space-y-6">
       <div className="space-y-4">
-        <p className="text-sm text-foreground">
-          If you use GitHub Copilot Chat&apos;s built-in MCP support:
-        </p>
+        <p className="text-sm text-foreground">If you use GitHub Copilot Chat&apos;s built-in MCP support:</p>
         <Steps>
           <li>
             Create <code>.vscode/mcp.json</code> in your project.
           </li>
           <li>
-            Add the server. Note the top-level key is <code>servers</code>, not{' '}
-            <code>mcpServers</code>.
+            Add the server. Note the top-level key is <code>servers</code>, not <code>mcpServers</code>.
             <CodeSection
               value={json}
               blockLabel="VS Code configuration"
@@ -305,17 +283,17 @@ function VsCodePanel({ serverUrl, onCopy }: TabPanelProps) {
             />
           </li>
           <li>
-            VS Code prompts to start the server — approve it. A browser window opens for
-            you to sign in with your BoostedBudget account.
+            VS Code prompts to start the server — approve it. A browser window opens for you to sign in with your
+            BoostedBudget account.
           </li>
         </Steps>
         <WorksWhen>the MCP output panel shows boostedbudget as Running.</WorksWhen>
       </div>
 
       <p className="text-sm text-muted-foreground">
-        If you use the Claude Code extension for VS Code instead: it does not read
-        .vscode/mcp.json. Use the Claude Code CLI command from the previous tab in the
-        integrated terminal, then run <code>/mcp</code> inside the extension&apos;s chat.
+        If you use the Claude Code extension for VS Code instead: it does not read .vscode/mcp.json. Use the Claude Code
+        CLI command from the previous tab in the integrated terminal, then run <code>/mcp</code> inside the
+        extension&apos;s chat.
       </p>
     </div>
   )
