@@ -1072,12 +1072,57 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 // `!ends_at.Before(now)` (i.e. "not yet expired" is true AT the expiry instant, not only
 // strictly before it). Using `>` here would disagree with the Go predicate at the exact
 // expiry instant.
+//
+// As of the Issue #1413 C1 fix, this predicate has no PRODUCTION caller — the three retention
+// queries below now use noManualOverrideAtAllPredicate instead (see that constant's comment for
+// why). It is kept, unused by production code, specifically so
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo and
+// TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary keep exercising the exact
+// production string rather than a hand-copied restatement of it — the ambiguity resolution for
+// this fix explicitly says not to delete or alter it. Those tests are //go:build integration and
+// so are invisible to the default (non-integration) build the `unused` linter runs against;
+// hence the directive below.
+//
+// integration-tagged parity tests noted above.
+//
+//nolint:unused // SQL twin of domain.User.HasActiveManualOverride(); referenced only by the
 const noActiveManualOverridePredicate = `
 	  AND NOT (
 	      manual_tier_override IS NOT NULL
 	      AND manual_tier_override <> ''
 	      AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())
 	  )
+`
+
+// noManualOverrideAtAllPredicate excludes a user with ANY non-empty manual_tier_override —
+// live OR already-lapsed — from the retention notice/hard-delete queries (Issue #1413 Critical
+// finding C1, Codex review).
+//
+// Why this must differ from noActiveManualOverridePredicate above: a comp *pauses* the
+// retention clock while live, and is re-armed by the separate, independently-scheduled
+// manual_tier_override_expiry_check daily job the moment the comp lapses. That job has NO
+// ordering guarantee relative to the retention_cleanup_check job that runs these queries. If
+// retention selection used the "only exclude while still live" rule
+// (noActiveManualOverridePredicate), a user whose comp lapsed moments before the expiry job
+// re-arms their clock would be selected here using a stale retention_expires_at from BEFORE the
+// comp even started — hard-deleted with no 30-day/7-day warning ever sent, in the race window
+// between the two jobs.
+//
+// Excluding on ANY non-empty override, live or lapsed, closes that window: the worst case is a
+// delay of up to one job cycle (until the expiry job clears the column and re-arms a fresh
+// window), never a wrongful deletion. See
+// TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a
+// delay, not a permanent exemption, and
+// TestGetUsersNeedingRetention30dNotice_Integration_ExcludesActiveComp (and its 7d/expired
+// siblings) for proof an ordinary never-comped user is unaffected.
+//
+// Deliberately a SEPARATE predicate from noActiveManualOverridePredicate, which stays exactly as
+// it was — it is the SQL twin of domain.User.HasActiveManualOverride() (row-level reads) and a
+// parity test guards that pairing. Two predicates, two different jobs, two different correctness
+// requirements: one governs "is the comp live right now", the other governs "is it safe to
+// notice/delete this account".
+const noManualOverrideAtAllPredicate = `
+	  AND (manual_tier_override IS NULL OR manual_tier_override = '')
 `
 
 // GetUsersNeedingRetention30dNotice returns users whose retention_expires_at is within 30 days
@@ -1091,7 +1136,7 @@ func (r *profileRepository) GetUsersNeedingRetention30dNotice(ctx context.Contex
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + noActiveManualOverridePredicate + `
+	` + noManualOverrideAtAllPredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
@@ -1115,7 +1160,7 @@ func (r *profileRepository) GetUsersNeedingRetention7dNotice(ctx context.Context
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + noActiveManualOverridePredicate + `
+	` + noManualOverrideAtAllPredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
@@ -1137,7 +1182,7 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		  AND subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-	` + noActiveManualOverridePredicate + `
+	` + noManualOverrideAtAllPredicate + `
 		ORDER BY retention_expires_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)

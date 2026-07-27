@@ -27,9 +27,13 @@ import (
 
 // retentionFixtureUsers holds the three canonical fixtures used by every retention-query
 // exclusion test: a user with an active admin comp (must be excluded), a user whose comp has
-// already expired (must still be selected — the negative case that catches an over-broad
-// predicate that permanently exempts anyone ever comped), and an ordinary never-comped user
-// (must still be selected — proves the query is not a no-op).
+// already expired (Issue #1413 Critical finding C1, Codex review — must ALSO be excluded: a
+// lapsed comp still delays retention until the daily expiry job clears the column and re-arms
+// the clock, otherwise a user could be hard-deleted with no warning in the window between the
+// retention-cleanup job and the override-expiry job — see
+// TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a
+// delay, not a permanent exemption), and an ordinary never-comped user (must still be selected
+// — proves the query is not a no-op).
 type retentionFixtureUsers struct {
 	activeComp   *domain.User
 	expiredComp  *domain.User
@@ -100,8 +104,9 @@ func setupRetentionFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 }
 
 // assertRetentionSelection asserts the standard three-way outcome shared by all three
-// retention queries: the actively-comped user must be excluded, while the expired-comp user
-// and the ordinary user must both still be selected.
+// retention queries: BOTH the actively-comped user and the lapsed-comp user must be excluded
+// (C1 fix — any non-empty override, live or expired, delays retention), while the ordinary user
+// must still be selected.
 func assertRetentionSelection(t *testing.T, users []*domain.User, fixtures retentionFixtureUsers) {
 	t.Helper()
 	ids := make(map[string]bool, len(users))
@@ -112,8 +117,8 @@ func assertRetentionSelection(t *testing.T, users []*domain.User, fixtures reten
 	if ids[fixtures.activeComp.ID] {
 		t.Errorf("actively comped user %s must be EXCLUDED from retention selection, but was returned", fixtures.activeComp.ID)
 	}
-	if !ids[fixtures.expiredComp.ID] {
-		t.Errorf("user %s with an EXPIRED override must still be selected (negative case for an over-broad predicate), but was excluded", fixtures.expiredComp.ID)
+	if ids[fixtures.expiredComp.ID] {
+		t.Errorf("user %s with a LAPSED override must ALSO be EXCLUDED (Issue #1413 C1 fix) — an override, live or expired, always delays retention until the column is explicitly cleared, but was returned", fixtures.expiredComp.ID)
 	}
 	if !ids[fixtures.ordinaryUser.ID] {
 		t.Errorf("ordinary never-comped user %s must still be selected — the query must not become a no-op", fixtures.ordinaryUser.ID)
@@ -174,11 +179,69 @@ func TestGetUsersWithExpiredRetention_Integration_ExcludesActiveComp(t *testing.
 	assertRetentionSelection(t, users, fixtures)
 }
 
+// TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared is the C1 negative-
+// direction proof: exclusion of a lapsed comp must be a DELAY, not a permanent exemption. For
+// each of the three retention queries, a user with an already-expired
+// manual_tier_override/manual_tier_ends_at is first confirmed excluded, then the override
+// columns are cleared (simulating the manual_tier_override_expiry_check job re-arming the
+// clock), and the SAME query is run again — the user must now be selected. An implementation
+// that accidentally excluded on retention_expires_at or some other sticky flag (rather than the
+// override columns themselves) would fail this second assertion.
+func TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	tests := []struct {
+		name               string
+		retentionExpiresAt time.Time
+		query              func(context.Context) ([]*domain.User, error)
+	}{
+		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice},
+		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice},
+		{"expired_retention", time.Now().Add(-1 * time.Hour), repo.GetUsersWithExpiredRetention},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("c1delay_%s_%d", tt.name, time.Now().UnixNano())
+			premium := "premium"
+			expiredAt := time.Now().Add(-1 * time.Hour)
+			user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, tt.retentionExpiresAt, &premium, &expiredAt)
+
+			before, err := tt.query(ctx)
+			require.NoError(t, err)
+			beforeIDs := make(map[string]bool, len(before))
+			for _, u := range before {
+				beforeIDs[u.ID] = true
+			}
+			if beforeIDs[user.ID] {
+				t.Fatalf("user %s with a LAPSED override must be excluded before the column is cleared", user.ID)
+			}
+
+			// Simulate the expiry job clearing the lapsed override.
+			_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = NULL, manual_tier_ends_at = NULL WHERE id = $1`, user.ID)
+			require.NoError(t, err)
+
+			after, err := tt.query(ctx)
+			require.NoError(t, err)
+			afterIDs := make(map[string]bool, len(after))
+			for _, u := range after {
+				afterIDs[u.ID] = true
+			}
+			if !afterIDs[user.ID] {
+				t.Errorf("user %s must be selected once the override column is cleared — exclusion must be a delay, not a permanent exemption", user.ID)
+			}
+		})
+	}
+}
+
 // TestNoActiveManualOverridePredicate_Integration_ParityWithGo is the point of Part B: the
 // override predicate now has two independent expressions of the SAME rule — Go
 // (domain.User.HasActiveManualOverride, used for row-level reads) and SQL
 // (noActiveManualOverridePredicate, used for these set-based queries). This test inserts the
-// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/''/'premium' x
+// full 3x3 fixture matrix from the plan (manual_tier_override: NULL/”/'premium' x
 // manual_tier_ends_at: NULL/past/future) and asserts the SQL predicate's verdict equals the Go
 // predicate's verdict for every one of the 9 rows. This is the guard against the two
 // definitions drifting apart in a future edit.

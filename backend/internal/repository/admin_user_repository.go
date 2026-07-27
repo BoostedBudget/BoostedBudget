@@ -48,6 +48,18 @@ type AdminUserRepository interface {
 	//
 	// Returns ErrUserNotFound if targetUserID does not exist or is soft-deleted.
 	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error)
+
+	// RemoveUserTierOverrideIfMatches is the CAS-guarded sibling of RemoveUserTierOverride,
+	// used by the daily manual-tier-override-expiry worker (Issue #1413 High finding H4): it
+	// only clears the override if manual_tier_override/manual_tier_ends_at still equal
+	// expectedOverride/expectedEndsAt (the values the worker observed when it selected this
+	// user as an expiry candidate). Returns claimed=false (never an error) if the row no longer
+	// matches — e.g. an admin extended or replaced the override between the worker's select and
+	// this call — so the worker's stale decision cannot clobber a fresh admin action.
+	//
+	// The admin-initiated RemoveUserTierOverride above is unaffected: it keeps its unconditional
+	// behaviour and signature.
+	RemoveUserTierOverrideIfMatches(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int, expectedOverride *string, expectedEndsAt *time.Time) (row RemoveTierOverrideRow, claimed bool, err error)
 }
 
 // UpdateTierRow is the result of setting a user's manual tier override in a single
@@ -410,107 +422,141 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 	return count, nil
 }
 
-// removeUserTierOverrideQuery clears a user's manual tier override and, in the same
-// statement, conditionally re-arms the retention clock.
+// removeUserTierOverrideSelectPrior is the shared "prior" CTE body for both the unconditional
+// admin-initiated removal (removeUserTierOverrideQuery) and the CAS-guarded expiry-worker
+// removal (removeUserTierOverrideIfMatchesQuery, Issue #1413 High finding H4). It locks
+// (FOR UPDATE) and reads the pre-UPDATE snapshot needed for three purposes: (1)
+// PriorManualTierOverride, so the caller can tell whether this call actually removed anything,
+// (2) should_rearm_retention, the single named boolean the retention CASEs below all key off —
+// see its own comment for why it looks the way it does, and (3), for the CAS variant only, the
+// override values the caller can still condition the WHERE clause on.
 //
-// The "prior" CTE locks (FOR UPDATE) and reads the pre-UPDATE snapshot needed for two
-// purposes: (1) PriorManualTierOverride, so the caller can tell whether this call actually
-// removed anything, and (2) the read-only-status re-arm condition below, evaluated against
-// the state as it was *before* this statement touches anything.
+// should_rearm_retention combines the H3 and H8 fixes (Issue #1413 High findings, Codex review)
+// into ONE condition, per the review's own note that they interact:
+//   - H3: retention must be (re-)armed whenever a prior override existed AND the reverted raw
+//     status is read-only — including INITIALISING it when it was never running before (NULL),
+//     not only re-arming an already-running clock. Before this fix, a user who was comped
+//     before ever going read-only, then had their subscription cancelled while comped (the
+//     cancellation webhook skips SetRetentionDates for a comped user), then had the comp
+//     removed, would see the CASE's old `retention_expires_at IS NOT NULL` guard fail and the
+//     clock would stay NULL forever — read-only with no deletion warning ever sent.
+//   - H8: a "clear" call where NO override actually existed (a no-op — Removed=false) must be
+//     completely side-effect-free on retention. Before this fix, the CASE never checked whether
+//     an override had existed at all, so a stale/repeated/double-clicked clear on an
+//     already-cancelled, no-override user would silently reset retention_expires_at to
+//     now+retentionMonths and null both notice flags every time — indefinitely postponing
+//     deletion and suppressing warnings.
 //
-// Retention re-arm rationale (Issue #1413): a comp *pauses* the retention clock — Task 4
-// excludes comped users from retention queries rather than clearing their dates, so the
-// database keeps the truth of when read-only status actually began. The hazard: comp someone
-// for 8 months against a 6-month clock, and at removal retention_expires_at is already in the
-// past — they'd be hard-deleted on the next daily run with no 30d/7d warning. So: if a
-// retention clock was running (retention_expires_at IS NOT NULL) AND the reverted raw status
-// is read-only ('inactive'/'cancelled'/'past_due' — the SQL-side twin of
-// domain.SubscriptionStatus.IsReadOnlySubscription()), restart the clock and clear both
-// notice-sent flags so the warnings fire again. If the reverted status is NOT read-only (the
-// user resubscribed while comped), retention is left untouched — the normal webhook path
-// already clears it. If the clock was never running (retention_expires_at IS NULL), it stays
-// NULL regardless of status.
-const removeUserTierOverrideQuery = `
-	WITH prior AS (
-		SELECT manual_tier_override, subscription_status, retention_expires_at
-		FROM users
-		WHERE id = $1 AND is_deleted = FALSE
-		FOR UPDATE
-	)
+// If the reverted status is NOT read-only (the user resubscribed while comped), or no prior
+// override existed, retention is left completely untouched — the normal webhook path (or
+// nothing, for the no-op case) is responsible for it.
+const removeUserTierOverrideSelectPrior = `
+	SELECT manual_tier_override, subscription_status, retention_expires_at,
+	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
+	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention
+	FROM users
+	WHERE id = $1 AND is_deleted = FALSE
+`
+
+// removeUserTierOverrideCASClause restricts the CAS-guarded variant (H4) to rows whose current
+// manual_tier_override/manual_tier_ends_at still match what the caller last observed. Uses
+// IS NOT DISTINCT FROM rather than = because both columns are nullable and SQL's = is never
+// true when either side is NULL (e.g. a permanent override has NULL manual_tier_ends_at).
+const removeUserTierOverrideCASClause = `
+	  AND manual_tier_override IS NOT DISTINCT FROM $3
+	  AND manual_tier_ends_at IS NOT DISTINCT FROM $4
+`
+
+// removeUserTierOverrideUpdate is the shared UPDATE body for both variants: clear the override
+// columns, and conditionally re-arm/initialise retention per should_rearm_retention (see
+// removeUserTierOverrideSelectPrior's comment).
+const removeUserTierOverrideUpdate = `
 	UPDATE users u
 	SET manual_tier_override = NULL,
 	    manual_tier_ends_at = NULL,
 	    updated_at = NOW(),
-	    retention_started_at = CASE
-	        WHEN prior.retention_expires_at IS NOT NULL
-	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
-	        THEN NOW()
-	        ELSE u.retention_started_at
-	    END,
-	    retention_expires_at = CASE
-	        WHEN prior.retention_expires_at IS NOT NULL
-	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
-	        THEN NOW() + make_interval(months => $2::int)
-	        ELSE u.retention_expires_at
-	    END,
-	    retention_notice_30d_sent_at = CASE
-	        WHEN prior.retention_expires_at IS NOT NULL
-	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
-	        THEN NULL
-	        ELSE u.retention_notice_30d_sent_at
-	    END,
-	    retention_notice_7d_sent_at = CASE
-	        WHEN prior.retention_expires_at IS NOT NULL
-	             AND prior.subscription_status IN ('inactive', 'cancelled', 'past_due')
-	        THEN NULL
-	        ELSE u.retention_notice_7d_sent_at
-	    END
+	    retention_started_at = CASE WHEN prior.should_rearm_retention THEN NOW() ELSE u.retention_started_at END,
+	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN NOW() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
+	    retention_notice_30d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_30d_sent_at END,
+	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END
 	FROM prior
 	WHERE u.id = $1
 	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override
 `
 
-// RemoveUserTierOverride clears a user's manual tier override, re-arms the retention clock
-// when the reverted status is read-only, and writes an audit log row — in one transaction.
-// See the AdminUserRepository interface doc for the contract.
-func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error) {
+// removeUserTierOverrideQuery is the unconditional, admin-initiated removal: clicking "Remove
+// Override" means "clear whatever is there right now", regardless of what the admin last saw.
+const removeUserTierOverrideQuery = `
+	WITH prior AS (
+	` + removeUserTierOverrideSelectPrior + `
+	FOR UPDATE
+	)
+	` + removeUserTierOverrideUpdate
+
+// removeUserTierOverrideIfMatchesQuery is the CAS-guarded removal used by the manual tier
+// override expiry worker (Issue #1413 High finding H4, Codex review): the worker selects expired
+// candidates via GetUsersWithExpiredManualTierOverride, then calls
+// RemoveUserTierOverrideIfMatches with the override values it observed at selection time. If an
+// admin has since extended or replaced the override, the CAS clause below fails to match, the
+// "prior" CTE returns zero rows, and the clear does not happen — the worker's stale decision
+// never overwrites the admin's fresh one.
+const removeUserTierOverrideIfMatchesQuery = `
+	WITH prior AS (
+	` + removeUserTierOverrideSelectPrior + removeUserTierOverrideCASClause + `
+	FOR UPDATE
+	)
+	` + removeUserTierOverrideUpdate
+
+// removeTierOverride is the shared transaction body for both RemoveUserTierOverride
+// (unconditional, admin path) and RemoveUserTierOverrideIfMatches (CAS-guarded, expiry-worker
+// path — Issue #1413 High finding H4): begin a transaction, run the given query, decrypt
+// clerk_user_id, compute Removed, and write the audit row.
+//
+// Zero rows returned by the query (pgx.ErrNoRows) is reported as claimed=false with a NIL
+// error — never translated to ErrUserNotFound here — because for the CAS variant that outcome
+// is the expected, non-error "someone changed the override under us" case (Issue #1413's
+// claim-then-act pattern: this is a legitimate skip, not a failure). It is only the caller
+// (RemoveUserTierOverride, for the unconditional query which has no CAS clause and therefore
+// no way to return zero rows except a missing/soft-deleted target) that translates
+// claimed=false into ErrUserNotFound.
+func (r *adminUserRepository) removeTierOverride(
+	ctx context.Context, query string, args []interface{}, actorUserID, targetUserID, reason string,
+) (RemoveTierOverrideRow, bool, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to begin transaction: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// If the target is missing or is_deleted, the "prior" CTE returns no rows, the implicit
-	// join in "FROM prior" yields zero rows, and RETURNING is empty — surfaced below as
-	// pgx.ErrNoRows -> ErrUserNotFound.
 	var row RemoveTierOverrideRow
 	var clerkUserIDEnc string
-	err = tx.QueryRow(ctx, removeUserTierOverrideQuery, targetUserID, retentionMonths).Scan(
+	err = tx.QueryRow(ctx, query, args...).Scan(
 		&row.RevertedTier, &row.RevertedStatus, &clerkUserIDEnc, &row.PriorManualTierOverride,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return RemoveTierOverrideRow{}, ErrUserNotFound
+			return RemoveTierOverrideRow{}, false, nil
 		}
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to remove user tier override: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to remove user tier override: %w", err)
 	}
 	row.Removed = row.PriorManualTierOverride != nil && *row.PriorManualTierOverride != ""
 
 	// Decrypt the returned clerk_user_id (it is encrypted in the DB)
 	row.ClerkUserID, err = r.enc.DecryptString(clerkUserIDEnc)
 	if err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to decrypt clerk_user_id: %w", err)
 	}
 
 	// Audit row inside the same transaction — even when Removed is false (idempotent no-op),
 	// this call is the natural repair hook for metadata #1413 may have corrupted, so it always
 	// audits and (in the service layer) always re-syncs Clerk.
 	// actor_user_id -> audit_logs.user_id (acting admin); targetUserID -> resource_id.
+	// If actorUserID is empty, leave as nil -> SQL NULL (column is nullable with FK ON DELETE
+	// SET NULL; a missing actor must never abort a legitimate admin action).
 	var actorParam interface{}
 	if actorUserID != "" {
 		actorParam = actorUserID
-	} // else: leave nil -> SQL NULL. Column is nullable with FK ON DELETE SET NULL; a missing
-	// actor must never abort a legitimate admin action.
+	}
 
 	detailsMap := map[string]interface{}{
 		"reason": reason,
@@ -520,12 +566,12 @@ func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorU
 	}
 	detailsBytes, err := json.Marshal(detailsMap)
 	if err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to marshal audit details: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to marshal audit details: %w", err)
 	}
 
 	encryptedChanges, err := r.enc.EncryptJSON(json.RawMessage(detailsBytes))
 	if err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to encrypt audit changes: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to encrypt audit changes: %w", err)
 	}
 
 	auditQuery := `
@@ -534,13 +580,59 @@ func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorU
 	`
 	_, err = tx.Exec(ctx, auditQuery, actorParam, targetUserID, encryptedChanges)
 	if err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to create audit log: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to create audit log: %w", err)
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return RemoveTierOverrideRow{}, fmt.Errorf("failed to commit transaction: %w", err)
+		return RemoveTierOverrideRow{}, false, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return row, true, nil
+}
+
+// RemoveUserTierOverride clears a user's manual tier override, re-arms/initialises the
+// retention clock when a prior override existed and the reverted status is read-only, and
+// writes an audit log row — in one transaction. Unconditional: an admin clicking "Remove
+// Override" always clears whatever is currently there. See the AdminUserRepository interface
+// doc for the full contract.
+func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int) (RemoveTierOverrideRow, error) {
+	// This query has no CAS clause, so zero rows can only mean the target is missing or
+	// soft-deleted — surfaced as ErrUserNotFound (the same sentinel UpdateUserTier uses).
+	row, claimed, err := r.removeTierOverride(ctx, removeUserTierOverrideQuery,
+		[]interface{}{targetUserID, retentionMonths}, actorUserID, targetUserID, reason)
+	if err != nil {
+		return RemoveTierOverrideRow{}, err
+	}
+	if !claimed {
+		return RemoveTierOverrideRow{}, ErrUserNotFound
 	}
 	return row, nil
+}
+
+// RemoveUserTierOverrideIfMatches clears a user's manual tier override ONLY IF its current
+// manual_tier_override and manual_tier_ends_at still match expectedOverride/expectedEndsAt —
+// the values the caller observed when it decided to remove the override (Issue #1413 High
+// finding H4, Codex review). Used by the daily manual-tier-override-expiry job: it selects
+// expired candidates via GetUsersWithExpiredManualTierOverride, then calls this method rather
+// than the unconditional RemoveUserTierOverride, so an admin who extends or replaces the
+// override in the window between the select and this call is not overwritten by the worker's
+// now-stale decision.
+//
+// Returns claimed=false with a nil error — never an error — when the CAS predicate does not
+// match (the target is missing/soft-deleted, or an admin changed the override under us). Per
+// the claim-then-act pattern, this is a normal, expected outcome: the caller should log and
+// skip, not retry or alert — the expiry job runs again the next day and will pick the user up
+// then if they are still genuinely eligible.
+//
+// The admin-initiated path (RemoveUserTierOverride, above) keeps its existing unconditional
+// behaviour and signature untouched — this is a distinct method precisely so the CAS is opt-in
+// for the one caller (the expiry worker) that needs it.
+func (r *adminUserRepository) RemoveUserTierOverrideIfMatches(
+	ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int,
+	expectedOverride *string, expectedEndsAt *time.Time,
+) (RemoveTierOverrideRow, bool, error) {
+	return r.removeTierOverride(ctx, removeUserTierOverrideIfMatchesQuery,
+		[]interface{}{targetUserID, retentionMonths, expectedOverride, expectedEndsAt},
+		actorUserID, targetUserID, reason)
 }
 
 // buildFilterClause constructs the WHERE clause and arguments for admin user filters.

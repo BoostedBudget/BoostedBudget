@@ -278,10 +278,18 @@ func TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenActive(t *
 	assert.True(t, fixedNotice7.Equal(*snap.RetentionNotice7d), "7d notice flag must be untouched for an active reverted status")
 }
 
-// TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenClockNeverRunning verifies
-// that even with a read-only reverted status, if retention_expires_at was never set (NULL), it
-// stays NULL — the re-arm is gated on a clock having actually been running.
-func TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenClockNeverRunning(t *testing.T) {
+// TestRemoveUserTierOverride_Integration_InitialisesRetention_WhenClockNeverRan proves the H3
+// fix (Issue #1413 High finding, Codex review): when a prior override existed, the reverted raw
+// status is read-only, AND retention_expires_at was never set (NULL — the clock never ran, e.g.
+// the cancellation webhook skipped SetRetentionDates because the user was comped at the time),
+// the clock must now be INITIALISED on removal, not left NULL forever. Before this fix, the old
+// CASE required `prior.retention_expires_at IS NOT NULL` to re-arm, which meant a user who was
+// comped before ever going read-only would have no retention clock, get comped, have their
+// subscription cancelled while comped (clock skipped), and then have the comp removed — landing
+// permanently in read-only with no clock ever starting and no deletion warning ever sent. This
+// test is the direct regression test for that scenario: it previously asserted the clock stayed
+// NULL (encoding the bug); it now asserts the clock starts.
+func TestRemoveUserTierOverride_Integration_InitialisesRetention_WhenClockNeverRan(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewAdminUserRepository(pool, enc)
@@ -295,15 +303,60 @@ func TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenClockNever
 	setManualOverride(t, pool, target.ID, &override, nil)
 	// retention_started_at/expires_at/notice flags all remain NULL from creation — clock never ran.
 
+	beforeCall := time.Now()
 	row, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "comp ended, never had a clock", testRetentionMonths)
 	require.NoError(t, err)
 	assert.Equal(t, "cancelled", row.RevertedStatus)
 
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
-	assert.Nil(t, snap.RetentionStartedAt, "retention_started_at must stay NULL when the clock never ran")
-	assert.Nil(t, snap.RetentionExpiresAt, "retention_expires_at must stay NULL when the clock never ran")
+	require.NotNil(t, snap.RetentionStartedAt, "retention_started_at must be INITIALISED (H3 fix) even though the clock never ran before")
+	require.NotNil(t, snap.RetentionExpiresAt, "retention_expires_at must be INITIALISED (H3 fix) even though the clock never ran before")
+	assert.WithinDuration(t, beforeCall, *snap.RetentionStartedAt, 10*time.Second)
+	assert.WithinDuration(t, beforeCall.AddDate(0, testRetentionMonths, 0), *snap.RetentionExpiresAt, 10*time.Second)
 	assert.Nil(t, snap.RetentionNotice30d)
 	assert.Nil(t, snap.RetentionNotice7d)
+}
+
+// TestRemoveUserTierOverride_Integration_NoOpClear_DoesNotResetRunningRetention proves the H8
+// fix (Issue #1413 High finding, Codex review): a "clear" call with NO prior override must be
+// genuinely side-effect-free on retention, even when the reverted status is read-only and a
+// retention clock IS already running. Before this fix, the CASE condition only checked
+// `retention_expires_at IS NOT NULL AND status read-only` — it never checked whether an override
+// had actually existed — so a repeated/stale/double-click "remove override" call on an already
+// cancelled-with-no-override user would silently RESET retention_expires_at to
+// now+retentionMonths and null both notice flags, indefinitely postponing deletion and
+// suppressing warnings, every time it was called. This test fixes retention to a known past
+// value and asserts it is untouched by a no-op call.
+func TestRemoveUserTierOverride_Integration_NoOpClear_DoesNotResetRunningRetention(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	// No setManualOverride call — manual_tier_override stays NULL (no prior override).
+
+	fixedStart := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedExpires := time.Date(2021, 7, 1, 0, 0, 0, 0, time.UTC)
+	fixedNotice30 := time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC)
+	fixedNotice7 := time.Date(2021, 6, 20, 0, 0, 0, 0, time.UTC)
+	setRetentionState(t, pool, target.ID, &fixedStart, &fixedExpires, &fixedNotice30, &fixedNotice7)
+
+	row, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "stale double-click, no override present", testRetentionMonths)
+	require.NoError(t, err)
+	assert.False(t, row.Removed, "no prior override existed — this must be a no-op")
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.RetentionStartedAt)
+	require.NotNil(t, snap.RetentionExpiresAt)
+	require.NotNil(t, snap.RetentionNotice30d)
+	require.NotNil(t, snap.RetentionNotice7d)
+	assert.True(t, fixedStart.Equal(*snap.RetentionStartedAt), "retention_started_at must be UNCHANGED by a no-op clear (H8 fix)")
+	assert.True(t, fixedExpires.Equal(*snap.RetentionExpiresAt), "retention_expires_at must be UNCHANGED by a no-op clear (H8 fix) — a stale/repeated clear must not indefinitely postpone deletion")
+	assert.True(t, fixedNotice30.Equal(*snap.RetentionNotice30d), "30d notice flag must be UNCHANGED by a no-op clear (H8 fix)")
+	assert.True(t, fixedNotice7.Equal(*snap.RetentionNotice7d), "7d notice flag must be UNCHANGED by a no-op clear (H8 fix)")
 }
 
 // TestRemoveUserTierOverride_Integration_AuditRow_ActorAndTarget verifies the audit row lands
@@ -385,4 +438,186 @@ func TestRemoveUserTierOverride_Integration_SoftDeletedTarget(t *testing.T) {
 	_, err = repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "target is soft-deleted", testRetentionMonths)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUserNotFound)
+}
+
+// ─── Issue #1413 High finding H4 (Codex review): RemoveUserTierOverrideIfMatches ───────────
+//
+// The expiry worker selects expired-override candidates, then removes them. Without a CAS
+// guard, an admin who extends or replaces the override in the window between the select and the
+// removal has their fresh comp destroyed by the worker's stale decision. These tests prove the
+// CAS clause closes that window while leaving the unconditional admin path (tested above)
+// untouched.
+
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMismatch_Override_NoClear verifies that
+// when manual_tier_override no longer matches what the caller expected (an admin changed it
+// concurrently), the clear does NOT happen: claimed=false, no error, and the override column is
+// left exactly as it now is in the database.
+func TestRemoveUserTierOverrideIfMatches_Integration_CASMismatch_Override_NoClear(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	endsAt := time.Now().Add(1 * time.Hour)
+	currentOverride := "household_3" // an admin has since replaced "household_2" with this
+	setManualOverride(t, pool, target.ID, &currentOverride, &endsAt)
+
+	staleExpected := "household_2" // what the worker observed at selection time
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, target.ID, "expiry worker: stale decision", testRetentionMonths, &staleExpected, &endsAt)
+	require.NoError(t, err, "a CAS mismatch must not be an error")
+	assert.False(t, claimed, "the clear must not apply when the override no longer matches")
+	assert.Equal(t, RemoveTierOverrideRow{}, row, "a zero-value row must be returned on CAS mismatch")
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.ManualTierOverride)
+	assert.Equal(t, "household_3", *snap.ManualTierOverride, "the override must be left INTACT — a stale worker decision must not clobber the admin's fresh comp")
+	require.NotNil(t, snap.ManualTierEndsAt)
+	assert.WithinDuration(t, endsAt, *snap.ManualTierEndsAt, time.Second)
+}
+
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMismatch_EndsAt_NoClear verifies the same
+// non-clearing outcome when only manual_tier_ends_at (not the override name) has changed under
+// the caller — e.g. an admin extended the comp's expiry.
+func TestRemoveUserTierOverrideIfMatches_Integration_CASMismatch_EndsAt_NoClear(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	override := "household_2"
+	extendedEndsAt := time.Now().Add(48 * time.Hour) // admin extended it
+	setManualOverride(t, pool, target.ID, &override, &extendedEndsAt)
+
+	staleEndsAt := time.Now().Add(-1 * time.Hour) // what the worker observed (already past)
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, target.ID, "expiry worker: stale decision", testRetentionMonths, &override, &staleEndsAt)
+	require.NoError(t, err)
+	assert.False(t, claimed, "the clear must not apply when manual_tier_ends_at no longer matches")
+	assert.Equal(t, RemoveTierOverrideRow{}, row)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.ManualTierOverride)
+	assert.Equal(t, "household_2", *snap.ManualTierOverride)
+	require.NotNil(t, snap.ManualTierEndsAt)
+	assert.WithinDuration(t, extendedEndsAt, *snap.ManualTierEndsAt, time.Second, "the extended expiry must be left INTACT")
+}
+
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears verifies the positive case:
+// when the current override still matches exactly what the caller expected, the clear applies
+// normally — claimed=true, columns cleared, Removed=true, retention/audit behavior identical to
+// the unconditional path (both variants share removeTierOverride).
+func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour) // expired — exactly what the worker would have selected
+	setManualOverride(t, pool, target.ID, &override, &endsAt)
+
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, target.ID, "expiry worker: lapsed comp", testRetentionMonths, &override, &endsAt)
+	require.NoError(t, err)
+	assert.True(t, claimed, "the clear must apply when the CAS predicate matches")
+	assert.True(t, row.Removed)
+	require.NotNil(t, row.PriorManualTierOverride)
+	assert.Equal(t, "household_2", *row.PriorManualTierOverride)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snap.ManualTierOverride, "manual_tier_override must be cleared on a CAS match")
+	assert.Nil(t, snap.ManualTierEndsAt, "manual_tier_ends_at must be cleared on a CAS match")
+
+	audit := fetchLatestAuditRow(t, pool, target.ID, "remove_manual_tier")
+	assert.Equal(t, actor.ID, *audit.UserID, "the CAS variant must still write an audit row")
+}
+
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears verifies the CAS
+// clause's NULL-safety: when the expected manual_tier_ends_at is nil and the actual value in the
+// database is also NULL, IS NOT DISTINCT FROM must treat that as a match (plain `=` would not).
+func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	override := "household_2"
+	setManualOverride(t, pool, target.ID, &override, nil) // permanent override, no expiry
+
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, target.ID, "admin-equivalent removal via CAS path", testRetentionMonths, &override, nil)
+	require.NoError(t, err)
+	assert.True(t, claimed, "NULL expectedEndsAt must match a NULL manual_tier_ends_at (IS NOT DISTINCT FROM)")
+	assert.True(t, row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snap.ManualTierOverride)
+	assert.Nil(t, snap.ManualTierEndsAt)
+}
+
+// TestRemoveUserTierOverrideIfMatches_Integration_MissingTarget_NotClaimed verifies a
+// missing/soft-deleted target is reported the same way as a CAS mismatch: claimed=false, nil
+// error — never ErrUserNotFound. Unlike the unconditional path, this CAS-guarded method has no
+// way to distinguish "target gone" from "override changed", and the claim-then-act pattern
+// treats both identically: a legitimate skip, not a failure.
+func TestRemoveUserTierOverrideIfMatches_Integration_MissingTarget_NotClaimed(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, "00000000-0000-0000-0000-000000000000", "no such user", testRetentionMonths, &override, &endsAt)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	assert.Equal(t, RemoveTierOverrideRow{}, row)
+}
+
+// TestRemoveUserTierOverrideIfMatches_Integration_AdminPathUnaffected is a direct A/B proof that
+// adding the CAS variant did not change the unconditional admin path's behavior: given the exact
+// same fixture as the CAS-match test above, RemoveUserTierOverride (no CAS args at all) still
+// clears regardless, confirming its signature and semantics are untouched by the H4 fix.
+func TestRemoveUserTierOverrideIfMatches_Integration_AdminPathUnaffected(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	override := "household_5" // whatever is currently there — the admin path does not care
+	endsAt := time.Now().Add(30 * 24 * time.Hour)
+	setManualOverride(t, pool, target.ID, &override, &endsAt)
+
+	row, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "admin clicked Remove Override", testRetentionMonths)
+	require.NoError(t, err)
+	assert.True(t, row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snap.ManualTierOverride, "admin path clears regardless of current value — no CAS involved")
+	assert.Nil(t, snap.ManualTierEndsAt)
 }
