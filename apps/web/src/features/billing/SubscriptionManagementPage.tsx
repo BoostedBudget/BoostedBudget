@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { Alert } from '@/components/ui/alert'
 import { toast } from 'sonner'
+import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { GetCurrentSubscriptionOutputBody } from '@boostedbudget/api-client/models'
 import type { SubscriptionTier } from '../subscription/types'
 
@@ -23,6 +24,14 @@ import type { SubscriptionTier } from '../subscription/types'
  * for the tier block when subscription data is available, but always suppresses BillingDetails —
  * a comped user has no next-bill date, amount, or payment method to show — and offers no Change
  * Plan / Cancel actions (there is nothing to change or cancel), only a link to /pricing.
+ *
+ * M11 fix: the backend deliberately preserves the *raw* Paddle status on `subscription.status`
+ * for a comped user who also has a real (e.g. `past_due`) Paddle subscription behind them — that
+ * raw value is meaningful for billing/admin surfaces, but must never be shown here as if it were
+ * this user's access status (a comped user always has access, "Past Due" would be a contradictory,
+ * alarming lie). So the status passed to CurrentSubscriptionDisplay is the shared
+ * `getSubscriptionPresentation` derivation's `badgeLabel` (forced to the 'comped' kind, since this
+ * component only ever renders for a comped user) rather than the raw status string.
  */
 function ComplimentaryView({
   subscription,
@@ -47,7 +56,7 @@ function ComplimentaryView({
         <CurrentSubscriptionDisplay
           tier={subscription.tier}
           tierName={currentTierData.display_name}
-          status={subscription.status}
+          status={getSubscriptionPresentation({ status: subscription.status, isComped: true }).badgeLabel}
           billingInterval={subscription.billing_interval}
           amount={subscription.amount}
           currency={subscription.currency}

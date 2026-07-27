@@ -328,6 +328,60 @@ describe('UsersPage', () => {
     })
   })
 
+  describe('Comped chip vs real active status (Issue #1413 M10)', () => {
+    it('does NOT show a Comped chip or the override tier when the user\'s own subscription is genuinely active and the override has expired', () => {
+      // The bug: effective_status is 'active' here because the user's OWN subscription is
+      // active — not because of the (expired) override. Deriving comp state from
+      // effective_status alone would show this user as still comped at the override tier.
+      const usersWithRealActiveAndExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'active',
+          effective_status: 'active',
+          manual_tier_override: 'household_5',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithRealActiveAndExpiredOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+      expect(screen.queryByText('Household 5+')).not.toBeInTheDocument()
+    })
+
+    it('still shows the Comped chip and override tier when the override is live, even though the user\'s own subscription is genuinely active', () => {
+      const usersWithRealActiveAndLiveOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'active',
+          effective_status: 'active',
+          manual_tier_override: 'household_5',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithRealActiveAndLiveOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Comped')).toBeInTheDocument()
+      expect(screen.getByText('Household 5+')).toBeInTheDocument()
+    })
+  })
+
   describe('Status column regression', () => {
     it('still renders the raw subscription_status text', () => {
       mockUseListAdminUsers.mockReturnValue({
