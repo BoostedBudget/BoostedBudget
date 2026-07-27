@@ -8,6 +8,8 @@ import type {
   UpdateSubscriptionInputBody,
   GetCurrentSubscriptionOutputBody,
 } from '@boostedbudget/api-client/models'
+import { useSubscriptionPresentation } from '../../subscription/hooks/useSubscriptionPresentation'
+import { presentationFromSubscription } from '../../subscription/lib/subscriptionPresentation'
 
 interface UpdateOptions {
   newTier: string
@@ -29,6 +31,11 @@ function getErrorStatus(error: unknown): number | undefined {
 }
 
 export function useSubscriptionManagement() {
+  // Issue #1413: admin-comped users get real access with no Paddle subscription behind it —
+  // OR the profile-derived presentation's isComped in as a resilience fallback, in case the
+  // subscription endpoint hasn't been redeployed with the is_comped field yet (or 404s outright).
+  const profilePresentation = useSubscriptionPresentation()
+
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
@@ -38,11 +45,22 @@ export function useSubscriptionManagement() {
       },
     },
   })
+
+  const subPresentation = subscriptionQuery.data
+    ? presentationFromSubscription(subscriptionQuery.data)
+    : null
+  const isComped = (subPresentation?.isComped ?? false) || profilePresentation.isComped
+  // presentationFromSubscription doesn't thread comp_ends_at through today, so read it straight
+  // off the payload; profile is the last resort for the 404-fallback path.
+  const compEndsAt = subPresentation?.compEndsAt ?? subscriptionQuery.data?.comp_ends_at ?? profilePresentation.compEndsAt
+
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
-      enabled: ['active', 'trialing', 'cancelled', 'past_due'].includes(
-        subscriptionQuery.data?.status ?? '',
-      ),
+      enabled:
+        !isComped &&
+        ['active', 'trialing', 'cancelled', 'past_due'].includes(
+          subscriptionQuery.data?.status ?? '',
+        ),
     },
   })
 
@@ -91,14 +109,19 @@ export function useSubscriptionManagement() {
     return { status, message: err.message || 'Failed to update subscription. Please try again.' }
   }
 
-  const noSubscription = getErrorStatus(subscriptionQuery.error) === 404
+  const noSubscription404 = getErrorStatus(subscriptionQuery.error) === 404
+  // A comped user always has a real subscription (in the "you have access" sense), even when the
+  // endpoint 404s because the backend hasn't caught up yet.
+  const hasNoSubscription = noSubscription404 && !isComped
 
   return {
     // Current subscription data
     subscription: subscriptionQuery.data as GetCurrentSubscriptionOutputBody | undefined,
     isLoadingSubscription: subscriptionQuery.isLoading,
-    subscriptionError: noSubscription ? null : normalizeError(subscriptionQuery.error),
-    hasNoSubscription: noSubscription,
+    subscriptionError: noSubscription404 ? null : normalizeError(subscriptionQuery.error),
+    hasNoSubscription,
+    isComped,
+    compEndsAt,
     refetchSubscription: subscriptionQuery.refetch,
 
     // Billing portal URL
