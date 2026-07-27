@@ -16,4 +16,10 @@ describe('ANALYTICS_EVENTS', () => {
     expect(ANALYTICS_EVENTS.MCP_SETUP_TAB_CHANGED).toBe('mcp_setup_tab_changed')
     expect(ANALYTICS_EVENTS.MCP_CONFIG_COPIED).toBe('mcp_config_copied')
   })
+
+  // Issue #1413: Admin subscription override (comp tier apply/remove)
+  test('has the admin subscription override analytics event constants', () => {
+    expect(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED).toBe('admin_subscription_override_applied')
+    expect(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED).toBe('admin_subscription_override_removed')
+  })
 })

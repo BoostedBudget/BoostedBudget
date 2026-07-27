@@ -91,6 +91,10 @@ const (
 	// clears the over-capacity state silently.
 	EventHouseholdOverCapacityEntered = "household_over_capacity_entered"
 
+	// Admin subscription override events (Issue #1413)
+	EventAdminSubscriptionOverrideApplied = "admin_subscription_override_applied"
+	EventAdminSubscriptionOverrideRemoved = "admin_subscription_override_removed"
+
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
 	// which has direct access to the MCP session context. The backend does not receive the PostHog
