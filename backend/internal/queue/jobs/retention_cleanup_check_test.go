@@ -311,6 +311,146 @@ func TestNewRetentionCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	assert.NotNil(t, worker.logger)
 }
 
+// ─── #1413: comped users are exempt from retention cleanup (belt-and-braces worker guard;
+// Task 4 additionally excludes them at the SQL level) ──
+
+// TestRetentionCleanupCheck_CompedUser_NotDeleted is the hard-delete regression test: a comped
+// user present in the expired-retention candidate list must NOT be passed to ExecuteDeletion.
+func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(-24 * time.Hour) // already expired
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	users := []*domain.User{
+		{
+			ID: "user-comped", Email: "comped@example.com",
+			RetentionExpiresAt: &retentionExpiresAt,
+			ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
+		},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	// ExecuteDeletion is deliberately left unstubbed on mockDeletion: if the comp guard is
+	// missing, the real call would panic with "unexpected call" rather than silently pass.
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockDeletion.AssertNotCalled(t, "ExecuteDeletion", mock.Anything, "user-comped")
+}
+
+// TestRetentionCleanupCheck_CompedUser_No30dNotice proves a comped user does not receive the
+// 30-day pre-deletion warning. SetRetentionNotice30dSent is deliberately left unstubbed.
+func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(25 * 24 * time.Hour)
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour)
+	users := []*domain.User{
+		{
+			ID: "user-comped-30d", Email: "comped30@example.com",
+			RetentionExpiresAt: &retentionExpiresAt,
+			ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
+		},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped30@example.com", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetRetentionNotice30dSent", mock.Anything, "user-comped-30d")
+}
+
+// TestRetentionCleanupCheck_CompedUser_No7dNotice proves a comped user does not receive the
+// 7-day final warning. SetRetentionNotice7dSent is deliberately left unstubbed.
+func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(5 * 24 * time.Hour)
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour)
+	users := []*domain.User{
+		{
+			ID: "user-comped-7d", Email: "comped7@example.com",
+			RetentionExpiresAt: &retentionExpiresAt,
+			ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
+		},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped7@example.com", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetRetentionNotice7dSent", mock.Anything, "user-comped-7d")
+}
+
+// TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally proves a user whose manual override
+// has expired is NOT exempt — deletion proceeds normally.
+func TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(-24 * time.Hour)
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // expired
+	users := []*domain.User{
+		{
+			ID: "user-expired-override", Email: "expiredoverride@example.com",
+			RetentionExpiresAt: &retentionExpiresAt,
+			ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
+		},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockDeletion.On("ExecuteDeletion", ctx, "user-expired-override").Return(nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-expired-override")
+}
+
 // TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths tests that 0 months uses default (6).
 func TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)

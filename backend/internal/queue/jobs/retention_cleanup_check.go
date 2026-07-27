@@ -178,6 +178,16 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 
 	var sentCount, errorCount int
 	for _, user := range users {
+		// #1413: belt-and-braces — a comped user grants access and must not be warned about,
+		// or slated for, deletion. Task 4 additionally excludes comped users at the SQL level;
+		// this worker-level guard protects against a stale candidate list when a comp lands
+		// between the query and this loop.
+		if user.HasActiveManualOverride() {
+			w.logger.Info("skipping 30d retention notice for actively comped user",
+				"job_id", jobID, "user_id", user.ID)
+			continue
+		}
+
 		if sendErr := w.sendNoticeEmail(ctx, user, subject, body); sendErr != nil {
 			w.logger.Warn("failed to send 30d retention notice",
 				"job_id", jobID, "user_id", user.ID, "error", sendErr)
@@ -219,6 +229,13 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 
 	var sentCount, errorCount int
 	for _, user := range users {
+		// #1413: belt-and-braces — see send30dNotices for rationale.
+		if user.HasActiveManualOverride() {
+			w.logger.Info("skipping 7d retention notice for actively comped user",
+				"job_id", jobID, "user_id", user.ID)
+			continue
+		}
+
 		if sendErr := w.sendNoticeEmail(ctx, user, subject, body); sendErr != nil {
 			w.logger.Warn("failed to send 7d retention notice",
 				"job_id", jobID, "user_id", user.ID, "error", sendErr)
@@ -257,6 +274,16 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 
 	var deletedCount, errorCount int
 	for _, user := range users {
+		// #1413: belt-and-braces hard-delete guard — a comped user must never be
+		// auto-deleted. Task 4 additionally excludes comped users at the SQL level; this
+		// worker-level guard protects against a stale candidate list when a comp lands
+		// between the query and this loop.
+		if user.HasActiveManualOverride() {
+			w.logger.Info("skipping retention deletion for actively comped user",
+				"job_id", jobID, "user_id", user.ID)
+			continue
+		}
+
 		if deleteErr := w.deletionService.ExecuteDeletion(ctx, user.ID); deleteErr != nil {
 			w.logger.Error("failed to execute retention deletion",
 				"job_id", jobID, "user_id", user.ID, "error", deleteErr)
