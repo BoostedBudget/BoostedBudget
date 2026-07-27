@@ -96,6 +96,11 @@ type ProfileRepository interface {
 	// and who are not already deleted or pending deletion.
 	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
 
+	// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
+	// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9 — backs the daily job
+	// that expires lapsed admin comps).
+	GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error)
+
 	// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 	GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)
 
@@ -1134,6 +1139,45 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 		  AND deletion_requested_at IS NULL
 	` + noActiveManualOverridePredicate + `
 		ORDER BY retention_expires_at ASC
+	`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// expiredManualTierOverridePredicate selects users with a manual tier override that has
+// strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
+// performing the exact same clear-override/re-arm-retention/audit transition
+// AdminUserRepository.RemoveUserTierOverride (Issue #1414 / Task 7) performs for
+// admin-initiated removal, rather than duplicating that logic here).
+//
+// Boundary note: strictly past (`<`, not `<=`) to agree with
+// domain.User.HasActiveManualOverride()'s `!ends_at.Before(now)` semantics — an override ending
+// exactly now is still ACTIVE per the read path, so this predicate must not select it (see
+// TestGetUsersWithExpiredManualTierOverride_Integration_ExactExpiryBoundary).
+//
+// manual_tier_ends_at IS NOT NULL additionally excludes PERMANENT overrides (no expiry date
+// set) — those never lapse on their own and must only ever be cleared by an explicit admin
+// removal.
+const expiredManualTierOverridePredicate = `
+	  manual_tier_override IS NOT NULL
+	  AND manual_tier_override <> ''
+	  AND manual_tier_ends_at IS NOT NULL
+	  AND manual_tier_ends_at < NOW()
+	  AND is_deleted = FALSE
+`
+
+// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
+// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9).
+func (r *profileRepository) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE ` + expiredManualTierOverridePredicate + `
+		ORDER BY manual_tier_ends_at ASC
 	`
 	users, err := r.queryUsers(ctx, query)
 	if err != nil {

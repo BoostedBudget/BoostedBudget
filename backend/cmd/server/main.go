@@ -243,6 +243,12 @@ func main() {
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
+	// Issue #1413 (Task 9): Declare manual tier override expiry check worker (the
+	// time-triggered twin of the admin "remove override" endpoint — Issue #1414 / Task 7).
+	// Not gated on DELETION_TOKEN_SECRET like retention's worker, since it depends on
+	// adminUserRepo/clerkService, not deletionService.
+	var manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
+
 	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
 	// (purges household_members rows removed 30+ days ago). Constructed once
 	// householdService is available (below); not gated on DELETION_TOKEN_SECRET like
@@ -401,6 +407,21 @@ func main() {
 		// Clerk Backend API service — used by deletion service and email propagation worker
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
 		appLogger.Info("Clerk Backend API service initialized")
+
+		// Issue #1413 (Task 9): Manual tier override expiry check worker — reuses
+		// AdminUserRepository.RemoveUserTierOverride (adminUserRepo, Issue #1414 / Task 7) as
+		// the time-triggered twin of the admin "remove override" endpoint. RetentionMonths
+		// mirrors trialService.SetRetentionMonths / NewAdminUserService's retentionMonths param
+		// below — same cfg.RetentionPeriodMonths value threaded everywhere retention windows
+		// are sized.
+		manualTierOverrideExpiryCheckWorker = jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{
+			ProfileRepo:     profileRepo,
+			Remover:         adminUserRepo,
+			ClerkService:    clerkService,
+			RetentionMonths: cfg.RetentionPeriodMonths,
+			Logger:          appLogger,
+		})
+		appLogger.Info("Manual tier override expiry check worker created (River)")
 
 		// Create services
 		profileService := services.NewProfileService(services.NewProfileServiceDeps{
@@ -1203,6 +1224,26 @@ func main() {
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
 			}
 
+			// Issue #1413 (Task 9): Manual tier override expiry check (daily) — the
+			// time-triggered twin of the admin "remove override" endpoint (Issue #1414 /
+			// Task 7). HasActiveManualOverride() derives comp state at read time only, so
+			// nothing else re-arms retention / re-syncs Clerk / audits a comp that lapses on
+			// its own without an admin manually clearing it.
+			if manualTierOverrideExpiryCheckWorker != nil {
+				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+					river.PeriodicInterval(24*time.Hour),
+					func() (river.JobArgs, *river.InsertOpts) {
+						return jobs.ManualTierOverrideExpiryCheckArgs{
+								TriggerSource: "periodic",
+							}, &river.InsertOpts{
+								Queue: "low",
+							}
+					},
+					&river.PeriodicJobOpts{RunOnStart: false},
+				))
+				appLogger.Info("Manual tier override expiry check periodic job configured (daily)")
+			}
+
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check (daily)
 			// HouseholdMemberCleanupCheckUniqueOpts (household_member_cleanup_check.go)
 			// documents the same shape below as the source of truth this must stay in
@@ -1405,6 +1446,10 @@ func main() {
 			if retentionCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
 				appLogger.Info("Retention cleanup check worker registered with River")
+			}
+			if manualTierOverrideExpiryCheckWorker != nil {
+				river.AddWorker(riverWorkers, manualTierOverrideExpiryCheckWorker)
+				appLogger.Info("Manual tier override expiry check worker registered with River")
 			}
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check worker
 			// (constructed above, always non-nil here)

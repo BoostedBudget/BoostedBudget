@@ -159,6 +159,9 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention7dNotice(ctx 
 func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
+func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
 
 // Dunning methods (#898)
 func (m *MockProfileRepositoryForDeletion) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
