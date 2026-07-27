@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { PremiumRoute } from './PremiumRoute'
 import { useReadOnly } from './ReadOnlyContext'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
@@ -22,7 +22,20 @@ function ReadOnlyConsumer() {
   )
 }
 
-function buildUser(subscriptionStatus: string) {
+/** Route probe rendered at /pricing to inspect the Navigate redirect's location.state */
+function LocationProbe() {
+  const location = useLocation()
+  const frozen = (location.state as { frozen?: boolean } | null)?.frozen
+  return <div data-testid="location-probe" data-frozen={String(frozen)} />
+}
+
+interface BuildUserOverrides {
+  is_comped?: boolean
+  comp_ends_at?: string
+  effective_status?: string
+}
+
+function buildUser(subscriptionStatus: string, overrides: BuildUserOverrides = {}) {
   return {
     id: 'user-1',
     email: 'test@example.com',
@@ -34,7 +47,8 @@ function buildUser(subscriptionStatus: string) {
     locale: 'en-US',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
-  } as const
+    ...overrides,
+  }
 }
 
 function renderPremiumRoute(children = <div data-testid="content">Content</div>) {
@@ -45,6 +59,23 @@ function renderPremiumRoute(children = <div data-testid="content">Content</div>)
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <PremiumRoute>{children}</PremiumRoute>
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
+/** Renders PremiumRoute behind an actual /pricing route so redirects can be inspected. */
+function renderPremiumRouteWithRouting(children = <div data-testid="content">Content</div>) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/protected']}>
+        <Routes>
+          <Route path="/protected" element={<PremiumRoute>{children}</PremiumRoute>} />
+          <Route path="/pricing" element={<LocationProbe />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   )
@@ -158,5 +189,65 @@ describe('PremiumRoute', () => {
     })
     expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-is-readonly', 'true')
     expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-status', 'cancelled')
+  })
+
+  // Issue #1413: admin-comped users must get real write access, regardless of the raw
+  // subscription_status left behind on the user row.
+  describe('Comped users (#1413)', () => {
+    it('the core bug: grants write access for a comped user even with a raw status of inactive', async () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: buildUser('inactive', { is_comped: true }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      renderPremiumRoute(<ReadOnlyConsumer />)
+      await waitFor(() => {
+        expect(screen.getByTestId('readonly-consumer')).toBeInTheDocument()
+      })
+      expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-is-readonly', 'false')
+    })
+
+    it("sets contextStatus to 'comped' for a comped user", async () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: buildUser('active', { is_comped: true }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      renderPremiumRoute(<ReadOnlyConsumer />)
+      await waitFor(() => {
+        expect(screen.getByTestId('readonly-consumer')).toBeInTheDocument()
+      })
+      expect(screen.getByTestId('readonly-consumer')).toHaveAttribute('data-status', 'comped')
+    })
+
+    it('does not redirect a comped user whose raw status is unrecognised', async () => {
+      mockUseGetUserProfile.mockReturnValue({
+        data: buildUser('some_future_enum_value', { is_comped: true }),
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      renderPremiumRoute()
+      await waitFor(() => {
+        expect(screen.getByTestId('content')).toBeInTheDocument()
+      })
+    })
+  })
+
+  // This branch previously had no test at all.
+  it('redirects to /pricing with state.frozen === true for an unrecognised status', async () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: buildUser('some_future_enum_value'),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    renderPremiumRouteWithRouting()
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('location-probe')).toHaveAttribute('data-frozen', 'true')
   })
 })
