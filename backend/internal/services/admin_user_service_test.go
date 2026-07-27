@@ -41,6 +41,18 @@ func (m *MockAdminUserRepository) RemoveUserTierOverride(ctx context.Context, ac
 	return args.Get(0).(repository.RemoveTierOverrideRow), args.Error(1)
 }
 
+// RemoveUserTierOverrideIfMatches is the CAS-guarded sibling used by the override-expiry worker,
+// which must not clear a comp an admin re-applied between candidate selection and processing
+// (Codex review finding H4). Returns (row, claimed, err) — claimed=false means the row no longer
+// matched the expected override, so the caller must skip its follow-up work.
+func (m *MockAdminUserRepository) RemoveUserTierOverrideIfMatches(ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int, expectedOverride *string, expectedEndsAt *time.Time) (repository.RemoveTierOverrideRow, bool, error) {
+	args := m.Called(ctx, actorUserID, targetUserID, reason, retentionMonths, expectedOverride, expectedEndsAt)
+	if args.Get(0) == nil {
+		return repository.RemoveTierOverrideRow{}, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).(repository.RemoveTierOverrideRow), args.Bool(1), args.Error(2)
+}
+
 func (m *MockAdminUserRepository) ListUsers(ctx context.Context, filters domain.AdminUserFilters, limit, offset int) ([]domain.AdminUserListItem, int, error) {
 	args := m.Called(ctx, filters, limit, offset)
 	if args.Get(0) == nil {
