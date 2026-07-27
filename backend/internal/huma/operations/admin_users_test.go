@@ -42,6 +42,16 @@ func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, clerkUserID s
 	return args.Error(0)
 }
 
+// RemoveUserTierOverride satisfies services.AdminUserService for tests in this file that don't
+// exercise tier-override removal (Issue #1414 — see admin_subscriptions_test.go for coverage).
+func (m *mockAdminUserService) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (services.RemoveTierOverrideResult, error) {
+	args := m.Called(ctx, actorUserID, targetUserID, reason)
+	if args.Get(0) == nil {
+		return services.RemoveTierOverrideResult{}, args.Error(1)
+	}
+	return args.Get(0).(services.RemoveTierOverrideResult), args.Error(1)
+}
+
 // TestListUsers_Success tests successful user listing
 func TestListUsers_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)

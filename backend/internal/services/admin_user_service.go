@@ -38,18 +38,50 @@ type AdminUserService interface {
 
 	// UpdateUserTier updates a user's subscription tier natively and in Clerk
 	UpdateUserTier(ctx context.Context, clerkUserID, userID, tier, reason string, expiresAt *time.Time) error
+
+	// RemoveUserTierOverride clears an existing manual tier override for the target user and
+	// re-syncs Clerk metadata. Idempotent: a user with no existing override still returns
+	// RemoveTierOverrideResult{Removed: false} rather than an error, and the audit row /
+	// Clerk sync still happen (this call doubles as a repair hook for stale Clerk metadata).
+	//
+	// actorUserID is the acting admin's internal UUID (for the audit row; may be "").
+	// targetUserID is the user whose override is being cleared.
+	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (RemoveTierOverrideResult, error)
+}
+
+// RemoveTierOverrideResult communicates the outcome of clearing a user's manual tier
+// override back to the caller (the HTTP handler).
+type RemoveTierOverrideResult struct {
+	// Removed is true iff the user had a non-empty manual tier override before this call.
+	Removed bool
+	// RevertedTier is the user's base subscription tier, now effective again.
+	RevertedTier string
+	// RevertedStatus is the user's raw subscription status, now effective again.
+	RevertedStatus string
 }
 
 // adminUserService implements AdminUserService
 type adminUserService struct {
-	repo         repository.AdminUserRepository
-	adminService AdminService
+	repo            repository.AdminUserRepository
+	adminService    AdminService
+	clerkService    ClerkService
+	retentionMonths int
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
 // adminService is used to check if users are admins (can be nil if not needed).
-func NewAdminUserService(repo repository.AdminUserRepository, adminService AdminService) AdminUserService {
-	return &adminUserService{repo: repo, adminService: adminService}
+// clerkService is used to re-sync Clerk metadata on tier-override removal (can be nil —
+// existing tests already pass nil for adminService, and this parameter is nil-safe the same
+// way).
+// retentionMonths sizes the retention-clock re-arm window on tier-override removal
+// (config.Config.RetentionPeriodMonths — the same value trialService.SetRetentionMonths gets).
+func NewAdminUserService(repo repository.AdminUserRepository, adminService AdminService, clerkService ClerkService, retentionMonths int) AdminUserService {
+	return &adminUserService{
+		repo:            repo,
+		adminService:    adminService,
+		clerkService:    clerkService,
+		retentionMonths: retentionMonths,
+	}
 }
 
 // ListUsers returns a paginated list of users with optional filtering
@@ -178,4 +210,43 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, _, userID, tier, 
 	}
 
 	return nil
+}
+
+// RemoveUserTierOverride clears an existing manual tier override for the target user,
+// restarting the retention clock when applicable, and best-effort re-syncs Clerk metadata.
+// See the AdminUserService interface doc for the idempotency contract.
+func (s *adminUserService) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (RemoveTierOverrideResult, error) {
+	if targetUserID == "" {
+		return RemoveTierOverrideResult{}, ErrUserIDRequired
+	}
+	if reason == "" {
+		return RemoveTierOverrideResult{}, errors.New("reason is required")
+	}
+
+	row, err := s.repo.RemoveUserTierOverride(ctx, actorUserID, targetUserID, reason, s.retentionMonths)
+	if err != nil {
+		return RemoveTierOverrideResult{}, fmt.Errorf("failed to remove user tier override: %w", err)
+	}
+
+	// Clerk re-sync is best-effort and happens even when Removed is false — this call is the
+	// natural repair hook for metadata #1413 may have corrupted. A scratch domain.User carries
+	// the reverted (post-clear) tier/status so ClerkPublicMetadata() computes the correct
+	// "no override" payload without a second DB read.
+	if s.clerkService != nil && row.ClerkUserID != "" {
+		scratch := &domain.User{
+			SubscriptionTier:   row.RevertedTier,
+			SubscriptionStatus: row.RevertedStatus,
+		}
+		if syncErr := s.clerkService.UpdateUserMetadata(ctx, row.ClerkUserID, scratch.ClerkPublicMetadata()); syncErr != nil {
+			// Clerk sync is best-effort: the DB update already succeeded, so log and continue.
+			slog.ErrorContext(ctx, "failed to sync reverted tier to clerk metadata",
+				"clerk_user_id", row.ClerkUserID, "reverted_tier", row.RevertedTier, "error", syncErr)
+		}
+	}
+
+	return RemoveTierOverrideResult{
+		Removed:        row.Removed,
+		RevertedTier:   row.RevertedTier,
+		RevertedStatus: row.RevertedStatus,
+	}, nil
 }

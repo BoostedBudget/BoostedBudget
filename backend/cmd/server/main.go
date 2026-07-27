@@ -1577,7 +1577,9 @@ func main() {
 		appLogger.Info("Admin service initialized", "hardcoded_admin_emails", len(adminEmailConfig.AdminEmails))
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
-		adminUserService := services.NewAdminUserService(adminUserRepo, adminService)
+		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
+		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
+		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(
