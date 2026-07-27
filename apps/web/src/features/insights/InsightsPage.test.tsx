@@ -7,7 +7,7 @@ import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
-import { MemoryRouter, Routes, Route, useLocation as useRouterLocation } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation as useRouterLocation } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 

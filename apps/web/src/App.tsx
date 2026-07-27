@@ -1,5 +1,5 @@
 import { useEffect, useRef, Suspense, lazy } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { Toaster } from 'sonner'
 import { useCookieState } from './shared/hooks/useCookieState'

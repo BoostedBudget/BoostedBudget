@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router'
 import { PremiumRoute } from './PremiumRoute'
 import { useReadOnly } from './ReadOnlyContext'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'

@@ -7,7 +7,7 @@
  * Issue #679, #680: Account freezing when subscription expires
  */
 
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router'
 import { useProfile } from '@/features/profile/hooks/useProfile'
 import { presentationFromUser } from '@/features/subscription/lib/subscriptionPresentation'
 import { ReadOnlyProvider } from './ReadOnlyContext'

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import React from 'react'
 import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { usePricingContext } from './usePricingContext'
 import { mockUseUser } from '@/test/mocks/clerk'
 import {

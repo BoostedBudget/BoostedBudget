@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
 import { UsersPage } from './UsersPage'
 
