@@ -428,6 +428,58 @@ func TestClerkPublicMetadata_NotComped(t *testing.T) {
 	assert.Equal(t, "trial", metadata["subscription_status"])
 }
 
+// TestClerkPublicMetadata_TierAndStatusAgreeAcrossExpiryBoundary closes the gap left by
+// TestEffectiveTierAndStatusAt_AgreeAtSharedBoundary, which only exercises the private -At()
+// helpers directly against a single, already-shared `now`. ClerkPublicMetadata() cannot have
+// `now` injected — it reads the clock internally — so before the fix it computed
+// subscription_tier and subscription_status from two independent time.Now() reads (via
+// ComputeEffectiveTier() and ComputeEffectiveStatus()), which could disagree about whether the
+// override was still live if a clock read straddled the expiry boundary between the two calls.
+//
+// Since we cannot force which side of the boundary the internal clock lands on, this test
+// asserts the payload's internal consistency instead: whichever branch actually fired, the two
+// fields must agree — a live override must report the override tier together with "active";
+// an expired override must report the raw tier together with the raw status. Mixing (override
+// tier with the stale status, or vice versa) fails regardless of which side of the boundary the
+// internal read happened to land on.
+func TestClerkPublicMetadata_TierAndStatusAgreeAcrossExpiryBoundary(t *testing.T) {
+	override := "household_2"
+
+	check := func(t *testing.T, offset time.Duration) {
+		now := time.Now()
+		endsAt := now.Add(offset)
+		user := &User{
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "past_due",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &endsAt,
+		}
+
+		metadata := user.ClerkPublicMetadata()
+		tier := metadata["subscription_tier"]
+		status := metadata["subscription_status"]
+
+		switch tier {
+		case "household_2":
+			assert.Equal(t, string(SubscriptionStatusActive), status,
+				"override tier reported live but status disagrees — tier and status were computed from different clock reads")
+		case "premium":
+			assert.Equal(t, "past_due", status,
+				"override tier reported expired but status disagrees — tier and status were computed from different clock reads")
+		default:
+			t.Fatalf("unexpected subscription_tier %v", tier)
+		}
+	}
+
+	t.Run("1ms before expiry", func(t *testing.T) {
+		check(t, time.Millisecond)
+	})
+
+	t.Run("1ms after expiry", func(t *testing.T) {
+		check(t, -time.Millisecond)
+	})
+}
+
 // TestClerkPublicMetadata_TierKeyPresentAndNil asserts the "tier" key is present with an
 // explicit nil value (not omitted). Clerk's PATCH /v1/users/{id}/metadata performs a merge, and
 // an explicit null deletes the key server-side — omitting it entirely would leave the orphaned
