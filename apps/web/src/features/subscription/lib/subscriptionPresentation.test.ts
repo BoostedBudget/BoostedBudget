@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { getSubscriptionPresentation } from './subscriptionPresentation'
+import { getSubscriptionPresentation, presentationFromSubscription } from './subscriptionPresentation'
 
 describe('getSubscriptionPresentation', () => {
   describe('comped', () => {
@@ -120,5 +120,34 @@ describe('getSubscriptionPresentation', () => {
     const input = { status: 'trial', trialDaysRemaining: 3 }
 
     expect(getSubscriptionPresentation(input)).toEqual(getSubscriptionPresentation(input))
+  })
+})
+
+describe('presentationFromSubscription', () => {
+  // GetCurrentSubscriptionOutputBody's required fields, filled with representative values.
+  const baseSubscription = {
+    subscription_id: 'sub_123',
+    status: 'active',
+    tier: 'premium',
+    billing_interval: 'month',
+    cancel_at_period_end: false,
+    amount: '0.00',
+    currency: 'USD',
+    is_comped: true,
+  }
+
+  it('maps comp_ends_at to compEndsAt', () => {
+    const result = presentationFromSubscription({
+      ...baseSubscription,
+      comp_ends_at: '2026-08-10T00:00:00Z',
+    })
+
+    expect(result.compEndsAt).toBe('2026-08-10T00:00:00Z')
+  })
+
+  it('omits compEndsAt when the payload has no comp_ends_at', () => {
+    const result = presentationFromSubscription({ ...baseSubscription })
+
+    expect(result.compEndsAt).toBeUndefined()
   })
 })

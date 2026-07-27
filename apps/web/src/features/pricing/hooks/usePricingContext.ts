@@ -116,9 +116,8 @@ export function usePricingContext(): UsePricingContextResult {
       pricingState: {
         status: 'comped',
         tier: (sub.tier as TierName) ?? compedFallbackTier(),
-        // presentationFromSubscription doesn't thread comp_ends_at through today, so read it
-        // straight off the payload; profile is the last resort for the 404-fallback path above.
-        compEndsAt: subPresentation.compEndsAt ?? sub.comp_ends_at ?? profilePresentation.compEndsAt,
+        // Profile is the last resort for the 404-fallback path above (two-deploy resilience).
+        compEndsAt: subPresentation.compEndsAt ?? profilePresentation.compEndsAt,
       },
       tiers,
     }

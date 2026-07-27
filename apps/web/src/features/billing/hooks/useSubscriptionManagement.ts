@@ -50,9 +50,8 @@ export function useSubscriptionManagement() {
     ? presentationFromSubscription(subscriptionQuery.data)
     : null
   const isComped = (subPresentation?.isComped ?? false) || profilePresentation.isComped
-  // presentationFromSubscription doesn't thread comp_ends_at through today, so read it straight
-  // off the payload; profile is the last resort for the 404-fallback path.
-  const compEndsAt = subPresentation?.compEndsAt ?? subscriptionQuery.data?.comp_ends_at ?? profilePresentation.compEndsAt
+  // Profile is the last resort for the 404-fallback path (two-deploy resilience).
+  const compEndsAt = subPresentation?.compEndsAt ?? profilePresentation.compEndsAt
 
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
