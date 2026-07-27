@@ -105,9 +105,14 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		return own, nil
 	}
 
+	// #1413: Status must be the owner's EFFECTIVE status, matching the Tier line above.
+	// Reporting an effective tier next to a raw status is precisely the asymmetry that caused
+	// this issue in the first place — a comped owner would surface here as "household coverage
+	// at tier household_4, status inactive", which is self-contradictory. No consumer reads
+	// this field today, which is exactly why it would rot unnoticed until one did.
 	return domain.EffectiveEntitlement{
 		Tier:        owner.ComputeEffectiveTier(),
-		Status:      owner.SubscriptionStatus,
+		Status:      owner.ComputeEffectiveStatus(),
 		Source:      domain.EntitlementSourceHousehold,
 		PayerUserID: ent.PayerUserID,
 		HouseholdID: ent.HouseholdID,
