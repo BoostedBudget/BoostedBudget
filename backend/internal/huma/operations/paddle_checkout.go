@@ -738,19 +738,13 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	case "active", "trialing", "cancelled", "past_due":
 		// proceed to Paddle lookup below
 	default:
-		if isComped {
-			return h.compedSubscriptionResponse(user), nil
-		}
-		return nil, huma.Error404NotFound("No subscription found")
+		return h.compedOrNotFound(user, isComped)
 	}
 
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("no Paddle subscription ID for user", "user_id", user.ID, "error", err)
-		if isComped {
-			return h.compedSubscriptionResponse(user), nil
-		}
-		return nil, huma.Error404NotFound("No subscription found")
+		return h.compedOrNotFound(user, isComped)
 	}
 
 	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
@@ -784,6 +778,16 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
 	}
 	return out, nil
+}
+
+// compedOrNotFound returns the synthetic comped response when isComped is true, otherwise the
+// standard 404 — the shared outcome for both "no Paddle subscription at all" branches in
+// HandleGetCurrentSubscription (unrecognized status, and a missing PaddleSubscriptionID).
+func (h *PaddleCheckoutHandler) compedOrNotFound(user *domain.User, isComped bool) (*GetCurrentSubscriptionOutput, error) {
+	if isComped {
+		return h.compedSubscriptionResponse(user), nil
+	}
+	return nil, huma.Error404NotFound("No subscription found")
 }
 
 // compedSubscriptionResponse builds the synthetic 200 response for a comped user (Issue
