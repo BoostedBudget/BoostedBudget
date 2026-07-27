@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SubscriptionStatusBanner } from './SubscriptionStatusBanner'
+import { bannerCtaVariants } from '@/shared/components/bannerVariants'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockUseGetBillingPortalUrl } from '@/test/mocks/subscription-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
@@ -171,6 +172,18 @@ describe('SubscriptionStatusBanner', () => {
     const alert = screen.getByRole('alert')
     expect(alert.className).toContain('bg-destructive/10')
     expect(alert.className).toContain('border-destructive/30')
+  })
+
+  it('inactive banner resubscribe CTA uses the shared bannerCtaVariants primary variant', () => {
+    mockUseGetUserProfile.mockReturnValue({
+      data: makeUser({ subscription_status: 'inactive' }),
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
+    render(<SubscriptionStatusBanner />)
+    const cta = screen.getByText('Resubscribe').closest('a')
+    expect(cta?.className).toBe(bannerCtaVariants({ variant: 'primary' }))
   })
 
   it('CTA label is Resubscribe for both cancelled and inactive (consistent spelling)', () => {
