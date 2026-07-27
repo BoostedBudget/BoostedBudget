@@ -393,4 +393,74 @@ describe('SubscriptionManagementPage', () => {
       expect(screen.getByText('No Active Subscription')).toBeInTheDocument()
     })
   })
+
+  // Issue #1413 M11: the backend deliberately preserves the raw Paddle status for a comped user
+  // who also has a real (e.g. past_due) Paddle subscription behind them. That raw status must
+  // never be surfaced as this user's access status — it contradicts the complimentary-access
+  // banner and is alarming for someone who actually has access.
+  describe('Comped user with a raw past_due Paddle subscription (M11)', () => {
+    it('does not show the raw past_due billing status in the status display', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          status: 'past_due',
+          tier: 'premium',
+          is_comped: true,
+          amount: '0.00',
+          currency: 'USD',
+          billing_interval: 'month',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined, error: null }),
+      })
+
+      const { container } = renderPage()
+
+      // Matches both 'Past Due' and 'Past_due' (the underscore-preserving pre-fix rendering).
+      expect(container.textContent).not.toMatch(/past[\s_]?due/i)
+    })
+
+    it('still shows the complimentary view and no next-billing date or amount for that same user', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          status: 'past_due',
+          tier: 'premium',
+          is_comped: true,
+          amount: '0.00',
+          currency: 'USD',
+          billing_interval: 'month',
+          next_billing_date: '2026-09-01',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined, error: null }),
+      })
+
+      renderPage()
+
+      expect(screen.getByText(/no end date/i)).toBeInTheDocument()
+      expect(screen.queryByText('Next Billing Date:')).toBeNull()
+      expect(screen.queryByText('Amount:')).toBeNull()
+    })
+
+    it('regression: a non-comped past_due user still sees "Past Due"', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          status: 'past_due',
+          tier: 'premium',
+          is_comped: false,
+          amount: '8.99',
+          currency: 'USD',
+          billing_interval: 'month',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined, error: null }),
+      })
+
+      renderPage()
+
+      expect(screen.getByText('Payment Past Due')).toBeInTheDocument()
+    })
+  })
 })

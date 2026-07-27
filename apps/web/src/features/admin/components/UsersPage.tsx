@@ -65,24 +65,23 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   return 'secondary'
 }
 
-// AdminUserListItem carries a server-computed `effective_status` (mirroring
-// domain.User.ComputeEffectiveStatus — see backend/internal/domain/user.go), which forces
-// 'active' whenever a manual override is currently in effect. Typed here as an optional
-// intersection (rather than relying on the generated field's own required-ness) so
-// `hasLiveOverride` below still has a defined fallback — via `isOverrideActive` — for any
-// caller (e.g. tests) whose data omits it.
-type AdminUserWithEffectiveStatus = AdminUserListItem & { effective_status?: string }
-
 /**
  * Whether a manual tier override is currently live for this row. A single source of truth
  * shared by the Tier column and the Status column's "Comped" chip — the original bug was
  * exactly these two cells disagreeing about override liveness, so they must derive it the
- * same way. Prefers the server-computed `effective_status` when present; falls back to the
- * local `isOverrideActive` liveness check otherwise.
+ * same way.
+ *
+ * `AdminUserListItem` does not carry a server-computed `is_comped` field — only
+ * `effective_status`, which answers "does this user currently have write access" (forced to
+ * 'active' whenever EITHER the user's own subscription is active OR a manual override is
+ * currently in effect). That is a different question from "is this user comped by an override
+ * right now", so `effective_status` must never be consulted here: a user whose own subscription
+ * is genuinely active, but whose override has *expired*, would otherwise still read as comped
+ * (Issue #1413 M10 — the exact bug the admin fixes were meant to eliminate, reintroduced through
+ * this fallback). Comp state is therefore derived purely from the expiry predicate,
+ * `isOverrideActive`.
  */
-function hasLiveOverride(user: AdminUserWithEffectiveStatus): boolean {
-  if (!user.manual_tier_override) return false
-  if (user.effective_status !== undefined) return user.effective_status === 'active'
+function hasLiveOverride(user: AdminUserListItem): boolean {
   return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at)
 }
 
