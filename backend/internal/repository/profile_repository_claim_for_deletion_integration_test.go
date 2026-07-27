@@ -151,13 +151,29 @@ func TestClaimForDeletion_Integration_ActiveOverride_WithDeletionRequest_StillCl
 	assert.True(t, claimed, "a user's own outstanding GDPR deletion request must beat a live admin comp")
 }
 
-// TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_StillClaims proves the
-// negative direction: an override that has already LAPSED must not block the claim — the
-// point-in-time transition uses noActiveManualOverridePredicate ("still live right now"), the
-// same rule CancelIfPastDue/ExpireTrialIfNoOverride use, not the retention queries' "any
-// override at all" rule. An over-tight predicate that treats any override (live or expired) as
-// a block would silently strand a user who was comped in the past forever.
-func TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_StillClaims(t *testing.T) {
+// TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed is the C1
+// regression proof (Issue #1413, third round of remediation): a LAPSED-but-uncleared override
+// must NOT be claimable for hard deletion, no differently than a live one.
+//
+// This test previously asserted the opposite — that an expired override still permits the
+// claim — on the theory that claimForDeletionPredicate should use the "still live right now"
+// rule (noActiveManualOverridePredicate), matching CancelIfPastDue/ExpireTrialIfNoOverride. That
+// was the C1 bug, not a documented rule: the retention *queries* that select this same user as a
+// deletion candidate (GetUsersWithExpiredRetention) were correctly changed to exclude ANY
+// override, live or lapsed (noManualOverrideAtAllPredicate) — see that constant's doc comment for
+// why: a comp pauses the retention clock while live, and is only re-armed by the independently
+// scheduled manual_tier_override_expiry_check job, which has no ordering guarantee relative to
+// the retention worker. If the claim used the live-only rule while the query used the
+// all-overrides rule, a user whose comp lapsed moments before the expiry job re-armed their clock
+// would sail through: selected by the query (any override present, so actually excluded — wait,
+// the real race is a comp granted AFTER a stale candidate was selected under the OLD "no override
+// at all" query semantics from before this fix existed) and then hard-deleted by this claim
+// before the expiry job ever ran. Requiring claimForDeletionPredicate to agree with the retention
+// queries' all-overrides rule closes that window: the worst case is a delay of up to one expiry
+// job cycle, never a wrongful deletion — see
+// TestClaimForDeletion_Integration_ClearedOverride_Claims immediately below for proof this is a
+// delay, not a permanent exemption.
+func TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
@@ -165,12 +181,44 @@ func TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_StillCla
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	tier := "premium"
-	overrideEndsAt := time.Now().Add(-24 * time.Hour) // already lapsed
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // already lapsed, not yet cleared
 	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, &tier, &overrideEndsAt)
 
 	claimed, err := repo.ClaimForDeletion(ctx, user.ID)
 	require.NoError(t, err)
-	assert.True(t, claimed, "a user whose override has already expired must still be claimable")
+	assert.False(t, claimed, "a lapsed-but-uncleared override must still block the deletion claim — "+
+		"this is the C1 data-loss scenario: a lapsed comp must not slip through to a hard delete")
+
+	var isDeleted bool
+	require.NoError(t, pool.QueryRow(ctx, "SELECT is_deleted FROM users WHERE id = $1", user.ID).Scan(&isDeleted))
+	assert.False(t, isDeleted)
+}
+
+// TestClaimForDeletion_Integration_ClearedOverride_Claims proves the exclusion above is a DELAY,
+// not a permanent exemption: once manual_tier_override is actually cleared (simulating the daily
+// manual_tier_override_expiry_check job doing its job), the same user becomes claimable again.
+func TestClaimForDeletion_Integration_ClearedOverride_Claims(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	tier := "premium"
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // lapsed
+	user := createClaimForDeletionFixtureUser(t, ctx, pool, repo, suffix, false, nil, &tier, &overrideEndsAt)
+
+	claimed, err := repo.ClaimForDeletion(ctx, user.ID)
+	require.NoError(t, err)
+	require.False(t, claimed, "sanity check: still blocked before the override is cleared")
+
+	// Simulate the expiry job clearing the column.
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = NULL, manual_tier_ends_at = NULL WHERE id = $1`, user.ID)
+	require.NoError(t, err)
+
+	claimed, err = repo.ClaimForDeletion(ctx, user.ID)
+	require.NoError(t, err)
+	assert.True(t, claimed, "once the expiry job clears the override column, the user must become claimable again")
 }
 
 // TestClaimForDeletion_Integration_AlreadyDeleted_NotClaimed proves is_deleted = TRUE is

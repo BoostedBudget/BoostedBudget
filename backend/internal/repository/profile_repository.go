@@ -910,17 +910,36 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 }
 
 // claimForDeletionPredicate expresses the ratified product rule that a user's own GDPR
-// deletion request beats an admin comp: the claim succeeds when EITHER there is no
-// currently-active manual tier override, OR the user has an outstanding deletion request of
-// their own. It reuses noActiveManualOverridePredicate unmodified — wrapping it in
-// "TRUE <fragment>" converts its leading "AND NOT (...)" into a standalone boolean usable
-// inside this OR — so there remains exactly one SQL expression of "is there a currently-active
-// override" (a parity test guards that expression against domain.User.HasActiveManualOverride()).
-// Issue #1413 Critical finding C2, Codex review round 2.
+// deletion request beats an admin comp: the claim succeeds when EITHER the user has an
+// outstanding deletion request of their own, OR there is no manual tier override AT ALL (live or
+// already lapsed).
+//
+// This reuses noManualOverrideAtAllPredicate unmodified, wrapped in "TRUE <fragment>" so its
+// leading "AND (...)" becomes a standalone boolean usable inside this OR — the same splicing
+// trick previously used (incorrectly, for this predicate) with noActiveManualOverridePredicate.
+//
+// Issue #1413 Critical finding C1 (third round of remediation — the first two rounds left this
+// on the live-only rule): this predicate MUST agree with the retention queries
+// (GetUsersWithExpiredRetention et al.), which already exclude ANY override, live or lapsed, via
+// noManualOverrideAtAllPredicate. Before this fix, claimForDeletionPredicate used
+// noActiveManualOverridePredicate ("still live right now") instead — the exact rule that's
+// correct for point-in-time transitions like CancelIfPastDue, but wrong here: a comp that lapsed
+// moments before the independently-scheduled manual_tier_override_expiry_check job clears the
+// column would pass the live-only check and be hard-deleted, with no warning, in the ordering gap
+// between that job and the retention worker. That is the original data-loss bug this whole branch
+// (#1413) exists to fix — see noManualOverrideAtAllPredicate's doc comment for the full race, and
+// TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed /
+// TestClaimForDeletion_Integration_ClearedOverride_Claims for the real-DB proof this is a delay
+// (until the expiry job clears the column), not a permanent exemption.
+//
+// Deliberately still a SEPARATE predicate from noActiveManualOverridePredicate, which stays
+// exactly as it was for its own callers (CancelIfPastDue, ClaimPlaidDisconnectIfPastDue,
+// ExpireTrialIfNoOverride) — those are point-in-time transitions guarded against a comp granted
+// in a race window, not a cross-job-ordering hazard like this one.
 const claimForDeletionPredicate = `
 	  AND (
 	    deletion_requested_at IS NOT NULL
-	    OR (TRUE` + noActiveManualOverridePredicate + `)
+	    OR (TRUE` + noManualOverrideAtAllPredicate + `)
 	  )
 `
 

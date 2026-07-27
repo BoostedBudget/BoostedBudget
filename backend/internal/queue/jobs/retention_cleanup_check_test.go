@@ -417,14 +417,25 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "ClaimRetentionNotice7dSent", mock.Anything, "user-comped-7d")
 }
 
-// TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally proves a user whose manual override
-// has expired is NOT exempt — deletion proceeds normally.
-func TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally(t *testing.T) {
+// TestRetentionCleanupCheck_ExpiredOverride_NotDeleted is the C1 regression proof (Issue #1413,
+// third round of remediation) at the worker-guard level.
+//
+// This test previously asserted the OPPOSITE — that a user whose manual override has expired is
+// "not exempt" and gets deleted normally — on the theory that only a currently-active comp
+// should block auto-deletion. That was the C1 bug encoded as a test, not a documented rule: the
+// belt-and-braces guard in deleteExpiredAccounts must agree with the retention queries (which
+// exclude ANY override, live or lapsed, via noManualOverrideAtAllPredicate) and with the
+// corrected claimForDeletionPredicate the real ExecuteDeletion claim now enforces. A lapsed
+// override that the daily manual_tier_override_expiry_check job hasn't yet cleared must still
+// delay deletion — deleting "normally" here is exactly the lapsed-comp hard-delete this branch
+// exists to fix. See domain.User.HasAnyManualOverride and noManualOverrideAtAllPredicate for the
+// full rationale shared with the SQL-level fix.
+func TestRetentionCleanupCheck_ExpiredOverride_NotDeleted(t *testing.T) {
 	ctx := context.Background()
 
 	retentionExpiresAt := time.Now().Add(-24 * time.Hour)
 	override := "household_2"
-	overrideEndsAt := time.Now().Add(-24 * time.Hour) // expired
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // expired, not yet cleared
 	users := []*domain.User{
 		{
 			ID: "user-expired-override", Email: "expiredoverride@example.com",
@@ -440,7 +451,8 @@ func TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally(t *testing.T) {
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
-	mockDeletion.On("ExecuteDeletion", ctx, "user-expired-override").Return(nil)
+	// ExecuteDeletion is deliberately left unstubbed — an unstubbed testify mock call panics,
+	// a stronger proof than AssertNotCalled alone that the guard actually short-circuits.
 
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
@@ -448,7 +460,37 @@ func TestRetentionCleanupCheck_ExpiredOverride_DeletedNormally(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-expired-override")
+	mockDeletion.AssertNotCalled(t, "ExecuteDeletion", mock.Anything, "user-expired-override")
+}
+
+// TestRetentionCleanupCheck_NonComped_DeletedNormally is the positive-direction proof required
+// alongside the guard above: an ordinary user with NO override at all must still be deleted.
+// Without this, an over-tight guard that silently stopped all deletions would pass every
+// "nothing bad happened" test.
+func TestRetentionCleanupCheck_NonComped_DeletedNormally(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(-24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-ordinary", Email: "ordinary@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockDeletion.On("ExecuteDeletion", ctx, "user-ordinary").Return(nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-ordinary")
 }
 
 // ─── Issue #1413 Medium finding M9 (Codex review round 2): ClaimRetentionNotice30dSent/7dSent

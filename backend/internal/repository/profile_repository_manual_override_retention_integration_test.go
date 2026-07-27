@@ -127,7 +127,9 @@ func assertRetentionSelection(t *testing.T, users []*domain.User, fixtures reten
 
 // TestGetUsersNeedingRetention30dNotice_Integration_ExcludesActiveComp verifies all three
 // required outcomes for the 30-day notice query in one shot: exclude an actively comped user,
-// still select a user whose override has expired, and still select an ordinary user.
+// ALSO exclude a user whose override has already lapsed but hasn't been cleared (Issue #1413 C1
+// fix — noManualOverrideAtAllPredicate excludes on any override, live or expired), and still
+// select an ordinary user.
 func TestGetUsersNeedingRetention30dNotice_Integration_ExcludesActiveComp(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

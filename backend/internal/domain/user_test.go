@@ -240,6 +240,37 @@ func TestHasActiveManualOverride(t *testing.T) {
 	}
 }
 
+// TestHasAnyManualOverride tests the ANY-override predicate (live OR already lapsed) needed by
+// belt-and-braces guards that must agree with the retention queries' "exclude on any override"
+// rule (noManualOverrideAtAllPredicate in profile_repository.go), rather than
+// HasActiveManualOverride's "still live right now" rule. Issue #1413 Critical finding C1: a comp
+// that has lapsed but not yet been cleared by the daily expiry job must still count here, unlike
+// HasActiveManualOverride where a past expiry means "no active override."
+func TestHasAnyManualOverride(t *testing.T) {
+	override := "household_2"
+	empty := ""
+	future := time.Now().Add(24 * time.Hour)
+	past := time.Now().Add(-24 * time.Hour)
+
+	tests := []struct {
+		name     string
+		user     *User
+		expected bool
+	}{
+		{"nil override", &User{ManualTierOverride: nil}, false},
+		{"empty string override", &User{ManualTierOverride: &empty}, false},
+		{"no expiry (permanent override)", &User{ManualTierOverride: &override, ManualTierEndsAt: nil}, true},
+		{"future expiry (live)", &User{ManualTierOverride: &override, ManualTierEndsAt: &future}, true},
+		{"past expiry (lapsed but uncleared) — unlike HasActiveManualOverride, still true", &User{ManualTierOverride: &override, ManualTierEndsAt: &past}, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, tc.user.HasAnyManualOverride())
+		})
+	}
+}
+
 // TestHasActiveManualOverrideAt_BoundarySemantics locks in the `!ManualTierEndsAt.Before(now)`
 // semantics at the exact expiry boundary, using a fixed `now` passed explicitly to the -At
 // variant. Because -At takes the timestamp as a parameter rather than reading the clock, an
