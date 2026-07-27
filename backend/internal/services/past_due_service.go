@@ -13,12 +13,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // ErrPaddleAlreadyCancelled is returned by PastDuePaddleClient.CancelSubscription when
 // the subscription is already in a cancelled state in Paddle. This error is tolerated —
 // the flow continues because the local state still needs to be updated.
 var ErrPaddleAlreadyCancelled = errors.New("paddle subscription already cancelled")
+
+// pastDueClaimLease is the lease duration requested for both ActionPlaidDisconnectPastDue and
+// ActionPastDueGraceCancel work claims — matches ExecuteDeletion's accountDeletionClaimLease
+// (Issue #1413, deletion_service.go). Both paths make Plaid/Paddle calls; generous beats tight,
+// and the fencing token (repository.WorkClaimsRepository) makes an over-run detectable rather
+// than silently re-granted to a second worker.
+const pastDueClaimLease = 15 * time.Minute
 
 // PastDueProfileRepository defines the repository methods needed by PastDueService.
 type PastDueProfileRepository interface {
@@ -35,15 +43,6 @@ type PastDueProfileRepository interface {
 	// window (Issue #1413 High finding H6, Codex review round 3: predicate extended to also
 	// close the comp race).
 	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
-
-	// ClaimPlaidDisconnectIfPastDue atomically verifies, at the moment of the claim, that a user
-	// is still 'past_due' and carries no currently-active manual tier override, before the
-	// day-14 pre-emptive Plaid disconnect proceeds. Unlike CancelIfPastDue, this path has no
-	// state transition of its own to hang a CAS on — see the repository implementation's doc
-	// comment for how it closes the race without a schema change. Returns (true, nil) if the
-	// claim succeeded (safe to disconnect), (false, nil) if the user has recovered or been
-	// comped since reReadStillPastDue's check (Issue #1413 High finding H6, Codex review round 3).
-	ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error)
 
 	// SetRetentionDates starts the 6-month retention clock.
 	SetRetentionDates(ctx context.Context, userID string, started, expires time.Time) error
@@ -107,6 +106,7 @@ type PastDueService struct {
 	notificationRepo    PastDueNotificationRepository
 	analytics           phclient.Analytics
 	householdChecker    householdCoverageCheckerForPastDue // #1413: nil skips the exemption
+	claimsRepo          repository.WorkClaimsRepository     // #1413 H6a/H6b: required, see SetWorkClaimsRepo
 	graceDays           int
 	plaidDisconnectDays int
 	retentionMonths     int
@@ -153,6 +153,18 @@ func (s *PastDueService) SetAnalytics(a phclient.Analytics) {
 // pre-#1413 behavior.
 func (s *PastDueService) SetHouseholdChecker(c householdCoverageCheckerForPastDue) {
 	s.householdChecker = c
+}
+
+// SetWorkClaimsRepo wires the durable work-claims mechanism processGraceExpiry (H6b) and
+// processPlaidDisconnectWindow (H6a) require for EXCLUSIVITY before any irreversible Plaid/Paddle
+// call. Issue #1413, Codex review round 4 — mirrors DeletionService.SetWorkClaimsRepo. Like that
+// method, this is NOT an optional capability: the self-assigning-update "claims" both paths used
+// before (ClaimPlaidDisconnectIfPastDue, and the old ordering in processGraceExpiry) reserved
+// nothing, so two workers could both disconnect the same user's Plaid items or both cancel their
+// Paddle subscription. A nil claims repo makes both destructive paths fail loudly rather than
+// silently falling back to that guard-only behavior.
+func (s *PastDueService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+	s.claimsRepo = repo
 }
 
 // GetUsersInPastDue returns users whose subscription_status is 'past_due'
@@ -211,14 +223,43 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 }
 
 // processGraceExpiry handles auto-cancellation when grace period has elapsed.
-// Ordering: re-read → Plaid → Paddle → CAS flip → retention → clear stamp → notify.
+// Ordering: re-read → claim → re-verify → Plaid → Paddle → CAS flip → retention → clear stamp →
+// notify → Complete. Issue #1413 High finding H6b: a real work claim on ActionPastDueGraceCancel
+// runs BEFORE external work for EXCLUSIVITY; predicate is re-verified immediately after claim wins.
 func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.User, now time.Time) error {
-	// Re-read guard: mirrors processPlaidDisconnectWindow (lines 236-249).
-	// A user who paid between GetUsersInPastDue and this call must not lose Plaid or Paddle state.
-	// The CAS at Step 3 is a second net, but this guard prevents unnecessary destructive calls.
+	// Cheap early check (mirrors ExecuteDeletion's belt-and-braces short-circuit): avoids
+	// claiming at all in the common already-recovered/already-comped case. NOT the source of
+	// correctness — the re-verify immediately after the claim below is.
 	if stillPastDue, err := s.reReadStillPastDue(ctx, user.ID); err != nil {
 		return fmt.Errorf("failed to re-read user %s before grace expiry: %w", user.ID, err)
 	} else if !stillPastDue {
+		return nil
+	}
+
+	if s.claimsRepo == nil {
+		return fmt.Errorf("processGraceExpiry: work claims repository not configured")
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPastDueGraceCancel, pastDueClaimLease)
+	if err != nil {
+		return fmt.Errorf("failed to claim grace-expiry cancellation for user %s: %w", user.ID, err)
+	}
+	if !claimed {
+		// Another worker already holds this lease, or the action was already completed.
+		// Legitimate outcome, not an error.
+		s.logger.Info("past_due grace-expiry claim lost — another worker holds it, or it was already completed",
+			"user_id", user.ID)
+		return nil
+	}
+
+	// Re-verify the predicate against the freshest possible read, immediately after winning the
+	// claim and before any irreversible external work.
+	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
+	if err != nil {
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
+		return fmt.Errorf("failed to re-verify user %s before grace expiry: %w", user.ID, err)
+	}
+	if !stillPastDue {
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "precondition lost since claim")
 		return nil
 	}
 
@@ -228,10 +269,11 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	)
 
 	// Step 1: Disconnect Plaid FIRST.
-	// If this fails, return the error so the caller (cron job) retries tomorrow.
-	// The user stays past_due — no partial cancellation.
+	// If this fails, Release (so the next run can retry immediately) and return the error so the
+	// caller (cron job) retries. The user stays past_due — no partial cancellation.
 	if s.plaidCleanup != nil {
 		if err := s.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); err != nil {
+			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items for past_due user %s: %w", user.ID, err)
 		}
 	}
@@ -251,6 +293,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	if s.paddleClient != nil && user.PaddleSubscriptionID != nil {
 		if err := s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID); err != nil {
 			if !errors.Is(err, ErrPaddleAlreadyCancelled) {
+				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
 				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, err)
 			}
 			s.logger.Info("Paddle subscription already cancelled, continuing",
@@ -262,15 +305,23 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 
 	// Step 3: CAS flip subscription_status → cancelled.
 	// Only flips if the user is still 'past_due' — guards against a concurrent
-	// subscription.activated webhook that may have restored the user to 'active'
-	// between the Plaid disconnect above and this point.
+	// subscription.activated webhook that may have restored the user to 'active', or a comp
+	// granted, between the Plaid/Paddle calls above and this point. This is the final,
+	// authoritative correctness check (kept exactly as before) — the claim above provides
+	// exclusivity, this predicate still provides correctness.
 	flipped, err := s.repo.CancelIfPastDue(ctx, user.ID)
 	if err != nil {
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
 		return fmt.Errorf("CancelIfPastDue: %w", err)
 	}
 	if !flipped {
-		// User recovered (payment arrived between Plaid disconnect and this point).
-		// Log and return — do NOT continue with retention/notify/clear.
+		// User recovered, or was comped, during the external calls above — a narrow residual
+		// window no guard can close (it cannot be atomic with an external Plaid/Paddle call).
+		// Release (never Complete) so a later run can retry once eligible again: Completing here
+		// would permanently block reclaiming per the work_claims contract ("a completed claim is
+		// never re-granted"), stranding a user who must still be cancelled once a mid-flight comp
+		// lapses.
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDue predicate lost during external work")
 		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
 			slog.String("user_id", user.ID))
 		return nil
@@ -304,6 +355,18 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		"tier", user.SubscriptionTier,
 	)
 
+	// Mark the claim durably complete. A false ok (no error) means our lease was reclaimed by
+	// another worker while we were doing the work above — that worker may have ALSO run the
+	// Plaid/Paddle cleanup and CAS flip concurrently, which is precisely what this mechanism
+	// exists to make visible instead of silent.
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPastDueGraceCancel, token)
+	if err != nil {
+		s.logger.Error("failed to mark grace-expiry claim complete", "user_id", user.ID, "action", repository.ActionPastDueGraceCancel, "error", err)
+	} else if !completed {
+		s.logger.Error("grace-expiry claim lease lost mid-flight — Plaid/Paddle cleanup and cancellation may have run twice",
+			"user_id", user.ID, "action", repository.ActionPastDueGraceCancel)
+	}
+
 	return nil
 }
 
@@ -335,7 +398,9 @@ func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) 
 }
 
 // processPlaidDisconnectWindow handles the pre-emptive Plaid disconnect before grace expiry.
-// Re-reads the user's current status first to avoid racing a recovery webhook.
+// Issue #1413 High finding H6a: a real work claim on ActionPlaidDisconnectPastDue provides
+// EXCLUSIVITY (replacing the deleted ClaimPlaidDisconnectIfPastDue guard); reReadStillPastDue
+// immediately after claim wins re-verifies CORRECTNESS against the freshest read.
 func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user domain.User) error {
 	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
 	if err != nil {
@@ -345,17 +410,30 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 		return nil
 	}
 
-	// #1413 High finding H6 (Codex review round 3): reReadStillPastDue's check above is a plain
-	// read and is NOT atomic with the Plaid disconnect call below — an admin can still grant a
-	// comp in that window. Claim the right to disconnect via a conditional update that
-	// re-verifies "still past_due, still no live override" against committed state at the moment
-	// of the claim. A lost claim is a legitimate skip (the comp already granted access, or the
-	// user recovered), not a failure.
-	claimed, err := s.repo.ClaimPlaidDisconnectIfPastDue(ctx, user.ID)
+	if s.claimsRepo == nil {
+		return fmt.Errorf("processPlaidDisconnectWindow: work claims repository not configured")
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim Plaid disconnect for user %s: %w", user.ID, err)
 	}
 	if !claimed {
+		// Another worker already holds this lease, or the action was already completed.
+		// Legitimate outcome, not an error.
+		s.logger.Info("past_due Plaid disconnect claim lost — another worker holds it, or it was already completed",
+			"user_id", user.ID)
+		return nil
+	}
+
+	// Re-verify the predicate against the freshest possible read, immediately after winning the
+	// claim and before the external Plaid call.
+	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID)
+	if err != nil {
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
+		return fmt.Errorf("failed to re-verify user %s before Plaid disconnect: %w", user.ID, err)
+	}
+	if !stillPastDue {
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, "precondition lost since claim")
 		s.logger.Info("past_due Plaid disconnect claim lost — user recovered or comped concurrently, skipping",
 			"user_id", user.ID)
 		return nil
@@ -367,15 +445,24 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 
 	if s.plaidCleanup != nil {
 		if err := s.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); err != nil {
-			// Idempotent — log but continue; the daily job will retry.
-			s.logger.Warn("failed to disconnect Plaid items in past_due window",
-				"user_id", user.ID, "error", err)
-		} else {
-			if s.analytics != nil {
-				s.analytics.Capture(user.ID, phclient.EventPastDuePlaidDisconnected, nil)
-			}
-			s.createPlaidDisconnectedNotification(ctx, user)
+			// #1413 Codex review round 4: no longer tolerated with a bare log-and-continue — the
+			// work claim exists precisely so a failure here can be safely retried (Release makes
+			// it immediately reclaimable) instead of silently swallowed with no automatic retry.
+			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
+			return fmt.Errorf("failed to disconnect Plaid items in past_due window for user %s: %w", user.ID, err)
 		}
+		if s.analytics != nil {
+			s.analytics.Capture(user.ID, phclient.EventPastDuePlaidDisconnected, nil)
+		}
+		s.createPlaidDisconnectedNotification(ctx, user)
+	}
+
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPlaidDisconnectPastDue, token)
+	if err != nil {
+		s.logger.Error("failed to mark Plaid disconnect claim complete", "user_id", user.ID, "action", repository.ActionPlaidDisconnectPastDue, "error", err)
+	} else if !completed {
+		s.logger.Error("Plaid disconnect claim lease lost mid-flight — disconnect may have run twice",
+			"user_id", user.ID, "action", repository.ActionPlaidDisconnectPastDue)
 	}
 
 	return nil
@@ -437,6 +524,14 @@ func (s *PastDueService) createCancelledNotification(ctx context.Context, user d
 	}); err != nil {
 		s.logger.Error("failed to create subscription_cancelled notification",
 			"user_id", user.ID, "error", err)
+	}
+}
+
+// releaseClaimOnFailure releases a work claim and logs any release failure.
+// Used to consolidate the repeated Release + Warn pattern in grace-expiry/Plaid-disconnect paths.
+func (s *PastDueService) releaseClaimOnFailure(ctx context.Context, userID, action, token, reason string) {
+	if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, action, token, reason); releaseErr != nil {
+		s.logger.Warn("failed to release work claim", "user_id", userID, "action", action, "reason", reason, "error", releaseErr)
 	}
 }
 

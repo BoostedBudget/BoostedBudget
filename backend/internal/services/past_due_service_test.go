@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -34,11 +35,6 @@ func (m *mockPastDueProfileRepo) GetUserByID(ctx context.Context, userID string)
 }
 
 func (m *mockPastDueProfileRepo) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *mockPastDueProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }
@@ -103,7 +99,37 @@ func newTestPastDueService(
 	clerk *mockPastDueClerkClient,
 	notifications *mockPastDueNotificationRepo,
 ) *PastDueService {
-	return NewPastDueService(repo, plaid, paddle, clerk, notifications, testGraceDays, testPlaidDisconnectDays)
+	svc := NewPastDueService(repo, plaid, paddle, clerk, notifications, testGraceDays, testPlaidDisconnectDays)
+	// #1413 H6a/H6b (Codex review round 4): PastDueService now requires a work claims repo for
+	// EXCLUSIVITY before any irreversible Plaid/Paddle call. Wire a permissive default so tests
+	// exercising OTHER behavior aren't forced to plumb claim expectations through; tests that
+	// exercise the claim mechanism ITSELF override via svc.SetWorkClaimsRepo(customMock).
+	svc.SetWorkClaimsRepo(newAllowingPastDueClaimsRepo())
+	return svc
+}
+
+// testPastDueClaimToken is the fixed fencing token newAllowingPastDueClaimsRepo's Claim stub
+// returns. Tests that only care about PastDueService's OTHER behavior can rely on it implicitly;
+// tests exercising the claim mechanism itself supply their own MockWorkClaimsRepository instead.
+const testPastDueClaimToken = "test-past-due-claim-token"
+
+// newAllowingPastDueClaimsRepo returns a MockWorkClaimsRepository (defined in
+// deletion_service_test.go — same package) stubbed to always grant and complete BOTH past_due
+// work claims (ActionPlaidDisconnectPastDue, ActionPastDueGraceCancel) — for tests that exercise
+// PastDueService's OTHER behavior and aren't themselves testing the claim mechanism. userID is
+// wildcarded so one instance works across this file's whole fixture matrix. Mirrors
+// deletion_service_test.go's newAllowingClaimsRepo.
+func newAllowingPastDueClaimsRepo() *MockWorkClaimsRepository {
+	m := new(MockWorkClaimsRepository)
+	for _, action := range []string{repository.ActionPlaidDisconnectPastDue, repository.ActionPastDueGraceCancel} {
+		m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, action, pastDueClaimLease).
+			Return(testPastDueClaimToken, true, nil).Maybe()
+		m.On("Complete", mock.Anything, repository.ResourceTypeUser, mock.Anything, action, testPastDueClaimToken).
+			Return(true, nil).Maybe()
+		m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, action, testPastDueClaimToken, mock.AnythingOfType("string")).
+			Return(true, nil).Maybe()
+	}
+	return m
 }
 
 func userWithPastDue(userID string, pastDueStartedAt time.Time) domain.User {
@@ -263,24 +289,22 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 
 	// Re-read confirms still past_due
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	// #1413 High finding H6: the Plaid disconnect claim must succeed for the disconnect to proceed.
-	repo.On("ClaimPlaidDisconnectIfPastDue", mock.Anything, userID).Return(true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	repo.AssertCalled(t, "ClaimPlaidDisconnectIfPastDue", mock.Anything, userID)
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
 }
 
-// Test 4b (H6): reReadStillPastDue passes, but the atomic claim itself fails — e.g. an admin
-// granted a comp, or the user recovered, in the narrow window between the re-read and this call.
-// Proves the race reReadStillPastDue alone cannot close: DisconnectAllUserItems must NOT run.
+// Test 4b (H6a): reReadStillPastDue passes, but the work claim itself is lost — e.g. an admin
+// granted a comp, or the user recovered, in the narrow window between the re-read and this call,
+// or another worker already holds/completed the claim. Proves the race reReadStillPastDue alone
+// cannot close: DisconnectAllUserItems must NOT run.
 func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -289,6 +313,8 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t 
 	notif := &mockPastDueNotificationRepo{}
 
 	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
 
 	userID := "user-plaid-claim-lost"
 	now := time.Now()
@@ -296,15 +322,125 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t 
 	user := userWithPastDue(userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	// The claim reports false — the comp/recovery landed after reReadStillPastDue's read.
-	repo.On("ClaimPlaidDisconnectIfPastDue", mock.Anything, userID).Return(false, nil)
+	// The claim reports false — another worker holds it, or it's already completed.
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+		Return("", false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
 
-	repo.AssertCalled(t, "ClaimPlaidDisconnectIfPastDue", mock.Anything, userID)
+	mockClaims.AssertCalled(t, "Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
 	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Release", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_PlaidFails_ReleasesClaim proves H6a's
+// "claim won + external failure" direction: the claim must be Released (not left to expire, not
+// silently swallowed) and the failure must propagate so the daily job retries. Regression target:
+// the OLD processPlaidDisconnectWindow logged this error and continued — the exact swallowed-
+// failure anti-pattern #1413 replaces the guard mechanism to fix.
+func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_PlaidFails_ReleasesClaim(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-plaid-claim-fail"
+	now := time.Now()
+	pastDueStarted := now.Add(-15 * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	plaidErr := errors.New("plaid API error")
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(plaidErr)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error()).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.Error(t, err, "Plaid failure must propagate so the daily job retries")
+
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error())
+	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_Success_CompletesClaim proves H6a's
+// positive direction end to end: a genuinely eligible user's claim is won, the disconnect runs,
+// and Complete is called with the SAME token Claim returned.
+func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_Success_CompletesClaim(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-plaid-claim-complete"
+	now := time.Now()
+	pastDueStarted := now.Add(-15 * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
+	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
+}
+
+// TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedNotSwallowed proves a
+// lost lease at Complete time (another worker reclaimed this tuple while we were mid-flight) does
+// not silently pass as success and is not reported as a processing failure — mirrors
+// deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed. The
+// loud-logging behavior itself is inspected in the source (processPlaidDisconnectWindow's Complete
+// handling) and is not independently mechanically asserted here for lack of an injectable log sink.
+func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-plaid-complete-false"
+	now := time.Now()
+	pastDueStarted := now.Add(-15 * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+	// The lease was reclaimed by another worker before we could Complete it.
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
+		Return(false, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	assert.NoError(t, err, "the disconnect already ran; a lost lease at Complete time must not be reported as a failure")
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
 }
 
 // Test 5: Plaid-only window but re-read shows recovered — no-op
@@ -439,6 +575,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testi
 
 	// Pass interface nil for paddleClient (not a typed nil) so s.paddleClient == nil.
 	svc := NewPastDueService(repo, plaid, nil, clerk, notif, testGraceDays, testPlaidDisconnectDays)
+	svc.SetWorkClaimsRepo(newAllowingPastDueClaimsRepo())
 	_ = paddle // used only for AssertNotCalled below
 
 	userID := "user-nil-paddle"
@@ -684,4 +821,206 @@ func TestPastDueService_ProcessUser_HouseholdCheckFails_SkipsDefensivelyButPropa
 
 	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+}
+
+// ─── #1413 H6b (Codex review round 4): the work claim must be won, and re-verified, BEFORE any
+// Plaid/Paddle destructive work — the whole point of the finding is that ordering, not merely a
+// wider predicate, closes the "CAS correctly refuses after the irreversible work already ran" bug. ──
+
+// TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork proves H6b's ordering
+// fix directly by recording the actual call order via .Run() hooks — an ordering regression
+// wouldn't change WHETHER each mock is called, only WHEN, so plain AssertCalled assertions
+// (already covered by Test 1) cannot catch it.
+func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-ordering"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	var callOrder []string
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "claim") }).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "plaid_disconnect") }).
+		Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "paddle_cancel") }).
+		Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "cas_flip") }).
+		Return(true, nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
+		Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"claim", "plaid_disconnect", "paddle_cancel", "cas_flip"}, callOrder,
+		"the claim must be won BEFORE any Paddle cancel or Plaid disconnect — H6b's ordering fix")
+}
+
+// TestPastDueService_ProcessUser_GraceExpiry_ClaimLost_SkipsDestructive proves H6b's "claim not
+// won" direction: no external call of any kind, and no state transition.
+func TestPastDueService_ProcessUser_GraceExpiry_ClaimLost_SkipsDestructive(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-claim-lost"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return("", false, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
+
+	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Release", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestPastDueService_ProcessUser_GraceExpiry_ClaimWon_PlaidFails_ReleasesClaim proves H6b's "claim
+// won + external failure" direction: Release is called with the reason, no state transition
+// occurs, and the failure propagates so the daily job retries.
+func TestPastDueService_ProcessUser_GraceExpiry_ClaimWon_PlaidFails_ReleasesClaim(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-release-on-fail"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	plaidErr := errors.New("plaid API error")
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(plaidErr)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error()).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.Error(t, err)
+
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error())
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDue", mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes proves that when the
+// final CancelIfPastDue CAS misses (comp/recovery landed during the Plaid/Paddle calls), the claim
+// is Released — NOT Completed. Completing here would permanently block reclaiming per the
+// work_claims contract ("a completed claim is never re-granted"), stranding a user who must still
+// be cancelled once a mid-flight comp lapses.
+func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-cas-miss"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	// CAS misses — recovered or comped during the external calls above.
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(false, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSwallowed mirrors
+// deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed: a lost
+// lease at Complete time must not be reported as a processing failure. The loud-logging behavior
+// itself is inspected in the source (processGraceExpiry's Complete handling) and is not
+// independently mechanically asserted here for lack of an injectable log sink.
+func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-complete-false"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+	// The lease was reclaimed by another worker before we could Complete it.
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
+		Return(false, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	assert.NoError(t, err, "the cancellation already ran; a lost lease at Complete time must not be reported as a failure")
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
 }

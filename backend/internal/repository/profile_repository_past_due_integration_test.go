@@ -274,107 +274,11 @@ func TestCancelIfPastDue_Integration_ExpiredOverride_StillFlips(t *testing.T) {
 	assert.Equal(t, "cancelled", status)
 }
 
-// TestClaimPlaidDisconnectIfPastDue_Integration_Success proves the happy path: a genuinely
-// eligible past_due user (no override) can claim the day-14 Plaid disconnect.
-func TestClaimPlaidDisconnectIfPastDue_Integration_Success(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	pastDueStarted := time.Now().Add(-15 * 24 * time.Hour)
-	user := &domain.User{
-		ClerkUserID:        "clerk_claim_ok_" + suffix,
-		Email:              "claim-ok-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "past_due",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
-
-	_, err = pool.Exec(ctx, `UPDATE users SET past_due_started_at = $1 WHERE id = $2`, pastDueStarted, user.ID)
-	require.NoError(t, err)
-
-	claimed, err := repo.ClaimPlaidDisconnectIfPastDue(ctx, user.ID)
-	require.NoError(t, err)
-	assert.True(t, claimed, "an eligible past_due user (no override) must be able to claim the disconnect")
-
-	// The claim self-assigns past_due_started_at — it must be unchanged, not nulled or reset.
-	var gotPastDueStartedAt time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT past_due_started_at FROM users WHERE id = $1", user.ID).Scan(&gotPastDueStartedAt))
-	assert.WithinDuration(t, pastDueStarted, gotPastDueStartedAt, time.Microsecond,
-		"the claim's self-assignment must not alter past_due_started_at")
-}
-
-// TestClaimPlaidDisconnectIfPastDue_Integration_ActiveOverride_NoClaim proves Issue #1413 High
-// finding H6: an admin comp granted on a past_due user must block the claim — the actual race
-// interleaving, not just a happy-path assertion.
-func TestClaimPlaidDisconnectIfPastDue_Integration_ActiveOverride_NoClaim(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	pastDueStarted := time.Now().Add(-15 * 24 * time.Hour)
-	user := &domain.User{
-		ClerkUserID:        "clerk_claim_comped_" + suffix,
-		Email:              "claim-comped-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "past_due",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
-
-	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
-	_, err = pool.Exec(ctx, `UPDATE users SET past_due_started_at = $1, manual_tier_override = $2, manual_tier_ends_at = $3 WHERE id = $4`,
-		pastDueStarted, "household_2", overrideEndsAt, user.ID)
-	require.NoError(t, err)
-
-	claimed, err := repo.ClaimPlaidDisconnectIfPastDue(ctx, user.ID)
-	require.NoError(t, err)
-	assert.False(t, claimed, "the claim must fail for a user with a live manual tier override")
-}
-
-// TestClaimPlaidDisconnectIfPastDue_Integration_NonPastDue_NoClaim proves the claim also
-// requires subscription_status = 'past_due' — a user who recovered must not be claimed.
-func TestClaimPlaidDisconnectIfPastDue_Integration_NonPastDue_NoClaim(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	pastDueStarted := time.Now().Add(-15 * 24 * time.Hour)
-	user := &domain.User{
-		ClerkUserID:        "clerk_claim_recovered_" + suffix,
-		Email:              "claim-recovered-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "active", // recovered
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
-
-	_, err = pool.Exec(ctx, `UPDATE users SET past_due_started_at = $1 WHERE id = $2`, pastDueStarted, user.ID)
-	require.NoError(t, err)
-
-	claimed, err := repo.ClaimPlaidDisconnectIfPastDue(ctx, user.ID)
-	require.NoError(t, err)
-	assert.False(t, claimed, "the claim must fail once the user has recovered to a non-past_due status")
-}
+// ClaimPlaidDisconnectIfPastDue and its three integration tests that used to live here were
+// deleted in Issue #1413 round 4 (High finding H6a): the method was an atomic GUARD (a
+// self-assigning UPDATE) that proved its predicate held at one instant but reserved nothing — two
+// workers could both see "still past_due, no override" and both disconnect the same user's Plaid
+// items. It is superseded by a real work_claims claim (repository.ActionPlaidDisconnectPastDue),
+// taken in past_due_service.go's processPlaidDisconnectWindow, which re-verifies the same
+// still-past_due/no-override predicate via reReadStillPastDue after winning the claim. See
+// work_claims_repository_integration_test.go for that mechanism's exclusivity proof.

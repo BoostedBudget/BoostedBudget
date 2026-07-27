@@ -155,6 +155,51 @@ func (m *mockAnalyticsClient) Close() {
 	m.Called()
 }
 
+// mockWorkClaimsRepository mocks repository.WorkClaimsRepository (Issue #1413 High finding H7,
+// Codex review round 4) — the durable, fencing-token-guarded claim mechanism
+// processSubscriptionCanceled uses for exclusivity on ActionSubscriptionCancelledCleanup, wired in
+// via SetWorkClaimsRepo. Mirrors services.MockWorkClaimsRepository (deletion_service_test.go).
+type mockWorkClaimsRepository struct {
+	mock.Mock
+}
+
+func (m *mockWorkClaimsRepository) Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (string, bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, lease)
+	return args.String(0), args.Bool(1), args.Error(2)
+}
+
+func (m *mockWorkClaimsRepository) Complete(ctx context.Context, resourceType, resourceID, action, token string) (bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, token)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockWorkClaimsRepository) Release(ctx context.Context, resourceType, resourceID, action, token, reason string) (bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, token, reason)
+	return args.Bool(0), args.Error(1)
+}
+
+// testWebhookClaimToken is the fixed fencing token newAllowingWebhookClaimsRepo's Claim stub
+// returns. Tests that only care about processSubscriptionCanceled's OTHER behavior can rely on it
+// implicitly; tests exercising the claim mechanism itself supply their own
+// mockWorkClaimsRepository via worker.SetWorkClaimsRepo(customMock).
+const testWebhookClaimToken = "test-webhook-claim-token"
+
+// newAllowingWebhookClaimsRepo returns a mockWorkClaimsRepository stubbed to always grant and
+// complete ActionSubscriptionCancelledCleanup — for tests that exercise the worker's OTHER
+// behavior and aren't themselves testing the claim mechanism. userID is wildcarded so one
+// instance works across this file's whole fixture matrix. Mirrors
+// deletion_service_test.go's newAllowingClaimsRepo.
+func newAllowingWebhookClaimsRepo() *mockWorkClaimsRepository {
+	m := new(mockWorkClaimsRepository)
+	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, true, nil).Maybe()
+	m.On("Complete", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+		Return(true, nil).Maybe()
+	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil).Maybe()
+	return m
+}
+
 // loadWebhookFixture loads a webhook fixture from testdata
 func loadWebhookFixture(t *testing.T, filename string) *domain.PaddleWebhookEvent {
 	t.Helper()
@@ -214,6 +259,11 @@ func setupWorkerTest(t *testing.T) (
 		TierConfig:            tierConfig,
 		Logger:                logger,
 	})
+	// #1413 H7 (Codex review round 4): processSubscriptionCanceled now requires a work claims
+	// repo for EXCLUSIVITY. Wire a permissive default so tests exercising OTHER behavior aren't
+	// forced to plumb claim expectations through; tests that exercise the claim mechanism ITSELF
+	// override via worker.SetWorkClaimsRepo(customMock).
+	worker.SetWorkClaimsRepo(newAllowingWebhookClaimsRepo())
 
 	return worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, mockTxnRepo
 }
@@ -1164,15 +1214,24 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {
 	mockClerk.AssertExpectations(t)
 }
 
-// TestWorker_SubscriptionCanceled_PlaidCleanupError_StillSucceeds tests that a Plaid disconnect error
-// is logged and swallowed — webhook processing still succeeds.
-// Issue #896: Errors from DisconnectAllUserItems must not fail webhook processing.
-func TestWorker_SubscriptionCanceled_PlaidCleanupError_StillSucceeds(t *testing.T) {
+// TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim proves Issue #1413 High
+// finding H7's failure-handling fix: a Plaid disconnect error is no longer logged and swallowed —
+// it now ABORTS the cleanup claim (Release, not Complete) and propagates so River retries the
+// whole webhook. This inverts the PRE-#1413 test (TestWorker_SubscriptionCanceled_
+// PlaidCleanupError_StillSucceeds), which encoded the swallowed-failure anti-pattern the #1413
+// design doc calls out by name (finding C2's sibling for this path): "the OLD flow logged this
+// error and continued — orphaning a still-connected, still-billing Plaid item with no automatic
+// retry." The unconditional trio (cancelled write, Clerk sync, past-due clear) still runs — they
+// are deliberately outside the claim and record billing truth regardless of its outcome.
+// Issue #896 / #1413.
+func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	mockPlaid := new(mockPlaidItemCleanupService)
 	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
 
 	webhook := loadWebhookFixture(t, "subscription_canceled.json")
 	args := SubscriptionWebhookArgs{
@@ -1187,26 +1246,31 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_StillSucceeds(t *testing.
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
 	}
+	plaidErr := errors.New("plaid disconnect failed")
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(canceledUser, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
-	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(errors.New("plaid disconnect failed"))
+	// Unconditional trio still runs.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	// #930: Retention clock started even when Plaid cleanup errors
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
-	// #898: past_due stamp cleared on cancellation
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, true, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(plaidErr)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
+		Return(true, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
-	// Error from Plaid cleanup must be swallowed — webhook still succeeds
-	require.NoError(t, err)
-	mockPlaid.AssertExpectations(t)
-	mockWebhookRepo.AssertExpectations(t)
-	mockProfileRepo.AssertExpectations(t)
-	mockClerk.AssertExpectations(t)
+	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
+	// Unconditional trio ran despite the claim-guarded work aborting.
+	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
+	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
 }
 
 // ─── #1413: comped users keep Plaid connections and retention clock untouched on Paddle
@@ -1629,14 +1693,18 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems(t *tes
 	mockClerk.AssertExpectations(t)
 }
 
-// TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucceeds tests that a Plaid
-// disconnect error is logged and swallowed — webhook processing still succeeds (#930).
-func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucceeds(t *testing.T) {
+// TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_Aborts_ReleasesClaim is the
+// subscription.paused twin of TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_
+// ReleasesClaim (#930 / #1413 High finding H7): a Plaid disconnect error now aborts and releases
+// the cleanup claim instead of being logged and swallowed.
+func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_Aborts_ReleasesClaim(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
 	ctx := context.Background()
 
 	mockPlaid := new(mockPlaidItemCleanupService)
 	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
 
 	webhook := loadWebhookFixture(t, "subscription_paused.json")
 	args := SubscriptionWebhookArgs{
@@ -1651,27 +1719,27 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_StillSucce
 		ClerkUserID:      "clerk_user_123",
 		SubscriptionTier: "premium",
 	}
+	plaidErr := errors.New("plaid disconnect failed")
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
-	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(errors.New("plaid disconnect failed"))
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	// #930: Retention clock started even when Plaid cleanup errors
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
-	// #898: past_due stamp cleared on cancellation (paused → cancelled)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, true, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(plaidErr)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
+		Return(true, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
-	// Error from Plaid cleanup must be swallowed — webhook still succeeds
-	require.NoError(t, err)
-	mockPlaid.AssertExpectations(t)
-	mockWebhookRepo.AssertExpectations(t)
-	mockProfileRepo.AssertExpectations(t)
+	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 	mockNotifRepo.AssertNotCalled(t, "Create")
-	mockClerk.AssertExpectations(t)
 }
 
 // TestWorker_SubscriptionCreated_PausedStatus_NormalizedToCancelled verifies that a
@@ -2198,6 +2266,8 @@ func setupWorkerTestWithHousehold(t *testing.T) (
 		DB:                pool,
 		Logger:            logger,
 	})
+	// #1413 H7: see setupWorkerTest's identical comment.
+	worker.SetWorkClaimsRepo(newAllowingWebhookClaimsRepo())
 	return worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockHHRepo, pool
 }
 
@@ -2711,6 +2781,169 @@ func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
 	require.NoError(t, err)
 	mockHHRepo.AssertExpectations(t)
 	require.NoError(t, pool.ExpectationsWereMet(), "no transaction/Exec should occur for a non-owner")
+}
+
+// ─── #1413 High finding H7 (Codex review round 4): the cleanup claim must be won, and re-verified,
+// BEFORE the Plaid disconnect / retention-clock writes — exclusivity plus a fresh re-read shrinks
+// the window a plain freshUser check left open. ──
+
+// TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork proves the ordering directly by
+// recording the actual call order via .Run() hooks — an ordering regression wouldn't change
+// WHETHER each mock is called, only WHEN.
+func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+
+	var callOrder []string
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "claim") }).
+		Return(testWebhookClaimToken, true, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "plaid_disconnect") }).
+		Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "set_retention") }).
+		Return(nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+		Return(true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"claim", "plaid_disconnect", "set_retention"}, callOrder,
+		"the claim must be won BEFORE the Plaid disconnect / retention-clock writes — H7's ordering fix")
+}
+
+// TestWorker_SubscriptionCanceled_ClaimLost_SkipsDestructive proves the "claim not won" direction:
+// no external call of any kind, and no state transition — but the unconditional trio still runs.
+func TestWorker_SubscriptionCanceled_ClaimLost_SkipsDestructive(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	// Another worker already holds this lease, or it was already completed.
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return("", false, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
+
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
+	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
+}
+
+// TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim proves the positive direction
+// end to end: a genuinely eligible user's claim is won, Plaid disconnect and retention-clock both
+// run, and Complete is called with the SAME token Claim returned.
+func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, true, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+		Return(true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
+	mockPlaid.AssertCalled(t, "DisconnectAllUserItems", ctx, "user_2abc123def456")
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
+}
+
+// TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed mirrors
+// deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed: a lost
+// lease at Complete time must not be reported as a webhook-processing failure. The loud-logging
+// behavior itself is inspected in the source (processSubscriptionCanceled's Complete handling) and
+// is not independently mechanically asserted here for lack of an injectable log sink.
+func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: webhook.EventID, EventType: "subscription.canceled"}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, true, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	// The lease was reclaimed by another worker before we could Complete it.
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+		Return(false, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "the cleanup already ran; a lost lease at Complete time must not be reported as a failure")
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
 }
 
 // TestSyncClerkMetadata_ReReadFailure_NoClerkCall pins Issue #1413 Task 9 Part B's simplified
