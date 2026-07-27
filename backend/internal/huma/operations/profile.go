@@ -87,6 +87,16 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 func (h *ProfileHandler) enrichUserProfile(user *domain.User) *domain.User {
 	user.ComputeTrialDaysRemaining()
 	user.EffectiveTier = user.ComputeEffectiveTier()
+
+	// Issue #1413: expose the effective status/comp state so the frontend stops rendering
+	// a comped user as "expired". subscription_status keeps its exact current meaning
+	// (admin UI and billing pages read it) — these are additive, derived fields.
+	user.EffectiveStatus = user.ComputeEffectiveStatus()
+	user.IsComped = user.HasActiveManualOverride()
+	if user.IsComped {
+		user.CompTier = *user.ManualTierOverride
+		user.CompEndsAt = user.ManualTierEndsAt // nil = permanent comp
+	}
 	return user
 }
 

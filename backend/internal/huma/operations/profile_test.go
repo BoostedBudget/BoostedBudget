@@ -245,6 +245,137 @@ func TestUpdateProfile_InvalidTimezoneSource_Returns422(t *testing.T) {
 	assertHTTPStatus(t, err, http.StatusUnprocessableEntity)
 }
 
+// TestGetProfile_Comped_SetsEffectiveStatusIsCompedAndCompTier tests that a user with an
+// active manual tier override (Issue #1413) gets effective_status forced to "active",
+// is_comped=true, and comp_tier populated from the raw override value.
+func TestGetProfile_Comped_SetsEffectiveStatusIsCompedAndCompTier(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "inactive"
+	override := "household_2"
+	endsAt := time.Now().Add(30 * 24 * time.Hour)
+	user.ManualTierOverride = &override
+	user.ManualTierEndsAt = &endsAt
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "active", output.Body.EffectiveStatus)
+	assert.True(t, output.Body.IsComped)
+	assert.Equal(t, "household_2", output.Body.CompTier)
+	require.NotNil(t, output.Body.CompEndsAt)
+	assert.WithinDuration(t, endsAt, *output.Body.CompEndsAt, time.Second)
+	// The raw field keeps its exact current meaning — admin UI and billing pages read it.
+	assert.Equal(t, "inactive", output.Body.SubscriptionStatus)
+}
+
+// TestGetProfile_CompedPermanent_CompEndsAtOmitted tests that a comp with no end date
+// (permanent comp) serializes with comp_ends_at absent from the JSON, not zero-valued.
+func TestGetProfile_CompedPermanent_CompEndsAtOmitted(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "inactive"
+	override := "household_2"
+	user.ManualTierOverride = &override
+	user.ManualTierEndsAt = nil // permanent comp
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.IsComped)
+	assert.Nil(t, output.Body.CompEndsAt)
+
+	raw, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "comp_ends_at", "permanent comp must omit comp_ends_at entirely")
+}
+
+// TestGetProfile_NotComped_EffectiveStatusEqualsRawStatus tests that a user without any
+// manual override gets effective_status equal to the raw subscription_status, and that
+// subscription_status itself is unchanged.
+func TestGetProfile_NotComped_EffectiveStatusEqualsRawStatus(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "past_due"
+	user.ManualTierOverride = nil
+	user.ManualTierEndsAt = nil
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "past_due", output.Body.SubscriptionStatus)
+	assert.Equal(t, "past_due", output.Body.EffectiveStatus)
+	assert.False(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.CompTier)
+	assert.Nil(t, output.Body.CompEndsAt)
+
+	// is_comped has no omitempty — the frontend must always see the key, even when false.
+	raw, err := json.Marshal(output.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"is_comped":false`)
+}
+
+// TestGetProfile_ExpiredOverride_NotComped tests that an expired manual tier override
+// (ManualTierEndsAt in the past) yields is_comped=false with comp_tier/comp_ends_at unset,
+// even though ManualTierOverride is still populated on the row.
+func TestGetProfile_ExpiredOverride_NotComped(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "inactive"
+	override := "household_2"
+	expiredAt := time.Now().Add(-24 * time.Hour)
+	user.ManualTierOverride = &override
+	user.ManualTierEndsAt = &expiredAt
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.CompTier)
+	assert.Nil(t, output.Body.CompEndsAt)
+	assert.Equal(t, "inactive", output.Body.EffectiveStatus)
+}
+
 // TestUpdateProfile_DuplicateEmail_Returns409 tests that a duplicate email error returns HTTP 409.
 func TestUpdateProfile_DuplicateEmail_Returns409(t *testing.T) {
 	mockService := &mockProfileService{
