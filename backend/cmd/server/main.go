@@ -1579,7 +1579,8 @@ func main() {
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
 		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
-		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths)
+		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
+		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(

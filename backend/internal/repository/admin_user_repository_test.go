@@ -567,6 +567,7 @@ func TestUpdateUserTier_AuditLogWithSpecialChars(t *testing.T) {
 	defer mock.Close()
 
 	ctx := context.Background()
+	actorID := uuid.New().String()
 	userID := uuid.New().String()
 	tier := "premium"
 	reason := `Support case "ABC-123" & customer's request`
@@ -574,17 +575,69 @@ func TestUpdateUserTier_AuditLogWithSpecialChars(t *testing.T) {
 	clerkUserID := "user_clerk_" + uuid.New().String()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE users SET manual_tier_override`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH prior AS`)).
 		WithArgs(tier, pgxmock.AnyArg(), userID).
-		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id"}).AddRow(clerkUserID))
+		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id", "subscription_tier", "subscription_status", "manual_tier_override"}).
+			AddRow(clerkUserID, "premium", "active", nil))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO audit_logs`)).
-		WithArgs(userID, pgxmock.AnyArg()).
+		WithArgs(actorID, userID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
-	gotClerkID, err := repo.UpdateUserTier(ctx, userID, tier, reason, nil)
+	row, err := repo.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
 
 	assert.NoError(t, err)
-	assert.Equal(t, clerkUserID, gotClerkID)
+	assert.Equal(t, clerkUserID, row.ClerkUserID)
+	assert.Equal(t, "premium", row.SubscriptionTier)
+	assert.Equal(t, "active", row.SubscriptionStatus)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUpdateUserTier_EmptyActor_CoercedToNULL verifies an empty actorUserID is passed as SQL
+// NULL (not the empty string) to the audit insert — pgxmock.AnyArg() in the test above would
+// hide this bug, so this test pins the exact argument via a typed matcher.
+func TestUpdateUserTier_EmptyActor_CoercedToNULL(t *testing.T) {
+	mock, repo := setupAdminMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "system-initiated"
+	clerkUserID := "user_clerk_" + uuid.New().String()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH prior AS`)).
+		WithArgs(tier, pgxmock.AnyArg(), userID).
+		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id", "subscription_tier", "subscription_status", "manual_tier_override"}).
+			AddRow(clerkUserID, "premium", "active", nil))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO audit_logs`)).
+		WithArgs(nil, userID, pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	_, err := repo.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetOwnedHouseholdActiveMemberCount_Success tests the household seat-count lookup used by
+// the service's household-downgrade warning (Issue #1413 Defect 5).
+func TestGetOwnedHouseholdActiveMemberCount_Success(t *testing.T) {
+	mock, repo := setupAdminMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*)`)).
+		WithArgs(userID).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(4))
+
+	count, err := repo.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 4, count)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
