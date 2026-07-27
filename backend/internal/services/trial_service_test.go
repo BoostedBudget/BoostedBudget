@@ -347,6 +347,60 @@ func TestTrialService_ExpireTrial_HouseholdCheckFails_SkipsDefensivelyButPropaga
 	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
+// ─── #1413: comped users are exempt from trial-expiry destructive actions ──
+
+func TestTrialService_ExpireTrial_ActiveOverride_Skipped(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	user := &domain.User{
+		ID:                 userID,
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	repo.AssertNotCalled(t, "UpdateSubscriptionStatus", mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+}
+
+func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-123"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // expired
+	user := &domain.User{
+		ID:                 userID,
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("UpdateSubscriptionStatus", ctx, userID, "inactive").Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+	plaidCleanup.AssertExpectations(t)
+}
+
 func TestTrialService_CanGrantTrial_True(t *testing.T) {
 	service, _, _ := setupTestTrialService(t)
 

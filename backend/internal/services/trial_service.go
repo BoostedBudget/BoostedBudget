@@ -188,6 +188,19 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
+	// #1413: an active manual override ("comp") grants access and must not be undermined by
+	// the daily trial-expiry job — a comped user can still carry subscription_status='trial'
+	// with a past TrialEndsAt, but ComputeEffectiveStatus forces their effective status to
+	// active, so expiring them here would silently revoke what the comp granted. Checked
+	// before the household-coverage lookup below: HasActiveManualOverride is pure and cannot
+	// fail, so there's no reason to pay for a household DB round-trip first. Accepted cost
+	// (already ratified): a permanently comped user is re-selected and re-skipped by this job
+	// every run — volume is a handful of rows.
+	if user.HasActiveManualOverride() {
+		s.logger.Info("skipping trial expiry for actively comped user", "user_id", userID)
+		return nil
+	}
+
 	// #1367 — Phase 3: exempt actively covered household members. Fail closed on an
 	// uncertain check (skip expiry this run) rather than risk wrongly locking out an
 	// actually-covered member — the daily job retries, so this self-heals.
