@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -282,6 +283,51 @@ func (m *MockAuditLogger) Log(ctx context.Context, action, resourceType, resourc
 	return args.Error(0)
 }
 
+// MockWorkClaimsRepository mocks repository.WorkClaimsRepository (Issue #1413 Critical finding
+// C2) — the durable, fencing-token-guarded claim mechanism ExecuteDeletion uses for exclusivity
+// on ActionAccountDeletion, wired in via SetWorkClaimsRepo.
+type MockWorkClaimsRepository struct {
+	mock.Mock
+}
+
+func (m *MockWorkClaimsRepository) Claim(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (string, bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, lease)
+	return args.String(0), args.Bool(1), args.Error(2)
+}
+
+func (m *MockWorkClaimsRepository) Complete(ctx context.Context, resourceType, resourceID, action, token string) (bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, token)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockWorkClaimsRepository) Release(ctx context.Context, resourceType, resourceID, action, token, reason string) (bool, error) {
+	args := m.Called(ctx, resourceType, resourceID, action, token, reason)
+	return args.Bool(0), args.Error(1)
+}
+
+// testDeletionClaimToken is the fixed fencing token newAllowingClaimsRepo's Claim stub returns.
+// Tests that only care about ExecuteDeletion's OTHER behavior (Paddle/Plaid/cascade ordering,
+// etc.) can assert Complete was called with this exact value without having to plumb a real
+// per-test token through.
+const testDeletionClaimToken = "test-claim-token"
+
+// newAllowingClaimsRepo returns a MockWorkClaimsRepository stubbed to always grant the
+// ActionAccountDeletion claim and always complete it successfully — for tests that exercise
+// ExecuteDeletion's OTHER behavior and aren't themselves testing the claim mechanism. userID is
+// wildcarded (mock.Anything) so one instance works across this file's whole matrix of fixture
+// users. Both expectations are .Maybe() because some callers (e.g. the already-deleted /
+// belt-and-braces-skip tests) never reach the claim at all.
+func newAllowingClaimsRepo() *MockWorkClaimsRepository {
+	m := new(MockWorkClaimsRepository)
+	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil).Maybe()
+	m.On("Complete", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionAccountDeletion, testDeletionClaimToken).
+		Return(true, nil).Maybe()
+	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil).Maybe()
+	return m
+}
+
 // TestRequestDeletion_Success tests successful deletion request
 func TestRequestDeletion_Success(t *testing.T) {
 	ctx := context.Background()
@@ -509,6 +555,7 @@ func TestExecuteDeletion_CascadesAllData(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
@@ -540,6 +587,7 @@ func TestExecuteDeletion_DeletesClerkUser(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
@@ -596,6 +644,7 @@ func TestExecuteDeletion_HandlesClerkError(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(errors.New("Clerk API error"))
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
@@ -654,6 +703,7 @@ func TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil).Run(func(args mock.Arguments) {
 		callOrder = append(callOrder, "RemoveAllUserItems")
 	})
@@ -674,10 +724,17 @@ func TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete(t *testing.T) {
 		"PlaidCleanup should be called before DeleteUserCascade")
 }
 
-// TestExecuteDeletion_SucceedsEvenIfPlaidCleanupFails verifies that
-// ExecuteDeletion continues with deletion even if Plaid cleanup fails
-// Issue #668: Graceful degradation - don't block deletion if Plaid unavailable
-func TestExecuteDeletion_SucceedsEvenIfPlaidCleanupFails(t *testing.T) {
+// TestExecuteDeletion_PlaidCleanupFails_AbortsDeletion is a corrected test (Issue #1413 Critical
+// finding C2, round 3 remediation).
+//
+// This test previously asserted the OPPOSITE — named "...SucceedsEvenIfPlaidCleanupFails" — that
+// ExecuteDeletion continues to cascade-delete even when Plaid cleanup fails, framed as "graceful
+// degradation." That was the C2 bug, not a documented rule: DeleteUserCascade clears the user's
+// Plaid references, so proceeding after a failed cleanup destroys the only local record of the
+// Plaid item that still needs removing (and is still billing) — nothing would ever retry it.
+// Aborting and releasing the claim is the deliberate fix: the next run retries the whole
+// sequence while the references are still present to retry against.
+func TestExecuteDeletion_PlaidCleanupFails_AbortsDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -694,20 +751,28 @@ func TestExecuteDeletion_SucceedsEvenIfPlaidCleanupFails(t *testing.T) {
 		IsDeleted:   false,
 	}
 
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
-	// Plaid cleanup fails
-	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(errors.New("plaid API unavailable"))
-	// But deletion should still proceed
-	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+	plaidErr := errors.New("plaid API unavailable")
+	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(plaidErr)
+	// DeleteUserCascade, Clerk deletion, and the audit log are deliberately left unstubbed —
+	// an unstubbed testify mock call panics, a stronger proof than AssertNotCalled alone that
+	// the abort actually happens before any of them.
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
-	// Should succeed even if Plaid cleanup fails
-	assert.NoError(t, err)
-	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+	require.Error(t, err, "a failed Plaid cleanup must abort the deletion, not be swallowed")
+	assert.ErrorIs(t, err, plaidErr)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestSetPlaidCleanupService verifies that SetPlaidCleanupService wires up the service
@@ -735,6 +800,7 @@ func TestSetPlaidCleanupService(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
@@ -795,6 +861,7 @@ func TestExecuteDeletion_ActiveSubscription_CancelsImmediately(t *testing.T) {
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -823,6 +890,7 @@ func TestExecuteDeletion_TrialSubscription_CancelsImmediately(t *testing.T) {
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("trial")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -850,6 +918,7 @@ func TestExecuteDeletion_TrialingSubscription_CancelsImmediately(t *testing.T) {
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("trialing")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -877,6 +946,7 @@ func TestExecuteDeletion_PastDueSubscription_CancelsImmediately(t *testing.T) {
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("past_due")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -904,6 +974,7 @@ func TestExecuteDeletion_CancelledSubscription_DoesNotCancelAgain(t *testing.T) 
 	user, _, paddleCustID := buildUserWithPaddle("cancelled")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	// CancelSubscriptionImmediately must NOT be called
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -942,6 +1013,7 @@ func TestExecuteDeletion_InactiveSubscription_DoesNotCancel(t *testing.T) {
 	}
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
@@ -977,6 +1049,7 @@ func TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive(t *testing.T) {
 	}
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
@@ -986,9 +1059,16 @@ func TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive(t *testing.T) {
 	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestExecuteDeletion_PaddleCancelFails_DeletionContinues verifies that a Paddle cancel
-// failure is non-critical — deletion still completes. Issue #1006.
-func TestExecuteDeletion_PaddleCancelFails_DeletionContinues(t *testing.T) {
+// TestExecuteDeletion_PaddleCancelFails_AbortsDeletion is a corrected test (Issue #1413 Critical
+// finding C2, round 3 remediation).
+//
+// This test previously asserted the OPPOSITE — named "...DeletionContinues" — that a Paddle
+// cancel failure is "non-critical" and the archive step and cascade still run. That was the C2
+// bug: DeleteUserCascade clears paddle_subscription_id/paddle_customer_id, so proceeding after a
+// failed cancel destroys the only local record of the subscription that still needs cancelling —
+// nothing would ever retry it, and the user keeps getting billed. Aborting on the FIRST cleanup
+// failure (before ever attempting the archive step) and releasing the claim is the fix.
+func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -999,26 +1079,35 @@ func TestExecuteDeletion_PaddleCancelFails_DeletionContinues(t *testing.T) {
 	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
 	service.SetPaddleCleanupService(mockPaddle)
 
-	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+	user, paddleSubID, _ := buildUserWithPaddle("active")
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
-	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(errors.New("Paddle API timeout"))
-	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
-	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+	paddleErr := errors.New("Paddle API timeout")
+	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(paddleErr)
+	// ArchiveAndAnonymizeCustomer, DeleteUserCascade, and Clerk deletion are deliberately left
+	// unstubbed — an unstubbed testify mock call panics, proving the abort happens before any
+	// of them, not just before the cascade.
 
 	err := service.ExecuteDeletion(ctx, user.ID)
-	// Must succeed despite Paddle cancel failure
-	assert.NoError(t, err)
-	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
-	// Archive must still run even when cancel fails
-	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
+
+	require.Error(t, err, "a failed Paddle cancel must abort the deletion, not be swallowed")
+	assert.ErrorIs(t, err, paddleErr)
+	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
-// TestExecuteDeletion_PaddleArchiveFails_DeletionContinues verifies that a Paddle archive
-// failure is non-critical — deletion still completes. Issue #1006.
-func TestExecuteDeletion_PaddleArchiveFails_DeletionContinues(t *testing.T) {
+// TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion is the archive-step sibling of the
+// cancel-failure test above — same C2 correction, same rationale.
+func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1030,18 +1119,27 @@ func TestExecuteDeletion_PaddleArchiveFails_DeletionContinues(t *testing.T) {
 	service.SetPaddleCleanupService(mockPaddle)
 
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
-	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(errors.New("Paddle API timeout"))
-	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+	archiveErr := errors.New("Paddle API timeout")
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(archiveErr)
+	// DeleteUserCascade and Clerk deletion are deliberately left unstubbed.
 
 	err := service.ExecuteDeletion(ctx, user.ID)
-	// Must succeed despite Paddle archive failure
-	assert.NoError(t, err)
-	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+
+	require.Error(t, err, "a failed Paddle archive must abort the deletion, not be swallowed")
+	assert.ErrorIs(t, err, archiveErr)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestSetPaddleCleanupService_WiresCorrectly verifies that SetPaddleCleanupService wires
@@ -1061,6 +1159,7 @@ func TestSetPaddleCleanupService_WiresCorrectly(t *testing.T) {
 	user, paddleSubID, paddleCustID := buildUserWithPaddle("active")
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil)
 	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
@@ -1092,6 +1191,7 @@ func TestExecuteDeletion_PaddleRunsBeforePlaidAndDB(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPaddle.On("CancelSubscriptionImmediately", ctx, paddleSubID).Return(nil).Run(func(args mock.Arguments) {
 		callOrder = append(callOrder, "CancelSubscription")
 	})
@@ -1414,6 +1514,7 @@ func TestExecuteDeletion_ActiveComp_WithDeletionRequest_ProceedsAnyway(t *testin
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
@@ -1426,10 +1527,26 @@ func TestExecuteDeletion_ActiveComp_WithDeletionRequest_ProceedsAnyway(t *testin
 	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
 }
 
-// TestExecuteDeletion_ExpiredComp_NoDeletionRequest_ProceedsAnyway verifies that an expired
-// (no longer active) manual tier override does not block auto-deletion — the guard must key
-// off HasActiveManualOverride, not merely ManualTierOverride being non-nil.
-func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_ProceedsAnyway(t *testing.T) {
+// TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShortCircuit is a
+// corrected test (Issue #1413 Critical finding C1, round 3 remediation).
+//
+// Previously named "...ProceedsAnyway" and asserting that deletion completes for an expired comp
+// with no deletion request. That was accurate under the OLD claimForDeletionPredicate
+// (noActiveManualOverridePredicate — "still live right now"), which was itself the C1 bug: a
+// lapsed-but-uncleared comp must delay deletion until the daily expiry job clears the column,
+// exactly like the retention queries already required (see
+// profile_repository.go's noManualOverrideAtAllPredicate). This test's actual, narrower purpose
+// was to prove the cheap belt-and-braces short-circuit
+// (HasActiveManualOverride() && DeletionRequestedAt == nil) does NOT itself fire for an EXPIRED
+// override — i.e. execution reaches the real claim/predicate machinery rather than being wrongly
+// (short-circuit-)skipped there too, since HasActiveManualOverride is false for an expired
+// override. It does not, and should not, assert what the real predicate then decides — that is
+// proven against a live database in
+// TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed
+// (profile_repository_claim_for_deletion_integration_test.go). ClaimForDeletion is mocked here to
+// return the real, corrected answer (false) rather than the stale `true` this test used to
+// assert.
+func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShortCircuit(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1442,17 +1559,25 @@ func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_ProceedsAnyway(t *testing
 	expired := time.Now().Add(-1 * time.Hour)
 	user := compedUser(&expired, nil)
 
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
-	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
-	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
-	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
-	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
-	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+	// Reflects the corrected predicate's real answer for a lapsed-but-uncleared override with
+	// no deletion request (see the doc comment above for the live-DB proof this mirrors).
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
-	assert.NoError(t, err)
-	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+	assert.NoError(t, err, "a denied claim is a legitimate skip, not an error")
+	mockRepo.AssertCalled(t, "ClaimForDeletion", ctx, user.ID) // proves the belt-and-braces short-circuit did NOT fire here
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestExecuteDeletion_NonComped_ProceedsNormally verifies the new guard does not affect
@@ -1475,6 +1600,7 @@ func TestExecuteDeletion_NonComped_ProceedsNormally(t *testing.T) {
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
 	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
@@ -1485,26 +1611,35 @@ func TestExecuteDeletion_NonComped_ProceedsNormally(t *testing.T) {
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
 }
 
-// --- Issue #1413 Critical finding C2 (Codex review round 2): ClaimForDeletion closes the
-// grant-vs-delete race ---
+// --- Issue #1413 Critical finding C2 (closed for real, round 3): TWO claim gates now guard
+// ExecuteDeletion's destructive work ---
 //
 // The Part C guard above (HasActiveManualOverride() && DeletionRequestedAt == nil) is a
 // read-only check against the GetUserByID snapshot. It cannot, by itself, protect the
 // irreversible external cleanup (Paddle cancel, Plaid disconnect) and cascade delete from a comp
 // granted in the window between that snapshot and this call. It is kept as a cheap
-// belt-and-braces short-circuit (unchanged, see above); the actual enforcement now lives in
-// ClaimForDeletion — a conditional UPDATE evaluated against committed state at the moment of the
-// claim. These tests use a user object that looks eligible from the snapshot (no comp visible)
-// so the Part C short-circuit does NOT fire, forcing execution through to the claim — proving
-// the claim, not the earlier read, is what gates the destructive work.
+// belt-and-braces short-circuit (unchanged, see above). The tests below use a user object that
+// looks eligible from the snapshot (no comp visible) so that short-circuit does NOT fire, forcing
+// execution through BOTH real gates:
+//
+//  1. claimsRepo.Claim (work_claims, EXCLUSIVITY) — replaces the old self-assigning
+//     ClaimForDeletion-as-a-guard. A lost claim here means another worker holds the lease, or the
+//     action was already completed; the predicate is never even re-checked.
+//  2. profileRepo.ClaimForDeletion (CORRECTNESS re-check) — still a conditional UPDATE evaluated
+//     against committed state at the moment of the claim, now gated behind gate 1 rather than
+//     being the only gate.
+//
+// Both gates release the work claim on denial/error so a later run doesn't wait out the full
+// lease, per the #1413 design doc's required call shape.
 
-// TestExecuteDeletion_ClaimNotGranted_SkipsWithoutExternalCleanup proves the race is actually
-// closed: even though the snapshot looked eligible, a lost claim (simulating a comp granted in
-// the interleaving window) must prevent ALL destructive work — Paddle cancel, Paddle archive,
-// Plaid disconnect, cascade delete, and Clerk deletion. Every one of those collaborators is
-// deliberately left unstubbed on its mock: an unstubbed testify mock call panics, which is a
-// stronger proof than an AssertNotCalled would be alone.
-func TestExecuteDeletion_ClaimNotGranted_SkipsWithoutExternalCleanup(t *testing.T) {
+// TestExecuteDeletion_WorkClaimNotGranted_SkipsWithoutPredicateOrCleanup proves gate 1 alone
+// blocks all destructive work AND the predicate re-check: even though the snapshot looked
+// eligible, a lost work claim (simulating another worker holding the lease, or this action
+// already completed) must prevent ClaimForDeletion, Paddle cancel, Paddle archive, Plaid
+// disconnect, cascade delete, and Clerk deletion. Every one of those collaborators is
+// deliberately left unstubbed: an unstubbed testify mock call panics, a stronger proof than
+// AssertNotCalled alone.
+func TestExecuteDeletion_WorkClaimNotGranted_SkipsWithoutPredicateOrCleanup(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1523,13 +1658,18 @@ func TestExecuteDeletion_ClaimNotGranted_SkipsWithoutExternalCleanup(t *testing.
 		IsDeleted:   false,
 	}
 
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return("", false, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
-	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, nil)
-	// Nothing below is stubbed on purpose.
+	// ClaimForDeletion and everything below is deliberately left unstubbed on purpose.
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
-	assert.NoError(t, err, "a lost claim is a legitimate skip, not an error")
+	assert.NoError(t, err, "a claim not won is a legitimate skip, not an error")
+	mockRepo.AssertNotCalled(t, "ClaimForDeletion", mock.Anything, mock.Anything)
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
 	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
@@ -1538,11 +1678,10 @@ func TestExecuteDeletion_ClaimNotGranted_SkipsWithoutExternalCleanup(t *testing.
 	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", mock.Anything, mock.Anything)
 }
 
-// TestExecuteDeletion_ClaimGranted_ProceedsWithFullCleanup is the negative-direction proof: an
-// over-tight claim predicate that silently stopped ALL deletions would pass every
-// "nothing bad happened" test above, so this asserts the destructive path genuinely still runs
-// once the claim succeeds.
-func TestExecuteDeletion_ClaimGranted_ProceedsWithFullCleanup(t *testing.T) {
+// TestExecuteDeletion_WorkClaimErrors_PropagatesAndSkipsPredicateAndCleanup proves a DB error
+// during the work-claims Claim call itself (as opposed to a lost claim) propagates as an error
+// and still must not reach the predicate re-check or any destructive work.
+func TestExecuteDeletion_WorkClaimErrors_PropagatesAndSkipsPredicateAndCleanup(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1558,6 +1697,135 @@ func TestExecuteDeletion_ClaimGranted_ProceedsWithFullCleanup(t *testing.T) {
 		Email:       "test@example.com",
 		IsDeleted:   false,
 	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return("", false, errors.New("db unavailable"))
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	// Nothing below is stubbed on purpose.
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.Error(t, err)
+	mockRepo.AssertNotCalled(t, "ClaimForDeletion", mock.Anything, mock.Anything)
+	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+}
+
+// TestExecuteDeletion_PredicateDenied_ReleasesClaimAndSkipsCleanup proves gate 2 (the
+// ClaimForDeletion re-check) still gates correctness even after gate 1 is won — e.g. a comp
+// granted between the work claim and the predicate re-check — and that the work claim is
+// released so a later run doesn't wait out the full lease.
+func TestExecuteDeletion_PredicateDenied_ReleasesClaimAndSkipsCleanup(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, nil)
+	// Everything below is deliberately left unstubbed on purpose.
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.NoError(t, err, "a denied predicate re-check is a legitimate skip, not an error")
+	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
+	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates proves a DB error during the
+// predicate re-check itself (as opposed to a denial) propagates as an error, releases the work
+// claim, and still must not run any destructive work.
+func TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, errors.New("db unavailable"))
+	// Nothing below is stubbed on purpose.
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	assert.Error(t, err)
+	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// TestExecuteDeletion_BothClaimsGranted_ProceedsWithFullCleanupAndCompletes is the
+// negative-direction proof: an over-tight claim/predicate that silently stopped ALL deletions
+// would pass every "nothing bad happened" test above, so this asserts the destructive path
+// genuinely still runs once BOTH gates are won, and that Complete is called with the exact
+// token Claim returned — closing the loop the fencing token exists to protect.
+func TestExecuteDeletion_BothClaimsGranted_ProceedsWithFullCleanupAndCompletes(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPlaidCleanup := new(MockPlaidItemCleanupService)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, mockPlaidCleanup, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
 	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
@@ -1572,12 +1840,19 @@ func TestExecuteDeletion_ClaimGranted_ProceedsWithFullCleanup(t *testing.T) {
 	mockPlaidCleanup.AssertCalled(t, "RemoveAllUserItems", ctx, user.ID)
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
 	mockClerk.AssertCalled(t, "DeleteUser", ctx, user.ClerkUserID)
+	mockClaims.AssertCalled(t, "Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken)
 }
 
-// TestExecuteDeletion_ClaimErrors_PropagatesAndSkipsCleanup proves a DB error during the claim
-// itself (as opposed to a lost claim) propagates as an error — distinct from claimed == false —
-// and still must not run any destructive work.
-func TestExecuteDeletion_ClaimErrors_PropagatesAndSkipsCleanup(t *testing.T) {
+// TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed proves that a lost lease at
+// Complete time (another worker reclaimed this tuple while we were mid-flight — the exact
+// scenario the fencing token exists to detect) does not silently pass as success: ExecuteDeletion
+// must still return nil (the deletion genuinely happened; there's nothing left to retry), but the
+// caller-visible contract is that this case is surfaced loudly rather than swallowed. Since the
+// production code logs via slog.Default() rather than an injectable logger, this test's only
+// direct assertion is that ExecuteDeletion does not error or panic when Complete reports ok=false
+// — the loud-logging behavior itself is inspected in the source (see ExecuteDeletion's Complete
+// handling) and is not independently mechanically asserted here for lack of an injectable sink.
+func TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
 	mockEmail := new(MockEmailService)
@@ -1594,13 +1869,24 @@ func TestExecuteDeletion_ClaimErrors_PropagatesAndSkipsCleanup(t *testing.T) {
 		IsDeleted:   false,
 	}
 
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	// The lease was reclaimed by another worker before we could Complete it.
+	mockClaims.On("Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken).
+		Return(false, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
-	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(false, errors.New("db unavailable"))
-	// Nothing below is stubbed on purpose.
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	mockPlaidCleanup.On("RemoveAllUserItems", ctx, user.ID).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
 	err := service.ExecuteDeletion(ctx, user.ID)
 
-	assert.Error(t, err)
-	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	assert.NoError(t, err, "the cascade already ran; a lost lease at Complete time must not be reported as a deletion failure")
+	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
+	mockClaims.AssertCalled(t, "Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken)
 }
