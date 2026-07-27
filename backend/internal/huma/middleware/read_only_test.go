@@ -497,25 +497,17 @@ func TestReadOnlyMiddleware_PublicRoute_NoSecurity_Passthrough(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-// ─── #1413: effective status (admin comp) and fail-closed-on-unresolved-status ──────────────
-
-// TestReadOnlyMiddleware_POST_CompedUser_EffectiveActive_Allowed is the #1413 regression test:
-// an admin "comp" (manual tier override) must actually unlock mutating access. The Clerk
-// middleware now stores the EFFECTIVE status (domain.User.ComputeEffectiveStatus — "active"
-// when a non-expired override is in effect), not the stale raw subscription_status, so a
-// comped user whose raw status is still "inactive" is no longer 403'd.
-func TestReadOnlyMiddleware_POST_CompedUser_EffectiveActive_Allowed(t *testing.T) {
-	server, _ := setupReadOnlyTestAPI(t)
-
-	// "active" here represents the EFFECTIVE status the Clerk middleware would have computed
-	// via ComputeEffectiveStatus() for a comped user whose raw subscription_status is
-	// "inactive" — the context never carries the raw status once an override is active.
-	resp := doRequest(t, server, http.MethodPost, "/api/v1/transactions", "active")
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"a comped user (effective status active) must be allowed to mutate even though their raw subscription_status is inactive")
-}
+// ─── #1413: fail-closed-on-unresolved-status ─────────────────────────────────────────────────
+//
+// Note: this file's simulated Clerk middleware (setupReadOnlyTestAPI, above) injects the
+// effective-status header straight into the context, so it cannot exercise the real
+// clerk.go / profile_repository.go override-resolution wiring that #1413 actually changed.
+// The genuine "comped user" regression coverage lives in:
+//   - profile_repository_test.go (repository resolves an active override to "active" even
+//     though the row's raw subscription_status is "inactive")
+//   - clerk_subscription_status_test.go's
+//     TestClerkAndReadOnlyMiddleware_CompedUser_POST_Allowed, which wires the REAL Clerk
+//     middleware and the REAL read-only middleware together end-to-end.
 
 // TestReadOnlyMiddleware_POST_Unresolved_NonWhitelistedPath_Blocked503 tests the fail-closed
 // branch: when the Clerk middleware's status lookup failed (unresolved == true), a mutating
