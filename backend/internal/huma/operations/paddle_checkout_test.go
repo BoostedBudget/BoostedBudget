@@ -207,6 +207,21 @@ func (m *mockProfileRepo) ExpireTrialIfNoOverride(ctx context.Context, userID st
 	return false, nil
 }
 
+// ClaimForDeletion, ClaimRetentionNotice30dSent, ClaimRetentionNotice7dSent (Issue #1413 Codex
+// review round 2) are not exercised by these Paddle checkout tests; stubbed to satisfy the
+// widened ProfileRepository interface.
+func (m *mockProfileRepo) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockProfileRepo) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockProfileRepo) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error {
 	args := m.Called(ctx, tx, userID, plainEmail)
 	return args.Error(0)
