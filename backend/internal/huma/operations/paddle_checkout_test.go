@@ -183,6 +183,9 @@ func (m *mockProfileRepo) GetUsersNeedingRetention7dNotice(ctx context.Context) 
 func (m *mockProfileRepo) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
+func (m *mockProfileRepo) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
 func (m *mockProfileRepo) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
 	return nil
 }
