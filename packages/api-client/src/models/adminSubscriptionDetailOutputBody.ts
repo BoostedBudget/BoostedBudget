@@ -39,6 +39,7 @@ export interface AdminSubscriptionDetailOutputBody {
   readonly $schema?: string;
   active_overrides_count: number;
   base_tier: string;
+  effective_status: string;
   effective_tier: string;
   features: SubscriptionFeatures;
   limits: SubscriptionLimits;
