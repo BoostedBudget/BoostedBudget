@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
-import { CreditCard } from 'lucide-react'
+import { CreditCard, Gift } from 'lucide-react'
 import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { BillingDetails } from './components/BillingDetails'
@@ -13,7 +13,63 @@ import { SubscriptionManagementSkeleton } from './components/SubscriptionManagem
 import { SubscriptionErrorState } from './components/SubscriptionErrorState'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { Alert } from '@/components/ui/alert'
 import { toast } from 'sonner'
+import type { GetCurrentSubscriptionOutputBody } from '@boostedbudget/api-client/models'
+import type { SubscriptionTier } from '../subscription/types'
+
+/**
+ * Issue #1413: complimentary-access view for admin-comped users. Reuses CurrentSubscriptionDisplay
+ * for the tier block when subscription data is available, but always suppresses BillingDetails —
+ * a comped user has no next-bill date, amount, or payment method to show — and offers no Change
+ * Plan / Cancel actions (there is nothing to change or cancel), only a link to /pricing.
+ */
+function ComplimentaryView({
+  subscription,
+  currentTierData,
+  compEndsAt,
+  formatFeatures,
+  onViewPlans,
+}: {
+  subscription: GetCurrentSubscriptionOutputBody | undefined
+  currentTierData: SubscriptionTier | undefined
+  compEndsAt: string | undefined
+  formatFeatures: (tierData: SubscriptionTier | undefined) => string[]
+  onViewPlans: () => void
+}) {
+  const endDate = compEndsAt?.slice(0, 10)
+
+  return (
+    <div className="max-w-[800px] mx-auto p-8 space-y-8">
+      <h1 className="text-3xl font-semibold">Manage Subscription</h1>
+
+      {subscription && currentTierData && (
+        <CurrentSubscriptionDisplay
+          tier={subscription.tier}
+          tierName={currentTierData.display_name}
+          status={subscription.status}
+          billingInterval={subscription.billing_interval}
+          amount={subscription.amount}
+          currency={subscription.currency}
+          features={formatFeatures(currentTierData)}
+        />
+      )}
+
+      <Alert variant="info">
+        <Gift className="h-4 w-4" aria-hidden="true" />
+        <span>
+          {endDate
+            ? `Complimentary access ends ${endDate}.`
+            : 'Complimentary Premium, provided by BoostedBudget — no end date.'}
+        </span>
+      </Alert>
+
+      <Button onClick={onViewPlans} variant="outline" className="w-full">
+        View Plans
+      </Button>
+    </div>
+  )
+}
 
 /**
  * SubscriptionManagementPage - Complete subscription management interface
@@ -27,6 +83,8 @@ export function SubscriptionManagementPage() {
     isLoadingSubscription,
     subscriptionError,
     hasNoSubscription,
+    isComped,
+    compEndsAt,
     billingPortalUrl,
     updateSubscription,
     isUpdating,
@@ -67,23 +125,9 @@ export function SubscriptionManagementPage() {
     )
   }
 
-  if (hasNoSubscription || !subscription) {
-    return (
-      <div className="max-w-[800px] mx-auto p-8">
-        <EmptyState
-          icon={<CreditCard />}
-          title="No Active Subscription"
-          description="You don't have an active subscription yet. Choose a plan to get started."
-          action={<Button onClick={() => navigate('/pricing')}>View Plans</Button>}
-        />
-      </div>
-    )
-  }
-
-  const currentTierData = tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
-
-  // Helper to format tier features for display
-  const formatTierFeatures = (tierData: typeof currentTierData): string[] => {
+  // Helper to format tier features for display (defined before the branches below — both the
+  // comped view and the regular subscription flows use it).
+  const formatTierFeatures = (tierData: SubscriptionTier | undefined): string[] => {
     if (!tierData) return []
 
     const featureLabels: Record<string, string> = {
@@ -98,6 +142,39 @@ export function SubscriptionManagementPage() {
       .filter(([, value]) => Boolean(value))
       .map(([key]) => featureLabels[key] || key.replace(/_/g, ' '))
   }
+
+  // Issue #1413: admin-comped users get real access, even when the subscription endpoint 404s
+  // (checked before hasNoSubscription/!subscription below — an isComped user should never see the
+  // "No Active Subscription" empty state).
+  if (isComped) {
+    const compedTierData = subscription
+      ? tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
+      : undefined
+    return (
+      <ComplimentaryView
+        subscription={subscription}
+        currentTierData={compedTierData}
+        compEndsAt={subscription?.comp_ends_at ?? compEndsAt}
+        formatFeatures={formatTierFeatures}
+        onViewPlans={() => navigate('/pricing')}
+      />
+    )
+  }
+
+  if (hasNoSubscription || !subscription) {
+    return (
+      <div className="max-w-[800px] mx-auto p-8">
+        <EmptyState
+          icon={<CreditCard />}
+          title="No Active Subscription"
+          description="You don't have an active subscription yet. Choose a plan to get started."
+          action={<Button onClick={() => navigate('/pricing')}>View Plans</Button>}
+        />
+      </div>
+    )
+  }
+
+  const currentTierData = tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
 
   const handleUpdateSubscription = async (
     targetTier: string,
