@@ -2231,6 +2231,314 @@ func TestHandleGetCurrentSubscription_NilCurrentBillingPeriodDoesNotPanic(t *tes
 	mockService.AssertExpectations(t)
 }
 
+// TestHandleGetCurrentSubscription_CompedInactive_Returns200NotFound verifies that a comped
+// user with a raw "inactive" status (no Paddle subscription) gets a synthetic 200 response
+// instead of the 404 a non-comped inactive user would receive (Issue #1413).
+func TestHandleGetCurrentSubscription_CompedInactive_Returns200NotFound(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	endsAt := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "inactive",
+		PaddleSubscriptionID: nil,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "active", output.Body.Status)
+	assert.Equal(t, "household_2", output.Body.Tier)
+	assert.Empty(t, output.Body.SubscriptionID)
+	assert.True(t, output.Body.IsComped)
+	require.NotEmpty(t, output.Body.CompEndsAt)
+	parsed, parseErr := time.Parse(time.RFC3339, output.Body.CompEndsAt)
+	require.NoError(t, parseErr, "comp_ends_at must be RFC 3339")
+	assert.WithinDuration(t, endsAt, parsed, time.Second)
+	assert.Equal(t, "USD", output.Body.Currency)
+	assert.False(t, output.Body.CancelAtPeriodEnd)
+	assert.Empty(t, output.Body.BillingInterval)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CompedPermanent_CompEndsAtOmitted verifies a permanent
+// comp (no ManualTierEndsAt) omits comp_ends_at from the synthetic response entirely.
+func TestHandleGetCurrentSubscription_CompedPermanent_CompEndsAtOmitted(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil, // permanent
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.CompEndsAt)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CompedWithLivePaddleSubscription verifies that a comp
+// layered on top of a real (e.g. past_due) Paddle subscription returns the real Paddle data
+// plus is_comped/comp_ends_at — billing truth is preserved, the comp is annotated.
+func TestHandleGetCurrentSubscription_CompedWithLivePaddleSubscription(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	override := "household_2"
+	endsAt := time.Now().Add(10 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "past_due",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).Return(&paddle.Subscription{
+		ID:              subscriptionID,
+		Status:          paddle.SubscriptionStatusPastDue,
+		BillingCycle:    paddle.Duration{Interval: "month", Frequency: 1},
+		CurrencyCode:    "USD",
+		ScheduledChange: nil,
+	}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	// Billing truth preserved: real subscription ID and raw Paddle status, unchanged.
+	assert.Equal(t, subscriptionID, output.Body.SubscriptionID)
+	assert.Equal(t, "past_due", output.Body.Status)
+	// Comp annotated on top.
+	assert.True(t, output.Body.IsComped)
+	require.NotEmpty(t, output.Body.CompEndsAt)
+	parsed, parseErr := time.Parse(time.RFC3339, output.Body.CompEndsAt)
+	require.NoError(t, parseErr, "comp_ends_at must be RFC 3339")
+	assert.WithinDuration(t, endsAt, parsed, time.Second)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CompedTrialUser_ReturnsCompNotTrial verifies a comp
+// dominates a trial: a comped user with raw status "trial" gets the comp response, not the
+// trial branch.
+func TestHandleGetCurrentSubscription_CompedTrialUser_ReturnsCompNotTrial(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	endsAt := time.Now().Add(20 * 24 * time.Hour)
+	trialEndsAt := time.Now().Add(45 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "active", output.Body.Status)
+	assert.True(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.TrialEndsAt, "comp dominates trial: trial fields must not be populated")
+	assert.Nil(t, output.Body.TrialDaysRemaining)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CompedInactive_NoFakeUpcomingCharge verifies the
+// synthetic comped response never populates next_billing_date, current_period_end, or
+// amount — the frontend computes next_billing_date ?? current_period_end, so any value
+// there would render as a fake upcoming charge for someone who isn't being charged.
+func TestHandleGetCurrentSubscription_CompedInactive_NoFakeUpcomingCharge(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	endsAt := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Empty(t, output.Body.NextBillingDate)
+	assert.Empty(t, output.Body.CurrentPeriodEnd)
+	assert.Empty(t, output.Body.Amount)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_CompedNoSubscriptionID_Returns200 verifies that a comped
+// user whose raw status is a Paddle-lookup status (e.g. "active") but who has no
+// PaddleSubscriptionID (getActiveSubscriptionID fails) also gets the synthetic 200, not a 404.
+func TestHandleGetCurrentSubscription_CompedNoSubscriptionID_Returns200(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_3"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: nil, // no Paddle subscription — getActiveSubscriptionID fails
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     nil,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "active", output.Body.Status)
+	assert.Equal(t, "household_3", output.Body.Tier)
+	assert.True(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.SubscriptionID)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_NotComped_InactiveStillReturns404 verifies non-comped
+// paths are unchanged: a non-comped inactive user still gets a 404, not the synthetic 200.
+func TestHandleGetCurrentSubscription_NotComped_InactiveStillReturns404(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "inactive",
+		PaddleCustomerID:     nil,
+		PaddleSubscriptionID: nil,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.Error(t, err)
+	assert.Nil(t, output)
+	var humaErr huma.StatusError
+	require.True(t, errors.As(err, &humaErr), "expected huma.StatusError")
+	assert.Equal(t, 404, humaErr.GetStatus())
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_NotComped_IsCompedFalseInResponse verifies non-comped
+// users hitting the real Paddle-lookup path get is_comped=false and comp_ends_at empty in
+// the response (existing matrix — response now carries the new fields, defaulted).
+func TestHandleGetCurrentSubscription_NotComped_IsCompedFalseInResponse(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active",
+		PaddleCustomerID:     &customerID,
+		PaddleSubscriptionID: &subscriptionID,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:                   subscriptionID,
+			Status:               paddle.SubscriptionStatusActive,
+			CurrentBillingPeriod: &paddle.TimePeriod{EndsAt: "2026-03-01"},
+			CurrencyCode:         "USD",
+		}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.IsComped)
+	assert.Empty(t, output.Body.CompEndsAt)
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
 // --- Context-aware pricing: HandleGetBillingPortalURL extended status tests ---
 
 // TestHandleGetBillingPortalURL_AllowsCancelled verifies cancelled users can get billing portal URL.

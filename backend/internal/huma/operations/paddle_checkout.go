@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/danielgtaylor/huma/v2"
@@ -192,6 +193,8 @@ type GetCurrentSubscriptionOutput struct {
 		TrialDaysRemaining *int   `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
 		CancelAtPeriodEnd  bool   `json:"cancel_at_period_end" doc:"Whether the subscription is scheduled to cancel at end of current period"`
 		ScheduledChangeAt  string `json:"scheduled_change_at,omitempty" doc:"RFC 3339 datetime when the scheduled cancel takes effect" example:"2026-05-01T00:00:00Z"`
+		IsComped           bool   `json:"is_comped" doc:"True when access is granted by an admin comp rather than a paid subscription"`
+		CompEndsAt         string `json:"comp_ends_at,omitempty" doc:"RFC 3339 datetime when complimentary access ends; absent means indefinite"`
 	}
 }
 
@@ -691,8 +694,13 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	h.logger.Info("getting current subscription", "user_id", user.ID, "status", user.SubscriptionStatus)
 
-	// Handle trial users separately
-	if user.SubscriptionStatus == "trial" {
+	// isComped reflects a currently-active admin manual tier override (Issue #1413). A comp
+	// dominates a trial and grants synthetic access when no real Paddle subscription exists,
+	// so it must be computed before the trial/status branches below decide how to respond.
+	isComped := user.HasActiveManualOverride()
+
+	// Handle trial users separately — unless a comp is in effect, in which case the comp wins.
+	if user.SubscriptionStatus == "trial" && !isComped {
 		user.ComputeTrialDaysRemaining()
 
 		// Fallback: If TrialEndsAt is nil but status is "trial", compute from CreatedAt + 60 days
@@ -723,18 +731,25 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		return out, nil
 	}
 
-	// Users without a Paddle subscription (e.g., inactive/never subscribed) get a 404.
+	// Users without a Paddle subscription (e.g., inactive/never subscribed) get a 404 —
+	// unless a comp grants them synthetic access (Issue #1413).
 	// Cancelled and past_due users still have a subscription in Paddle we can fetch.
 	switch user.SubscriptionStatus {
 	case "active", "trialing", "cancelled", "past_due":
 		// proceed to Paddle lookup below
 	default:
+		if isComped {
+			return h.compedSubscriptionResponse(user), nil
+		}
 		return nil, huma.Error404NotFound("No subscription found")
 	}
 
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("no Paddle subscription ID for user", "user_id", user.ID, "error", err)
+		if isComped {
+			return h.compedSubscriptionResponse(user), nil
+		}
 		return nil, huma.Error404NotFound("No subscription found")
 	}
 
@@ -762,7 +777,33 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		out.Body.CancelAtPeriodEnd = true
 		out.Body.ScheduledChangeAt = subscription.ScheduledChange.EffectiveAt
 	}
+	// A comp layered on top of a real Paddle subscription (e.g. past_due/cancelled): billing
+	// truth from Paddle is preserved above unchanged, the comp is only annotated (Issue #1413).
+	out.Body.IsComped = isComped
+	if isComped && user.ManualTierEndsAt != nil {
+		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
+	}
 	return out, nil
+}
+
+// compedSubscriptionResponse builds the synthetic 200 response for a comped user (Issue
+// #1413) who has no real Paddle subscription to return — i.e. the paths that would
+// otherwise 404. status is reported as "active" (not a new enum value) so existing
+// allow-list consumers keep working; is_comped carries the real signal.
+//
+// next_billing_date, current_period_end, and amount are deliberately left absent/zero: the
+// frontend computes next_billing_date ?? current_period_end, so populating either would
+// render a fake upcoming charge for someone who is not being charged.
+func (h *PaddleCheckoutHandler) compedSubscriptionResponse(user *domain.User) *GetCurrentSubscriptionOutput {
+	out := &GetCurrentSubscriptionOutput{}
+	out.Body.Status = "active"
+	out.Body.Tier = user.ComputeEffectiveTier()
+	out.Body.Currency = "USD"
+	out.Body.IsComped = true
+	if user.ManualTierEndsAt != nil {
+		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
+	}
+	return out
 }
 
 // RegisterPaddleCheckoutRoutes registers Paddle checkout routes with the Huma API.
