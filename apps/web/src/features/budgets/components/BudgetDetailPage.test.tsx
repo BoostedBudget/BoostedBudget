@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 
-import { mockNavigate } from '@/test/mocks/react-router'
 import {
   mockUseBudgetDetail,
   mockUseAvailableCategories,
@@ -8,8 +7,9 @@ import {
 } from '@/test/mocks/budget-detail-hooks'
 import { mockUseTags } from '@/test/mocks/tags-hooks'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { BudgetDetailPage } from './BudgetDetailPage'
 
 function createMockBudget(overrides: Record<string, unknown> = {}) {
@@ -59,6 +59,8 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
   }
 }
 
+const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
+
 function renderWithRouter(budgetId = 'budget-1') {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -69,6 +71,7 @@ function renderWithRouter(budgetId = 'budget-1') {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/budgets/${budgetId}`]}>
+        <LocationProbe />
         <Routes>
           <Route path="/budgets/:budgetId" element={<BudgetDetailPage />} />
           <Route path="/budgets" element={<div>Budget List</div>} />
@@ -84,7 +87,7 @@ describe('BudgetDetailPage', () => {
     mockUseBudgetDetail.mockClear()
     mockUseAvailableCategories.mockClear()
     mockUseTags.mockClear()
-    mockNavigate.mockClear()
+    resetLocationProbe()
     // Set default return values
     mockUseBudgetDetail.mockReturnValue({
       budget: null,
@@ -617,7 +620,8 @@ describe('BudgetDetailPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /create savings goal/i }))
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/savings', { state: { openCreateDialog: true } })
+        expect(locationRef.current.pathname).toBe('/savings')
+        expect(locationRef.current.state).toEqual({ openCreateDialog: true })
       })
     })
 

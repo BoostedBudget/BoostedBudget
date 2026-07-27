@@ -4,3 +4,4 @@
 
 export * from './formTestHelpers'
 export * from './queryTestUtils'
+export * from './locationProbe'
