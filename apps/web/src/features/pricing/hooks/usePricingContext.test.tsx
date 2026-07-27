@@ -10,6 +10,7 @@ import {
   mockUseGetSubscriptionTiers,
   mockRefetchSubscriptionTiers,
 } from '@/test/mocks/subscription-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
 function PricingContextReader() {
   const { pricingState, tiers } = usePricingContext()
@@ -31,6 +32,12 @@ function PricingContextReader() {
       )}
       {pricingState.status === 'cancelled' && (
         <span data-testid="scheduled-change-at">{pricingState.scheduledChangeAt}</span>
+      )}
+      {pricingState.status === 'comped' && (
+        <>
+          <span data-testid="tier">{pricingState.tier}</span>
+          <span data-testid="comp-ends-at">{pricingState.compEndsAt}</span>
+        </>
       )}
       {tiers && <span data-testid="tiers-loaded">yes</span>}
     </div>
@@ -77,6 +84,15 @@ beforeEach(() => {
     isLoading: false,
     error: null,
     refetch: mockRefetchSubscriptionTiers,
+  })
+  // Non-comped by default — usePricingContext also consults the profile-derived presentation as a
+  // resilience fallback for comped users (Issue #1413); keep it a no-op unless a test overrides it.
+  mockUseGetUserProfile.mockClear()
+  mockUseGetUserProfile.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+    refetch: () => Promise.resolve(),
   })
 })
 
@@ -208,5 +224,66 @@ describe('usePricingContext', () => {
   it('exposes tiers map when loaded', () => {
     renderWithProviders()
     expect(screen.getByTestId('tiers-loaded').textContent).toBe('yes')
+  })
+
+  // Issue #1413: admin-comped users get real access even though they have no Paddle subscription.
+  describe('Comped users (#1413)', () => {
+    it('returns comped state (with tier and comp end date) from the subscription payload', () => {
+      mockUseUser.mockReturnValue(signedInUser)
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          status: 'active',
+          tier: 'household_2',
+          is_comped: true,
+          comp_ends_at: '2026-08-01T00:00:00Z',
+          amount: '0.00',
+          currency: 'USD',
+          cancel_at_period_end: false,
+        },
+        isLoading: false,
+        error: null,
+      })
+      renderWithProviders()
+      expect(screen.getByTestId('status').textContent).toBe('comped')
+      expect(screen.getByTestId('tier').textContent).toBe('household_2')
+      expect(screen.getByTestId('comp-ends-at').textContent).toBe('2026-08-01T00:00:00Z')
+    })
+
+    it('returns comped state via the profile when /subscription/current 404s (resilience fallback)', () => {
+      mockUseUser.mockReturnValue(signedInUser)
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: { status: 404, message: 'Not Found' },
+      })
+      mockUseGetUserProfile.mockReturnValue({
+        data: {
+          id: 'user-1',
+          subscription_status: 'inactive',
+          subscription_tier: 'premium',
+          effective_tier: 'premium',
+          is_comped: true,
+          comp_ends_at: '2026-09-01T00:00:00Z',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      renderWithProviders()
+      expect(screen.getByTestId('status').textContent).toBe('comped')
+      expect(screen.getByTestId('tier').textContent).toBe('premium')
+      expect(screen.getByTestId('comp-ends-at').textContent).toBe('2026-09-01T00:00:00Z')
+    })
+
+    it('regression: 404 + non-comped profile still returns inactive', () => {
+      mockUseUser.mockReturnValue(signedInUser)
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: { status: 404, message: 'Not Found' },
+      })
+      renderWithProviders()
+      expect(screen.getByTestId('status').textContent).toBe('inactive')
+    })
   })
 })
