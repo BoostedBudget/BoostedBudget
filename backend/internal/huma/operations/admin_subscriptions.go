@@ -55,9 +55,13 @@ type AdminRemoveTierOverrideOutput struct {
 // AdminSubscriptionDetailOutput represents the detailed subscription state for an admin to view
 type AdminSubscriptionDetailOutput struct {
 	Body struct {
-		BaseTier             string                            `json:"base_tier"`
-		SubscriptionStatus   string                            `json:"subscription_status"`
-		EffectiveTier        string                            `json:"effective_tier"`
+		BaseTier           string `json:"base_tier"`
+		SubscriptionStatus string `json:"subscription_status"`
+		EffectiveTier      string `json:"effective_tier"`
+		// EffectiveStatus is the server-computed effective subscription status (Issue #1413) —
+		// admins need both raw (SubscriptionStatus) and effective, since a live manual tier
+		// override forces access to "active" regardless of the stale raw status.
+		EffectiveStatus      string                            `json:"effective_status"`
 		ManualTierOverride   *string                           `json:"manual_tier_override,omitempty"`
 		ManualTierEndsAt     *time.Time                        `json:"manual_tier_ends_at,omitempty"`
 		Limits               domain.SubscriptionLimits         `json:"limits"`
@@ -191,6 +195,10 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	resp.Body.BaseTier = detail.SubscriptionTier
 	resp.Body.SubscriptionStatus = detail.SubscriptionStatus
 	resp.Body.EffectiveTier = string(effectiveSub.Tier)
+	// EffectiveStatus is already computed by AdminUserService.GetUserDetail (enrichAdminUser) —
+	// the single source of truth for override-liveness — so it is surfaced directly rather than
+	// recomputed here.
+	resp.Body.EffectiveStatus = detail.EffectiveStatus
 	resp.Body.ManualTierOverride = detail.ManualTierOverride
 	resp.Body.ManualTierEndsAt = detail.ManualTierEndsAt
 	resp.Body.Limits = effectiveSub.Limits

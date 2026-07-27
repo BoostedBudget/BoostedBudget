@@ -69,27 +69,27 @@ func TestAdminUserService_ListUsers_Success(t *testing.T) {
 
 	expectedUsers := []domain.AdminUserListItem{
 		{
-			ID:                   user1ID,
-			Email:                "user1@example.com",
-			SubscriptionTier:     "premium",
-			SubscriptionStatus:   "active",
-			PrimaryRegion:        "iad",
-			CreatedAt:            now,
-			LastLoginAt:          &now,
-			IsActive:             true,
-			LinkedAccountsCount:  3,
-			BoostsCount: 5,
+			ID:                  user1ID,
+			Email:               "user1@example.com",
+			SubscriptionTier:    "premium",
+			SubscriptionStatus:  "active",
+			PrimaryRegion:       "iad",
+			CreatedAt:           now,
+			LastLoginAt:         &now,
+			IsActive:            true,
+			LinkedAccountsCount: 3,
+			BoostsCount:         5,
 		},
 		{
-			ID:                   user2ID,
-			Email:                "user2@example.com",
-			SubscriptionTier:     "free",
-			SubscriptionStatus:   "trial",
-			PrimaryRegion:        "iad",
-			CreatedAt:            now,
-			IsActive:             true,
-			LinkedAccountsCount:  1,
-			BoostsCount: 2,
+			ID:                  user2ID,
+			Email:               "user2@example.com",
+			SubscriptionTier:    "free",
+			SubscriptionStatus:  "trial",
+			PrimaryRegion:       "iad",
+			CreatedAt:           now,
+			IsActive:            true,
+			LinkedAccountsCount: 1,
+			BoostsCount:         2,
 		},
 	}
 
@@ -258,16 +258,16 @@ func TestAdminUserService_GetUserDetail_Success(t *testing.T) {
 
 	expectedDetail := &domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
-			ID:                   userID,
-			Email:                "user@example.com",
-			SubscriptionTier:     "premium",
-			SubscriptionStatus:   "active",
-			PrimaryRegion:        "iad",
-			CreatedAt:            now,
-			LastLoginAt:          &now,
-			IsActive:             true,
-			LinkedAccountsCount:  5,
-			BoostsCount: 10,
+			ID:                  userID,
+			Email:               "user@example.com",
+			SubscriptionTier:    "premium",
+			SubscriptionStatus:  "active",
+			PrimaryRegion:       "iad",
+			CreatedAt:           now,
+			LastLoginAt:         &now,
+			IsActive:            true,
+			LinkedAccountsCount: 5,
+			BoostsCount:         10,
 		},
 		TransactionsCount: 1500,
 		BudgetsCount:      4,
@@ -401,6 +401,161 @@ func TestAdminUserService_ListUsers_EnrichesAdminStatus(t *testing.T) {
 	assert.True(t, response.Users[1].IsAdmin)
 	assert.Equal(t, "premium", response.Users[1].SubscriptionTier)
 	assert.Equal(t, "active", response.Users[1].SubscriptionStatus)
+
+	mockRepo.AssertExpectations(t)
+	mockAdminService.AssertExpectations(t)
+}
+
+// --- Issue #1413: EffectiveStatus enrichment (Task 8b) ---
+//
+// enrichAdminUser must populate EffectiveStatus using the single shared predicate
+// (domain.User.ComputeEffectiveStatus), never a re-implementation of override-liveness.
+
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_LiveOverride proves a live (non-expired)
+// manual tier override forces EffectiveStatus to "active" even though the raw
+// SubscriptionStatus is "inactive" — the whole point of Issue #1413 is that a comp must
+// actually unlock access, not just relabel the tier while EffectiveStatus stays stale.
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_LiveOverride(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	now := time.Now()
+	override := "household_2"
+	futureEnd := now.Add(24 * time.Hour)
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "comped@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &futureEnd,
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "inactive", response.Users[0].SubscriptionStatus, "raw status must stay untouched")
+	assert.Equal(t, "active", response.Users[0].EffectiveStatus, "a live override must force EffectiveStatus to active")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_NoOverride proves EffectiveStatus equals
+// the raw SubscriptionStatus when no manual tier override is set.
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_NoOverride(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "plain@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "past_due",
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "past_due", response.Users[0].SubscriptionStatus)
+	assert.Equal(t, "past_due", response.Users[0].EffectiveStatus, "no override -> EffectiveStatus mirrors the raw status")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_ExpiredOverride proves an EXPIRED manual
+// tier override does NOT force EffectiveStatus to active — it falls back to the raw status,
+// mirroring domain.User.ComputeEffectiveStatus's expiry behaviour exactly (single predicate).
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_ExpiredOverride(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	now := time.Now()
+	override := "household_2"
+	pastEnd := now.Add(-24 * time.Hour)
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "expired-comp@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "cancelled",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &pastEnd,
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "cancelled", response.Users[0].EffectiveStatus, "an expired override must not force active")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_HardcodedAdmin_ConsistentWithSubscriptionStatus
+// pins the deliberate resolution for the hardcoded-admin cosmetic override: hardcoded admins are
+// cosmetically forced to subscription_tier=premium/subscription_status=active for display, and
+// EffectiveStatus must be consistent with that displayed SubscriptionStatus (both "active"),
+// never the raw pre-override status — two adjacent fields disagreeing about the same user is
+// the exact class of bug Issue #1413 exists to fix.
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_HardcodedAdmin_ConsistentWithSubscriptionStatus(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAdminService := new(MockAdminService)
+	service := NewAdminUserService(mockRepo, mockAdminService, nil, 0, nil)
+
+	ctx := context.Background()
+	now := time.Now()
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "admin@boostedbudget.com",
+			SubscriptionTier:   "trial",
+			SubscriptionStatus: "trial", // raw status, pre-override
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+	mockAdminService.On("IsHardcodedAdmin", "admin@boostedbudget.com").Return(true)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "active", response.Users[0].SubscriptionStatus, "hardcoded admins are cosmetically forced to active")
+	assert.Equal(t, "active", response.Users[0].EffectiveStatus,
+		"EffectiveStatus must match the displayed SubscriptionStatus for hardcoded admins, not the raw pre-override status")
 
 	mockRepo.AssertExpectations(t)
 	mockAdminService.AssertExpectations(t)

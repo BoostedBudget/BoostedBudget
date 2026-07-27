@@ -178,8 +178,20 @@ func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserLi
 	}
 }
 
-// enrichAdminUser checks if user is admin and updates their info accordingly.
+// enrichAdminUser checks if user is admin and updates their info accordingly, and populates
+// EffectiveStatus (Issue #1413) via the single shared domain predicate
+// (domain.User.ComputeEffectiveStatus) — never reimplemented here.
 func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
+	// Build a scratch domain.User from this row's raw tier/status/override fields so
+	// EffectiveStatus is computed by the one canonical predicate everything else uses.
+	scratch := &domain.User{
+		SubscriptionTier:   user.SubscriptionTier,
+		SubscriptionStatus: user.SubscriptionStatus,
+		ManualTierOverride: user.ManualTierOverride,
+		ManualTierEndsAt:   user.ManualTierEndsAt,
+	}
+	user.EffectiveStatus = scratch.ComputeEffectiveStatus()
+
 	if s.adminService == nil {
 		return
 	}
@@ -187,6 +199,11 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 		user.IsAdmin = true
 		user.SubscriptionTier = "premium"
 		user.SubscriptionStatus = "active"
+		// Hardcoded admins are cosmetically forced to subscription_status=active for display;
+		// EffectiveStatus must stay consistent with that displayed status rather than the raw
+		// pre-override status computed above — two adjacent fields disagreeing about the same
+		// user is the exact class of bug Issue #1413 exists to fix.
+		user.EffectiveStatus = "active"
 	}
 }
 
