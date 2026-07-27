@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { User, Settings, LogOut, CreditCard } from 'lucide-react'
 import {
   DropdownMenu,

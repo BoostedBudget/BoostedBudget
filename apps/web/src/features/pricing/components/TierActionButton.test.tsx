@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
 import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { TierActionButton } from './TierActionButton'
 import type { PricingState } from '../hooks/usePricingContext'
 import type { SubscriptionTier } from '../../subscription/types'

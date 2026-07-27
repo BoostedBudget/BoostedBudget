@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, mock, setSystemTime } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { TransactionCard } from './TransactionCard'
 import type { Transaction } from '../types'
 import type { Account } from '../../accounts/types'

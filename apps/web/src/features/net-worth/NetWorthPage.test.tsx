@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import '@/test/mocks/shared-charts'
 import type { NetWorthSummary, NetWorthHistory } from '@/features/dashboard/types'
 

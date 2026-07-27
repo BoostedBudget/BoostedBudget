@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import type { NetWorthSummary, NetWorthHistory } from '../types'
 
 // Issue #575: Use centralized mocks to prevent mock.module() pollution

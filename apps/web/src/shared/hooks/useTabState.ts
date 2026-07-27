@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 
 /**
  * Custom hook for managing tab state via URL query parameters

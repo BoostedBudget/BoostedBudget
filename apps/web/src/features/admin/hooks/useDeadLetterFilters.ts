@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import type { ListAdminDeadLetterJobsParams, ListAdminDeadLetterJobsSortBy, ListAdminDeadLetterJobsSortDir } from '@boostedbudget/api-client/models'
 import { parseSortParam, serializeSortParam } from '@/shared/hooks/useSortUrlState'
 import type { SortState } from '@/shared/components/DataTable'
