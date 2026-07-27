@@ -1,11 +1,12 @@
 /**
  * FeaturesSection Component
  *
- * Displays key product features with benefit-focused copy in a 2x2 grid.
+ * Displays key product features with benefit-focused copy in a 2-column grid
+ * (5th card spans full width to close the section, #1411).
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { Landmark, BarChart3, Zap, LayoutDashboard } from 'lucide-react'
+import { Landmark, BarChart3, Zap, LayoutDashboard, Users } from 'lucide-react'
 
 const features = [
   {
@@ -22,15 +23,21 @@ const features = [
   },
   {
     icon: BarChart3,
-    title: 'Smart Categorization',
+    title: 'Categorization That Follows Your Rules',
     description:
-      'Our intelligent system automatically categorizes your transactions and learns from your corrections over time.',
+      "Every transaction arrives with a category from Plaid. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself.",
   },
   {
     icon: Zap,
-    title: 'Powerful Automation',
+    title: 'Automation You Can Audit',
     description:
-      'Create automation rules that suggest transfers, categorize transactions, and alert you when budgets are at risk.',
+      'Build rules that flag budget risks and suggest transfers. Every rule is one you wrote, so you always know why it fired.',
+  },
+  {
+    icon: Users,
+    title: 'Shared Household Budgeting',
+    description:
+      'One plan across 2 to 5+ members. Each person chooses which accounts to share, and can hide any account from the household at any time.',
   },
 ]
 
@@ -54,12 +61,14 @@ export function FeaturesSection() {
           </p>
         </div>
 
-        {/* Features Grid - 2x2 */}
+        {/* Features Grid */}
         <div className="mt-20 grid gap-8 sm:grid-cols-2 lg:gap-12">
           {features.map((feature, index) => (
             <div
               key={index}
-              className="group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10"
+              className={`group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10 ${
+                index === features.length - 1 ? 'sm:col-span-2' : ''
+              }`}
             >
               {/* Icon */}
               <div className="mx-auto mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/25">

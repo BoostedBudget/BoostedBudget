@@ -15,7 +15,7 @@ const previewTiers: TierName[] = ['premium', 'household_3', 'household_5']
 
 // Key features to highlight for each tier
 const tierHighlights: Record<TierName, string[]> = {
-  premium: ['For individuals', 'AI-powered insights', 'Priority support'],
+  premium: ['For individuals', 'Two years of transaction history', 'Priority support'],
   household_2: [],
   household_3: ['For 3 family members', 'Shared household budgeting', 'All premium features'],
   household_4: [],
@@ -57,7 +57,7 @@ export function PricingPreview() {
             Simple, Transparent Pricing
           </h2>
           <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-600 dark:text-slate-400">
-            Start with a 2-month free trial. No credit card required.
+            Start with a 60-day free trial. No credit card required.
           </p>
         </div>
 

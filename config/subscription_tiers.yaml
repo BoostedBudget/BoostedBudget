@@ -14,7 +14,6 @@
 
 # Default features for all paid tiers (can be overridden per-tier if needed)
 default_features: &default_features
-  ai_insights: true
   api_access: true
   priority_support: true
   custom_categories: true

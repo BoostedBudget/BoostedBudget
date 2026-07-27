@@ -1,0 +1,35 @@
+# BoostedBudget robots.txt
+#
+# Allows general crawling of the public marketing/legal surface and blocks
+# (1) the authenticated application areas, which only render meaningful
+# content behind Clerk auth and offer nothing for a crawler to index, and
+# (2) unprotected routes that carry a one-time token in the path -- those
+# are public by design (an invite or deletion-cancellation link can be
+# opened by anyone holding it) but must not become indexable/crawlable.
+#
+# Authenticated paths below are derived from the routes wrapped in
+# <ProtectedRoute> in apps/web/src/App.tsx (issue #1411) -- not guessed.
+# Tokenized paths below are the unprotected routes in that same file whose
+# path segment is a one-time token: /cancel-deletion/:token,
+# /households/invites/:token, /household/invite/:token (issue #1411 N2 fix).
+
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /oauth-callback
+Disallow: /accounts
+Disallow: /transactions
+Disallow: /review
+Disallow: /insights
+Disallow: /planning
+Disallow: /budgets
+Disallow: /auto-categorization
+Disallow: /boosts
+Disallow: /profile
+Disallow: /billing
+Disallow: /admin
+Disallow: /cancel-deletion
+Disallow: /households/
+Disallow: /household/
+
+Sitemap: https://boostedbudget.com/sitemap.xml

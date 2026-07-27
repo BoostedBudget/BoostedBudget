@@ -115,11 +115,34 @@ describe('LandingPage', () => {
 
     it('should display feature items', () => {
       renderWithProviders(<LandingPage />)
-      // Current 4 features in 2x2 grid
+      // Current 4 features in 2x2 grid, plus new 5th household card (#1411)
       expect(screen.getByRole('heading', { name: /all your accounts in one place/i })).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: /customizable dashboard/i })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: /smart categorization/i })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: /powerful automation/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /categorization that follows your rules/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /automation you can audit/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /shared household budgeting/i })).toBeInTheDocument()
+    })
+
+    it('should not overclaim AI/learning capabilities the product does not have (#1411)', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.queryByText(/learns from your corrections/i)).not.toBeInTheDocument()
+    })
+
+    it('should not claim "no black box, no surprises" for categorization — every synced transaction arrives pre-categorized by Plaid, an opaque third-party classifier; only rules that actually match an eligible transaction override that default (#1411 B3 fix)', () => {
+      renderWithProviders(<LandingPage />)
+      expect(screen.queryByText(/no black box, no surprises/i)).not.toBeInTheDocument()
+      // Must not attribute the default category to the bank (it's Plaid's PersonalFinanceCategory
+      // classifier — see backend/internal/services/plaid_mapper.go). Note: this card's own text
+      // must not claim rules "always" override the default (rule_application_service.go skips
+      // manually-categorized and already-reviewed transactions), but "always" legitimately
+      // appears elsewhere on the page (card 4's "you always know why it fired"), so that's
+      // asserted via the exact-string match below rather than a page-wide absence check.
+      expect(screen.queryByText(/your bank's own category/i)).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          /Every transaction arrives with a category from Plaid\. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself\./
+        )
+      ).toBeInTheDocument()
     })
   })
 
@@ -197,8 +220,11 @@ describe('LandingPage', () => {
 
     it('should display risk reversal messaging', () => {
       renderWithProviders(<LandingPage />)
-      // These messages appear in multiple places on the page
-      expect(screen.getAllByText(/2-month free trial/i).length).toBeGreaterThanOrEqual(1)
+      // These messages appear in multiple places on the page.
+      // Note: PricingPreview.tsx (owned by a different #1411 task) still says
+      // "2-month free trial" as of this change, so this assertion intentionally
+      // uses >= 1 rather than asserting an exact count.
+      expect(screen.getAllByText(/60-day free trial/i).length).toBeGreaterThanOrEqual(1)
       expect(screen.getAllByText(/cancel anytime/i).length).toBeGreaterThanOrEqual(1)
     })
   })

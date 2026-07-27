@@ -57,7 +57,7 @@ const baseTiersData = {
       display_name: 'Premium',
       description: '',
       limits: { transaction_history_days: 365 },
-      features: { ai_insights: false, api_access: false, priority_support: false, custom_categories: true, custom_tags: true, advanced_reports: false },
+      features: { api_access: false, priority_support: false, custom_categories: true, custom_tags: true, advanced_reports: false },
       pricing: { price_monthly: 8.99, price_yearly: 89.90, mobile_price_yearly: 89.90, users_included: 1 },
     },
   },

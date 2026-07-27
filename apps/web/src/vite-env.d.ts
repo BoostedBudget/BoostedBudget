@@ -7,6 +7,7 @@ interface ImportMetaEnv {
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_POSTHOG_KEY?: string
   readonly VITE_POSTHOG_HOST?: string
+  readonly VITE_MCP_URL?: string
   readonly DEV: boolean
   readonly PROD: boolean
   readonly MODE: string
@@ -24,6 +25,7 @@ interface RuntimeEnv {
   SENTRY_DSN?: string
   POSTHOG_KEY?: string
   POSTHOG_HOST?: string
+  MCP_URL?: string
 }
 
 interface Window {

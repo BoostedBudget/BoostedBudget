@@ -16,7 +16,8 @@ window.ENV = {
   ENVIRONMENT: '${ENVIRONMENT:-production}',
   SENTRY_DSN: '${SENTRY_DSN:-}',
   POSTHOG_KEY: '${POSTHOG_KEY:-}',
-  POSTHOG_HOST: '${POSTHOG_HOST:-https://us.i.posthog.com}'
+  POSTHOG_HOST: '${POSTHOG_HOST:-https://us.i.posthog.com}',
+  MCP_URL: '${MCP_URL:-}',
 };
 EOF
 

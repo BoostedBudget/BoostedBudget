@@ -5639,8 +5639,6 @@ components:
       properties:
         advanced_reports:
           type: boolean
-        ai_insights:
-          type: boolean
         api_access:
           type: boolean
         custom_categories:
@@ -5650,7 +5648,6 @@ components:
         priority_support:
           type: boolean
       required:
-        - ai_insights
         - api_access
         - priority_support
         - custom_categories
@@ -7304,7 +7301,7 @@ info:
     name: BoostedBudget Support
     url: https://boostedbudget.com/support
   description: |
-    BoostedBudget API - Global budgeting platform with intelligent automation rules and GDPR compliance.
+    BoostedBudget API - Global budgeting platform with user-defined automation rules and GDPR compliance.
 
     ## Authentication
 

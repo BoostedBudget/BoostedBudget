@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -280,6 +280,183 @@ describe('App', () => {
           expect(transactionsLink).not.toBeInTheDocument()
         })
       })
+    })
+  })
+
+  describe('hash fragment navigation (issue #1411 B1 fix)', () => {
+    beforeEach(() => {
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
+      mockUseClerk.mockReturnValue(createMockClerk())
+    })
+
+    it('scrolls to the #features section when the URL has a matching hash', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      try {
+        const Wrapper = createMemoryWrapper(['/#features'])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth' })
+        })
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
+    })
+
+    it('scrolls to the #faq section when the URL has a matching hash', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      try {
+        const Wrapper = createMemoryWrapper(['/#faq'])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth' })
+        })
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
+    })
+
+    // Codex review finding (post-B1 fix pass): /mcp is lazy-loaded (`lazy(() =>
+    // import('./features/mcp')...)` above). On a cold load of `/mcp#capabilities`, this
+    // effect can run while only <PageSkeleton /> has rendered — getElementById finds
+    // nothing and, without a retry, never scrolls at all. This pins the retry behavior:
+    // the target only exists once the lazy chunk resolves and Suspense swaps it in.
+    it('scrolls to a target inside a lazy-loaded route once it renders (cold load of /mcp#capabilities)', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      try {
+        const Wrapper = createMemoryWrapper(['/mcp#capabilities'])
+        render(<App />, { wrapper: Wrapper })
+
+        // McpPage is lazy — its "Capabilities" section (id="capabilities") does not
+        // exist in the DOM until the dynamic import resolves and Suspense swaps in the
+        // real content in place of <PageSkeleton />.
+        await waitFor(() => {
+          expect(
+            screen.getByRole('heading', { level: 2, name: "What it can and can't do" })
+          ).toBeInTheDocument()
+        })
+
+        await waitFor(() => {
+          expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth' })
+        })
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
+    })
+
+    it('does not scroll when the URL has no hash', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      try {
+        const Wrapper = createMemoryWrapper(['/'])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+        })
+        expect(scrollIntoViewMock).not.toHaveBeenCalled()
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
+    })
+
+    it('does not scroll when the hash does not match any element id', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      try {
+        const Wrapper = createMemoryWrapper(['/#does-not-exist'])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+        })
+        expect(scrollIntoViewMock).not.toHaveBeenCalled()
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+      }
+    })
+
+    it('respects prefers-reduced-motion by scrolling instantly instead of smoothly', async () => {
+      const scrollIntoViewMock = mock(() => {})
+      const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
+      HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+
+      const originalMatchMedia = window.matchMedia
+      window.matchMedia = mock((query: string) => ({
+        matches: query.includes('prefers-reduced-motion'),
+        media: query,
+        onchange: null,
+        addListener: mock(() => {}),
+        removeListener: mock(() => {}),
+        addEventListener: mock(() => {}),
+        removeEventListener: mock(() => {}),
+        dispatchEvent: mock(() => true),
+      })) as unknown as typeof window.matchMedia
+
+      try {
+        const Wrapper = createMemoryWrapper(['/#features'])
+        render(<App />, { wrapper: Wrapper })
+
+        await waitFor(() => {
+          expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'auto' })
+        })
+      } finally {
+        HTMLElement.prototype.scrollIntoView = originalScrollIntoView
+        window.matchMedia = originalMatchMedia
+      }
+    })
+  })
+
+  describe('MCP page routing (issue #1411)', () => {
+    beforeEach(() => {
+      // Signed-out, but Clerk finished loading — AuthReadyGate-equivalent state.
+      // /mcp must render without authentication.
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({ user: null }))
+      mockUseClerk.mockReturnValue(createMockClerk())
+    })
+
+    it('renders the MCP page at /mcp without authentication, inside the app shell', async () => {
+      const Wrapper = createMemoryWrapper(['/mcp'])
+      const { container } = render(<App />, { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+          /your finances, in the agent you already use/i
+        )
+      })
+
+      // Prove this is the non-landing app shell, not just "some banner/footer exist"
+      // (LandingHeader also has role="banner", and AppFooter renders unconditionally
+      // in both branches — see App.tsx). The `landing-page` class is only applied when
+      // isLandingPage is true, and the shared <main> wrapper only exists in the
+      // non-landing branch — so asserting the h1 lives inside it, and that the root
+      // never got the landing-page class, pins down which branch actually rendered.
+      expect(container.querySelector('.landing-page')).not.toBeInTheDocument()
+      const main = screen.getByRole('main')
+      expect(within(main).getByRole('heading', { level: 1 })).toHaveTextContent(
+        /your finances, in the agent you already use/i
+      )
+
+      // Shared Header + AppFooter render alongside that shared <main> (App.tsx
+      // non-landing branch), confirming the app shell — not the landing shell.
+      expect(screen.getByRole('banner')).toBeInTheDocument()
+      expect(screen.getByRole('contentinfo')).toBeInTheDocument()
     })
   })
 })
