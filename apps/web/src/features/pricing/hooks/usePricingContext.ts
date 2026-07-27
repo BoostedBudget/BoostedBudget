@@ -3,6 +3,9 @@ import {
   useGetCurrentSubscription,
   useGetSubscriptionTiers,
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { useProfile } from '@/features/profile/hooks/useProfile'
+import { useSubscriptionPresentation } from '../../subscription/hooks/useSubscriptionPresentation'
+import { presentationFromSubscription } from '../../subscription/lib/subscriptionPresentation'
 import type { SubscriptionTier } from '../../subscription/types'
 import type { TierName } from '../../subscription/types'
 
@@ -10,6 +13,11 @@ export type PricingState =
   | { status: 'loading' }
   | { status: 'signed-out' }
   | { status: 'inactive' }
+  /**
+   * Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
+   * `compEndsAt` is present for a time-boxed comp, absent for a permanent one.
+   */
+  | { status: 'comped'; tier: TierName; compEndsAt?: string }
   | { status: 'trial'; tier: TierName; daysRemaining: number; trialEndsAt: string }
   | { status: 'trialing'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string }
   | { status: 'active'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string }
@@ -29,6 +37,8 @@ function getErrorStatus(error: unknown): number | undefined {
 
 export function usePricingContext(): UsePricingContextResult {
   const { isLoaded, isSignedIn } = useUser()
+  const { user } = useProfile()
+  const profilePresentation = useSubscriptionPresentation()
 
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
@@ -56,7 +66,24 @@ export function usePricingContext(): UsePricingContextResult {
     return { pricingState: { status: 'signed-out' }, tiers }
   }
 
+  // A comped user's tier, for the paths below where the subscription payload has none to read
+  // (404, or empty response) — falls back to the profile's effective/raw tier.
+  const compedFallbackTier = (): TierName =>
+    ((user?.effective_tier ?? user?.subscription_tier) as TierName) ?? 'premium'
+
   if (getErrorStatus(subscriptionQuery.error) === 404) {
+    // Resilience: if backend and frontend deploy separately, /subscription/current may still
+    // 404 for a comped user. The profile query is already app-wide cached, so this costs nothing.
+    if (profilePresentation.isComped) {
+      return {
+        pricingState: {
+          status: 'comped',
+          tier: compedFallbackTier(),
+          compEndsAt: profilePresentation.compEndsAt,
+        },
+        tiers,
+      }
+    }
     return { pricingState: { status: 'inactive' }, tiers }
   }
 
@@ -67,7 +94,34 @@ export function usePricingContext(): UsePricingContextResult {
   const sub = subscriptionQuery.data
   if (!sub) {
     // isLoading is false here — this means a non-404 error or empty response
+    if (profilePresentation.isComped) {
+      return {
+        pricingState: {
+          status: 'comped',
+          tier: compedFallbackTier(),
+          compEndsAt: profilePresentation.compEndsAt,
+        },
+        tiers,
+      }
+    }
     return { pricingState: { status: 'inactive' }, tiers }
+  }
+
+  // Route the raw sub.status handling through the shared derivation rather than re-deriving
+  // "comped" from the raw payload here — OR profile-derived isComped in too, in case the
+  // subscription endpoint hasn't been redeployed with the is_comped field yet.
+  const subPresentation = presentationFromSubscription(sub)
+  if (subPresentation.isComped || profilePresentation.isComped) {
+    return {
+      pricingState: {
+        status: 'comped',
+        tier: (sub.tier as TierName) ?? compedFallbackTier(),
+        // presentationFromSubscription doesn't thread comp_ends_at through today, so read it
+        // straight off the payload; profile is the last resort for the 404-fallback path above.
+        compEndsAt: subPresentation.compEndsAt ?? sub.comp_ends_at ?? profilePresentation.compEndsAt,
+      },
+      tiers,
+    }
   }
 
   const tier = (sub.tier as TierName) ?? 'premium'

@@ -23,6 +23,7 @@ import {
   mockUseGetCurrentSubscription,
   mockUseGetBillingPortalUrl,
 } from '@/test/mocks/subscription-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
 function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: boolean }) {
   return render(
@@ -82,6 +83,15 @@ describe('PricingPage', () => {
       data: undefined,
       isLoading: false,
       error: null,
+    })
+    // Non-comped by default (usePricingContext also consults the profile-derived presentation as
+    // a resilience fallback for comped users, Issue #1413).
+    mockUseGetUserProfile.mockClear()
+    mockUseGetUserProfile.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
     })
   })
 
@@ -738,6 +748,104 @@ describe('PricingPage', () => {
         const updatePaymentButtons = screen.getAllByRole('button', { name: /^Update Payment$/i })
         expect(updatePaymentButtons.length).toBe(4) // 4 non-current tiers
         updatePaymentButtons.forEach(btn => expect(btn).toBeDisabled())
+      })
+    })
+
+    // Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
+    describe('comped (admin-granted complimentary access)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: { subscription_tier: 'premium' } },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+      })
+
+      it('shows a complimentary notice instead of the frozen banner, even when redirected with frozen state', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            comp_ends_at: '2026-08-10T00:00:00Z',
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />, { frozen: true })
+
+        expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
+        expect(screen.getByText(/complimentary access ends 2026-08-10/i)).toBeInTheDocument()
+      })
+
+      it('shows provided-by copy for a permanent comp (no end date)', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        expect(screen.getByText(/complimentary premium, provided by boostedbudget/i)).toBeInTheDocument()
+      })
+
+      it('shows Current Plan for the comped tier and an enabled Subscribe for every other tier', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
+        expect(currentPlanButtons.length).toBeGreaterThan(0)
+
+        const subscribeButtons = screen.getAllByRole('button', { name: /^subscribe$/i })
+        expect(subscribeButtons.length).toBe(4)
+        subscribeButtons.forEach((btn) => expect(btn).not.toBeDisabled())
+      })
+
+      it('does not show the TrialBanner for a comped user', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        expect(screen.queryByText(/you're on a free trial/i)).not.toBeInTheDocument()
       })
     })
   })

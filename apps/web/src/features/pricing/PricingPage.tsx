@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
+import { Award, Gem, Check, X, AlertTriangle, Gift } from 'lucide-react'
+import { Alert } from '@/components/ui/alert'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
 import {
@@ -81,6 +82,24 @@ function FrozenAccountBanner() {
   )
 }
 
+/**
+ * Issue #1413: calm, non-celebratory notice for admin-comped users. Replaces the frozen banner
+ * for this population — a comped user has real access, so "your subscription has expired" would
+ * be actively wrong.
+ */
+function ComplimentaryBanner({ compEndsAt }: { compEndsAt?: string }) {
+  return (
+    <Alert variant="info" className="mb-8">
+      <Gift className="h-4 w-4" aria-hidden="true" />
+      <span>
+        {compEndsAt
+          ? `Complimentary access ends ${compEndsAt.slice(0, 10)}.`
+          : 'Complimentary Premium, provided by BoostedBudget.'}
+      </span>
+    </Alert>
+  )
+}
+
 function hasTier(state: PricingState): state is Extract<PricingState, { tier: TierName }> {
   return 'tier' in state
 }
@@ -111,7 +130,7 @@ function TierCard({
   const billingInterval = billingPeriod === 'monthly' ? 'month' : 'year'
 
   const isCurrentTier =
-    ['active', 'trialing', 'cancelled', 'past_due'].includes(pricingState.status) &&
+    ['active', 'trialing', 'cancelled', 'past_due', 'comped'].includes(pricingState.status) &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
 
@@ -267,9 +286,12 @@ export function PricingPage() {
     query: { staleTime: 24 * 60 * 60 * 1000 },
   })
 
+  // Issue #1413: a comped user must never see the frozen banner — even when the route guard set
+  // location.state.frozen before the profile resolved (a race, not a real freeze).
   const isFrozen =
-    (location.state as { frozen?: boolean } | null)?.frozen === true ||
-    pricingState.status === 'past_due'
+    pricingState.status !== 'comped' &&
+    ((location.state as { frozen?: boolean } | null)?.frozen === true ||
+      pricingState.status === 'past_due')
 
   if (pricingState.status === 'loading') {
     return (
@@ -325,6 +347,9 @@ export function PricingPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
       {isFrozen && <FrozenAccountBanner />}
+      {pricingState.status === 'comped' && (
+        <ComplimentaryBanner compEndsAt={pricingState.compEndsAt} />
+      )}
       {pricingState.status === 'trial' && (
         <TrialBanner daysRemaining={pricingState.daysRemaining} />
       )}

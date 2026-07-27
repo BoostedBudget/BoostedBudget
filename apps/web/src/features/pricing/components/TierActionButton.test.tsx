@@ -321,4 +321,35 @@ describe('TierActionButton', () => {
       expect(screen.getByRole('button')).toBeDisabled()
     })
   })
+
+  // Issue #1413: comped users keep full commerce functionality — they may legitimately want to
+  // buy a paid plan (e.g. their comp has an end date), so only their own comped tier is disabled.
+  describe('comped state', () => {
+    it("shows disabled Current Plan for the comped user's own tier", () => {
+      const compedState: PricingState = { status: 'comped', tier: 'household_2' }
+      renderButton(compedState, 'household_2', 'month')
+      const btn = screen.getByRole('button')
+      expect(btn).toBeDisabled()
+      expect(btn.textContent).toContain('Current Plan')
+    })
+
+    it('shows an enabled Subscribe CTA for tiers other than the comped tier', () => {
+      const compedState: PricingState = { status: 'comped', tier: 'premium' }
+      renderButton(compedState, 'household_2', 'month')
+      const btn = screen.getByRole('button')
+      expect(btn).not.toBeDisabled()
+      expect(btn.textContent).toContain('Subscribe')
+    })
+
+    it('commerce stays functional: clicking Subscribe on a non-comped tier still checks out', () => {
+      const compedState: PricingState = {
+        status: 'comped',
+        tier: 'premium',
+        compEndsAt: '2026-08-01T00:00:00Z',
+      }
+      renderButton(compedState, 'household_2', 'month')
+      fireEvent.click(screen.getByRole('button'))
+      expect(mockCreatePaddleCheckoutMutateAsync).toHaveBeenCalled()
+    })
+  })
 })
