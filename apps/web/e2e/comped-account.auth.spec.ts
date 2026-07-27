@@ -117,7 +117,9 @@ test.describe('Comped account', () => {
 
     // Not read-only: ReadOnlyGuard renders its children un-wrapped (no inert container)
     // when write access is present, so the Edit button is a real, clickable button.
-    const editButton = page.getByRole('button', { name: 'Edit' })
+    // .first(): the dashboard renders an Edit control per widget, so a bare role query is a
+    // strict-mode violation. Any one of them being enabled and clickable proves write access.
+    const editButton = page.getByRole('button', { name: 'Edit' }).first()
     await expect(editButton).toBeVisible()
     await expect(editButton).toBeEnabled()
     await editButton.click()
@@ -134,8 +136,16 @@ test.describe('Comped account', () => {
     await page.goto('/profile')
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByText('Complimentary')).toBeVisible()
-    await expect(page.getByText('Inactive', { exact: true })).not.toBeVisible()
+    // .first(): "Complimentary" appears both in the badge and in the card's explanatory copy,
+    // so a bare text query is a strict-mode violation.
+    await expect(page.getByText('Complimentary').first()).toBeVisible()
+
+    // Scoped to the badge, deliberately. A bare getByText('Inactive') also matches the
+    // "Account Status" field (ProfilePage.tsx:181), which renders user.is_active — account
+    // enabled/disabled, a different concept from subscription state. Asserting on that text
+    // globally conflated the two and failed while the subscription badge was correct.
+    // What must hold is that the SUBSCRIPTION badge is never the destructive inactive one.
+    await expect(page.locator('[data-slot="badge"]', { hasText: 'Inactive' })).toHaveCount(0)
   })
 
   test('shows no frozen-account banner on /pricing', async ({ page }) => {
