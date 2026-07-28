@@ -29,12 +29,24 @@ type PlaidItemCleanupService interface {
 	// RemoveAllUserItems calls Plaid /item/remove for all of a user's linked items.
 	// This should be called BEFORE deleting user data from the database to stop Plaid billing.
 	//
-	// Errors are logged but don't stop processing (graceful degradation):
-	// - If one item fails to remove, the service continues with remaining items
-	// - This ensures best-effort cleanup even if some items are already invalid
+	// Every item is attempted even after an earlier one fails — a single bad item must not
+	// strand the rest of the user's items still-linked and still-billing. But this is NOT
+	// best-effort: genuine per-item failures are aggregated and returned as a non-nil error.
 	//
-	// Returns error only if the initial repository query fails.
-	// Plaid API and decryption errors are logged but the function continues.
+	// Issue #1413 finding H6: this function previously always returned nil ("graceful
+	// degradation... deletion should proceed regardless"), which made its only production
+	// caller's abort-on-failure logic (DeletionService.ExecuteDeletion) dead code — the
+	// deletion cascade would proceed and clear the local Plaid item/token references even
+	// after a failed /item/remove call, orphaning the still-active (still-billing) Plaid
+	// Item with nothing left able to retry it. That caller needs strict semantics, and today
+	// it is the ONLY caller, so the contract changed for it directly rather than adding a
+	// parallel strict variant nobody else would use. If a FUTURE caller legitimately wants
+	// best-effort semantics, make that an explicit, separate choice at that call site (e.g.
+	// a dedicated method or an explicit parameter) — do not revert this function to always
+	// returning nil, which would silently reopen H6.
+	//
+	// Returns a non-nil error if the initial repository query fails, or if one or more items
+	// failed to be removed from Plaid (wrapping each underlying error via errors.Join).
 	RemoveAllUserItems(ctx context.Context, userID string) error
 
 	// RemoveItem calls Plaid /item/remove for a single linked item.
@@ -120,8 +132,10 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 		"item_count", len(items),
 	)
 
-	// Process each item - continue on errors (graceful degradation)
+	// Process every item - continue on errors so a single bad item doesn't strand the rest
+	// still-linked and still-billing, but track failures to aggregate below (Issue #1413 H6).
 	var successCount, failCount int
+	var itemErrs []error
 	for _, item := range items {
 		if err := s.removeItemInternal(ctx, &item); err != nil {
 			s.logger.Warn("failed to remove Plaid item",
@@ -131,6 +145,7 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 				"error", err,
 			)
 			failCount++
+			itemErrs = append(itemErrs, err)
 		} else {
 			successCount++
 		}
@@ -142,8 +157,11 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 		"fail_count", failCount,
 	)
 
-	// Return nil even if some items failed (graceful degradation)
-	// The user deletion should proceed regardless
+	if len(itemErrs) > 0 {
+		return fmt.Errorf("failed to remove %d of %d Plaid item(s) for user %s: %w",
+			failCount, len(items), userID, errors.Join(itemErrs...))
+	}
+
 	return nil
 }
 

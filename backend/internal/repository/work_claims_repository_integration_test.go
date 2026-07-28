@@ -512,34 +512,83 @@ func TestWorkClaims_Claim_ConcurrentRace(t *testing.T) {
 	assert.NotEmpty(t, winnerToken, "the single winner's token must be non-empty")
 }
 
-// TestWorkClaims_Claim_EligibleResourceIsProcessedEndToEnd is the positive-direction
-// falsifiability check: an over-tight claim implementation that always returns false
-// would pass every "nothing bad happened" test above. This proves a genuinely fresh
-// resource can be claimed, have its work done, and be completed successfully.
-func TestWorkClaims_Claim_EligibleResourceIsProcessedEndToEnd(t *testing.T) {
+// TestWorkClaims_Claim_GatesExternalWork_WonVsLost is the corrected replacement for
+// TestWorkClaims_Claim_EligibleResourceIsProcessedEndToEnd (Issue #1413 round-3 finding
+// M2, "the ninth test in this branch found not testing what it claims"). The original
+// test's "external work" was the literal comment `// ... external work would happen
+// here ...` — no code ran there at all — so it only ever exercised Claim followed
+// unconditionally by Complete. It would have passed even if production code invoked its
+// side effect (a Plaid/Paddle call) WITHOUT ever checking whether the claim was won,
+// which is exactly the bug class this whole mechanism exists to prevent.
+//
+// This test asserts the GATING itself, not just the claim: a spy collaborator standing
+// in for the real external side effect is called exactly once when the claim is won, and
+// is never called when the claim is lost — for both ways a claim can be lost (already
+// completed, and held by another worker's unexpired lease). doGatedWork mirrors the
+// #1413 design doc's required call shape (claim -> call collaborator ONLY if claimed ->
+// Complete), which is what a real caller like DeletionService.ExecuteDeletion does.
+func TestWorkClaims_Claim_GatesExternalWork_WonVsLost(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
-	resourceID := setupTestResource(t, pool)
 	repo := NewWorkClaimsRepository(pool)
 
-	token, claimed, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup, 15*time.Minute)
-	require.NoError(t, err)
-	require.True(t, claimed, "a fresh resource with no prior claim must be claimable")
-	require.NotEmpty(t, token)
+	doGatedWork := func(action, resourceID string, spy func()) (claimed bool) {
+		token, won, err := repo.Claim(ctx, ResourceTypeUser, resourceID, action, 15*time.Minute)
+		require.NoError(t, err)
+		if !won {
+			return false
+		}
+		spy()
+		ok, err := repo.Complete(ctx, ResourceTypeUser, resourceID, action, token)
+		require.NoError(t, err)
+		require.True(t, ok)
+		return true
+	}
 
-	// ... external work would happen here ...
+	t.Run("won calls collaborator exactly once and durably completes", func(t *testing.T) {
+		resourceID := setupTestResource(t, pool)
 
-	ok, err := repo.Complete(ctx, ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup, token)
-	require.NoError(t, err)
-	require.True(t, ok)
+		callCount := 0
+		claimed := doGatedWork(ActionSubscriptionCancelledCleanup, resourceID, func() { callCount++ })
+		assert.True(t, claimed, "a fresh resource with no prior claim must be claimable")
+		assert.Equal(t, 1, callCount, "the collaborator must run exactly once when the claim is won")
 
-	var completedAt *time.Time
-	err = pool.QueryRow(ctx,
-		`SELECT completed_at FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
-		ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup,
-	).Scan(&completedAt)
-	require.NoError(t, err)
-	require.NotNil(t, completedAt, "Complete must durably record completion")
+		var completedAt *time.Time
+		err := pool.QueryRow(ctx,
+			`SELECT completed_at FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
+			ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup,
+		).Scan(&completedAt)
+		require.NoError(t, err)
+		assert.NotNil(t, completedAt, "Complete must durably record completion")
+	})
+
+	t.Run("lost because already completed never calls collaborator", func(t *testing.T) {
+		resourceID := setupTestResource(t, pool)
+
+		// Win and complete once — a genuine first run.
+		require.True(t, doGatedWork(ActionSubscriptionCancelledCleanup, resourceID, func() {}))
+
+		// A second attempt against the same (resource, action) must lose (already
+		// completed) and — this is the gating M2 found missing — must NOT invoke the
+		// collaborator, i.e. the external side effect, again.
+		callCount := 0
+		claimed := doGatedWork(ActionSubscriptionCancelledCleanup, resourceID, func() { callCount++ })
+		assert.False(t, claimed, "a completed claim must never be re-granted")
+		assert.Equal(t, 0, callCount, "the collaborator must NOT run when the claim is lost to completion")
+	})
+
+	t.Run("lost to another worker's unexpired lease never calls collaborator", func(t *testing.T) {
+		resourceID := setupTestResource(t, pool)
+
+		_, won, err := repo.Claim(ctx, ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup, 15*time.Minute)
+		require.NoError(t, err)
+		require.True(t, won, "the first claim must win and hold the lease")
+
+		callCount := 0
+		claimed := doGatedWork(ActionSubscriptionCancelledCleanup, resourceID, func() { callCount++ })
+		assert.False(t, claimed, "an unexpired lease held by another worker must not be re-granted")
+		assert.Equal(t, 0, callCount, "the collaborator must NOT run while another worker holds the lease")
+	})
 }
 
 func TestWorkClaims_Action_CheckConstraintRejectsUnknownAction(t *testing.T) {
@@ -552,4 +601,86 @@ func TestWorkClaims_Action_CheckConstraintRejectsUnknownAction(t *testing.T) {
 		VALUES ($1, $2, 'not_a_real_action', NOW() + INTERVAL '15 minutes')
 	`, ResourceTypeUser, resourceID)
 	assert.Error(t, err, "the action CHECK constraint must reject free-form strings")
+}
+
+// --- ClaimOutcome (#1413 round-3 finding H3) ---
+//
+// These are the tests that actually PROVE the H3 fix: pgxmock can only echo back canned rows,
+// so the unit tests in work_claims_repository_test.go pin down the query shape but cannot show
+// that "held by another live worker" and "already completed" are genuinely distinguished by the
+// live ON CONFLICT ... WHERE semantics. These do.
+
+func TestWorkClaims_ClaimOutcome_FreshResourceWins(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	resourceID := setupTestResource(t, pool)
+	repo := NewWorkClaimsRepository(pool).(WorkClaimsOutcomeRepository)
+
+	token, outcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, resourceID, ActionSubscriptionCancelledCleanup, 15*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, ClaimWon, outcome, "a fresh (resource, action) with no prior row must win")
+	assert.NotEmpty(t, token)
+}
+
+// TestWorkClaims_ClaimOutcome_DistinguishesHeldByOtherFromAlreadyCompleted is the falsifying
+// test for the bug H3 describes: an implementation that just wraps the bare bool Claim (i.e.
+// always reports the same outcome for both "not claimed" cases) would fail this, because it
+// would report the SAME outcome for a live in-flight lease as for a genuinely finished one.
+func TestWorkClaims_ClaimOutcome_DistinguishesHeldByOtherFromAlreadyCompleted(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	repo := NewWorkClaimsRepository(pool).(WorkClaimsOutcomeRepository)
+
+	// Case 1: another worker holds an unexpired, incomplete lease right now.
+	heldID := setupTestResource(t, pool)
+	firstToken, firstOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, heldID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, ClaimWon, firstOutcome)
+	require.NotEmpty(t, firstToken)
+
+	heldToken, heldOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, heldID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, ClaimHeldByOther, heldOutcome, "an unexpired, incomplete lease held by another worker must report HeldByOther, not AlreadyCompleted")
+	assert.Empty(t, heldToken)
+
+	// Case 2: the action already ran to completion for this tuple.
+	completedID := setupTestResource(t, pool)
+	completeToken, completeOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, completedID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, ClaimWon, completeOutcome)
+	ok, err := repo.Complete(ctx, ResourceTypeUser, completedID, ActionPastDueGraceCancel, completeToken)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	doneToken, doneOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, completedID, ActionPastDueGraceCancel, 15*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, ClaimAlreadyCompleted, doneOutcome, "a completed claim must report AlreadyCompleted, not HeldByOther")
+	assert.Empty(t, doneToken)
+}
+
+// TestWorkClaims_ClaimOutcome_ExpiredLeaseIsReclaimableAsWon proves ClaimOutcome shares Claim's
+// crashed-worker recovery: an expired-but-incomplete lease is reclaimable (ClaimWon), not stuck
+// reporting HeldByOther forever.
+func TestWorkClaims_ClaimOutcome_ExpiredLeaseIsReclaimableAsWon(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	resourceID := setupTestResource(t, pool)
+	repo := NewWorkClaimsRepository(pool).(WorkClaimsOutcomeRepository)
+
+	firstToken, firstOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice7d, 15*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, ClaimWon, firstOutcome)
+	require.NotEmpty(t, firstToken)
+
+	_, err = pool.Exec(ctx, `
+		UPDATE work_claims SET lease_expires_at = NOW() - INTERVAL '1 hour'
+		WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+	`, ResourceTypeUser, resourceID, ActionRetentionNotice7d)
+	require.NoError(t, err)
+
+	reclaimToken, reclaimOutcome, err := repo.ClaimOutcome(ctx, ResourceTypeUser, resourceID, ActionRetentionNotice7d, 15*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, ClaimWon, reclaimOutcome, "an expired, incomplete lease must be reclaimable as ClaimWon")
+	assert.NotEmpty(t, reclaimToken)
+	assert.NotEqual(t, firstToken, reclaimToken, "a reclaim must issue a fresh fencing token")
 }
