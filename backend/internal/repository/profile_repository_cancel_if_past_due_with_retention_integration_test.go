@@ -75,7 +75,9 @@ func TestCancelIfPastDueWithRetention_Integration_AtomicFlipAndClock(t *testing.
 }
 
 // TestCancelIfPastDueWithRetention_Integration_SkipsNonPastDue proves the predicate still guards
-// correctness: a non-past_due user is untouched, including its retention columns.
+// correctness: a non-past_due user is untouched, including its retention columns. Covers all
+// three non-past_due statuses (active, cancelled, inactive) — only past_due rows match the WHERE
+// predicate.
 func TestCancelIfPastDueWithRetention_Integration_SkipsNonPastDue(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -83,11 +85,58 @@ func TestCancelIfPastDueWithRetention_Integration_SkipsNonPastDue(t *testing.T) 
 	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	for _, status := range []string{"active", "cancelled", "inactive"} {
+		s := status
+		t.Run(s, func(t *testing.T) {
+			user := &domain.User{
+				ClerkUserID:        "clerk_notpd_" + s + "_" + suffix,
+				Email:              "notpd-" + s + "-" + suffix + "@example.com",
+				SubscriptionTier:   "premium",
+				SubscriptionStatus: s,
+				PrimaryRegion:      "iad",
+				IsActive:           true,
+			}
+			tx, err := pool.Begin(ctx)
+			require.NoError(t, err)
+			require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+			require.NoError(t, tx.Commit(ctx))
+			t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
+
+			now := time.Now()
+			flipped, err := repo.CancelIfPastDueWithRetention(ctx, user.ID, now, now.AddDate(0, 6, 0))
+			require.NoError(t, err)
+			assert.False(t, flipped, "a %s (non-past_due) user must not flip", s)
+
+			var got string
+			var retExpires *time.Time
+			require.NoError(t, pool.QueryRow(ctx,
+				`SELECT subscription_status, retention_expires_at FROM users WHERE id = $1`, user.ID,
+			).Scan(&got, &retExpires))
+			assert.Equal(t, s, got, "status must be unchanged for a %s user", s)
+			assert.Nil(t, retExpires, "retention_expires_at must stay NULL when the CAS misses")
+		})
+	}
+}
+
+// TestCancelIfPastDueWithRetention_Integration_ExpiredOverride_StillFlips proves the negative
+// direction of noActiveManualOverridePredicate: an override that has already LAPSED must not
+// block the flip (or the retention-clock write) — an over-tight predicate that treats any
+// override (live or expired) as a block would silently stop cancellation, and the retention
+// clock, forever for a user who was comped in the past. Mirrors
+// HasActiveManualOverride()'s boundary semantics.
+func TestCancelIfPastDueWithRetention_Integration_ExpiredOverride_StillFlips(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := &domain.User{
-		ClerkUserID:        "clerk_notpd_" + suffix,
-		Email:              "notpd-" + suffix + "@example.com",
+		ClerkUserID:        "clerk_cas_expired_" + suffix,
+		Email:              "cas-expired-" + suffix + "@example.com",
 		SubscriptionTier:   "premium",
-		SubscriptionStatus: "active",
+		SubscriptionStatus: "past_due",
 		PrimaryRegion:      "iad",
 		IsActive:           true,
 	}
@@ -97,18 +146,25 @@ func TestCancelIfPastDueWithRetention_Integration_SkipsNonPastDue(t *testing.T) 
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
-	now := time.Now()
-	flipped, err := repo.CancelIfPastDueWithRetention(ctx, user.ID, now, now.AddDate(0, 6, 0))
+	overrideEndsAt := time.Now().Add(-24 * time.Hour) // already lapsed
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = $1, manual_tier_ends_at = $2 WHERE id = $3`,
+		"household_2", overrideEndsAt, user.ID)
 	require.NoError(t, err)
-	assert.False(t, flipped, "an active (non-past_due) user must not flip")
+
+	started := time.Now().Truncate(time.Microsecond)
+	expires := started.AddDate(0, 6, 0)
+	flipped, err := repo.CancelIfPastDueWithRetention(ctx, user.ID, started, expires)
+	require.NoError(t, err)
+	assert.True(t, flipped, "CancelIfPastDueWithRetention must still flip a user whose override has already expired")
 
 	var status string
 	var retExpires *time.Time
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT subscription_status, retention_expires_at FROM users WHERE id = $1`, user.ID,
 	).Scan(&status, &retExpires))
-	assert.Equal(t, "active", status, "status must be untouched")
-	assert.Nil(t, retExpires, "retention_expires_at must stay NULL when the CAS misses")
+	assert.Equal(t, "cancelled", status)
+	require.NotNil(t, retExpires, "retention_expires_at must be set even though the user was previously comped")
+	assert.WithinDuration(t, expires, *retExpires, time.Microsecond)
 }
 
 // TestCancelIfPastDueWithRetention_Integration_SkipsActiveOverride proves the

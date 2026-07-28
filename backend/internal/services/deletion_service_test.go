@@ -174,9 +174,6 @@ func (m *MockProfileRepositoryForDeletion) ClearPastDueStartedAt(ctx context.Con
 func (m *MockProfileRepositoryForDeletion) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-func (m *MockProfileRepositoryForDeletion) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
 
 // CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
 // (Issue #1413 H5 residual) are not exercised by these deletion-service tests; stubbed to satisfy

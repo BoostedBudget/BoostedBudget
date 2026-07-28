@@ -611,11 +611,6 @@ func (m *MockUserRepository) RepairRetentionClock(ctx context.Context, userID st
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockUserRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
 func (m *MockUserRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)

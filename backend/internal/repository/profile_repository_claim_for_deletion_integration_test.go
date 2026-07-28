@@ -157,7 +157,7 @@ func TestClaimForDeletion_Integration_ActiveOverride_WithDeletionRequest_StillCl
 //
 // This test previously asserted the opposite — that an expired override still permits the
 // claim — on the theory that claimForDeletionPredicate should use the "still live right now"
-// rule (noActiveManualOverridePredicate), matching CancelIfPastDue/ExpireTrialIfNoOverride. That
+// rule (noActiveManualOverridePredicate), matching CancelIfPastDueWithRetention/ExpireTrialIfNoOverride. That
 // was the C1 bug, not a documented rule: the retention *queries* that select this same user as a
 // deletion candidate (GetUsersWithExpiredRetention) were correctly changed to exclude ANY
 // override, live or lapsed (noManualOverrideAtAllPredicate) — see that constant's doc comment for

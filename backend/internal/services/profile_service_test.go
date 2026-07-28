@@ -186,10 +186,6 @@ func (m *MockProfileRepository) ClearPastDueStartedAt(ctx context.Context, userI
 func (m *MockProfileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-func (m *MockProfileRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
 // CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
 // (Issue #1413 H5 residual) are not exercised by these profile-service tests; stubbed to satisfy
 // the widened ProfileRepository interface.

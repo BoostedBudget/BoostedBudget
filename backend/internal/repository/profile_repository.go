@@ -138,28 +138,23 @@ type ProfileRepository interface {
 	// Used by the dunning cron job to find candidates for grace-expiry processing (Issue #898).
 	GetUsersInPastDue(ctx context.Context) ([]domain.User, error)
 
-	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is
-	// still 'past_due' AND carries no currently-active manual tier override. Returns (true, nil)
-	// if the flip happened, (false, nil) if the user has already recovered (payment arrived
-	// between Plaid disconnect and this point) or an admin granted/extended a comp in that same
-	// window. Issue #898: CAS guard against recovery race condition. Issue #1413 High finding H6
-	// (Codex review round 3): predicate extended to also close the comp race — a prior read-only
-	// check of HasActiveManualOverride() cannot, by itself, protect the final status flip.
-	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
-
-	// CancelIfPastDueWithRetention is CancelIfPastDue's atomic sibling: it flips
-	// subscription_status to 'cancelled' AND starts the retention clock (retention_started_at,
-	// retention_expires_at) in the SAME UPDATE, closing Issue #1413's H5 residual on the
-	// past-due grace-cancel path. Previously CancelIfPastDue and a separate SetRetentionDates
-	// call left a window where the CAS could succeed but the retention write could be lost (a
-	// crash, a dead-lettered job) — and because GetUsersInPastDue only selects
-	// subscription_status = 'past_due', the daily dunning job can never re-select a user this
-	// already flipped to 'cancelled', so that user would be cancelled forever with no retention
-	// clock: never warned, never deleted. Combining both writes into one statement means either
-	// both land or neither does. Same predicate as CancelIfPastDue (still 'past_due', still no
-	// active override) — the claim provides exclusivity, this predicate still provides
-	// correctness. Returns (true, nil) if the flip happened, (false, nil) on the same
-	// already-recovered/already-comped conditions CancelIfPastDue reports.
+	// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled' AND starts
+	// the retention clock (retention_started_at, retention_expires_at) in the SAME UPDATE, closing
+	// Issue #1413's H5 residual on the past-due grace-cancel path. The status flip and the
+	// retention-clock write used to be two separate calls (a CAS-guarded status flip, then a
+	// separate SetRetentionDates call), which left a window where the CAS could succeed but the
+	// retention write could be lost (a crash, a dead-lettered job) — and because GetUsersInPastDue
+	// only selects subscription_status = 'past_due', the daily dunning job can never re-select a
+	// user this already flipped to 'cancelled', so that user would be cancelled forever with no
+	// retention clock: never warned, never deleted. Combining both writes into one statement means
+	// either both land or neither does. Predicate: still 'past_due' AND carries no currently-active
+	// manual tier override — the claim provides exclusivity, this predicate still provides
+	// correctness. Issue #898: CAS guard against recovery race condition. Issue #1413 High finding
+	// H6 (Codex review round 3): predicate extended to also close the comp race — a prior
+	// read-only check of HasActiveManualOverride() cannot, by itself, protect the final status
+	// flip. Returns (true, nil) if the flip happened, (false, nil) if the user has already
+	// recovered (payment arrived between Plaid disconnect and this point) or an admin
+	// granted/extended a comp in that same window.
 	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
 
 	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
@@ -963,7 +958,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 // (GetUsersWithExpiredRetention et al.), which already exclude ANY override, live or lapsed, via
 // noManualOverrideAtAllPredicate. Before this fix, claimForDeletionPredicate used
 // noActiveManualOverridePredicate ("still live right now") instead — the exact rule that's
-// correct for point-in-time transitions like CancelIfPastDue, but wrong here: a comp that lapsed
+// correct for point-in-time transitions like CancelIfPastDueWithRetention, but wrong here: a comp that lapsed
 // moments before the independently-scheduled manual_tier_override_expiry_check job clears the
 // column would pass the live-only check and be hard-deleted, with no warning, in the ordering gap
 // between that job and the retention worker. That is the original data-loss bug this whole branch
@@ -975,7 +970,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 // while the expiry job is healthy, not a permanent exemption.
 //
 // Deliberately still a SEPARATE predicate from noActiveManualOverridePredicate, which stays
-// exactly as it was for its own callers (CancelIfPastDue, ClaimPlaidDisconnectIfPastDue,
+// exactly as it was for its own callers (CancelIfPastDueWithRetention, ClaimPlaidDisconnectIfPastDue,
 // ExpireTrialIfNoOverride) — those are point-in-time transitions guarded against a comp granted
 // in a race window, not a cross-job-ordering hazard like this one.
 const claimForDeletionPredicate = `
@@ -1280,7 +1275,7 @@ func (r *profileRepository) IsRetentionNotice7dEligible(ctx context.Context, use
 // TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary kept exercising it purely
 // so the exact production string wouldn't silently drift from a hand-copied restatement. As of
 // the Issue #1413 Codex review round 3 fix (High findings H5/H6), it now has real production
-// callers too — CancelIfPastDue and ExpireTrialIfNoOverride splice this constant into a
+// callers too — CancelIfPastDueWithRetention and ExpireTrialIfNoOverride splice this constant into a
 // conditional UPDATE's WHERE clause, per the claim-then-act pattern (a third former caller,
 // ClaimPlaidDisconnectIfPastDue, was deleted in round 4 — see past_due_service.go's H6a fix,
 // which replaced its self-assigning-update "claim" with a real work_claims claim): this is the
@@ -1589,32 +1584,13 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 	return users, nil
 }
 
-// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is still
-// 'past_due' and carries no currently-active manual tier override. Returns (true, nil) if the
-// flip happened, (false, nil) if the user has already recovered (e.g. payment arrived between
-// Plaid disconnect and this call) or an admin granted/extended a comp in that same window.
-// Issue #898: CAS guard against recovery race condition. Issue #1413 High finding H6 (Codex
-// review round 3): predicate extended with noActiveManualOverridePredicate — a prior read-only
-// HasActiveManualOverride() check in the caller cannot, by itself, protect this write, since the
-// two are not atomic.
-func (r *profileRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET subscription_status = 'cancelled', updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due'
-	`+noActiveManualOverridePredicate,
-		userID)
-	if err != nil {
-		return false, fmt.Errorf("CancelIfPastDue: %w", err)
-	}
-	return ct.RowsAffected() > 0, nil
-}
-
-// CancelIfPastDueWithRetention is CancelIfPastDue's atomic sibling — see the interface doc
-// comment for the full Issue #1413 H5 residual rationale. Same predicate as CancelIfPastDue
-// (identical WHERE clause, including noActiveManualOverridePredicate); the only difference is
-// that retention_started_at/retention_expires_at are set in the SAME statement, so the status
-// flip and the retention-clock write can never land separately.
+// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled', starting the
+// retention clock in the same statement — see the interface doc comment for the full Issue #1413
+// H5 residual rationale. Predicate: still 'past_due' and carries no currently-active manual tier
+// override (noActiveManualOverridePredicate). Issue #898: CAS guard against recovery race
+// condition. Issue #1413 High finding H6 (Codex review round 3): predicate extended with
+// noActiveManualOverridePredicate — a prior read-only HasActiveManualOverride() check in the
+// caller cannot, by itself, protect this write, since the two are not atomic.
 func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
@@ -1635,9 +1611,10 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 // still 'trial' and carries no currently-active manual tier override. Returns (true, nil) if the
 // flip happened, (false, nil) if an admin granted/extended a comp between the caller's earlier
 // HasActiveManualOverride() read and this call, or the user's status has otherwise already moved
-// on. Issue #1413 High finding H5, Codex review round 3: follows CancelIfPastDue's shape — the
-// predicate that authorises the transition lives in the UPDATE's WHERE clause, evaluated against
-// committed state at the moment of the write, not in an earlier, non-atomic read-then-check.
+// on. Issue #1413 High finding H5, Codex review round 3: follows CancelIfPastDueWithRetention's
+// shape — the predicate that authorises the transition lives in the UPDATE's WHERE clause,
+// evaluated against committed state at the moment of the write, not in an earlier, non-atomic
+// read-then-check.
 func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users

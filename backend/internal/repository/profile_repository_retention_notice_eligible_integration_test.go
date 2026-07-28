@@ -280,7 +280,7 @@ func TestRetentionNoticeEligible_Integration_ActiveOverride_ReturnsFalse(t *test
 }
 
 // TestRetentionNoticeEligible_Integration_LapsedOverride_ReturnsFalse distinguishes M9 from
-// H5/H6: unlike CancelIfPastDue/ExpireTrialIfNoOverride/ClaimForDeletion (which use
+// H5/H6: unlike CancelIfPastDueWithRetention/ExpireTrialIfNoOverride/ClaimForDeletion (which use
 // noActiveManualOverridePredicate — "still live right now"), the retention-notice re-check reuses
 // noManualOverrideAtAllPredicate, matching the candidate queries' "any override, live or lapsed"
 // rule. A LAPSED override must still block the notice.
