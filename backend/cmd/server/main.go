@@ -670,6 +670,11 @@ func main() {
 				RetentionMonths: cfg.RetentionPeriodMonths,
 				Logger:          appLogger,
 			})
+			// Issue #1413 Medium finding M9 (Codex review round 3): required for
+			// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
+			// before a notice email is sent — replaces the old ClaimRetentionNotice30dSent/7dSent,
+			// which stamped the *_sent_at marker BEFORE the send was attempted.
+			retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
 			appLogger.Info("Retention cleanup check worker created (River)")
 
 			// Issue #633: Create DLQ cleanup worker

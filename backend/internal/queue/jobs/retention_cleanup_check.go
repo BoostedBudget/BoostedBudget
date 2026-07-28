@@ -11,8 +11,17 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 )
+
+// retentionNoticeClaimLease is the lease duration requested for both ActionRetentionNotice30d and
+// ActionRetentionNotice7d work claims (Issue #1413 Medium finding M9, Codex review round 3).
+// Shorter than the 15-minute lease used by claims guarding a Plaid/Paddle call (ExecuteDeletion,
+// PastDueService, SubscriptionWebhookWorker): sending a notice email has no slow external cleanup
+// step behind it, so 5 minutes is generous while still keeping a crashed worker's claim quickly
+// reclaimable.
+const retentionNoticeClaimLease = 5 * time.Minute
 
 // RetentionCleanupCheckArgs contains the arguments for the retention cleanup check job.
 // This job runs daily to:
@@ -35,17 +44,27 @@ type RetentionProfileRepository interface {
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
 	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed and are not deleted/pending.
 	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
-	// ClaimRetentionNotice30dSent atomically stamps the 30-day notice as sent, but only if it
-	// is still unsent AND the user carries no manual_tier_override at all (live or lapsed) —
-	// the same rule GetUsersNeedingRetention30dNotice's own query enforces. Returns
-	// (true, nil) if the claim succeeded (safe to send the notice email), (false, nil) if a
-	// comp was granted since the candidate query ran, or a concurrent worker/retry already
-	// claimed this notice. Issue #1413 Medium finding M9 (Codex review round 2): replaces the
-	// old unconditional SetRetentionNotice30dSent — send now follows a successful claim,
-	// closing both the comp race and the pre-existing double-send window.
-	ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error)
-	// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling.
-	ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error)
+
+	// IsRetentionNotice30dEligible re-verifies, at the moment the caller already holds an
+	// exclusive work_claims claim on repository.ActionRetentionNotice30d, that a user is still
+	// eligible for the 30-day notice: still in the notice window, still unsent, and carrying no
+	// manual_tier_override at all (live or lapsed) — the same rule
+	// GetUsersNeedingRetention30dNotice's own query enforces. Returns (true, nil) when safe to
+	// send the notice email now, (false, nil) when any of those conditions changed since the
+	// candidate query ran — a legitimate skip, never an error. Performs NO write. Issue #1413
+	// Medium finding M9 (Codex review round 3): replaces the old ClaimRetentionNotice30dSent,
+	// which stamped the *_sent_at marker BEFORE the send was even attempted, so a failed send
+	// left the marker set and the user was silently never warned again.
+	IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error)
+	// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling.
+	IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error)
+
+	// SetRetentionNotice30dSent marks the 30-day pre-deletion notice as sent. Callers MUST only
+	// invoke this AFTER the notice email has been sent successfully (Issue #1413 M9) — never
+	// before, and never on a skipped/failed send.
+	SetRetentionNotice30dSent(ctx context.Context, userID string) error
+	// SetRetentionNotice7dSent is SetRetentionNotice30dSent's 7-day sibling.
+	SetRetentionNotice7dSent(ctx context.Context, userID string) error
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -71,6 +90,12 @@ type RetentionCleanupCheckWorker struct {
 	profileRepo     RetentionProfileRepository
 	deletionService RetentionDeletionService
 	emailService    RetentionEmailService
+	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
+	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
+	// finding M9, Codex review round 3). See SetWorkClaimsRepo — like
+	// DeletionService/PastDueService/SubscriptionWebhookWorker's claims repos, this is required,
+	// not optional.
+	claimsRepo      repository.WorkClaimsRepository
 	retentionMonths int
 	logger          *slog.Logger
 }
@@ -100,6 +125,24 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 		emailService:    deps.EmailService,
 		retentionMonths: retentionMonths,
 		logger:          logger,
+	}
+}
+
+// SetWorkClaimsRepo wires the durable work-claims mechanism send30dNotices/send7dNotices require
+// for EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
+// finding M9, Codex review round 3). Mirrors DeletionService/PastDueService/
+// SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs, this is NOT an optional capability:
+// a nil claims repo makes the notice-sending path fail loudly (logged, per-user, as an error) for
+// every candidate rather than silently reverting to the old conflated claim-marker behavior.
+func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+	w.claimsRepo = repo
+}
+
+// releaseClaimOnFailure releases a work claim and logs any release failure. Mirrors
+// PastDueService/SubscriptionWebhookWorker's helper of the same name.
+func (w *RetentionCleanupCheckWorker) releaseClaimOnFailure(ctx context.Context, userID, action, token, reason string) {
+	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, action, token, reason); releaseErr != nil {
+		w.logger.Warn("failed to release work claim", "user_id", userID, "action", action, "reason", reason, "error", releaseErr)
 	}
 }
 
@@ -166,64 +209,38 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	return err
 }
 
+// retentionNoticeSpec parameterizes processRetentionNotices over the 30-day/7-day notice
+// variants, which differ only in: the work_claims action, the log/email copy, the eligibility
+// re-check, and which *_sent_at column gets stamped after a successful send.
+type retentionNoticeSpec struct {
+	action     string
+	noticeName string // for log messages, e.g. "30d"
+	subject    string
+	body       string
+	isEligible func(ctx context.Context, userID string) (bool, error)
+	markSent   func(ctx context.Context, userID string) error
+}
+
 // send30dNotices finds users needing 30-day warning and sends emails.
 func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID int64) error {
 	users, err := w.profileRepo.GetUsersNeedingRetention30dNotice(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch users needing 30d notice: %w", err)
 	}
-
 	if len(users) == 0 {
 		w.logger.Info("no users needing 30d retention notice", "job_id", jobID)
 		return nil
 	}
-
 	w.logger.Info("found users needing 30d retention notice", "job_id", jobID, "user_count", len(users))
 
-	const subject = "Your BoostedBudget data will be deleted in 30 days"
-	const body = "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access."
-
-	var sentCount, errorCount, skippedCount int
-	for _, user := range users {
-		// #1413: belt-and-braces — a comped user grants access and must not be warned about,
-		// or slated for, deletion. This is a cheap short-circuit against the candidate list
-		// snapshot (avoids an extra DB round-trip in the common already-comped case), NOT the
-		// source of correctness: it only catches a LIVE comp visible on this snapshot, and
-		// cannot by itself protect against a comp granted (or a lapsed-but-uncleared override)
-		// between the query and this loop. The real enforcement is the claim just below.
-		if user.HasActiveManualOverride() {
-			w.logger.Info("skipping 30d retention notice for actively comped user",
-				"job_id", jobID, "user_id", user.ID)
-			continue
-		}
-
-		// Issue #1413 Medium finding M9 (Codex review round 2): claim the notice atomically
-		// BEFORE sending — the previous order (send, then mark) left a comp-race and a
-		// double-send window open (two workers, or a retry, could both send). A lost claim is
-		// a legitimate, expected outcome, not an error.
-		claimed, claimErr := w.profileRepo.ClaimRetentionNotice30dSent(ctx, user.ID)
-		if claimErr != nil {
-			w.logger.Warn("failed to claim 30d retention notice",
-				"job_id", jobID, "user_id", user.ID, "error", claimErr)
-			errorCount++
-			continue
-		}
-		if !claimed {
-			w.logger.Info("skipping 30d retention notice — claim not granted (comped since query, or already sent)",
-				"job_id", jobID, "user_id", user.ID)
-			skippedCount++
-			continue
-		}
-
-		if sendErr := w.sendNoticeEmail(ctx, user, subject, body); sendErr != nil {
-			w.logger.Warn("failed to send 30d retention notice",
-				"job_id", jobID, "user_id", user.ID, "error", sendErr)
-			errorCount++
-			continue
-		}
-
-		sentCount++
-	}
+	sentCount, errorCount, skippedCount := w.processRetentionNotices(ctx, jobID, users, retentionNoticeSpec{
+		action:     repository.ActionRetentionNotice30d,
+		noticeName: "30d",
+		subject:    "Your BoostedBudget data will be deleted in 30 days",
+		body:       "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access.",
+		isEligible: w.profileRepo.IsRetentionNotice30dEligible,
+		markSent:   w.profileRepo.SetRetentionNotice30dSent,
+	})
 
 	w.logger.Info("30d retention notices processed",
 		"job_id", jobID, "sent", sentCount, "errors", errorCount, "skipped", skippedCount)
@@ -236,55 +253,166 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 	if err != nil {
 		return fmt.Errorf("failed to fetch users needing 7d notice: %w", err)
 	}
-
 	if len(users) == 0 {
 		w.logger.Info("no users needing 7d retention notice", "job_id", jobID)
 		return nil
 	}
-
 	w.logger.Info("found users needing 7d retention notice", "job_id", jobID, "user_count", len(users))
 
-	const subject = "Final notice: BoostedBudget data deletion in 7 days"
-	const body = "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data."
+	sentCount, errorCount, skippedCount := w.processRetentionNotices(ctx, jobID, users, retentionNoticeSpec{
+		action:     repository.ActionRetentionNotice7d,
+		noticeName: "7d",
+		subject:    "Final notice: BoostedBudget data deletion in 7 days",
+		body:       "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data.",
+		isEligible: w.profileRepo.IsRetentionNotice7dEligible,
+		markSent:   w.profileRepo.SetRetentionNotice7dSent,
+	})
 
-	var sentCount, errorCount, skippedCount int
+	w.logger.Info("7d retention notices processed",
+		"job_id", jobID, "sent", sentCount, "errors", errorCount, "skipped", skippedCount)
+	return nil
+}
+
+// processRetentionNotices implements the M9-corrected claim -> re-verify -> send -> stamp ->
+// complete sequence shared by the 30-day and 7-day retention notices (Issue #1413 Medium finding
+// M9, Codex review round 3):
+//
+//  1. Belt-and-braces HasActiveManualOverride() short-circuit against the candidate snapshot —
+//     cheap, but NOT the source of correctness (see the claim/re-verify below for that).
+//  2. Skip WITHOUT claiming when there is demonstrably nothing to send (no email service
+//     configured, or the user has no address on file) — claiming and immediately releasing would
+//     just churn the work_claims table for no benefit.
+//  3. Claim spec.action for EXCLUSIVITY. Nothing user-visible has happened yet.
+//  4. Re-verify eligibility via spec.isEligible (still in window, still unsent, still uncomped)
+//     against the freshest possible read — the claim gives exclusivity, this gives correctness.
+//  5. Send the notice email.
+//  6. ONLY on send success, stamp *_sent_at via spec.markSent, then mark the claim Complete.
+//
+// On any failure (claim error, ineligible, send error, or a failure to stamp *_sent_at after a
+// successful send), the claim is Released with the failure reason instead of Completed — the
+// *_sent_at column stays NULL, so the next daily run retries. This is the fix for the bug this
+// task exists to close: the old code stamped *_sent_at BEFORE sending, so a failed send left the
+// marker set and the user was silently never warned again before their data was deleted.
+//
+// Residual, by design: if the email PROVIDER accepts the message but SendRetentionNoticeEmail
+// still returns an error (or spec.markSent itself fails right after a genuinely successful send),
+// the claim is Released and the next run retries — which re-sends the email. At-least-once is the
+// deliberate choice over never-warn: a duplicate warning email is recoverable, a silently-skipped
+// one is not.
+func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Context, jobID int64, users []*domain.User, spec retentionNoticeSpec) (sentCount, errorCount, skippedCount int) {
 	for _, user := range users {
-		// #1413: belt-and-braces — see send30dNotices for rationale.
+		// #1413: belt-and-braces — a comped user grants access and must not be warned about, or
+		// slated for, deletion. Cheap short-circuit against the candidate list snapshot; the claim
+		// + re-verify below is the real enforcement.
 		if user.HasActiveManualOverride() {
-			w.logger.Info("skipping 7d retention notice for actively comped user",
+			w.logger.Info("skipping "+spec.noticeName+" retention notice for actively comped user",
 				"job_id", jobID, "user_id", user.ID)
 			continue
 		}
 
-		// Issue #1413 Medium finding M9 (Codex review round 2) — see send30dNotices for the
-		// full rationale: claim atomically before sending.
-		claimed, claimErr := w.profileRepo.ClaimRetentionNotice7dSent(ctx, user.ID)
-		if claimErr != nil {
-			w.logger.Warn("failed to claim 7d retention notice",
-				"job_id", jobID, "user_id", user.ID, "error", claimErr)
+		// Issue #1413 M9: prefer not to claim at all when there is demonstrably nothing to send —
+		// claiming and immediately releasing would just churn the work_claims table for no
+		// benefit.
+		if !w.canSendRetentionNotice(jobID, spec.noticeName, user) {
+			skippedCount++
+			continue
+		}
+
+		if w.claimsRepo == nil {
+			w.logger.Error("processRetentionNotices: work claims repository not configured",
+				"job_id", jobID, "user_id", user.ID, "notice", spec.noticeName)
+			errorCount++
+			continue
+		}
+		token, claimed, err := w.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, spec.action, retentionNoticeClaimLease)
+		if err != nil {
+			w.logger.Warn("failed to claim "+spec.noticeName+" retention notice",
+				"job_id", jobID, "user_id", user.ID, "error", err)
 			errorCount++
 			continue
 		}
 		if !claimed {
-			w.logger.Info("skipping 7d retention notice — claim not granted (comped since query, or already sent)",
+			// Another worker holds this lease, or the action was already completed. Legitimate
+			// outcome, not an error.
+			w.logger.Info("skipping "+spec.noticeName+" retention notice — claim not granted (comped since query, already sent, or a concurrent worker holds it)",
 				"job_id", jobID, "user_id", user.ID)
 			skippedCount++
 			continue
 		}
 
-		if sendErr := w.sendNoticeEmail(ctx, user, subject, body); sendErr != nil {
-			w.logger.Warn("failed to send 7d retention notice",
+		// Re-verify eligibility against the freshest possible read, immediately after winning the
+		// claim and before the email actually goes out.
+		eligible, err := spec.isEligible(ctx, user.ID)
+		if err != nil {
+			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, err.Error())
+			w.logger.Warn("failed to re-verify "+spec.noticeName+" retention notice eligibility",
+				"job_id", jobID, "user_id", user.ID, "error", err)
+			errorCount++
+			continue
+		}
+		if !eligible {
+			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, "precondition lost since claim")
+			w.logger.Info("skipping "+spec.noticeName+" retention notice — precondition lost since claim (comped, already sent, or window closed)",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+
+		if sendErr := w.emailService.SendRetentionNoticeEmail(ctx, user.Email, spec.subject, spec.body); sendErr != nil {
+			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, sendErr.Error())
+			w.logger.Warn("failed to send "+spec.noticeName+" retention notice",
 				"job_id", jobID, "user_id", user.ID, "error", sendErr)
 			errorCount++
 			continue
 		}
 
+		// Only stamp *_sent_at AFTER the send actually succeeded — this ordering is the entire
+		// M9 fix.
+		if markErr := spec.markSent(ctx, user.ID); markErr != nil {
+			// The email went out but we failed to record it. Release (not Complete) so the next
+			// run retries — see the residual note in the doc comment above: this risks a
+			// duplicate send, the deliberate at-least-once trade-off.
+			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, markErr.Error())
+			w.logger.Error("sent "+spec.noticeName+" retention notice but failed to record it — next run will retry and may re-send",
+				"job_id", jobID, "user_id", user.ID, "error", markErr)
+			errorCount++
+			continue
+		}
+
+		completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, spec.action, token)
+		if err != nil {
+			w.logger.Error("failed to mark "+spec.noticeName+" retention notice claim complete",
+				"job_id", jobID, "user_id", user.ID, "action", spec.action, "error", err)
+		} else if !completed {
+			// The lease was reclaimed by another worker while we were mid-flight — the fencing-
+			// token scenario. The notice may have been sent twice; this must be visible, not
+			// silent (per the #1413 ambiguity resolution for Complete returning ok=false).
+			w.logger.Error(spec.noticeName+" retention notice claim lease lost mid-flight — notice may have been sent twice",
+				"job_id", jobID, "user_id", user.ID, "action", spec.action)
+		}
+
 		sentCount++
 	}
+	return sentCount, errorCount, skippedCount
+}
 
-	w.logger.Info("7d retention notices processed",
-		"job_id", jobID, "sent", sentCount, "errors", errorCount, "skipped", skippedCount)
-	return nil
+// canSendRetentionNotice reports whether a notice email can actually be sent for user right now,
+// logging why not otherwise. Issue #1413 M9: called BEFORE claiming so a demonstrably-unsendable
+// notice (no email service configured, no address on file) never touches work_claims at all —
+// claiming and immediately releasing would just churn the table for no benefit. Prior to this fix,
+// both cases still stamped the *_sent_at marker despite nothing being sent.
+func (w *RetentionCleanupCheckWorker) canSendRetentionNotice(jobID int64, noticeName string, user *domain.User) bool {
+	if w.emailService == nil {
+		w.logger.Info("skipping "+noticeName+" retention notice: no email service configured",
+			"job_id", jobID, "user_id", user.ID)
+		return false
+	}
+	if user.Email == "" {
+		w.logger.Warn("user has no email, skipping "+noticeName+" retention notice",
+			"job_id", jobID, "user_id", user.ID)
+		return false
+	}
+	return true
 }
 
 // deleteExpiredAccounts finds users with expired retention and executes deletion.
@@ -336,19 +464,6 @@ func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context,
 		return fmt.Errorf("retention deletion: %d of %d deletions failed (see logs for details)", errorCount, len(users))
 	}
 	return nil
-}
-
-// sendNoticeEmail sends a retention notice email to the user.
-// If emailService is nil or email is empty, the send is skipped (no-op safe).
-func (w *RetentionCleanupCheckWorker) sendNoticeEmail(ctx context.Context, user *domain.User, subject, body string) error {
-	if w.emailService == nil {
-		return nil // No email service configured — skip sending
-	}
-	if user.Email == "" {
-		w.logger.Warn("user has no email, skipping retention notice", "user_id", user.ID)
-		return nil
-	}
-	return w.emailService.SendRetentionNoticeEmail(ctx, user.Email, subject, body)
 }
 
 // RetentionCleanupCheckUniqueOpts returns the recommended uniqueness options.

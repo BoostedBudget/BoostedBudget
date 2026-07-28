@@ -174,20 +174,33 @@ type ProfileRepository interface {
 	// granted in the race window.
 	ClaimForDeletion(ctx context.Context, userID string) (bool, error)
 
-	// ClaimRetentionNotice30dSent atomically stamps retention_notice_30d_sent_at as sent, but
-	// only if it is still unsent AND the user carries no manual_tier_override at all (live or
-	// lapsed) — reusing noManualOverrideAtAllPredicate, the same rule
-	// GetUsersNeedingRetention30dNotice's own query already enforces (Issue #1413 Critical
-	// finding C1). Returns (true, nil) if the claim succeeded (safe to send the notice email
-	// now), (false, nil) if a comp was granted since the candidate query ran, or a concurrent
-	// worker/retry already claimed this notice. Issue #1413 Medium finding M9 (Codex review
-	// round 2): closes both the comp race and the pre-existing double-send window (two workers,
-	// or a retry, could previously both send).
-	ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error)
+	// IsRetentionNotice30dEligible re-verifies, at the moment a caller already holds an
+	// EXCLUSIVE work_claims claim on repository.ActionRetentionNotice30d, that a user is still
+	// eligible for the 30-day pre-deletion notice: still inside the notice window, the notice
+	// still unsent, subscription still inactive/cancelled with no outstanding GDPR deletion
+	// request, and carrying no manual_tier_override at all (live or lapsed) —
+	// noManualOverrideAtAllPredicate, the SAME rule GetUsersNeedingRetention30dNotice's own
+	// candidate query enforces, mirrored here field-for-field so the two can never drift apart.
+	// Returns (true, nil) when it is safe to send the notice email right now, (false, nil) when
+	// any one of those conditions has changed since the candidate query ran (a comp granted, the
+	// window closed, the notice already sent by a since-completed claim, a deletion request filed)
+	// — a legitimate skip, never an error. This method performs NO write.
+	//
+	// Issue #1413 Medium finding M9 (Codex review round 3): replaces the earlier
+	// ClaimRetentionNotice30dSent, which conflated two different concerns into one atomic UPDATE —
+	// EXCLUSIVITY (now work_claims's job, via Claim/Complete/Release) and CORRECTNESS (this
+	// read-only re-check). The old method stamped retention_notice_30d_sent_at BEFORE the email
+	// send was even attempted, so a failed send left the marker set and the next day's candidate
+	// query silently excluded the user forever — the user was never warned before deletion, the
+	// exact outcome the notice exists to prevent. The corrected sequence is: Claim (exclusivity) →
+	// IsRetentionNotice30dEligible (this method, correctness) → send the email → ONLY on success,
+	// SetRetentionNotice30dSent (the marker) → Complete. On send failure, Release — the marker
+	// stays NULL, so the next daily run retries.
+	IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error)
 
-	// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling. See that
+	// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling. See that
 	// method's doc for the full rationale.
-	ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error)
+	IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error)
 
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
@@ -917,10 +930,12 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 // moments before the independently-scheduled manual_tier_override_expiry_check job clears the
 // column would pass the live-only check and be hard-deleted, with no warning, in the ordering gap
 // between that job and the retention worker. That is the original data-loss bug this whole branch
-// (#1413) exists to fix — see noManualOverrideAtAllPredicate's doc comment for the full race, and
+// (#1413) exists to fix — see noManualOverrideAtAllPredicate's doc comment for the full race, AND
+// for why this is honestly a delay only while manual_tier_override_expiry_check keeps running
+// successfully every day, not a guaranteed bound — that job's own failures are the thing to watch.
 // TestClaimForDeletion_Integration_ExpiredOverride_NoDeletionRequest_NotClaimed /
-// TestClaimForDeletion_Integration_ClearedOverride_Claims for the real-DB proof this is a delay
-// (until the expiry job clears the column), not a permanent exemption.
+// TestClaimForDeletion_Integration_ClearedOverride_Claims are the real-DB proof this is a delay
+// while the expiry job is healthy, not a permanent exemption.
 //
 // Deliberately still a SEPARATE predicate from noActiveManualOverridePredicate, which stays
 // exactly as it was for its own callers (CancelIfPastDue, ClaimPlaidDisconnectIfPastDue,
@@ -1156,38 +1171,55 @@ func (r *profileRepository) SetRetentionNotice7dSent(ctx context.Context, userID
 	return nil
 }
 
-// ClaimRetentionNotice30dSent atomically stamps retention_notice_30d_sent_at as sent, but only
-// if it is still unsent AND the user carries no manual_tier_override at all (live or lapsed —
-// noManualOverrideAtAllPredicate, the same rule GetUsersNeedingRetention30dNotice's own query
-// enforces). Returns (true, nil) if the claim succeeded (safe to send the notice email now),
-// (false, nil) if a comp was granted since the candidate query ran, or a concurrent
-// worker/retry already claimed this notice. Issue #1413 Medium finding M9, Codex review round 2.
-func (r *profileRepository) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET retention_notice_30d_sent_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND is_deleted = FALSE AND retention_notice_30d_sent_at IS NULL
-	`+noManualOverrideAtAllPredicate,
-		userID)
+// IsRetentionNotice30dEligible re-verifies FULL 30-day notice eligibility for a single user,
+// mirroring GetUsersNeedingRetention30dNotice's WHERE clause field-for-field (Issue #1413 Medium
+// finding M9, Codex review round 3) so the candidate query and this per-user re-check can never
+// silently drift apart. Performs NO write — see the ProfileRepository interface doc for why the
+// claim / eligibility-check / send / stamp sequence is deliberately split this way.
+func (r *profileRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
+	var eligible bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1
+			  AND is_deleted = FALSE
+			  AND retention_expires_at IS NOT NULL
+			  AND retention_expires_at - INTERVAL '30 days' <= NOW()
+			  AND retention_expires_at > NOW()
+			  AND retention_notice_30d_sent_at IS NULL
+			  AND subscription_status IN ('inactive', 'cancelled')
+			  AND deletion_requested_at IS NULL
+	`+noManualOverrideAtAllPredicate+`
+		)
+	`, userID).Scan(&eligible)
 	if err != nil {
-		return false, fmt.Errorf("ClaimRetentionNotice30dSent: %w", err)
+		return false, fmt.Errorf("IsRetentionNotice30dEligible: %w", err)
 	}
-	return ct.RowsAffected() > 0, nil
+	return eligible, nil
 }
 
-// ClaimRetentionNotice7dSent is ClaimRetentionNotice30dSent's 7-day sibling. See that method's
+// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling. See that method's
 // doc for the full rationale.
-func (r *profileRepository) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
-	ct, err := r.db.Exec(ctx, `
-		UPDATE users
-		SET retention_notice_7d_sent_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND is_deleted = FALSE AND retention_notice_7d_sent_at IS NULL
-	`+noManualOverrideAtAllPredicate,
-		userID)
+func (r *profileRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
+	var eligible bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1
+			  AND is_deleted = FALSE
+			  AND retention_expires_at IS NOT NULL
+			  AND retention_expires_at - INTERVAL '7 days' <= NOW()
+			  AND retention_expires_at > NOW()
+			  AND retention_notice_7d_sent_at IS NULL
+			  AND subscription_status IN ('inactive', 'cancelled')
+			  AND deletion_requested_at IS NULL
+	`+noManualOverrideAtAllPredicate+`
+		)
+	`, userID).Scan(&eligible)
 	if err != nil {
-		return false, fmt.Errorf("ClaimRetentionNotice7dSent: %w", err)
+		return false, fmt.Errorf("IsRetentionNotice7dEligible: %w", err)
 	}
-	return ct.RowsAffected() > 0, nil
+	return eligible, nil
 }
 
 // noActiveManualOverridePredicate excludes users with a currently-active admin manual tier
@@ -1241,11 +1273,17 @@ const noActiveManualOverridePredicate = `
 // comp even started — hard-deleted with no 30-day/7-day warning ever sent, in the race window
 // between the two jobs.
 //
-// Excluding on ANY non-empty override, live or lapsed, closes that window: the worst case is a
-// delay of up to one job cycle (until the expiry job clears the column and re-arms a fresh
-// window), never a wrongful deletion. See
-// TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a
-// delay, not a permanent exemption, and
+// Excluding on ANY non-empty override, live or lapsed, never causes a wrongful deletion — but the
+// delay this buys is bounded ONLY by manual_tier_override_expiry_check actually running
+// successfully every day, not by anything in this predicate. That job is best-effort: it is
+// registered with PeriodicJobOpts{RunOnStart: false}, and a failed run's retries eventually land
+// in the dead-letter queue with NO automatic replay (Issue #1413 Critical finding C1's "unbounded
+// exclusion" follow-up). If that job silently stops working, this predicate keeps excluding the
+// user indefinitely — "never deleted", not "delayed by a day" or "one job cycle" — until someone
+// notices the dead-lettered job and replays it. See manual_tier_override_expiry_check.go's Work()
+// for the failure metric/log this honesty depends on staying observable. See
+// TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a delay
+// WHILE THE EXPIRY JOB KEEPS RUNNING, not a permanent exemption by itself, and
 // TestGetUsersNeedingRetention30dNotice_Integration_ExcludesActiveComp (and its 7d/expired
 // siblings) for proof an ordinary never-comped user is unaffected.
 //

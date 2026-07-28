@@ -1910,16 +1910,16 @@ func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Cont
 	return false, nil
 }
 
-// ClaimForDeletion, ClaimRetentionNotice30dSent, ClaimRetentionNotice7dSent (Issue #1413 Codex
-// review round 2) are not exercised by these cursor tests; stubbed to satisfy the widened
+// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
+// review round 3) are not exercised by these cursor tests; stubbed to satisfy the widened
 // ProfileRepository interface.
 func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
-func (m *mockProfileRepoForCursorTests) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+func (m *mockProfileRepoForCursorTests) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
-func (m *mockProfileRepoForCursorTests) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+func (m *mockProfileRepoForCursorTests) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }

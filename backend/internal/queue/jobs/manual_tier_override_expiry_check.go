@@ -198,6 +198,18 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 		"job_id", job.ID, "expired", expiredCount, "errors", errorCount)
 	if errorCount > 0 {
 		err = fmt.Errorf("manual tier override expiry: %d of %d expirations failed (see logs for details)", errorCount, len(users))
+		// Issue #1413 C1 follow-up ("unbounded exclusion"): this job clearing manual_tier_override
+		// is the ONLY thing that bounds how long noManualOverrideAtAllPredicate can delay a
+		// retention notice/deletion. This job runs with PeriodicJobOpts{RunOnStart: false} and a
+		// failed run's retries eventually land in the dead-letter queue with no automatic replay —
+		// so if this job silently stops working, that "delay" becomes indefinite ("never deleted",
+		// not "delayed by a day"). An explicit ERROR-level log here, on top of the per-user Error
+		// logs already emitted above and the job_kind-labeled jobs_completed_total{status="failed"}
+		// metric the deferred func at the top of Work() already increments (the repo's established
+		// River-job observability mechanism — see the observability skill), is what keeps that
+		// failure mode observable rather than silent.
+		w.logger.Error("manual tier override expiry check completed with failures",
+			"job_id", job.ID, "errors", errorCount, "total", len(users))
 	}
 	return err
 }
