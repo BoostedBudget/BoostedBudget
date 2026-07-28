@@ -14,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -1281,6 +1282,57 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *t
 	// Unconditional trio ran despite the claim-guarded work aborting.
 	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
 	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
+}
+
+// TestWorker_SubscriptionCanceled_PlaidSideEffectClaimBusy_Aborts_ReleasesClaim proves Issue
+// #1413 H1's gating for this webhook: when DisconnectAllUserItems reports
+// services.ErrSideEffectClaimBusy (another flow — e.g. the past-due grace-cancel cron — already
+// holds the OPERATION-keyed Plaid-disconnect claim for this user), this webhook delivery must
+// still release its OWN flow claim and return an error so River retries the whole webhook. A
+// webhook delivery is one-shot — unlike the daily cron jobs, nothing else re-triggers this work if
+// it were silently acknowledged.
+func TestWorker_SubscriptionCanceled_PlaidSideEffectClaimBusy_Aborts_ReleasesClaim(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	canceledUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(canceledUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+		Return(testWebhookClaimToken, repository.ClaimWon, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(services.ErrSideEffectClaimBusy)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error()).
+		Return(true, nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "a busy side-effect claim must propagate so River retries the whole webhook")
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error())
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 }
 
 // ─── #1413: comped users keep Plaid connections and retention clock untouched on Paddle
