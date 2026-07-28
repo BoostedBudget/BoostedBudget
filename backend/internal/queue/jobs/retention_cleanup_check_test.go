@@ -66,13 +66,17 @@ func (m *MockRetentionProfileRepository) RepairRetentionClock(ctx context.Contex
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
+// IsRetentionNotice30dEligibleForOccurrence is IsRetentionNotice30dEligible's occurrence-scoped
+// successor (Issue #1413 round-4 finding M1) — see RetentionProfileRepository's doc comment.
+func (m *MockRetentionProfileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedRetentionExpiresAt)
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
+// IsRetentionNotice7dEligibleForOccurrence is IsRetentionNotice30dEligibleForOccurrence's 7-day
+// sibling.
+func (m *MockRetentionProfileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedRetentionExpiresAt)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -355,8 +359,8 @@ func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
 	mockEmail := new(MockRetentionEmailService)
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-1").Return(true, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-2").Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-1", retentionExpiresAt).Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-2", retentionExpiresAt).Return(true, nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-1").Return(nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-2").Return(nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
@@ -394,7 +398,7 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil)
-	mockRepo.On("IsRetentionNotice7dEligible", ctx, "user-3").Return(true, nil)
+	mockRepo.On("IsRetentionNotice7dEligibleForOccurrence", ctx, "user-3", retentionExpiresAt).Return(true, nil)
 	mockRepo.On("SetRetentionNotice7dSent", ctx, "user-3").Return(nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
@@ -515,15 +519,15 @@ func TestRetentionCleanupCheck_EmailServiceNil_SkipsSending(t *testing.T) {
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
-	// IsRetentionNotice30dEligible / SetRetentionNotice30dSent are deliberately left unstubbed:
-	// with no email service configured, the skip must happen BEFORE claiming or touching the
-	// profile repo at all. An unstubbed testify mock call panics, a stronger proof than
-	// AssertExpectations alone.
+	// IsRetentionNotice30dEligibleForOccurrence / SetRetentionNotice30dSent are deliberately left
+	// unstubbed: with no email service configured, the skip must happen BEFORE claiming or
+	// touching the profile repo at all. An unstubbed testify mock call panics, a stronger proof
+	// than AssertExpectations alone.
 
 	// nil email service, but claimsRepo IS wired to a WORKING (allowing) mock — this is the part
 	// that makes the test actually falsifiable: if the "skip before claiming" check were removed,
 	// Claim would succeed and the code would proceed to call the unstubbed
-	// IsRetentionNotice30dEligible, panicking. A nil claimsRepo here would let that same broken
+	// IsRetentionNotice30dEligibleForOccurrence, panicking. A nil claimsRepo here would let that same broken
 	// code path silently no-op via the (unrelated) "claims repo not configured" guard instead,
 	// masking the bug this test exists to catch.
 	worker := newTestRetentionWorker(mockRepo, mockDeletion, nil)
@@ -599,7 +603,7 @@ func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
 }
 
 // TestRetentionCleanupCheck_CompedUser_No30dNotice proves a comped user does not receive the
-// 30-day pre-deletion warning. IsRetentionNotice30dEligible is deliberately left unstubbed.
+// 30-day pre-deletion warning. IsRetentionNotice30dEligibleForOccurrence is deliberately left unstubbed.
 func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 	ctx := context.Background()
 
@@ -629,11 +633,11 @@ func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 
 	require.NoError(t, err)
 	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped30@example.com", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "IsRetentionNotice30dEligible", mock.Anything, "user-comped-30d")
+	mockRepo.AssertNotCalled(t, "IsRetentionNotice30dEligibleForOccurrence", mock.Anything, "user-comped-30d", mock.Anything)
 }
 
 // TestRetentionCleanupCheck_CompedUser_No7dNotice proves a comped user does not receive the
-// 7-day final warning. IsRetentionNotice7dEligible is deliberately left unstubbed.
+// 7-day final warning. IsRetentionNotice7dEligibleForOccurrence is deliberately left unstubbed.
 func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	ctx := context.Background()
 
@@ -663,7 +667,7 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 
 	require.NoError(t, err)
 	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, "comped7@example.com", mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "IsRetentionNotice7dEligible", mock.Anything, "user-comped-7d")
+	mockRepo.AssertNotCalled(t, "IsRetentionNotice7dEligibleForOccurrence", mock.Anything, "user-comped-7d", mock.Anything)
 }
 
 // TestRetentionCleanupCheck_ExpiredOverride_NotDeleted is the C1 regression proof (Issue #1413,
@@ -755,7 +759,7 @@ func TestRetentionCleanupCheck_NonComped_DeletedNormally(t *testing.T) {
 
 // TestRetentionCleanupCheck_30dClaimLost_NoEmailSent proves the race is actually closed: even
 // though the snapshot looked eligible, a lost claim must prevent the email send entirely.
-// SendRetentionNoticeEmail and IsRetentionNotice30dEligible are deliberately left unstubbed — an
+// SendRetentionNoticeEmail and IsRetentionNotice30dEligibleForOccurrence are deliberately left unstubbed — an
 // unstubbed testify mock call panics, a stronger proof than AssertNotCalled alone.
 func TestRetentionCleanupCheck_30dClaimLost_NoEmailSent(t *testing.T) {
 	ctx := context.Background()
@@ -851,7 +855,7 @@ func TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing(t *testing.T) {
 	mockClaims.On("Complete", ctx, repository.ResourceTypeUser, claimOKResourceID, repository.ActionRetentionNotice30d, testRetentionClaimToken).
 		Return(true, nil)
 
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-claimok").Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-claimok", retentionExpiresAt).Return(true, nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-claimok").Return(nil)
 
 	const subject30 = "Your BoostedBudget data will be deleted in 30 days"
@@ -893,7 +897,7 @@ func TestRetentionCleanupCheck_30dIneligibleAfterClaim_ReleasesClaim_SkipsSend(t
 	resourceID := retentionOccurrenceResourceID(t, "user-ineligible-30d", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
 		Return(testRetentionClaimToken, true, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-ineligible-30d").Return(false, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-ineligible-30d", retentionExpiresAt).Return(false, nil)
 	mockClaims.On("Release", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, testRetentionClaimToken, "precondition lost since claim").
 		Return(true, nil)
 
@@ -932,7 +936,7 @@ func TestRetentionCleanupCheck_30dSendFails_ReleasesClaim_NextRunRetries(t *test
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil).Twice()
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil).Twice()
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil).Twice()
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-retry-30d").Return(true, nil).Twice()
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-retry-30d", retentionExpiresAt).Return(true, nil).Twice()
 
 	const token1 = "token-attempt-1"
 	const token2 = "token-attempt-2"
@@ -977,7 +981,7 @@ func TestRetentionCleanupCheck_30dSendFails_ReleasesClaim_NextRunRetries(t *test
 
 // TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries mirrors the 30-day retry
 // proof for the 7-day notice — Issue #1413 M9's "both 30d and 7d independently" requirement: this
-// exercises IsRetentionNotice7dEligible / SetRetentionNotice7dSent / ActionRetentionNotice7d, not
+// exercises IsRetentionNotice7dEligibleForOccurrence / SetRetentionNotice7dSent / ActionRetentionNotice7d, not
 // merely the shared processRetentionNotices control flow already proven above.
 func TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries(t *testing.T) {
 	ctx := context.Background()
@@ -995,7 +999,7 @@ func TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries(t *testi
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil).Twice()
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return(users, nil).Twice()
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil).Twice()
-	mockRepo.On("IsRetentionNotice7dEligible", ctx, "user-retry-7d").Return(true, nil).Twice()
+	mockRepo.On("IsRetentionNotice7dEligibleForOccurrence", ctx, "user-retry-7d", retentionExpiresAt).Return(true, nil).Twice()
 
 	const token1 = "token-attempt-1-7d"
 	const token2 = "token-attempt-2-7d"
@@ -1059,7 +1063,7 @@ func TestRetentionCleanupCheck_30dSendSucceeds_OrderingProof(t *testing.T) {
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "claim") }).
 		Return(testRetentionClaimToken, true, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-order-30d").
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-order-30d", retentionExpiresAt).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "eligible") }).
 		Return(true, nil)
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "order30@example.com", mock.Anything, mock.Anything).
@@ -1110,7 +1114,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 	resourceID := retentionOccurrenceResourceID(t, "user-lease-lost", retentionExpiresAt)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
 		Return(testRetentionClaimToken, true, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, "user-lease-lost").Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-lease-lost", retentionExpiresAt).Return(true, nil)
 	mockEmail.On("SendRetentionNoticeEmail", ctx, "leaselost@example.com", mock.Anything, mock.Anything).Return(nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, "user-lease-lost").Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
@@ -1261,7 +1265,7 @@ func TestRetentionCleanupCheck_ProcessRetentionNotices_NilRetentionExpiresAt_Ret
 		noticeName: "30d",
 		subject:    "test subject",
 		body:       "test body",
-		isEligible: mockRepo.IsRetentionNotice30dEligible,
+		isEligible: mockRepo.IsRetentionNotice30dEligibleForOccurrence,
 		markSent:   mockRepo.SetRetentionNotice30dSent,
 	})
 

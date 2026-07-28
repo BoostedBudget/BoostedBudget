@@ -502,3 +502,99 @@ func TestRetentionNoticeEligible_Integration_FarOutsideWindow_ReturnsFalse(t *te
 	require.NoError(t, err)
 	assert.False(t, eligible7, "45 days out is outside the 7-day window")
 }
+
+// --- IsRetentionNotice30dEligibleForOccurrence / IsRetentionNotice7dEligibleForOccurrence
+// (Issue #1413 round-4 finding M1) ---
+//
+// IsRetentionNotice30dEligible/7dEligible above re-verify window/sent-state/status/override but
+// NOT that the row's CURRENT retention_expires_at still equals the value the caller claimed.
+// Round-4 review sequence: retention_cleanup_check.go claims using the candidate's
+// retention_expires_at (E1), but the row has since been RE-ARMED to a different value (E2) —
+// resubscribe (ClearRetentionDates), then cancel again, restarting the clock from a later point.
+// With a one-month retention configuration, two workers can hold E1 and E2 and BOTH see the
+// current clock as eligible (E2 is ALSO genuinely in-window, unsent, uncomped right now) — the
+// user gets a DUPLICATE notice. The *ForOccurrence siblings close this by requiring
+// retention_expires_at = expected in the SQL predicate itself.
+//
+// A real DB is required because pgxmock cannot prove that two DIFFERENT retention_expires_at
+// values behave differently against the same live row.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestRetentionNoticeEligibleForOccurrence_Integration -tags integration -v
+
+// TestRetentionNoticeEligibleForOccurrence_Integration_MatchingOccurrence_ReturnsTrue proves the
+// happy path: the claimed value matches the row's current retention_expires_at exactly.
+func TestRetentionNoticeEligibleForOccurrence_Integration_MatchingOccurrence_ReturnsTrue(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		eligible func(context.Context, string, time.Time) (bool, error)
+		offset   time.Duration
+	}{
+		{"30d", repo.IsRetentionNotice30dEligibleForOccurrence, windowOffset30d()},
+		{"7d", repo.IsRetentionNotice7dEligibleForOccurrence, windowOffset7d()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("occmatch_%s_%d", tt.name, time.Now().UnixNano())
+			expiresAt := time.Now().Add(tt.offset).Truncate(time.Microsecond)
+			user := createRetentionNoticeFixtureUser(t, ctx, pool, repo, suffix, retentionNoticeFixtureOpts{
+				retentionExpiresAt: &expiresAt,
+			})
+
+			eligible, err := tt.eligible(ctx, user.ID, expiresAt)
+			require.NoError(t, err)
+			assert.True(t, eligible, "the claimed occurrence matches the row's current retention_expires_at exactly")
+		})
+	}
+}
+
+// TestRetentionNoticeEligibleForOccurrence_Integration_StaleOccurrence_ReturnsFalse is THE M1
+// regression proof: a stale candidate claimed E1, but the row has since been RE-ARMED to a
+// DIFFERENT retention_expires_at (E2) — even though E2 is itself currently in-window, unsent, and
+// uncomped (i.e. the row genuinely IS eligible right now, just not for E1's claim), the
+// occurrence-scoped check must report ineligible for the stale E1 claim.
+func TestRetentionNoticeEligibleForOccurrence_Integration_StaleOccurrence_ReturnsFalse(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		eligible func(context.Context, string, time.Time) (bool, error)
+		offset   time.Duration
+	}{
+		{"30d", repo.IsRetentionNotice30dEligibleForOccurrence, windowOffset30d()},
+		{"7d", repo.IsRetentionNotice7dEligibleForOccurrence, windowOffset7d()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("occstale_%s_%d", tt.name, time.Now().UnixNano())
+			staleExpiresAt := time.Now().Add(tt.offset).Truncate(time.Microsecond) // E1 — what the stale candidate claimed
+			currentExpiresAt := staleExpiresAt.Add(2 * time.Hour)                  // E2 — the row's CURRENT (re-armed) value, still in-window
+
+			user := createRetentionNoticeFixtureUser(t, ctx, pool, repo, suffix, retentionNoticeFixtureOpts{
+				retentionExpiresAt: &currentExpiresAt,
+			})
+
+			eligible, err := tt.eligible(ctx, user.ID, staleExpiresAt)
+			require.NoError(t, err)
+			assert.False(t, eligible, "a stale claimed occurrence must not be reported eligible once the row has been re-armed to a different retention_expires_at")
+
+			// Sanity: the CURRENT occurrence (E2) genuinely IS eligible right now — proving the
+			// false result above isn't accidentally caused by some OTHER predicate
+			// (window/sent/status/override).
+			currentEligible, err := tt.eligible(ctx, user.ID, currentExpiresAt)
+			require.NoError(t, err)
+			assert.True(t, currentEligible, "test setup sanity: the row's current (re-armed) occurrence must itself be genuinely eligible")
+		})
+	}
+}

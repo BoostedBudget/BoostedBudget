@@ -58,19 +58,26 @@ type RetentionProfileRepository interface {
 	// clobbering it), unlike the destructive external side effects work_claims exists to guard.
 	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
 
-	// IsRetentionNotice30dEligible re-verifies, at the moment the caller already holds an
-	// exclusive work_claims claim on repository.ActionRetentionNotice30d, that a user is still
-	// eligible for the 30-day notice: still in the notice window, still unsent, and carrying no
-	// manual_tier_override at all (live or lapsed) — the same rule
-	// GetUsersNeedingRetention30dNotice's own query enforces. Returns (true, nil) when safe to
-	// send the notice email now, (false, nil) when any of those conditions changed since the
-	// candidate query ran — a legitimate skip, never an error. Performs NO write. Issue #1413
-	// Medium finding M9 (Codex review round 3): replaces the old ClaimRetentionNotice30dSent,
-	// which stamped the *_sent_at marker BEFORE the send was even attempted, so a failed send
-	// left the marker set and the user was silently never warned again.
-	IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error)
-	// IsRetentionNotice7dEligible is IsRetentionNotice30dEligible's 7-day sibling.
-	IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error)
+	// IsRetentionNotice30dEligibleForOccurrence re-verifies, at the moment the caller already
+	// holds an exclusive work_claims claim on repository.ActionRetentionNotice30d, that a user is
+	// still eligible for the 30-day notice: still in the notice window, still unsent, carrying no
+	// manual_tier_override at all (live or lapsed) — the same rule GetUsersNeedingRetention30dNotice's
+	// own query enforces — AND that retention_expires_at still equals expectedRetentionExpiresAt,
+	// the SAME value the caller claimed (Issue #1413 round-4 finding M1). Without that last check,
+	// a stale candidate could claim E1's occurrence while the row has since been re-armed to E2
+	// (resubscribe, then cancel again) — with a short retention configuration, E2 can ALSO be
+	// genuinely in-window right now, so a worker holding the stale E1 claim would report eligible
+	// and send a DUPLICATE notice alongside whatever worker is legitimately processing E2. Returns
+	// (true, nil) when safe to send the notice email now, (false, nil) when any condition
+	// (including the occurrence) changed since the candidate query ran — a legitimate skip, never
+	// an error. Performs NO write. Issue #1413 Medium finding M9 (Codex review round 3): replaces
+	// the old ClaimRetentionNotice30dSent, which stamped the *_sent_at marker BEFORE the send was
+	// even attempted, so a failed send left the marker set and the user was silently never warned
+	// again.
+	IsRetentionNotice30dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error)
+	// IsRetentionNotice7dEligibleForOccurrence is IsRetentionNotice30dEligibleForOccurrence's
+	// 7-day sibling.
+	IsRetentionNotice7dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error)
 
 	// SetRetentionNotice30dSent marks the 30-day pre-deletion notice as sent. Callers MUST only
 	// invoke this AFTER the notice email has been sent successfully (Issue #1413 M9) — never
@@ -254,7 +261,11 @@ type retentionNoticeSpec struct {
 	noticeName string // for log messages, e.g. "30d"
 	subject    string
 	body       string
-	isEligible func(ctx context.Context, userID string) (bool, error)
+	// isEligible takes the CLAIMED retention_expires_at occurrence as its third argument (Issue
+	// #1413 round-4 finding M1) — processRetentionNotices passes *user.RetentionExpiresAt, the
+	// SAME value the candidate query returned and the claim key was built from, so the check can
+	// require the row's CURRENT retention_expires_at to still match it.
+	isEligible func(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error)
 	markSent   func(ctx context.Context, userID string) error
 }
 
@@ -275,7 +286,7 @@ func (w *RetentionCleanupCheckWorker) send30dNotices(ctx context.Context, jobID 
 		noticeName: "30d",
 		subject:    "Your BoostedBudget data will be deleted in 30 days",
 		body:       "Your account data is preserved in read-only mode. Your data will be permanently deleted in 30 days unless you resubscribe. Visit boostedbudget.com/pricing to restore full access.",
-		isEligible: w.profileRepo.IsRetentionNotice30dEligible,
+		isEligible: w.profileRepo.IsRetentionNotice30dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice30dSent,
 	})
 
@@ -301,7 +312,7 @@ func (w *RetentionCleanupCheckWorker) send7dNotices(ctx context.Context, jobID i
 		noticeName: "7d",
 		subject:    "Final notice: BoostedBudget data deletion in 7 days",
 		body:       "This is your final warning. Your BoostedBudget account data will be permanently deleted in 7 days. Resubscribe at boostedbudget.com/pricing to keep your data.",
-		isEligible: w.profileRepo.IsRetentionNotice7dEligible,
+		isEligible: w.profileRepo.IsRetentionNotice7dEligibleForOccurrence,
 		markSent:   w.profileRepo.SetRetentionNotice7dSent,
 	})
 
@@ -393,8 +404,11 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 		}
 
 		// Re-verify eligibility against the freshest possible read, immediately after winning the
-		// claim and before the email actually goes out.
-		eligible, err := spec.isEligible(ctx, user.ID)
+		// claim and before the email actually goes out. *user.RetentionExpiresAt is the SAME
+		// occurrence the claim above was keyed on (Issue #1413 round-4 finding M1) — guaranteed
+		// non-nil here since OccurrenceResourceID above would have already errored (and `continue`d)
+		// on a nil RetentionExpiresAt.
+		eligible, err := spec.isEligible(ctx, user.ID, *user.RetentionExpiresAt)
 		if err != nil {
 			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, err.Error())
 			w.logger.Warn("failed to re-verify "+spec.noticeName+" retention notice eligibility",
