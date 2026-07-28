@@ -48,7 +48,7 @@ describe('McpSetupTabs', () => {
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: mock(() => Promise.resolve(undefined)) },
       configurable: true,
-      writable: true,
+      writable: true
     })
   })
 
@@ -79,6 +79,7 @@ describe('McpSetupTabs', () => {
     it('renders a "not configured" state instead of a broken URL', () => {
       render(<McpSetupTabs />)
       expect(screen.getByText(/not configured in this environment/i)).toBeInTheDocument()
+      expect(document.body.textContent).not.toMatch(/qa|testing/i)
       // No literal server URL should be interpolated anywhere on the page.
       expect(document.body.textContent).not.toMatch(/https?:\/\//)
     })
@@ -134,16 +135,13 @@ describe('McpSetupTabs', () => {
     await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
 
     expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.MCP_SETUP_TAB_CHANGED, {
-      client: 'cursor',
+      client: 'cursor'
     })
   })
 
   it('does not fire MCP_SETUP_TAB_CHANGED merely from the initial render', () => {
     render(<McpSetupTabs />)
-    expect(mockTrackEvent).not.toHaveBeenCalledWith(
-      ANALYTICS_EVENTS.MCP_SETUP_TAB_CHANGED,
-      expect.anything()
-    )
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.MCP_SETUP_TAB_CHANGED, expect.anything())
   })
 
   it('swaps panel content when switching tabs', async () => {
@@ -188,12 +186,14 @@ describe('McpSetupTabs', () => {
       render(<McpSetupTabs />)
 
       await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
-      const copyButton = screen.getByRole('button', { name: /copy mcp server url/i })
+      const copyButton = screen.getByRole('button', {
+        name: /copy mcp server url/i
+      })
       await user.click(copyButton)
 
       await waitFor(() => {
         expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.MCP_CONFIG_COPIED, {
-          client: 'cursor',
+          client: 'cursor'
         })
       })
     })
@@ -207,22 +207,21 @@ describe('McpSetupTabs', () => {
       Object.defineProperty(navigator, 'clipboard', {
         value: { writeText: mock(() => Promise.reject(new Error('denied'))) },
         configurable: true,
-        writable: true,
+        writable: true
       })
       render(<McpSetupTabs />)
 
       await user.click(screen.getByRole('tab', { name: 'Cursor & other clients' }))
-      const copyButton = screen.getByRole('button', { name: /copy mcp server url/i })
+      const copyButton = screen.getByRole('button', {
+        name: /copy mcp server url/i
+      })
       await user.click(copyButton)
 
       // Give the rejected promise a tick to settle before asserting the negative.
       await waitFor(() => {
         expect(navigator.clipboard.writeText).toHaveBeenCalled()
       })
-      expect(mockTrackEvent).not.toHaveBeenCalledWith(
-        ANALYTICS_EVENTS.MCP_CONFIG_COPIED,
-        expect.anything()
-      )
+      expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.MCP_CONFIG_COPIED, expect.anything())
     })
 
     it('exposes an aria-live confirmation region', () => {
@@ -239,7 +238,9 @@ describe('McpSetupTabs', () => {
       render(<McpSetupTabs />)
       await user.click(screen.getByRole('tab', { name: 'Claude Code CLI' }))
 
-      const region = screen.getByRole('region', { name: /claude code command/i })
+      const region = screen.getByRole('region', {
+        name: /claude code command/i
+      })
       expect(region).toHaveAttribute('tabIndex', '0')
     })
   })
@@ -255,9 +256,7 @@ describe('McpSetupTabs', () => {
 
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
     expect(screen.getByText(/Model Context Protocol over Streamable HTTP/i)).toBeInTheDocument()
-    expect(
-      screen.getByText(/following your client.s own documentation/i)
-    ).toBeInTheDocument()
+    expect(screen.getByText(/following your client.s own documentation/i)).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/unverified/i)
     expect(document.body.textContent).not.toMatch(/#1421/)
     // The regression this test guards against: the unverified config snippet

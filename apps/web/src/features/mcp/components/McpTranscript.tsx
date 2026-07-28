@@ -26,7 +26,7 @@ export interface McpTranscriptProps {
 }
 
 const BASE_FIGCAPTION =
-  'Illustrative transcript. The tool names, operation IDs, and confirmation flow are exactly what the server does. The account names and dollar figures are synthetic sample data, not customer data.'
+  'Illustrative transcript. The conversation and confirmation flow reflect how MCP works. The account names and dollar figures are synthetic sample data, not customer data.'
 
 export function McpTranscript({ turns, showsStatusMarkers = false, className }: McpTranscriptProps) {
   const figcaption = showsStatusMarkers
@@ -34,17 +34,10 @@ export function McpTranscript({ turns, showsStatusMarkers = false, className }: 
     : BASE_FIGCAPTION
 
   return (
-    <figure
-      data-illustrative="true"
-      className={cn('rounded-2xl border border-border bg-card p-6', className)}
-    >
+    <figure data-illustrative="true" className={cn('rounded-2xl border border-border bg-card p-6', className)}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">
-          Agent session
-        </span>
-        <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">
-          Sample data
-        </span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Agent session</span>
+        <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-foreground">Sample data</span>
       </div>
 
       <div
@@ -56,10 +49,7 @@ export function McpTranscript({ turns, showsStatusMarkers = false, className }: 
         {turns.map((turn, i) => (
           <div key={i} className="flex gap-3">
             <span
-              className={cn(
-                'w-14 shrink-0 font-semibold',
-                turn.speaker === 'You' ? 'text-foreground' : 'text-primary'
-              )}
+              className={cn('w-14 shrink-0 font-semibold', turn.speaker === 'You' ? 'text-foreground' : 'text-primary')}
             >
               {turn.speaker}
             </span>
