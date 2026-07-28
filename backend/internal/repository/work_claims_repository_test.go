@@ -112,6 +112,118 @@ func TestWorkClaimsRepository_Claim_Error(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// --- ClaimOutcome (#1413 round-3 finding H3) ---
+//
+// Claim's bare bool conflates two outcomes that need different caller responses: another
+// worker mid-lease (retryable) vs. already completed (terminal). ClaimOutcome is the additive
+// widening — a NEW method on a NEW interface (WorkClaimsOutcomeRepository) rather than a
+// changed Claim signature, so every existing WorkClaimsRepository implementation/mock needs no
+// changes. These tests pin down its query shape; the outcome DISTINCTION itself (which depends
+// on real ON CONFLICT ... WHERE semantics pgxmock cannot model) is proven against a live
+// Postgres instance in work_claims_repository_integration_test.go.
+
+func TestWorkClaimsRepository_ClaimOutcome_Wins(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+
+	outcomeRepo, ok := repo.(WorkClaimsOutcomeRepository)
+	require.True(t, ok, "NewWorkClaimsRepository's concrete type must also satisfy WorkClaimsOutcomeRepository")
+
+	ctx := context.Background()
+	rows := pgxmock.NewRows([]string{"state", "token"}).AddRow("won", "fresh-token-1")
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH attempt AS`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionPlaidDisconnectPastDue, 900.0, pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	token, outcome, err := outcomeRepo.ClaimOutcome(ctx, ResourceTypeUser, "user-1", ActionPlaidDisconnectPastDue, 15*time.Minute)
+
+	require.NoError(t, err)
+	assert.Equal(t, ClaimWon, outcome)
+	assert.Equal(t, "fresh-token-1", token)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWorkClaimsRepository_ClaimOutcome_HeldByOther(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+	outcomeRepo := repo.(WorkClaimsOutcomeRepository)
+
+	ctx := context.Background()
+	rows := pgxmock.NewRows([]string{"state", "token"}).AddRow("held_by_other", nil)
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH attempt AS`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionSubscriptionCancelledCleanup, 900.0, pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	token, outcome, err := outcomeRepo.ClaimOutcome(ctx, ResourceTypeUser, "user-1", ActionSubscriptionCancelledCleanup, 15*time.Minute)
+
+	require.NoError(t, err)
+	assert.Equal(t, ClaimHeldByOther, outcome)
+	assert.Empty(t, token, "a HeldByOther outcome must return an empty token")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWorkClaimsRepository_ClaimOutcome_AlreadyCompleted(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+	outcomeRepo := repo.(WorkClaimsOutcomeRepository)
+
+	ctx := context.Background()
+	rows := pgxmock.NewRows([]string{"state", "token"}).AddRow("already_completed", nil)
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH attempt AS`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionSubscriptionCancelledCleanup, 900.0, pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	token, outcome, err := outcomeRepo.ClaimOutcome(ctx, ResourceTypeUser, "user-1", ActionSubscriptionCancelledCleanup, 15*time.Minute)
+
+	require.NoError(t, err)
+	assert.Equal(t, ClaimAlreadyCompleted, outcome)
+	assert.Empty(t, token, "an AlreadyCompleted outcome must return an empty token")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWorkClaimsRepository_ClaimOutcome_Error(t *testing.T) {
+	mock, repo := setupWorkClaimsMockDB(t)
+	defer mock.Close()
+	outcomeRepo := repo.(WorkClaimsOutcomeRepository)
+
+	ctx := context.Background()
+	mock.ExpectQuery(regexp.QuoteMeta(`WITH attempt AS`)).
+		WithArgs(ResourceTypeUser, "user-1", ActionAccountDeletion, 60.0, pgxmock.AnyArg()).
+		WillReturnError(errors.New("db error"))
+
+	token, outcome, err := outcomeRepo.ClaimOutcome(ctx, ResourceTypeUser, "user-1", ActionAccountDeletion, time.Minute)
+
+	assert.Error(t, err)
+	assert.Empty(t, token)
+	assert.Equal(t, ClaimHeldByOther, outcome, "on error, outcome must be the safe non-terminal zero value, never ClaimWon")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestWorkClaimsRepository_ClaimOutcome_RejectsNonPositiveLease(t *testing.T) {
+	for _, lease := range []time.Duration{0, -time.Second, -time.Hour} {
+		mock, repo := setupWorkClaimsMockDB(t)
+		outcomeRepo := repo.(WorkClaimsOutcomeRepository)
+
+		ctx := context.Background()
+		token, outcome, err := outcomeRepo.ClaimOutcome(ctx, ResourceTypeUser, "user-1", ActionAccountDeletion, lease)
+
+		assert.Error(t, err, "lease=%s must be rejected", lease)
+		assert.Empty(t, token)
+		assert.Equal(t, ClaimHeldByOther, outcome)
+		assert.NoError(t, mock.ExpectationsWereMet())
+		mock.Close()
+	}
+}
+
+// TestClaimOutcome_ZeroValueIsNotWon guards the deliberate iota ordering: the zero value of
+// ClaimOutcome must never be ClaimWon, so a forgotten/zeroed variable is never mistaken for
+// success by a caller that skips checking err.
+func TestClaimOutcome_ZeroValueIsNotWon(t *testing.T) {
+	var zero ClaimOutcome
+	assert.NotEqual(t, ClaimWon, zero)
+	assert.Equal(t, ClaimHeldByOther, zero)
+}
+
 // TestWorkClaimsRepository_Claim_RejectsNonPositiveLease covers a bug an
 // adversarial review surfaced: a zero or negative lease.Seconds() would make
 // make_interval produce a zero/negative interval, so the freshly "claimed" row

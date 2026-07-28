@@ -115,7 +115,12 @@ type SubscriptionWebhookWorker struct {
 	// EXCLUSIVITY on ActionSubscriptionCancelledCleanup before the Plaid disconnect / retention-
 	// clock side effects (Issue #1413 High finding H7, Codex review round 4). See
 	// SetWorkClaimsRepo — like DeletionService's, this is not an optional capability.
-	claimsRepo repository.WorkClaimsRepository
+	//
+	// Typed as the wider WorkClaimsOutcomeRepository (round-3 finding H3), not the base
+	// WorkClaimsRepository other #1413 callers use: this worker MUST distinguish "another
+	// worker holds this lease right now" (retryable) from "already completed" (terminal) —
+	// see processSubscriptionCanceled's ClaimOutcome switch below.
+	claimsRepo repository.WorkClaimsOutcomeRepository
 	logger     *slog.Logger
 }
 
@@ -175,7 +180,12 @@ func (w *SubscriptionWebhookWorker) SetAnalytics(a phclient.Analytics) {
 // clock side effects (Issue #1413 High finding H7, Codex review round 4). Mirrors
 // DeletionService.SetWorkClaimsRepo / PastDueService.SetWorkClaimsRepo — a nil claims repo makes
 // that destructive path fail loudly rather than silently falling back to guard-only behavior.
-func (w *SubscriptionWebhookWorker) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+//
+// Takes the wider WorkClaimsOutcomeRepository (issue #1413 round-3 finding H3) — see the
+// claimsRepo field doc comment. repository.NewWorkClaimsOutcomeRepository constructs a value
+// that satisfies this; every other #1413 caller keeps using the narrower
+// repository.NewWorkClaimsRepository / WorkClaimsRepository unchanged.
+func (w *SubscriptionWebhookWorker) SetWorkClaimsRepo(repo repository.WorkClaimsOutcomeRepository) {
 	w.claimsRepo = repo
 }
 
@@ -830,16 +840,30 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	if w.claimsRepo == nil {
 		return fmt.Errorf("processSubscriptionCanceled: work claims repository not configured")
 	}
-	token, claimed, err := w.claimsRepo.Claim(ctx, repository.ResourceTypeUser, userID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease)
+	// #1413 round-3 finding H3: ClaimOutcome (not bare Claim) because this caller — unlike the
+	// daily past-due/retention cron jobs, which re-run tomorrow regardless — MUST NOT treat
+	// "another worker holds this lease right now" the same as "already completed." Collapsing
+	// both into a skip here would get THIS webhook delivery marked processed even when the
+	// in-flight holder later crashes: nothing else would ever retrigger the Plaid disconnect or
+	// retention-clock write for this user again.
+	token, outcome, err := w.claimsRepo.ClaimOutcome(ctx, repository.ResourceTypeUser, userID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim subscription-cancelled cleanup for user %s: %w", userID, err)
 	}
-	if !claimed {
-		// Another worker already holds this lease, or the action was already completed.
-		// Legitimate outcome, not an error.
-		w.logger.Info("subscription-cancelled cleanup claim lost — another worker holds it, or it was already completed",
-			"user_id", userID)
+	switch outcome {
+	case repository.ClaimAlreadyCompleted:
+		// Terminal: the cleanup already ran to completion for this user. A genuine skip.
+		w.logger.Info("subscription-cancelled cleanup already completed, skipping", "user_id", userID)
 		return nil
+	case repository.ClaimHeldByOther:
+		// Retryable, NOT a skip: another worker holds an unexpired, incomplete lease right now.
+		// Return an error so River retries the whole webhook — by the time the retry lands, the
+		// lease will have either expired (crashed holder, now reclaimable) or completed (finished
+		// holder, now ClaimAlreadyCompleted above). Acking this webhook here instead would silently
+		// drop the Plaid disconnect / retention-clock work if the current holder crashed.
+		w.logger.Warn("subscription-cancelled cleanup claim held by another in-flight worker; retrying webhook rather than acking",
+			"user_id", userID)
+		return fmt.Errorf("subscription-cancelled cleanup claim held by another in-flight worker for user %s", userID)
 	}
 
 	// Re-verify the comp predicate against the freshest possible read, immediately after winning
@@ -867,9 +891,16 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	}
 
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion.
+	// #1413 round-3 finding H5: this write is REQUIRED, not best-effort. Both the retention-
+	// notice jobs and hard deletion require retention_expires_at IS NOT NULL — a swallowed
+	// failure here left this user cancelled with no clock: never warned, never deleted,
+	// indefinitely. Release (not Complete) and propagate so River retries the whole webhook;
+	// unlike the past-due grace path, nothing here gates re-entry on subscription_status, so a
+	// retry naturally reaches this write again.
 	now := time.Now()
 	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
-		w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)
+		w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
+		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
 	}
 
 	// Mark the claim durably complete. A false ok (no error) means our lease was reclaimed by

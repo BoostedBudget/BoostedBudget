@@ -392,7 +392,13 @@ func main() {
 		mortgageLiabilityRepo := repository.NewMortgageLiabilityRepository(db, fieldEncryptor)                // Issue #910: Plaid Liabilities
 		studentLoanLiabilityRepo := repository.NewStudentLoanLiabilityRepository(db, fieldEncryptor)          // Issue #910: Plaid Liabilities
 		merchantRepo := repository.NewMerchantRepository(db)                                                  // Issue #1163: Merchant batch-upsert
-		workClaimsRepo := repository.NewWorkClaimsRepository(db)                                              // Issue #1413: durable leased claims for destructive actions
+		// NewWorkClaimsOutcomeRepository (not NewWorkClaimsRepository): the subscription-cancellation
+		// webhook needs the wider WorkClaimsOutcomeRepository view (#1413 round-3 finding H3, see
+		// SubscriptionWebhookWorker.SetWorkClaimsRepo). Every other consumer below still declares its
+		// setter parameter as the narrower repository.WorkClaimsRepository, and a
+		// WorkClaimsOutcomeRepository value satisfies that automatically (its method set is a
+		// superset) — so this single swap requires no other changes at any other call site.
+		workClaimsRepo := repository.NewWorkClaimsOutcomeRepository(db) // Issue #1413: durable leased claims for destructive actions
 
 		// Create GDPR-consent-gated analytics client.
 		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
