@@ -598,20 +598,20 @@ func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID
 	return args.Bool(0), args.Error(1)
 }
 
-// ClaimForDeletion, ClaimRetentionNotice30dSent, ClaimRetentionNotice7dSent (Issue #1413
-// Codex review round 2) are not exercised by these account-service tests; stubbed to satisfy
+// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413
+// Codex review round 3) are not exercised by these account-service tests; stubbed to satisfy
 // the widened ProfileRepository interface.
 func (m *MockUserRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockUserRepository) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+func (m *MockUserRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockUserRepository) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+func (m *MockUserRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }

@@ -3,6 +3,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -318,6 +319,56 @@ func TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed(t *test
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1 of 2")
 	mockRemover.AssertNumberOfCalls(t, "RemoveUserTierOverrideIfMatches", 2)
+}
+
+// TestManualTierOverrideExpiryCheck_AggregateFailure_LoggedAtError is the observability proof
+// (Issue #1413 C1 follow-up, "unbounded exclusion"): this job clearing manual_tier_override is the
+// ONLY thing that bounds how long a lapsed comp can delay a retention notice/deletion. The job
+// itself runs with RunOnStart: false and a failed run's retries eventually land in the dead-letter
+// queue with no automatic replay, so if this job silently stops working, that "delay" becomes
+// indefinite. This test proves a run with per-user failures logs an explicit ERROR-level summary
+// (on top of the per-user Error logs and the jobs_completed_total{status="failed"} metric the
+// deferred func in Work() already increments — this repo's established River-job observability
+// mechanism), so the failure is actually observable rather than only visible in Info-level logs.
+func TestManualTierOverrideExpiryCheck_AggregateFailure_LoggedAtError(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-fail-obs", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-fail-obs", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(nil, false, errors.New("db unavailable"))
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewManualTierOverrideExpiryCheckWorker(ManualTierOverrideExpiryCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		Remover:         mockRemover,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.Error(t, err, "an aggregate per-user failure must still surface as a job error so River retries")
+
+	// Note: a bare "level=ERROR" substring check would NOT be falsifiable here on its own — the
+	// per-user "failed to expire manual tier override" log a few lines above is already ERROR
+	// level, so that alone can't distinguish "the aggregate summary log exists" from "it doesn't".
+	// The line below, tied to the exact aggregate message this fix adds, is what actually catches
+	// its removal — and matched against "level=ERROR ... msg=" together, it also confirms the
+	// summary is logged at ERROR (not Info/Warn), not merely present in the log at some level.
+	logOutput := logBuf.String()
+	assert.Regexp(t, `level=ERROR msg="manual tier override expiry check completed with failures"`, logOutput,
+		"an aggregate expiry-check failure must be logged at ERROR, not just Info, so it is actually observable")
 }
 
 // TestManualTierOverrideExpiryCheck_NoUsers_NoOp tests the job succeeds when there's nothing to do.

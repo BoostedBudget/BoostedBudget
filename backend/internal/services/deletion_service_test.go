@@ -195,11 +195,11 @@ func (m *MockProfileRepositoryForDeletion) ClaimForDeletion(ctx context.Context,
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) ClaimRetentionNotice30dSent(ctx context.Context, userID string) (bool, error) {
+func (m *MockProfileRepositoryForDeletion) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockProfileRepositoryForDeletion) ClaimRetentionNotice7dSent(ctx context.Context, userID string) (bool, error) {
+func (m *MockProfileRepositoryForDeletion) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 
