@@ -330,6 +330,40 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		return nil
 	}
 
+	// Issue #1413 finding H4: every path below that returns (or panics) without reaching
+	// Complete must release the claim, or it leaks for the full 15-minute lease — blocking
+	// any retry the whole time. Previously DeleteUserCascade failing did exactly that (no
+	// Release call at all), and a panic anywhere in this section leaked it too (no deferred
+	// release existed). `released`/`completed` make this defer a no-op on the paths that
+	// already release/complete explicitly below, while still catching anything that doesn't
+	// — including a bare `return` added carelessly in the future.
+	//
+	// Every Release call in this function — explicit ones below AND this deferred one — uses
+	// a bounded, independent context (context.WithoutCancel + a short timeout), never ctx
+	// directly: ctx may already be cancelled by the time a failure is being handled (e.g. the
+	// same shutdown/deadline that caused the failure also cancelled the job's context), and
+	// releasing with an already-cancelled context would silently fail to release at all.
+	completed := false
+	released := false
+	releaseClaim := func(reason string) {
+		if completed || released {
+			return
+		}
+		released = true
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, releaseErr := s.claimsRepo.Release(rctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, reason); releaseErr != nil {
+			slog.Default().Warn("failed to release deletion claim", "user_id", userID, "error", releaseErr, "release_reason", reason)
+		}
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			releaseClaim(fmt.Sprintf("panic during deletion: %v", r))
+			panic(r) // do not swallow the panic — only ensure the claim is released first
+		}
+		releaseClaim("deletion returned without completing — releasing to allow retry")
+	}()
+
 	// The work claim gives EXCLUSIVITY; ClaimForDeletion's conditional UPDATE still
 	// re-verifies CORRECTNESS ("is this user still eligible") against committed state at the
 	// moment of the claim — e.g. an admin comp granted between the GetUserByID read above and
@@ -337,9 +371,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// call shape): the claim alone cannot know whether deletion is still authorised.
 	eligible, err := s.profileRepo.ClaimForDeletion(ctx, userID)
 	if err != nil {
-		if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
-			slog.Default().Warn("failed to release deletion claim after predicate error", "user_id", userID, "error", releaseErr)
-		}
+		releaseClaim(err.Error())
 		return fmt.Errorf("failed to claim user for deletion: %w", err)
 	}
 	if !eligible {
@@ -347,9 +379,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 		// check, and the user has no outstanding GDPR deletion request of their own to
 		// override it. Release immediately so a later run (once the comp lapses and is
 		// cleared) doesn't have to wait out the full lease. Legitimate outcome, not an error.
-		if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, "precondition lost — comp granted or extended since last read"); releaseErr != nil {
-			slog.Default().Warn("failed to release deletion claim after predicate denial", "user_id", userID, "error", releaseErr)
-		}
+		releaseClaim("precondition lost — comp granted or extended since last read")
 		slog.Default().Info("skipping auto-deletion — claim not granted (comped since last read)",
 			"user_id", userID)
 		return nil
@@ -363,9 +393,7 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// sequence from scratch instead.
 	if s.paddleCleanupSvc != nil {
 		if err := s.cleanupPaddleResources(ctx, userID, user); err != nil {
-			if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
-				slog.Default().Warn("failed to release deletion claim after Paddle cleanup failure", "user_id", userID, "error", releaseErr)
-			}
+			releaseClaim(err.Error())
 			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
 		}
 	}
@@ -376,14 +404,15 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// cascade that would strand an un-removed, still-billing Plaid item with no local record.
 	if s.plaidCleanupSvc != nil {
 		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
-			if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token, err.Error()); releaseErr != nil {
-				slog.Default().Warn("failed to release deletion claim after Plaid cleanup failure", "user_id", userID, "error", releaseErr)
-			}
+			releaseClaim(err.Error())
 			return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
 		}
 	}
 
-	// Execute cascade deletion in database
+	// Execute cascade deletion in database. Issue #1413 finding H4: a failure here used to
+	// return WITHOUT releasing the claim at all — the one path that leaked it every time this
+	// step failed, since there was no explicit Release call and no deferred one. releaseClaim
+	// (called via the defer above on any non-completing return) now covers this too.
 	if err := s.profileRepo.DeleteUserCascade(ctx, userID); err != nil {
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
 	}
@@ -393,12 +422,23 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// cleanup and cascade we just ran may have ALSO been run by whoever holds the claim now.
 	// That is precisely the failure mode this whole mechanism exists to make visible instead
 	// of silent, so it is logged at Error with enough context to investigate, not swallowed.
-	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token)
-	if err != nil {
-		slog.Default().Error("failed to mark deletion claim complete", "user_id", userID, "action", repository.ActionAccountDeletion, "error", err)
-	} else if !completed {
-		slog.Default().Error("deletion claim lease lost mid-flight — external cleanup and cascade may have run twice",
-			"user_id", userID, "action", repository.ActionAccountDeletion)
+	//
+	// `completed` is set to true regardless of the Complete outcome (ok true/false), as long
+	// as the Complete call itself didn't error: by this point DeleteUserCascade has already
+	// run, so there is nothing left for the deferred release to protect — and if our lease
+	// was reclaimed (ok=false), the row now belongs to whoever holds the CURRENT token, and
+	// our Release would rightly no-op against it anyway (fencing check), so there is no
+	// reason to attempt it. Only a genuine error from Complete itself leaves `completed`
+	// false, letting the deferred release fire so a stuck claim doesn't linger forever.
+	completedOk, completeErr := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionAccountDeletion, token)
+	if completeErr != nil {
+		slog.Default().Error("failed to mark deletion claim complete", "user_id", userID, "action", repository.ActionAccountDeletion, "error", completeErr)
+	} else {
+		completed = true
+		if !completedOk {
+			slog.Default().Error("deletion claim lease lost mid-flight — external cleanup and cascade may have run twice",
+				"user_id", userID, "action", repository.ActionAccountDeletion)
+		}
 	}
 
 	// Delete user from Clerk (non-critical)

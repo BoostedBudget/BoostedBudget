@@ -754,7 +754,7 @@ func TestExecuteDeletion_PlaidCleanupFails_AbortsDeletion(t *testing.T) {
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -772,7 +772,7 @@ func TestExecuteDeletion_PlaidCleanupFails_AbortsDeletion(t *testing.T) {
 	assert.ErrorIs(t, err, plaidErr)
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
 	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestSetPlaidCleanupService verifies that SetPlaidCleanupService wires up the service
@@ -1084,7 +1084,7 @@ func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -1102,7 +1102,7 @@ func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 	assert.ErrorIs(t, err, paddleErr)
 	mockPaddle.AssertNotCalled(t, "ArchiveAndAnonymizeCustomer", mock.Anything, mock.Anything, mock.Anything)
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion is the archive-step sibling of the
@@ -1123,7 +1123,7 @@ func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -1139,7 +1139,7 @@ func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {
 	require.Error(t, err, "a failed Paddle archive must abort the deletion, not be swallowed")
 	assert.ErrorIs(t, err, archiveErr)
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestSetPaddleCleanupService_WiresCorrectly verifies that SetPaddleCleanupService wires
@@ -1562,7 +1562,7 @@ func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShort
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -1577,7 +1577,7 @@ func TestExecuteDeletion_ExpiredComp_NoDeletionRequest_BeltAndBracesDoesNotShort
 	mockRepo.AssertCalled(t, "ClaimForDeletion", ctx, user.ID) // proves the belt-and-braces short-circuit did NOT fire here
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
 	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestExecuteDeletion_NonComped_ProceedsNormally verifies the new guard does not affect
@@ -1740,7 +1740,7 @@ func TestExecuteDeletion_PredicateDenied_ReleasesClaimAndSkipsCleanup(t *testing
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -1756,7 +1756,7 @@ func TestExecuteDeletion_PredicateDenied_ReleasesClaimAndSkipsCleanup(t *testing
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
 	mockClerk.AssertNotCalled(t, "DeleteUser", mock.Anything, mock.Anything)
 	mockAudit.AssertNotCalled(t, "Log", ctx, "user.deleted", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates proves a DB error during the
@@ -1782,7 +1782,7 @@ func TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates(t *testing.T
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
-	mockClaims.On("Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
@@ -1795,7 +1795,7 @@ func TestExecuteDeletion_PredicateErrors_ReleasesClaimAndPropagates(t *testing.T
 	assert.Error(t, err)
 	mockPlaidCleanup.AssertNotCalled(t, "RemoveAllUserItems", mock.Anything, mock.Anything)
 	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
 // TestExecuteDeletion_BothClaimsGranted_ProceedsWithFullCleanupAndCompletes is the
@@ -1889,4 +1889,148 @@ func TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	assert.NoError(t, err, "the cascade already ran; a lost lease at Complete time must not be reported as a deletion failure")
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID)
 	mockClaims.AssertCalled(t, "Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken)
+}
+
+// --- Issue #1413 finding H4: every path that wins the work claim must release it unless
+// it durably completes. Before this fix, DeleteUserCascade failing returned WITHOUT
+// releasing — leaking the claim for the full 15-minute lease and blocking a retry the whole
+// time — and there was no deferred release at all, so a panic anywhere in the destructive
+// section leaked the claim too. The three tests below are the regression coverage for that.
+
+// TestExecuteDeletion_CascadeFails_ReleasesClaim is the direct regression test for the H4
+// leak: DeleteUserCascade failing must release the work claim so the very next run can
+// retry immediately, rather than waiting out the full lease untouched.
+func TestExecuteDeletion_CascadeFails_ReleasesClaim(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	cascadeErr := errors.New("db write failed")
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Return(cascadeErr)
+	// Clerk deletion and audit log deliberately left unstubbed — an unstubbed testify mock
+	// call panics, proving the failure return happens before either of them.
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, cascadeErr)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+}
+
+// TestExecuteDeletion_ReleasesClaim_WithIndependentContext_EvenIfCallerContextCancelled
+// proves the other half of H4: Release must use a bounded, independent context
+// (context.WithoutCancel), not the caller's ctx — which may already be cancelled by the
+// time a failure is being handled (e.g. a River job context cancelled by the same
+// deadline/shutdown that is causing the failure). Releasing with an already-cancelled
+// context would silently fail to release at all, leaking the claim for the rest of the
+// lease. This test cancels the caller's context BEFORE calling ExecuteDeletion and asserts
+// the context actually passed to Release is NOT the cancelled one.
+func TestExecuteDeletion_ReleasesClaim_WithIndependentContext_EvenIfCallerContextCancelled(t *testing.T) {
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate the caller's context already being cancelled/timed out
+
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	// Captured synchronously INSIDE the mocked Release call, not after: the production
+	// closure's own `defer cancel()` fires as soon as Release returns, so a context
+	// reference read only after ExecuteDeletion returns would already be cancelled by that
+	// (correct, unrelated) cleanup — Err() must be snapshotted at call time to actually test
+	// what the caller received, not what a later cleanup did to the same object.
+	var releaseCalled bool
+	var releaseCtxErrAtCallTime error
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", baseCtx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Run(func(args mock.Arguments) {
+			releaseCalled = true
+			releaseCtxErrAtCallTime = args.Get(0).(context.Context).Err()
+		}).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", baseCtx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", baseCtx, user.ID).Return(true, nil)
+	cascadeErr := errors.New("db write failed")
+	mockRepo.On("DeleteUserCascade", baseCtx, user.ID).Return(cascadeErr)
+
+	err := service.ExecuteDeletion(baseCtx, user.ID)
+
+	require.Error(t, err)
+	require.True(t, releaseCalled, "Release must still be called even with a cancelled caller context")
+	assert.Error(t, baseCtx.Err(), "sanity check: baseCtx really is cancelled")
+	assert.NoError(t, releaseCtxErrAtCallTime, "Release's context must be independent of the cancelled caller context, or the release itself would silently fail")
+}
+
+// TestExecuteDeletion_PanicDuringCascade_ReleasesClaimThenRePanics proves the deferred
+// release also covers a panic (e.g. an unexpected nil pointer deep in a repository call)
+// during the destructive section — previously nothing released the claim in that case
+// either, leaking it for the full lease on top of the process crashing. The panic must
+// still propagate (this is not panic-swallowing), but the claim must be released first.
+func TestExecuteDeletion_PanicDuringCascade_ReleasesClaimThenRePanics(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID).Run(func(args mock.Arguments) {
+		panic("simulated unexpected panic during cascade")
+	}).Return(nil)
+
+	require.Panics(t, func() {
+		_ = service.ExecuteDeletion(ctx, user.ID)
+	}, "the panic must still propagate — this proves the claim is released first, not that panics are swallowed")
+
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }

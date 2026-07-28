@@ -10,6 +10,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock implementations for testing PlaidItemCleanupService
@@ -96,9 +97,19 @@ func Test_RemoveAllUserItems_CallsPlaidRemoveForEachItem(t *testing.T) {
 	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 2)
 }
 
-// Test_RemoveAllUserItems_ContinuesOnPlaidError verifies that
-// RemoveAllUserItems continues processing other items even if one Plaid call fails
-func Test_RemoveAllUserItems_ContinuesOnPlaidError(t *testing.T) {
+// Test_RemoveAllUserItems_AggregatesErrorButAttemptsAllItems is a corrected test
+// (Issue #1413 finding H6). It previously asserted the OPPOSITE — named
+// "...ContinuesOnPlaidError" and asserting assert.NoError — encoding the "graceful
+// degradation" behavior that made ExecuteDeletion's abort-on-cleanup-failure dead code:
+// RemoveAllUserItems always returned nil, so the caller's `if err != nil { abort }` never
+// fired, and the deletion cascade proceeded to clear the local Plaid references, orphaning
+// the still-active (still-billing) Plaid Item with nothing left able to retry it.
+//
+// RemoveAllUserItems's only production caller (DeletionService.ExecuteDeletion) needs a
+// genuine per-item failure to abort the deletion, so this function is now strict: it still
+// attempts every item (a single bad item must not strand the rest, still billing), but
+// aggregates any failures into a non-nil returned error.
+func Test_RemoveAllUserItems_AggregatesErrorButAttemptsAllItems(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-123"
 
@@ -113,18 +124,51 @@ func Test_RemoveAllUserItems_ContinuesOnPlaidError(t *testing.T) {
 	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
 
 	// Mock: First Plaid call fails, second succeeds
-	mockPlaid.On("RemoveItem", ctx, "decrypted-token-1").Return(errors.New("plaid API error"))
+	plaidErr := errors.New("plaid API error")
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token-1").Return(plaidErr)
 	mockPlaid.On("RemoveItem", ctx, "decrypted-token-2").Return(nil)
 
 	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
 
-	// Execute - should not return error (graceful degradation)
 	err := service.RemoveAllUserItems(ctx, userID)
 
-	// Verify - error is logged but not returned (graceful degradation)
-	assert.NoError(t, err)
+	// The failure must be surfaced so a caller like ExecuteDeletion can abort instead of
+	// silently proceeding to destroy the local record of the still-failed item.
+	require.Error(t, err)
+	assert.ErrorIs(t, err, plaidErr, "the aggregate error must wrap the underlying Plaid failure")
 
-	// Verify both items were processed
+	// Both items must still have been attempted — one bad item must not strand the rest.
+	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 2)
+}
+
+// Test_RemoveAllUserItems_AllItemsFail_AggregatesBothErrors proves the aggregate error
+// isn't just "the first failure" — every failed item's error is preserved and every item
+// is still attempted, even when none of them succeed.
+func Test_RemoveAllUserItems_AllItemsFail_AggregatesBothErrors(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-123"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "decrypted-token-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "decrypted-token-2"},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
+
+	err1 := errors.New("plaid API error 1")
+	err2 := errors.New("plaid API error 2")
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token-1").Return(err1)
+	mockPlaid.On("RemoveItem", ctx, "decrypted-token-2").Return(err2)
+
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, err1)
+	assert.ErrorIs(t, err, err2)
 	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 2)
 }
 
