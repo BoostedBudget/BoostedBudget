@@ -79,7 +79,7 @@ func TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain(t *te
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{user}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, userID).Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, userID, secondCycleExpires).Return(true, nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, userID).Return(nil)
 	mockEmail.On("SendRetentionNoticeEmail", ctx, user.Email, mock.Anything, mock.Anything).Return(nil).Once()
 
@@ -132,7 +132,7 @@ func TestRetentionCleanupCheck_Occurrence_SameCycle_SecondRunDoesNotResend(t *te
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{user}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("IsRetentionNotice30dEligible", ctx, userID).Return(true, nil)
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, userID, retentionExpiresAt).Return(true, nil)
 	mockRepo.On("SetRetentionNotice30dSent", ctx, userID).Return(nil).Once()
 	mockEmail.On("SendRetentionNoticeEmail", ctx, user.Email, mock.Anything, mock.Anything).Return(nil).Once()
 

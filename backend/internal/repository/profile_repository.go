@@ -1271,6 +1271,67 @@ func (r *profileRepository) IsRetentionNotice7dEligible(ctx context.Context, use
 	return eligible, nil
 }
 
+// IsRetentionNotice30dEligibleForOccurrence is IsRetentionNotice30dEligible's occurrence-scoped
+// sibling (Issue #1413 round-4 finding M1). IsRetentionNotice30dEligible re-verifies
+// window/sent-state/status/override but NOT that the row's CURRENT retention_expires_at still
+// equals the value the caller claimed. retention_cleanup_check.go's processRetentionNotices
+// claims using the CANDIDATE's retention_expires_at (E1), but the row can have been RE-ARMED to a
+// DIFFERENT value (E2) by the time this re-check runs — resubscribe (ClearRetentionDates), then
+// cancel again, restarting the clock from a later point. With a short (e.g. one-month) retention
+// configuration, two workers can hold E1 and E2 and BOTH see the current clock as eligible (E2 is
+// ALSO genuinely in-window, unsent, uncomped right now) — the user gets a DUPLICATE notice.
+// Requiring `retention_expires_at = expectedRetentionExpiresAt` closes this: the check only
+// passes for the EXACT occurrence the caller claimed.
+//
+// Consequence is milder than H1/H3 (this branch already accepts at-least-once for notices over
+// never-warn — see processRetentionNotices' doc comment), but the same discipline applies: the
+// eligibility check must validate the discriminator it claimed.
+func (r *profileRepository) IsRetentionNotice30dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	var eligible bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1
+			  AND is_deleted = FALSE
+			  AND retention_expires_at = $2
+			  AND retention_expires_at - INTERVAL '30 days' <= NOW()
+			  AND retention_expires_at > NOW()
+			  AND retention_notice_30d_sent_at IS NULL
+			  AND subscription_status IN ('inactive', 'cancelled')
+			  AND deletion_requested_at IS NULL
+	`+noManualOverrideAtAllPredicate+`
+		)
+	`, userID, expectedRetentionExpiresAt).Scan(&eligible)
+	if err != nil {
+		return false, fmt.Errorf("IsRetentionNotice30dEligibleForOccurrence: %w", err)
+	}
+	return eligible, nil
+}
+
+// IsRetentionNotice7dEligibleForOccurrence is IsRetentionNotice30dEligibleForOccurrence's 7-day
+// sibling. See that method's doc for the full rationale.
+func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context.Context, userID string, expectedRetentionExpiresAt time.Time) (bool, error) {
+	var eligible bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1
+			  AND is_deleted = FALSE
+			  AND retention_expires_at = $2
+			  AND retention_expires_at - INTERVAL '7 days' <= NOW()
+			  AND retention_expires_at > NOW()
+			  AND retention_notice_7d_sent_at IS NULL
+			  AND subscription_status IN ('inactive', 'cancelled')
+			  AND deletion_requested_at IS NULL
+	`+noManualOverrideAtAllPredicate+`
+		)
+	`, userID, expectedRetentionExpiresAt).Scan(&eligible)
+	if err != nil {
+		return false, fmt.Errorf("IsRetentionNotice7dEligibleForOccurrence: %w", err)
+	}
+	return eligible, nil
+}
+
 // noActiveManualOverridePredicate excludes users with a currently-active admin manual tier
 // override ("comp") from set-based retention queries (Issue #1413). A comped user must never
 // be warned about, or auto-deleted for, retention expiry.
