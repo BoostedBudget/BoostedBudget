@@ -245,8 +245,25 @@ type profileRepository struct {
 	enc *appcrypto.FieldEncryptor
 }
 
-// NewProfileRepository creates a new ProfileRepository instance
-func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) ProfileRepository {
+// NewProfileRepository creates a new ProfileRepository instance.
+//
+// Returns the concrete *profileRepository type (not the ProfileRepository interface) — Issue
+// #1413 round-4 finding P6. profileRepository grew occurrence-scoped sibling methods
+// (ClearPastDueStartedAtIfMatches, CancelIfPastDueOccurrenceWithRetention,
+// IsRetentionNotice30dEligibleForOccurrence/7d) that are needed only by past_due_service.go's and
+// retention_cleanup_check.go's own narrow consumer interfaces, not by the broad canonical
+// ProfileRepository interface every other service's test double also implements. Every existing
+// call site (main.go, every _test.go in this package) already assigns via `:=` or passes the
+// value straight into a function parameter, so this is a compile-compatible widening: the
+// concrete type structurally satisfies ProfileRepository and every narrower consumer interface it
+// is passed to. Returning the interface here would force EITHER the new methods onto the
+// canonical interface (rippling boilerplate mock stubs across every unrelated service's test file
+// that implements it in full) OR main.go to carry a second, separately-typed handle to the same
+// repository — this return-type change avoids both at the cost of a one-line signature edit.
+// Precedent: NewMerchantRepository, NewMerchantOverrideRepository, NewSystemHealthRepository, and
+// NewDeadLetterJobRepository already return their unexported concrete pointer types in this same
+// package.
+func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) *profileRepository {
 	return &profileRepository{db: db, enc: enc}
 }
 
@@ -1512,6 +1529,62 @@ func (r *profileRepository) ClearPastDueStartedAt(ctx context.Context, userID st
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+// ClearPastDueStartedAtIfMatches is ClearPastDueStartedAt's occurrence-scoped sibling (Issue
+// #1413 round-4 finding H3). ClearPastDueStartedAt above is UNCONDITIONAL (WHERE id = $1) —
+// correct for subscription_webhook.go's recovery-path callers, where Paddle telling us the
+// subscription is no longer past_due IS the authorization. It is WRONG for
+// processGraceExpiry's auto-cancel step (past_due_service.go), which captured a SPECIFIC dunning
+// cycle's timestamp earlier in its own run: sequence — the CAS (CancelIfPastDueOccurrenceWithRetention)
+// succeeds and the flow reaches this clear step; meanwhile the user recovers, then re-enters
+// past_due, and the webhook stamps a NEW past_due_started_at (SetPastDueStartedAt) for the NEW
+// cycle; the ORIGINAL flow, still holding its stale snapshot, then reaches an unconditional clear
+// and would erase the NEW cycle's timestamp too. Because GetUsersInPastDue requires
+// past_due_started_at IS NOT NULL, that user would never be selected again — stuck past-due
+// forever with no dunning.
+//
+// The fix is a compare-and-swap: only clear when past_due_started_at STILL equals expected, the
+// value the caller actually acted on.
+//
+// Distinguishes two zero-rows-affected causes that a single bool cannot tell apart:
+//   - The user genuinely does not exist: (false, ErrUserNotFound), matching the plain
+//     ClearPastDueStartedAt's existing contract — this is an anomaly worth surfacing as an error.
+//   - The user exists but past_due_started_at has already moved on to a newer cycle: (false, nil)
+//     — a legitimate, expected skip, NOT an error. The newer cycle's timestamp is exactly what
+//     must survive untouched so a future dunning run can still select and process it; treating
+//     this as an error would make a caller retry/alert on what is actually the fix working
+//     correctly.
+//
+// Implemented as one round trip: the `existing` CTE independently proves whether the row exists
+// at all, while the `updated` CTE performs the actual CAS write; a data-modifying CTE referenced
+// exactly once always executes exactly once, so there is no double-write hazard here.
+//
+// NOTE: this is a NEW, separate method rather than a signature change to ClearPastDueStartedAt —
+// subscription_webhook.go's three recovery-path callers need the unconditional version's
+// semantics (no "expected occurrence" to compare against there), and per the #1413 P6 task's
+// scope fence, that file is owned by a concurrent task. Once that surface settles, folding these
+// back into one CAS-shaped method (with the unconditional case expressed as "no expectation
+// supplied") would be a reasonable follow-up cleanup.
+func (r *profileRepository) ClearPastDueStartedAtIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
+	var userExists, cleared bool
+	err := r.db.QueryRow(ctx, `
+		WITH existing AS (
+			SELECT 1 FROM users WHERE id = $1
+		), updated AS (
+			UPDATE users SET past_due_started_at = NULL, updated_at = NOW()
+			WHERE id = $1 AND past_due_started_at = $2
+			RETURNING 1
+		)
+		SELECT EXISTS(SELECT 1 FROM existing), EXISTS(SELECT 1 FROM updated)
+	`, userID, expected).Scan(&userExists, &cleared)
+	if err != nil {
+		return false, fmt.Errorf("ClearPastDueStartedAtIfMatches: %w", err)
+	}
+	if !userExists {
+		return false, ErrUserNotFound
+	}
+	return cleared, nil
 }
 
 // GetUsersInPastDue returns users with subscription_status='past_due' and non-nil past_due_started_at.
