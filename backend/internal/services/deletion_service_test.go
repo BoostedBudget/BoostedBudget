@@ -1148,6 +1148,54 @@ func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
+// TestExecuteDeletion_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim is the H1 gating test at
+// the CALLER boundary: when the OPERATION-keyed ActionPaddleCancelSubscription claim is held by
+// another flow (e.g. a concurrent past_due grace-cancel), cleanupPaddleResources must return
+// ErrSideEffectClaimBusy WITHOUT ever calling the Paddle collaborator, and ExecuteDeletion must
+// still release its OWN ActionAccountDeletion flow claim and propagate the error — exactly like
+// any other cleanup failure. This is the "side-effect claim lost while flow claim held →
+// collaborator not called, flow claim released" case, proven at this caller rather than only
+// inside plaidItemCleanupService.
+func TestExecuteDeletion_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	user, _, _ := buildUserWithPaddle("active")
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	// Another flow already holds the side-effect claim — Claim reports claimed=false.
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return("", false, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	// CancelSubscriptionImmediately, ArchiveAndAnonymizeCustomer, DeleteUserCascade, and Clerk
+	// deletion are deliberately left unstubbed — an unstubbed testify mock call panics, proving
+	// the Paddle collaborator is never reached at all.
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	require.Error(t, err, "a busy side-effect claim must abort this deletion attempt so it retries")
+	assert.ErrorIs(t, err, ErrSideEffectClaimBusy)
+	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "DeleteUserCascade", mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	// The side-effect claim was never won, so there is nothing to release for it.
+	mockClaims.AssertNotCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, mock.Anything, mock.Anything)
+}
+
 // TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion is the archive-step sibling of the
 // cancel-failure test above — same C2 correction, same rationale.
 func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {

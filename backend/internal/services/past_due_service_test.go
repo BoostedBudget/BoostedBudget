@@ -278,6 +278,50 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 	repo.AssertCalled(t, "CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
 }
 
+// TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim
+// is the H1 gating test at the CALLER boundary: when the OPERATION-keyed
+// ActionPaddleCancelSubscription claim is held by another flow (e.g. a concurrent account
+// deletion), processGraceExpiry must never call the Paddle collaborator, must release its OWN
+// ActionPastDueGraceCancel flow claim, and must propagate the error so the daily job logs it and
+// retries tomorrow — exactly like any other Step 2 failure.
+func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-paddle-side-effect-busy"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	// Another flow (e.g. account deletion) already holds the side-effect claim.
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return("", false, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	// paddle.CancelSubscription is deliberately left unstubbed — an unstubbed testify mock call
+	// panics, proving the collaborator is never reached.
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	require.Error(t, err, "a busy side-effect claim must propagate so the daily job retries")
+	assert.ErrorIs(t, err, ErrSideEffectClaimBusy)
+	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "CancelIfPastDueWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertNotCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, mock.Anything, mock.Anything)
+}
+
 // Test 4: Plaid-only window (14 <= age < 21) — DisconnectAllUserItems called
 func TestPastDueService_ProcessUser_PlaidDisconnect_AgeInWindow(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
