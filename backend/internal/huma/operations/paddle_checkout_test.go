@@ -195,9 +195,6 @@ func (m *mockProfileRepo) ClearPastDueStartedAt(ctx context.Context, userID stri
 func (m *mockProfileRepo) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-func (m *mockProfileRepo) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
 
 // CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
 // (Issue #1413 H5 residual) are not exercised by these Paddle checkout tests; stubbed to satisfy

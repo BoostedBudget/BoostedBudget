@@ -1369,50 +1369,6 @@ func TestGetUserByClerkID_WithPastDueStartedAt(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestCancelIfPastDue_WhenPastDue_Flips verifies that CancelIfPastDue returns (true, nil)
-// when the UPDATE affects one row (user was past_due).
-func TestCancelIfPastDue_WhenPastDue_Flips(t *testing.T) {
-	mockDB, repo := setupMockDB(t)
-	defer mockDB.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-
-	mockDB.ExpectExec(regexp.QuoteMeta(`
-		UPDATE users
-		SET subscription_status = 'cancelled', updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due'`)).
-		WithArgs(userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	flipped, err := repo.CancelIfPastDue(ctx, userID)
-	require.NoError(t, err)
-	assert.True(t, flipped, "should return true when a row was updated")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
-// TestCancelIfPastDue_WhenNotPastDue_NoFlip verifies that CancelIfPastDue returns (false, nil)
-// when the UPDATE affects zero rows (user has already recovered).
-func TestCancelIfPastDue_WhenNotPastDue_NoFlip(t *testing.T) {
-	mockDB, repo := setupMockDB(t)
-	defer mockDB.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-
-	mockDB.ExpectExec(regexp.QuoteMeta(`
-		UPDATE users
-		SET subscription_status = 'cancelled', updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due'`)).
-		WithArgs(userID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-
-	flipped, err := repo.CancelIfPastDue(ctx, userID)
-	require.NoError(t, err)
-	assert.False(t, flipped, "should return false when no row was updated (user recovered)")
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
 // ─── #1413: GetEffectiveSubscriptionStatusByUserID ──────────────────────────
 // An admin "comp" sets manual_tier_override/manual_tier_ends_at but leaves the raw
 // subscription_status column untouched. Every access gate must read the EFFECTIVE status

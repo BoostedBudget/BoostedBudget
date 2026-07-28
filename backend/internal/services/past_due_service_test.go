@@ -1017,7 +1017,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWon_PlaidFails_ReleasesClai
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes proves that when the
-// final CancelIfPastDue CAS misses (comp/recovery landed during the Plaid/Paddle calls), the claim
+// final CancelIfPastDueWithRetention CAS misses (comp/recovery landed during the Plaid/Paddle calls), the claim
 // is Released — NOT Completed. Completing here would permanently block reclaiming per the
 // work_claims contract ("a completed claim is never re-granted"), stranding a user who must still
 // be cancelled once a mid-flight comp lapses.
