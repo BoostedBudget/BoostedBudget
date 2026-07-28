@@ -36,12 +36,16 @@ type PastDueProfileRepository interface {
 	// GetUserByID retrieves a user by their internal UUID (used for race-condition re-read).
 	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
 
-	// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled' AND starts
-	// the 6-month retention clock in the SAME UPDATE, only if the user is still 'past_due' AND
-	// carries no currently-active manual tier override. Returns (true, nil) if the flip happened,
-	// (false, nil) if the user has already recovered (payment arrived between Plaid disconnect
-	// and this point) or an admin granted/extended a comp in that same window (Issue #1413 High
-	// finding H6, Codex review round 3: predicate extended to also close the comp race).
+	// CancelIfPastDueOccurrenceWithRetention atomically flips subscription_status to 'cancelled'
+	// AND starts the 6-month retention clock in the SAME UPDATE, only if the user is still
+	// 'past_due', carries no currently-active manual tier override, AND past_due_started_at still
+	// equals expectedPastDueStartedAt — the SPECIFIC dunning cycle this flow claimed. Returns
+	// (true, nil) if the flip happened, (false, nil) for ANY predicate miss: the user already
+	// recovered, an admin granted/extended a comp in that window (Issue #1413 High finding H6,
+	// Codex review round 3), or (Issue #1413 round-4 finding H1) the row has already moved on to a
+	// DIFFERENT past_due cycle than the one this flow verified — cycle B is ALSO 'past_due' with
+	// no override, so without the occurrence check a stale worker holding cycle A's claim would
+	// flip cycle B before cycle B's own grace period had expired.
 	//
 	// Issue #1413 round-3 finding H5 residual: this REPLACES the earlier separate
 	// CancelIfPastDue + SetRetentionDates pair. That pair left a window where the CAS could
@@ -50,7 +54,7 @@ type PastDueProfileRepository interface {
 	// job can never re-select a user this already flipped to 'cancelled', so that user would be
 	// cancelled forever with no retention clock: never warned, never deleted. One statement means
 	// either both land or neither does.
-	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
+	CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error)
 
 	// ClearPastDueStartedAtIfMatches clears the past_due_started_at timestamp after auto-cancel,
 	// but ONLY if the column still holds expected — the SAME timestamp this flow captured at the
@@ -245,10 +249,17 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 // notify → Complete. Issue #1413 High finding H6b: a real work claim on ActionPastDueGraceCancel
 // runs BEFORE external work for EXCLUSIVITY; predicate is re-verified immediately after claim wins.
 func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.User, now time.Time) error {
+	// Issue #1413 round-4 finding H1: occurrence computed ONCE and threaded into every check and
+	// write below — the claim key (P5, already fixed), BOTH reReadStillPastDue re-verifications
+	// (this fix), and the final CAS predicate (this fix) — so a worker that has been sitting on a
+	// STALE snapshot of an earlier dunning cycle can never act on a newer one. user.PastDueStartedAt
+	// is guaranteed non-nil here: ProcessPastDueUser returns early otherwise.
+	occurrence := repository.FormatOccurrenceTimestamp(user.PastDueStartedAt)
+
 	// Cheap early check (mirrors ExecuteDeletion's belt-and-braces short-circuit): avoids
-	// claiming at all in the common already-recovered/already-comped case. NOT the source of
-	// correctness — the re-verify immediately after the claim below is.
-	if stillPastDue, err := s.reReadStillPastDue(ctx, user.ID); err != nil {
+	// claiming at all in the common already-recovered/already-comped/already-newer-cycle case. NOT
+	// the source of correctness — the re-verify immediately after the claim below is.
+	if stillPastDue, err := s.reReadStillPastDue(ctx, user.ID, occurrence); err != nil {
 		return fmt.Errorf("failed to re-read user %s before grace expiry: %w", user.ID, err)
 	} else if !stillPastDue {
 		return nil
@@ -262,10 +273,10 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// once, the SAME user can never have grace-cancel run again for the lifetime of the
 	// work_claims row, even after a full recover→re-enter-past-due cycle. past_due_started_at is
 	// the dunning-cycle discriminator: it is set once when the user enters past_due and cleared
-	// (ClearPastDueStartedAt, below) only after this flow completes, so it is stable across
-	// retries of the SAME cycle and changes on the NEXT one. See
+	// (ClearPastDueStartedAtIfMatches, below) only after this flow completes, so it is stable
+	// across retries of the SAME cycle and changes on the NEXT one. See
 	// internal/repository/work_claims_occurrence.go for the full rationale.
-	resourceID, err := repository.OccurrenceResourceID(user.ID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt))
+	resourceID, err := repository.OccurrenceResourceID(user.ID, occurrence)
 	if err != nil {
 		return fmt.Errorf("processGraceExpiry: %w", err)
 	}
@@ -291,7 +302,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 
 	// Re-verify the predicate against the freshest possible read, immediately after winning the
 	// claim and before any irreversible external work.
-	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
+	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID, occurrence)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 		return fmt.Errorf("failed to re-verify user %s before grace expiry: %w", user.ID, err)
@@ -368,35 +379,38 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// Steps 3+4 (combined): CAS flip subscription_status → cancelled AND start the 6-month
 	// retention clock, in ONE atomic UPDATE.
 	//
-	// The CAS still only flips if the user is still 'past_due' — guarding against a concurrent
-	// subscription.activated webhook that restored the user to 'active', or a comp granted,
-	// between the Plaid/Paddle calls above and this point. This is the final, authoritative
-	// correctness check — the claim above provides exclusivity, this predicate still provides
-	// correctness.
+	// The CAS still only flips if the user is still 'past_due', still uncomped, AND still on the
+	// EXACT dunning cycle this flow claimed (past_due_started_at = the timestamp captured at the
+	// top of this function) — guarding against a concurrent subscription.activated webhook that
+	// restored the user to 'active', a comp granted, or (Issue #1413 round-4 finding H1) a full
+	// recover→re-enter-past-due cycle completing between the Plaid/Paddle calls above and this
+	// point. This is the final, authoritative correctness check — the claim above provides
+	// exclusivity, this predicate still provides correctness.
 	//
 	// Issue #1413 round-3 finding H5 residual, closed for real: the two writes used to be
 	// separate (CancelIfPastDue then SetRetentionDates), so a lost/failed retention write after a
 	// successful CAS left the user cancelled with NO clock — and since GetUsersInPastDue only
 	// selects subscription_status = 'past_due', tomorrow's run could never re-reach them to
-	// retry (they are no longer past_due). CancelIfPastDueWithRetention makes both writes land
-	// together or not at all, closing that window on this path entirely. (A belt-and-braces
-	// repair query, RepairRetentionClock, also exists in profile_repository.go for any user
-	// already stuck in this state from before this fix, or from any other path — see
+	// retry (they are no longer past_due). CancelIfPastDueOccurrenceWithRetention makes both
+	// writes land together or not at all, closing that window on this path entirely. (A
+	// belt-and-braces repair query, RepairRetentionClock, also exists in profile_repository.go for
+	// any user already stuck in this state from before this fix, or from any other path — see
 	// retention_cleanup_check.go.)
 	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
-	flipped, err := s.repo.CancelIfPastDueWithRetention(ctx, user.ID, now, retentionExpires)
+	flipped, err := s.repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, *user.PastDueStartedAt, now, retentionExpires)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
-		return fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
+		return fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)
 	}
 	if !flipped {
-		// User recovered, or was comped, during the external calls above — a narrow residual
-		// window no guard can close (it cannot be atomic with an external Plaid/Paddle call).
-		// Release (never Complete) so a later run can retry once eligible again: Completing here
-		// would permanently block reclaiming per the work_claims contract ("a completed claim is
-		// never re-granted"), stranding a user who must still be cancelled once a mid-flight comp
-		// lapses.
-		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDueWithRetention predicate lost during external work")
+		// User recovered, was comped, or (H1) a newer dunning cycle already replaced this one
+		// during the external calls above — a narrow residual window no guard can close (it
+		// cannot be atomic with an external Plaid/Paddle call). Release (never Complete) so a
+		// later run can retry once eligible again: Completing here would permanently block
+		// reclaiming per the work_claims contract ("a completed claim is never re-granted"),
+		// stranding a user who must still be cancelled once a mid-flight comp lapses, or whose
+		// newer cycle must still get its OWN eventual grace-cancel evaluation.
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDueOccurrenceWithRetention predicate lost during external work")
 		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
 			slog.String("user_id", user.ID))
 		return nil
@@ -451,9 +465,19 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 }
 
 // reReadStillPastDue re-reads the user's current status and returns true only if the user is
-// still past_due. Returns false (+ logs) if the user recovered. Used by both grace-expiry and
-// Plaid-disconnect-window paths to guard against concurrent recovery webhooks.
-func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) (bool, error) {
+// still past_due, uncomped, AND still on the exact dunning cycle the caller claimed. Returns
+// false (+ logs) otherwise. Used by both grace-expiry and Plaid-disconnect-window paths to guard
+// against concurrent recovery webhooks.
+//
+// expectedOccurrence is repository.FormatOccurrenceTimestamp(user.PastDueStartedAt) for the
+// SAME past_due_started_at snapshot the caller used to build its work_claims resourceID — Issue
+// #1413 round-4 finding H1. Status and HasActiveManualOverride() alone are not enough: a batch
+// snapshot can capture cycle A, the user can recover and re-enter past_due as cycle B before this
+// re-read runs, and cycle B is ALSO 'past_due' with no override — so a stale worker holding cycle
+// A's claim would pass both of the older checks and act on cycle B, before cycle B's own grace
+// period had actually expired. A mismatch here is a normal, expected skip (not an error): the
+// CURRENT cycle is left alone for a future run to evaluate on its own merits.
+func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID, expectedOccurrence string) (bool, error) {
 	current, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return false, err
@@ -474,6 +498,14 @@ func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) 
 		)
 		return false, nil
 	}
+	// Issue #1413 round-4 finding H1: the row must still be on the EXACT cycle this worker
+	// claimed, not merely "some" past_due cycle.
+	if currentOccurrence := repository.FormatOccurrenceTimestamp(current.PastDueStartedAt); currentOccurrence != expectedOccurrence {
+		s.logger.Info("past_due occurrence changed since this worker's snapshot was taken; skipping stale action",
+			"user_id", userID,
+		)
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -482,7 +514,13 @@ func (s *PastDueService) reReadStillPastDue(ctx context.Context, userID string) 
 // EXCLUSIVITY (replacing the deleted ClaimPlaidDisconnectIfPastDue guard); reReadStillPastDue
 // immediately after claim wins re-verifies CORRECTNESS against the freshest read.
 func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user domain.User) error {
-	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
+	// Issue #1413 round-4 finding H1: occurrence computed ONCE and threaded into both
+	// reReadStillPastDue calls and the claim key below — see processGraceExpiry's matching
+	// comment. user.PastDueStartedAt is guaranteed non-nil here: ProcessPastDueUser returns early
+	// otherwise.
+	occurrence := repository.FormatOccurrenceTimestamp(user.PastDueStartedAt)
+
+	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID, occurrence)
 	if err != nil {
 		return fmt.Errorf("failed to re-read user %s for Plaid disconnect check: %w", user.ID, err)
 	}
@@ -496,7 +534,7 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 	// Issue #1413 P5: same reasoning as processGraceExpiry — the claim key must include WHICH
 	// dunning-cycle OCCURRENCE this is, via past_due_started_at, or a completed disconnect in one
 	// cycle would permanently block disconnecting again in a later cycle.
-	resourceID, err := repository.OccurrenceResourceID(user.ID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt))
+	resourceID, err := repository.OccurrenceResourceID(user.ID, occurrence)
 	if err != nil {
 		return fmt.Errorf("processPlaidDisconnectWindow: %w", err)
 	}
@@ -518,7 +556,7 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 
 	// Re-verify the predicate against the freshest possible read, immediately after winning the
 	// claim and before the external Plaid call.
-	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID)
+	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID, occurrence)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
 		return fmt.Errorf("failed to re-verify user %s before Plaid disconnect: %w", user.ID, err)

@@ -1680,6 +1680,37 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 	return ct.RowsAffected() > 0, nil
 }
 
+// CancelIfPastDueOccurrenceWithRetention is CancelIfPastDueWithRetention's occurrence-scoped
+// sibling (Issue #1413 round-4 finding H1). CancelIfPastDueWithRetention's predicate — still
+// 'past_due' and no currently-active manual override — is necessary but not sufficient once a
+// worker can be racing a NEWER past_due cycle for the SAME user: a batch snapshot captures cycle
+// A's past_due_started_at, the user recovers, then re-enters past_due as cycle B (a genuinely NEW
+// past_due_started_at) — cycle B is ALSO 'past_due' with no override, so the old predicate would
+// happily flip it even though the worker only ever verified cycle A's grace period, not cycle B's
+// (round-4 finding H1). Adding `AND past_due_started_at = expectedPastDueStartedAt` closes this:
+// the CAS now only succeeds for the EXACT cycle the caller claimed and re-verified.
+//
+// Returns (true, nil) when the flip happened, (false, nil) whenever the predicate misses for ANY
+// reason — recovered, comped, or (this fix) a different cycle now occupies the row. All three are
+// the same "someone else's business, not an error" outcome for this caller: past_due_service.go's
+// processGraceExpiry Releases (never Completes) its claim and lets a future run handle whatever
+// cycle is actually current.
+func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET subscription_status = 'cancelled',
+		    retention_started_at = $2,
+		    retention_expires_at = $3,
+		    updated_at = NOW()
+		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
+	`+noActiveManualOverridePredicate,
+		userID, retentionStarted, retentionExpires, expectedPastDueStartedAt)
+	if err != nil {
+		return false, fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
 // ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the user is
 // still 'trial' and carries no currently-active manual tier override. Returns (true, nil) if the
 // flip happened, (false, nil) if an admin granted/extended a comp between the caller's earlier
