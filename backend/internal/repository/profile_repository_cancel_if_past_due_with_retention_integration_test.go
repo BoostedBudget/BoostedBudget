@@ -250,3 +250,111 @@ func TestCancelIfPastDueWithRetention_Integration_SecondCallIsNoop(t *testing.T)
 	require.NotNil(t, retStarted)
 	assert.WithinDuration(t, firstStarted, *retStarted, time.Microsecond, "the second call must not overwrite the first call's retention clock")
 }
+
+// --- CancelIfPastDueOccurrenceWithRetention (Issue #1413 round-4 finding H1) ---
+//
+// CancelIfPastDueWithRetention above CASes on subscription_status and the manual-override
+// predicate only — it does NOT check that past_due_started_at is still the SPECIFIC dunning
+// cycle the caller claimed. Round-4 review sequence: a batch snapshot captures cycle A's
+// past_due_started_at -> the user recovers -> re-enters past_due as cycle B (a NEW
+// past_due_started_at) -> a stale worker still holding cycle A's snapshot re-verifies only
+// status+override (both still say "past_due, no override" — cycle B is ALSO past_due!) and
+// proceeds to disconnect Plaid / cancel Paddle / flip status during cycle B, before cycle B's own
+// grace period has expired. CancelIfPastDueOccurrenceWithRetention closes this by adding
+// `AND past_due_started_at = expectedPastDueStartedAt` to the CAS predicate, so a worker can only
+// flip the SPECIFIC cycle it actually claimed.
+//
+// A real DB is required because pgxmock cannot prove that a STALE occurrence leaves a genuinely
+// DIFFERENT (newer) past_due_started_at, and the row's status, completely untouched.
+//
+// Run with:
+//
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run TestCancelIfPastDueOccurrenceWithRetention_Integration -tags integration -v
+
+// TestCancelIfPastDueOccurrenceWithRetention_Integration_MatchingOccurrence_Flips proves the
+// happy path: CASing with the occurrence the caller actually claimed flips the user exactly like
+// CancelIfPastDueWithRetention does today.
+func TestCancelIfPastDueOccurrenceWithRetention_Integration_MatchingOccurrence_Flips(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_occmatch_" + suffix,
+		Email:              "occmatch-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
+
+	pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
+
+	started := time.Now().Truncate(time.Microsecond)
+	expires := started.AddDate(0, 6, 0)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, expires)
+	require.NoError(t, err)
+	assert.True(t, flipped, "CASing with the occurrence the caller actually claimed must flip")
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT subscription_status FROM users WHERE id = $1`, user.ID).Scan(&status))
+	assert.Equal(t, "cancelled", status)
+}
+
+// TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_DoesNotFlip is THE H1
+// regression proof at the repository layer: a worker holding an EARLIER cycle's timestamp
+// (staleOccurrence) must not flip a user whose row has already moved on to a NEWER cycle
+// (currentOccurrence) — even though status and override still pass. Before this fix (a predicate
+// checking only status+override), this CAS would have incorrectly flipped the user mid-cycle-B,
+// before cycle B's own grace period expired.
+func TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_DoesNotFlip(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_occstale_" + suffix,
+		Email:              "occstale-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
+
+	staleOccurrence := time.Now().Add(-60 * 24 * time.Hour).Truncate(time.Microsecond)   // cycle A — what the stale worker claimed
+	currentOccurrence := time.Now().Add(-1 * time.Hour).Truncate(time.Microsecond)       // cycle B — the row's CURRENT cycle
+	_, err = pool.Exec(ctx, `UPDATE users SET past_due_started_at = $1, subscription_status = 'past_due' WHERE id = $2`, currentOccurrence, user.ID)
+	require.NoError(t, err)
+
+	started := time.Now().Truncate(time.Microsecond)
+	expires := started.AddDate(0, 6, 0)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, staleOccurrence, started, expires)
+	require.NoError(t, err)
+	assert.False(t, flipped, "a stale occurrence must not flip a user whose row has moved on to a newer cycle")
+
+	var status string
+	var retExpires *time.Time
+	var pastDueStartedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT subscription_status, retention_expires_at, past_due_started_at FROM users WHERE id = $1`, user.ID,
+	).Scan(&status, &retExpires, &pastDueStartedAt))
+	assert.Equal(t, "past_due", status, "the user must remain past_due — cycle B's own grace period has not been evaluated")
+	assert.Nil(t, retExpires, "no retention clock must start off a stale occurrence")
+	require.NotNil(t, pastDueStartedAt)
+	assert.WithinDuration(t, currentOccurrence, *pastDueStartedAt, time.Microsecond, "cycle B's timestamp must be untouched")
+}
