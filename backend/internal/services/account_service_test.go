@@ -590,6 +590,27 @@ func (m *MockUserRepository) ClearPastDueStartedAt(ctx context.Context, userID s
 	return args.Error(0)
 }
 
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these account-service tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *MockUserRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	args := m.Called(ctx, userID, retentionStarted, retentionExpires)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+	args := m.Called(ctx, userID, startedAt, expiresAt)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockUserRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)

@@ -147,6 +147,21 @@ type ProfileRepository interface {
 	// check of HasActiveManualOverride() cannot, by itself, protect the final status flip.
 	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
 
+	// CancelIfPastDueWithRetention is CancelIfPastDue's atomic sibling: it flips
+	// subscription_status to 'cancelled' AND starts the retention clock (retention_started_at,
+	// retention_expires_at) in the SAME UPDATE, closing Issue #1413's H5 residual on the
+	// past-due grace-cancel path. Previously CancelIfPastDue and a separate SetRetentionDates
+	// call left a window where the CAS could succeed but the retention write could be lost (a
+	// crash, a dead-lettered job) — and because GetUsersInPastDue only selects
+	// subscription_status = 'past_due', the daily dunning job can never re-select a user this
+	// already flipped to 'cancelled', so that user would be cancelled forever with no retention
+	// clock: never warned, never deleted. Combining both writes into one statement means either
+	// both land or neither does. Same predicate as CancelIfPastDue (still 'past_due', still no
+	// active override) — the claim provides exclusivity, this predicate still provides
+	// correctness. Returns (true, nil) if the flip happened, (false, nil) on the same
+	// already-recovered/already-comped conditions CancelIfPastDue reports.
+	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
+
 	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
 	// user is still 'trial' AND carries no currently-active manual tier override. Returns
 	// (true, nil) if the flip happened, (false, nil) if an admin granted/extended a comp between
@@ -205,6 +220,28 @@ type ProfileRepository interface {
 	// UpdateUserEmailTx updates a user's email, blind index, and resets email_verified=false
 	// within an existing transaction. Returns ErrDuplicateEmail if the email is already in use.
 	UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, userID, plainEmail string) error
+
+	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
+	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
+	// Issue #1413 H5 residual, belt-and-braces repair path. CancelIfPastDueWithRetention closes
+	// the specific race on the past-due grace-cancel path going forward, but this query also
+	// catches: (a) any row already stuck in this state from BEFORE that fix existed, and (b) any
+	// other, currently-unknown path that might leave a user cancelled with no clock. Mirrors the
+	// other retention queries' predicates (subscription_status IN ('inactive', 'cancelled'),
+	// not deleted, no outstanding GDPR deletion request, no manual_tier_override at all — live or
+	// lapsed) so a comped or already-deletion-pending user is never touched.
+	GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error)
+
+	// RepairRetentionClock sets the retention clock for a single user, but ONLY if
+	// retention_expires_at is still NULL and the user is still read-only-status at the moment of
+	// the write — a conditional UPDATE (not a claim) is sufficient here because the write is
+	// purely additive and idempotent: once retention_expires_at is set, the WHERE clause itself
+	// prevents any concurrent repair attempt from clobbering it, unlike the destructive external
+	// side effects work_claims exists to guard. Returns (true, nil) if the clock was set, (false,
+	// nil) if the user no longer matches (already repaired by a concurrent run, comp granted,
+	// deletion requested, or status changed) since the candidate query ran — a legitimate skip,
+	// not an error.
+	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
 }
 
 // profileRepository implements ProfileRepository using PostgreSQL
@@ -1366,6 +1403,49 @@ func (r *profileRepository) GetUsersWithExpiredRetention(ctx context.Context) ([
 	return users, nil
 }
 
+// GetUsersNeedingRetentionClockRepair implements the Issue #1413 H5 residual repair path — see
+// the interface doc comment for the full rationale. Mirrors GetUsersWithExpiredRetention's
+// predicate shape except retention_expires_at IS NULL instead of IS NOT NULL/expired.
+func (r *profileRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE retention_expires_at IS NULL
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+	` + noManualOverrideAtAllPredicate + `
+		ORDER BY updated_at ASC
+	`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
+}
+
+// RepairRetentionClock implements the Issue #1413 H5 residual repair write — see the interface
+// doc comment for why a conditional UPDATE (not a work_claims claim) is sufficient here.
+func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET retention_started_at = $2,
+		    retention_expires_at = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND retention_expires_at IS NULL
+		  AND subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+	`+noManualOverrideAtAllPredicate,
+		userID, startedAt, expiresAt)
+	if err != nil {
+		return false, fmt.Errorf("RepairRetentionClock: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
 // expiredManualTierOverridePredicate selects users with a manual tier override that has
 // strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
 // performing the exact same clear-override/re-arm-retention/audit transition
@@ -1526,6 +1606,27 @@ func (r *profileRepository) CancelIfPastDue(ctx context.Context, userID string) 
 		userID)
 	if err != nil {
 		return false, fmt.Errorf("CancelIfPastDue: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// CancelIfPastDueWithRetention is CancelIfPastDue's atomic sibling — see the interface doc
+// comment for the full Issue #1413 H5 residual rationale. Same predicate as CancelIfPastDue
+// (identical WHERE clause, including noActiveManualOverridePredicate); the only difference is
+// that retention_started_at/retention_expires_at are set in the SAME statement, so the status
+// flip and the retention-clock write can never land separately.
+func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET subscription_status = 'cancelled',
+		    retention_started_at = $2,
+		    retention_expires_at = $3,
+		    updated_at = NOW()
+		WHERE id = $1 AND subscription_status = 'past_due'
+	`+noActiveManualOverridePredicate,
+		userID, retentionStarted, retentionExpires)
+	if err != nil {
+		return false, fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
 }

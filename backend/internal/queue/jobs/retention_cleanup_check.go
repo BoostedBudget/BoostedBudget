@@ -45,6 +45,19 @@ type RetentionProfileRepository interface {
 	// GetUsersWithExpiredRetention returns users whose retention_expires_at has passed and are not deleted/pending.
 	GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error)
 
+	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
+	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
+	// Issue #1413 round-3 finding H5 residual, belt-and-braces repair path. See
+	// RepairRetentionClock's doc comment for the write side.
+	GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error)
+
+	// RepairRetentionClock sets the retention clock for a single user, but ONLY if
+	// retention_expires_at is still NULL and the user is still read-only-status at the moment of
+	// the write. This is a plain conditional UPDATE, not a work_claims claim — the write is purely
+	// additive and idempotent (once set, the WHERE clause itself prevents a concurrent repair from
+	// clobbering it), unlike the destructive external side effects work_claims exists to guard.
+	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
+
 	// IsRetentionNotice30dEligible re-verifies, at the moment the caller already holds an
 	// exclusive work_claims claim on repository.ActionRetentionNotice30d, that a user is still
 	// eligible for the 30-day notice: still in the notice window, still unsent, and carrying no
@@ -178,6 +191,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
 	}()
+
+	// Step 0: Repair any read-only-status user whose retention clock never started — Issue #1413
+	// round-3 finding H5 residual, belt-and-braces backstop. Run BEFORE the notice/deletion steps
+	// below so a user repaired in this very pass can become eligible for a notice in the SAME
+	// run rather than waiting for tomorrow's. Non-fatal like steps 1/2 — a failure here must not
+	// block deletion processing, which is the more time-sensitive step.
+	if repairErr := w.repairRetentionClocks(ctx, job.ID); repairErr != nil {
+		w.logger.Error("failed to repair retention clocks",
+			"job_id", job.ID,
+			"error", repairErr,
+		)
+		// Don't fail job — continue with other steps
+	}
 
 	// Step 1: Send 30-day pre-deletion warnings
 	if notice30Err := w.send30dNotices(ctx, job.ID); notice30Err != nil {
@@ -419,6 +445,64 @@ func (w *RetentionCleanupCheckWorker) canSendRetentionNotice(jobID int64, notice
 		return false
 	}
 	return true
+}
+
+// repairRetentionClocks finds users stuck read-only-status with no retention clock and repairs
+// them — Issue #1413 round-3 finding H5 residual. CancelIfPastDueWithRetention
+// (past_due_service.go) closes the specific race on the past-due grace-cancel path going
+// forward by making the CAS and the retention write one atomic statement, but this repair query
+// also catches: (a) any row already stuck in this state from before that fix existed, and (b)
+// any other, currently-unknown path that might leave a user cancelled/inactive with a NULL
+// clock. retentionMonths matches the same duration used everywhere else in this worker.
+func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context, jobID int64) error {
+	users, err := w.profileRepo.GetUsersNeedingRetentionClockRepair(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch users needing retention clock repair: %w", err)
+	}
+	if len(users) == 0 {
+		w.logger.Info("no users needing retention clock repair", "job_id", jobID)
+		return nil
+	}
+	w.logger.Info("found users needing retention clock repair", "job_id", jobID, "user_count", len(users))
+
+	now := time.Now()
+	expires := now.AddDate(0, w.retentionMonths, 0)
+	var repairedCount, skippedCount, errorCount int
+	for _, user := range users {
+		// Belt-and-braces: a comped user must never have a retention clock started for them,
+		// even though the candidate query already excludes any override (live or lapsed) via
+		// noManualOverrideAtAllPredicate. Mirrors the same defensive pattern used throughout this
+		// worker and past_due_service.go.
+		if user.HasAnyManualOverride() {
+			w.logger.Info("skipping retention clock repair for user with a manual tier override (live or lapsed)",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+
+		repaired, repairErr := w.profileRepo.RepairRetentionClock(ctx, user.ID, now, expires)
+		if repairErr != nil {
+			w.logger.Warn("failed to repair retention clock",
+				"job_id", jobID, "user_id", user.ID, "error", repairErr)
+			errorCount++
+			continue
+		}
+		if !repaired {
+			// Already repaired by a concurrent run, or the user's status/clock changed since the
+			// candidate query ran — a legitimate skip, not an error.
+			w.logger.Info("retention clock repair skipped — precondition lost since query",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+
+		w.logger.Info("retention clock repaired", "job_id", jobID, "user_id", user.ID)
+		repairedCount++
+	}
+
+	w.logger.Info("retention clock repair processed",
+		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount)
+	return nil
 }
 
 // deleteExpiredAccounts finds users with expired retention and executes deletion.
