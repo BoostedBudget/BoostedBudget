@@ -14,25 +14,9 @@
  * apps/mcp-server/src/manifest/capability-summary.drift.test.ts fails the
  * build if this committed file falls out of sync with the manifest.
  *
- * Claims discipline: this file must never say the agent "writes and runs
- * code" (it calls a typed client from a declared operation list), that
- * tokens are "bound to your OAuth grant" (that binding is inert at runtime —
- * #1418; say "your account and the exact request"), that recipes are
- * "read-only" (saving one is a confirmation-gated write), that disconnection
- * is available from account settings or is instant (no such UI exists yet —
- * #1419; it's Clerk-dashboard-only and fails open during a Clerk outage),
- * that recipes can run automatically (no scheduler — #1220), that a paid
- * plan is required (api_access is unenforced), or any unfalsifiable security
- * adjective ("bank-grade", "military-grade", "zero-trust").
- *
- * Round 2 (#1430): must never say a saved-recipe confirmation is re-invoked via
- * `execute` (recipes.ts:163-190 — the challenge names `recipe.save`), that "every
- * call" is proxied to the Go backend (search and recipe.templates are handled
- * locally against the static spec index / template list — agent.ts:144-150,
- * agent.ts:279-290), or that "the agent never stores" credentials (the Durable
- * Object's props do store the raw OAuth token via updateProps() — agent.ts:45-55,
- * 64-84; the true, narrower claim from README.md is "never visible in tool inputs
- * or outputs").
+ * Claims discipline: keep this page user-facing and precise. Describe account
+ * access, confirmation, and practical limits without exposing service topology,
+ * internal operation names, implementation details, or unfinished roadmap items.
  */
 
 import { useEffect, useLayoutEffect } from 'react'
@@ -60,66 +44,54 @@ const TOC_SECTIONS = [
   { id: 'recipes', label: 'Recipes' },
   { id: 'data-and-access', label: 'Data and access' },
   { id: 'limits', label: 'Limits' },
-  { id: 'troubleshooting', label: 'Troubleshooting' },
+  { id: 'troubleshooting', label: 'Troubleshooting' }
+]
+
+const CAPABILITY_HIGHLIGHTS = [
+  'Analyze spending, budgets, net worth, and portfolio performance',
+  'Recategorize, tag, and review transactions — with your confirmation',
+  'Create and adjust budgets, categories, tags, and savings goals',
+  'Save named reviews and run them again when you need them'
 ]
 
 const TRANSCRIPT_SUBSCRIPTION_AUDIT = [
   {
     speaker: 'You' as const,
-    lines: [
-      "Which of my subscriptions are costing me the most, and can you cancel the ones I don't use?",
-    ],
+    lines: ["Which of my subscriptions are costing me the most, and can you cancel the ones I don't use?"]
   },
   {
     speaker: 'Agent' as const,
     lines: [
-      'execute({ calls: [',
-      '  { operationId: "getRecurringSubscriptions" },',
-      '  { operationId: "getLargestTransactionsForPeriod", params: { limit: 5 } }',
-      ']})',
-      '→ 5 recurring charges found, $71.96/mo total. Latest Peacock charge: $6.99 on Checking ···4021, no matching activity in 60 days.',
-    ],
-  },
-  {
-    speaker: 'Agent' as const,
-    lines: [
-      "I can't cancel a subscription myself — that only happens with the merchant. I can tag that Peacock charge \"Review to cancel\" so it's easy to find when you do.",
-    ],
+      'I found 5 recurring charges totaling $71.96/mo. The latest Peacock charge is $6.99 on Checking ···4021, with no matching activity in 60 days.',
+      'I can\'t cancel a subscription myself — that happens with the merchant. I can tag the Peacock charge "Review to cancel" so it\'s easy to find.'
+    ]
   },
   { speaker: 'You' as const, lines: ['Yes, tag it.'] },
   {
     speaker: 'Agent' as const,
-    lines: [
-      'execute({ calls: [{ operationId: "updateTransactionTags", pathParams: { id: "txn_peacock_04a1" }, body: { tags: ["Review to cancel"] } }] })',
-      '⟳ Confirm: set tags on this transaction to ["Review to cancel"]?',
-    ],
+    lines: ['⟳ Confirm: tag the Peacock transaction as "Review to cancel"?']
   },
   { speaker: 'You' as const, lines: ['Confirmed.'] },
   {
     speaker: 'Agent' as const,
     lines: [
-      'execute({ ..., confirmationToken: "3f7a9c..." })',
-      "→ Tagged. Cancelling Peacock itself still happens on peacocktv.com or with your bank — BoostedBudget can't do that step for you.",
-    ],
-  },
+      "→ Tagged. Cancelling Peacock itself still happens on peacocktv.com or with your bank — BoostedBudget can't do that step for you."
+    ]
+  }
 ]
 
 const TRANSCRIPT_HOUSEHOLD_REFUSAL = [
-  { speaker: 'You' as const, lines: ['My partner sent me a household invite. Accept it.'] },
   {
-    speaker: 'Agent' as const,
-    lines: [
-      'search({ query: "household invite", tag: "Household" })',
-      '→ getMyHousehold, listHouseholdInvites, getHouseholdInvitePreview',
-    ],
+    speaker: 'You' as const,
+    lines: ['My partner sent me a household invite. Accept it.']
   },
   {
     speaker: 'Agent' as const,
     lines: [
-      "I can see the invite — it's from the account ending 8815 and it's still pending. I can't accept it.",
-      "Accepting a household invite is consent to share financial data, so it isn't available to agents at all. Open BoostedBudget and accept it there.",
-    ],
-  },
+      "I found the invite — it's from the account ending 8815 and it's still pending. I can't accept it.",
+      "Accepting a household invite is consent to share financial data, so it isn't available to agents at all. Open BoostedBudget and accept it there."
+    ]
+  }
 ]
 
 /** Restores document.title / meta description / canonical link on unmount. Best-effort SEO: a
@@ -168,15 +140,7 @@ function useDocumentHead(title: string, description: string, canonicalHref: stri
   }, [title, description, canonicalHref])
 }
 
-function Section({
-  id,
-  title,
-  children,
-}: {
-  id: string
-  title: string
-  children: React.ReactNode
-}) {
+function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
     <section aria-labelledby={id} className="space-y-4">
       <h2 id={id} className="scroll-mt-24 text-2xl font-semibold text-foreground">
@@ -185,12 +149,6 @@ function Section({
       {children}
     </section>
   )
-}
-
-function topTags(readCountByTag: Record<string, number>, count: number): [string, number][] {
-  return Object.entries(readCountByTag)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, count)
 }
 
 export function McpPage() {
@@ -212,24 +170,13 @@ export function McpPage() {
     }
   }, [])
 
-  const {
-    totalOperations,
-    allowedOperations,
-    readOperations,
-    writeOperations,
-    excludedOperations,
-    destructiveWriteOperations,
-    readCountByTag,
-    exclusionGroups,
-  } = capabilitySummary
-
-  const featuredTags = topTags(readCountByTag, 5)
+  const { allowedOperations, readOperations, writeOperations, publicBoundaries } = capabilitySummary
 
   return (
     <div>
       {/* Above the rule: centred, larger type, Persuade opening. */}
       <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
-        <McpHero allowedOperationsCount={allowedOperations} />
+        <McpHero capabilityCount={allowedOperations} />
         <div className="mt-12">
           <McpTranscript turns={TRANSCRIPT_SUBSCRIPTION_AUDIT} showsStatusMarkers />
         </div>
@@ -245,93 +192,58 @@ export function McpPage() {
           <div className="flex-1 space-y-16 text-left">
             <Section id="overview" title="What the MCP server is">
               <p className="text-foreground">
-                BoostedBudget runs a remote MCP (Model Context Protocol) server at a single
-                URL. Connect Claude Desktop, Claude Code, or VS Code, sign in with your
-                BoostedBudget account, and your agent can read your accounts, transactions,
-                budgets, and portfolio directly — no exporting statements, no copy-pasting
-                numbers into a chat window.
+                BoostedBudget runs a remote MCP (Model Context Protocol) server at a single URL. Connect Claude Desktop,
+                Claude Code, or VS Code, sign in with your BoostedBudget account, and your agent can read your accounts,
+                transactions, budgets, and portfolio directly — no exporting statements, no copy-pasting numbers into a
+                chat window.
               </p>
               <p className="text-foreground">
-                Every write — recategorizing a transaction, tagging it, saving a recipe — waits
-                for you to confirm it first. Nothing in your account changes until you say yes.
+                Every write — recategorizing a transaction, tagging it, saving a recipe — waits for you to confirm it
+                first. Nothing in your account changes until you say yes.
               </p>
             </Section>
 
             <Section id="capabilities" title="What it can and can't do">
               <p className="text-foreground">
-                The API behind BoostedBudget has {totalOperations} operations. {allowedOperations}{' '}
-                of them are reachable through MCP ({readOperations} read, {writeOperations}{' '}
-                write — every write confirmation-gated, {destructiveWriteOperations} of them
-                deletions). The rest — {excludedOperations} operations — are permanently
-                excluded and never reachable at all, no matter what an agent asks for.
+                MCP exposes {allowedOperations} capabilities: {readOperations} for reading your finances and{' '}
+                {writeOperations} for changes that always wait for your confirmation.
               </p>
               <p className="text-foreground">
-                Reads span every area of the product, including{' '}
-                {featuredTags.map(([tag, count], i) => (
-                  <span key={tag}>
-                    {i > 0 && ', '}
-                    {tag} ({count})
-                  </span>
-                ))}
-                .
+                Ask about spending, budgets, transactions, categories, savings goals, net worth, investments, and
+                household data. You can also organize your finances and save repeatable reviews with your confirmation.
               </p>
               <ul className="grid gap-2 sm:grid-cols-2">
-                <li className="flex items-start gap-2 text-foreground">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  Analyze spending, budgets, net worth, and portfolio performance
-                </li>
-                <li className="flex items-start gap-2 text-foreground">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  Recategorize, tag, and review transactions — with your confirmation
-                </li>
-                <li className="flex items-start gap-2 text-foreground">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  Create and adjust budgets, categories, tags, and savings goals
-                </li>
-                <li className="flex items-start gap-2 text-foreground">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                  Save named recipes and run them through execute for repeatable analysis
-                </li>
+                {CAPABILITY_HIGHLIGHTS.map((highlight) => (
+                  <li key={highlight} className="flex items-start gap-2 text-foreground">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    {highlight}
+                  </li>
+                ))}
               </ul>
 
-              <p className="text-foreground">
-                Here&apos;s what that boundary looks like when an agent hits it:
-              </p>
+              <p className="text-foreground">Here&apos;s what that boundary looks like when an agent hits it:</p>
               <McpTranscript turns={TRANSCRIPT_HOUSEHOLD_REFUSAL} />
 
               <div>
-                <h3 className="mb-2 text-base font-semibold text-foreground">
-                  Permanently excluded — cannot be enabled
-                </h3>
-                <ul className="space-y-1.5">
-                  {exclusionGroups.map((group) => (
-                    <li key={group.reason} className="flex justify-between gap-4 text-muted-foreground">
-                      <span>{group.reason}</span>
-                      <span className="shrink-0 font-medium text-foreground">{group.count}</span>
+                <h3 className="mb-2 text-base font-semibold text-foreground">Some actions stay in BoostedBudget</h3>
+                <ul aria-label="Actions that stay in BoostedBudget" className="grid gap-3 sm:grid-cols-2">
+                  {publicBoundaries.map((boundary) => (
+                    <li key={boundary.id} className="rounded-lg border border-border bg-card p-4">
+                      <h4 className="font-medium text-foreground">{boundary.title}</h4>
+                      <p className="mt-1 text-muted-foreground">{boundary.description}</p>
                     </li>
                   ))}
                 </ul>
               </div>
             </Section>
 
-            <Section id="how-it-works" title={`Two tools instead of ${allowedOperations}`}>
+            <Section id="how-it-works" title="How it works">
               <p className="text-foreground">
-                Rather than exposing all {allowedOperations} reachable operations as separate
-                tools, the server gives an agent two primitives instead of {allowedOperations}{' '}
-                tools: <code>search</code> to discover the right operation by keyword, tag, or
-                read/write class, and <code>execute</code> to call it. <code>execute</code> calls
-                a typed client against a declared list of operations — it does not write or run
-                arbitrary code against your finances.
+                Your agent uses two tools: <code>search</code> finds the right capability, and <code>execute</code>{' '}
+                carries it out. You can ask in plain language, then review the answer or confirm a proposed change.
               </p>
               <p className="text-foreground">
-                The capability manifest behind both tools is deny-by-default: an operation is
-                reachable only if it&apos;s explicitly classified as read or write. Anything not
-                listed — or explicitly excluded — is denied, with no exceptions carved out at
-                request time.
-              </p>
-              <p className="text-foreground">
-                A third set of tools, <code>recipe.*</code>, builds saved, repeatable
-                compositions on top of <code>search</code> and <code>execute</code> — see{' '}
+                Saved recipes let you keep a repeatable financial review and run it again when you ask for it — see{' '}
                 <a href="#recipes" className="text-primary underline underline-offset-2">
                   Saved recipes
                 </a>{' '}
@@ -341,10 +253,9 @@ export function McpPage() {
 
             <Section id="connect" title="Connect your client">
               <p className="text-foreground">
-                You need a BoostedBudget account. During your 60-day trial and while your
-                subscription is active, your agent can read your data and make changes you
-                confirm. If your subscription lapses, reading keeps working and changes are
-                blocked — unless you&apos;re a covered member of an active household plan, in
+                You need a BoostedBudget account. During your 60-day trial and while your subscription is active, your
+                agent can read your data and make changes you confirm. If your subscription lapses, reading keeps
+                working and changes are blocked — unless you&apos;re a covered member of an active household plan, in
                 which case your agent can keep making confirmed changes too.
               </p>
               <McpSetupTabs />
@@ -352,25 +263,17 @@ export function McpPage() {
 
             <Section id="write-safety" title="Every write waits for you">
               <p className="text-foreground">
-                Every write goes through the same confirmation flow, whether it&apos;s a single
-                tag update via <code>execute</code> or a saved recipe via{' '}
-                <code>recipe.save</code>: the write tool describes what would happen and
-                returns a one-time confirmation token, the agent presents that to you, and
-                only after you say yes does the agent re-invoke that same tool —{' '}
-                <code>execute</code> or <code>recipe.save</code> — with the token to
-                actually make the change.
+                Every change goes through the same confirmation flow. The agent describes what would happen and asks you
+                to approve it before anything in your account changes.
               </p>
               <p className="text-foreground">
-                Each token is single-use and expires after 5 minutes. It&apos;s tied to your
-                account and the exact request being confirmed — the specific operation and
-                arguments — so it can&apos;t be replayed for a different call.
+                Confirmations are single-use and expire after 5 minutes. Each one is tied to your account and the exact
+                request you reviewed, so it cannot be reused for something different.
               </p>
               <p className="text-foreground">
-                Some categories of change are excluded from MCP entirely and can&apos;t be
-                confirmed into existence: Plaid account linking and unlinking, account deletion,
-                admin operations, and money movement. There is no money-movement operation at
-                all — Boosts&apos; <code>acceptTransferSuggestion</code> records your intent to
-                transfer; the transfer itself happens at your bank and is matched afterward.
+                Bank connections, household and sharing decisions, subscription changes, and account deletion stay in
+                BoostedBudget. MCP does not move money; it can only record your transfer intent for you to complete with
+                your bank.
               </p>
             </Section>
 
@@ -381,17 +284,14 @@ export function McpPage() {
                     &ldquo;What&apos;s my dining spend this month, and is it trending up?&rdquo;
                   </p>
                   <p className="mt-1 text-foreground">
-                    The agent finds the right analytics operations and answers in one message —
-                    no dashboard required.
+                    The agent finds the right information and answers in one message — no dashboard required.
                   </p>
                 </li>
                 <li className="rounded-lg border border-border bg-card p-4">
-                  <p className="font-mono text-sm text-foreground">
-                    &ldquo;Review my unreviewed transactions.&rdquo;
-                  </p>
+                  <p className="font-mono text-sm text-foreground">&ldquo;Review my unreviewed transactions.&rdquo;</p>
                   <p className="mt-1 text-foreground">
-                    The agent pulls your review inbox, flags anything it thinks looks
-                    miscategorized, and asks before bulk-approving the rest.
+                    The agent pulls your review inbox, flags anything it thinks looks miscategorized, and asks before
+                    bulk-approving the rest.
                   </p>
                 </li>
                 <li className="rounded-lg border border-border bg-card p-4">
@@ -399,9 +299,8 @@ export function McpPage() {
                     &ldquo;What should I do with my extra cash this month?&rdquo;
                   </p>
                   <p className="mt-1 text-foreground">
-                    The agent checks your budgets, savings goals, and any pending Boosts
-                    transfer suggestions, then explains the options — it won&apos;t move
-                    anything without your confirmation.
+                    The agent checks your budgets, savings goals, and any pending Boosts transfer suggestions, then
+                    explains the options — it won&apos;t move anything without your confirmation.
                   </p>
                 </li>
                 <li className="rounded-lg border border-border bg-card p-4">
@@ -417,96 +316,48 @@ export function McpPage() {
 
             <Section id="recipes" title="Saved recipes">
               <p className="text-foreground">
-                A recipe is a named, saved sequence of calls — for example, &ldquo;Monthly
-                Financial Review&rdquo; or &ldquo;Portfolio Review.&rdquo; <code>recipe.save</code>{' '}
-                stores it, <code>recipe.list</code> shows what you&apos;ve saved, and{' '}
-                <code>recipe.run</code> resolves a saved recipe to its calls, which the agent
-                then passes to <code>execute</code>.
+                A recipe is a named, saved financial review — for example, &ldquo;Monthly Financial Review&rdquo; or
+                &ldquo;Portfolio Review.&rdquo; Your agent can save it, show you what you&apos;ve saved, and run it
+                again whenever you ask.
               </p>
               <p className="text-foreground">
-                Recipes can only be built from read calls in v1 — but{' '}
-                <code>recipe.save</code> is still a confirmation-gated write, since it changes
-                what&apos;s stored on your account. You&apos;ll see the same confirm-before-it-
-                happens flow described above.
+                A recipe contains read-only analysis requests, but saving one still needs your confirmation because it
+                changes what&apos;s stored on your account. You&apos;ll see the same confirm-before-it-happens flow
+                described above.
               </p>
               <p className="text-foreground">
-                There&apos;s no scheduler yet — recipes run when you or your agent ask for them,
-                not on a timer (tracked in{' '}
-                <a
-                  href="https://github.com/BoostedBudget/BoostedBudget/issues/1220"
-                  className="text-primary underline underline-offset-2"
-                >
-                  #1220
-                </a>
-                ). A handful of starter templates — a monthly financial review, a spending
-                deep-dive, a subscription audit, a portfolio review — are built in; ask your
-                agent to list them.
+                Recipes run when you or your agent ask for them, not on a timer. A handful of starter reviews — monthly
+                finances, spending, subscriptions, and portfolios — are built in.
               </p>
             </Section>
 
             <Section id="data-and-access" title="Data handling and access control">
               <p className="text-foreground">
-                The Worker that handles MCP requests never connects to the database.{' '}
-                <code>execute</code> and the account-touching <code>recipe.*</code> tools —{' '}
-                <code>recipe.list</code>, <code>recipe.save</code>, <code>recipe.run</code> — are
-                proxied to the same Go backend that powers the BoostedBudget web app, which
-                enforces account ownership and validates every request the same way it would
-                from a browser. <code>search</code> and <code>recipe.templates</code> don&apos;t
-                touch the backend at all — they run locally against a static spec index and
-                template list.
+                Every request is scoped to your BoostedBudget account and checked with the same permissions used in the
+                app.
               </p>
               <p className="text-foreground">
-                Your BoostedBudget credentials are injected server-side after you sign in —
-                they&apos;re never visible in a tool&apos;s input or output. Tool calls,
-                successful or not, are recorded to an audit log on a best-effort basis.
+                Your BoostedBudget credentials are injected server-side after you sign in — they&apos;re never visible
+                to the agent. Calls, successful or not, are recorded in an audit log on a best-effort basis.
               </p>
               <p className="text-foreground">
-                Access is revoked from the Clerk dashboard today — an in-app disconnect page is
-                planned (
-                <a
-                  href="https://github.com/BoostedBudget/BoostedBudget/issues/1419"
-                  className="text-primary underline underline-offset-2"
-                >
-                  #1419
-                </a>
-                ) but doesn&apos;t exist yet. A revoked grant is detected within about 30–60
-                seconds via a background check on every request. That&apos;s a best-effort SLA,
-                not a hard security boundary: the check fails open if Clerk&apos;s API is
-                unreachable, so a Clerk outage does not block MCP access.
+                You can revoke access from your sign-in provider&apos;s security dashboard. It can take about 30–60
+                seconds to take effect, and that timing is best effort.
               </p>
             </Section>
 
-            <Section id="limits" title="Limits and known gaps">
+            <Section id="limits" title="Limits">
               <ul className="space-y-2 text-foreground">
                 <li>
-                  60 requests/minute and 5 concurrent calls, enforced per session, not per
-                  account — a second agent session against the same account gets its own limit.
-                  That covers <code>execute</code> and the account-touching{' '}
-                  <code>recipe.*</code> tools (<code>recipe.list</code>,{' '}
-                  <code>recipe.save</code>, <code>recipe.run</code>) — <code>search</code> and{' '}
-                  <code>recipe.templates</code> don&apos;t go through the limiter at all.
+                  60 requests/minute and 5 concurrent calls, enforced per session, not per account — a second agent
+                  session against the same account gets its own limit.
                 </li>
                 <li>
                   <code>execute</code> accepts at most 25 calls per invocation.
                 </li>
                 <li>
-                  Each call&apos;s result is truncated to about 500 characters — ask for a small{' '}
-                  <code>limit</code> and page through results rather than requesting everything
-                  at once.
-                </li>
-                <li>
-                  <code>/mcp</code> (Streamable HTTP, used by every tab above) is the
-                  recommended transport and is checked on every request. <code>/sse</code> is
-                  also accepted, but a revoked grant is only checked when an{' '}
-                  <code>/sse</code> connection opens, not on every message afterward — a
-                  long-lived stream can outlive a revocation until it reconnects.
-                </li>
-                <li>
-                  <code>execute</code> calls a typed API client from a declared list of
-                  operations — a simplified Code Mode, not agent-authored code running in a
-                  sandboxed isolate. A Dynamic Worker Loader for isolate-based sandboxing is
-                  referenced in the Worker config as a commented-out stub; it hasn&apos;t been
-                  built.
+                  Each call&apos;s result is truncated to about 500 characters — ask for a small <code>limit</code> and
+                  page through results rather than requesting everything at once.
                 </li>
               </ul>
             </Section>
@@ -515,9 +366,8 @@ export function McpPage() {
               <ul className="space-y-3 text-foreground">
                 <li>
                   <span className="font-medium">Boostedbudget doesn&apos;t appear after adding it: </span>
-                  double-check you pasted the full URL, including the <code>https://</code>{' '}
-                  scheme, and left Advanced settings empty so Dynamic Client Registration can
-                  run.
+                  double-check you pasted the full URL, including the <code>https://</code> scheme, and left Advanced
+                  settings empty so Dynamic Client Registration can run.
                 </li>
                 <li>
                   <span className="font-medium">Sign-in opens but nothing happens after: </span>
@@ -527,8 +377,7 @@ export function McpPage() {
                   <span className="font-medium">
                     <code>claude mcp list</code> shows <code>! Needs authentication</code>:{' '}
                   </span>
-                  that&apos;s expected before you run <code>/mcp</code> → Authenticate — it is
-                  not an error.
+                  that&apos;s expected before you run <code>/mcp</code> → Authenticate — it is not an error.
                 </li>
                 <li>
                   <span className="font-medium">I revoked access but the agent can still call tools: </span>
