@@ -153,9 +153,14 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 
 // releaseClaimOnFailure releases a work claim and logs any release failure. Mirrors
 // PastDueService/SubscriptionWebhookWorker's helper of the same name.
-func (w *RetentionCleanupCheckWorker) releaseClaimOnFailure(ctx context.Context, userID, action, token, reason string) {
-	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, action, token, reason); releaseErr != nil {
-		w.logger.Warn("failed to release work claim", "user_id", userID, "action", action, "reason", reason, "error", releaseErr)
+//
+// userID and resourceID are both taken (rather than deriving one from the other) because, since
+// Issue #1413 P5, resourceID is a composite "{userID}:{occurrence discriminator}" built by
+// repository.OccurrenceResourceID — userID stays available for clean, greppable log fields while
+// resourceID is what actually goes into the Release call.
+func (w *RetentionCleanupCheckWorker) releaseClaimOnFailure(ctx context.Context, userID, resourceID, action, token, reason string) {
+	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, resourceID, action, token, reason); releaseErr != nil {
+		w.logger.Warn("failed to release work claim", "user_id", userID, "resource_id", resourceID, "action", action, "reason", reason, "error", releaseErr)
 	}
 }
 
@@ -356,7 +361,22 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 			errorCount++
 			continue
 		}
-		token, claimed, err := w.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, spec.action, retentionNoticeClaimLease)
+		// Issue #1413 P5: the claim key must identify not just WHO (user.ID) and WHAT (spec.action)
+		// but WHICH retention OCCURRENCE — otherwise a user who is warned once, later resubscribes
+		// (clearing the clock), and cancels again would find this (user, action) pair already
+		// permanently completed from the FIRST retention cycle, and the second cycle's notice would
+		// never fire before hard deletion. retention_expires_at is the retention-cycle
+		// discriminator: it is set once when the clock starts and only changes when the clock is
+		// re-armed (a fresh cancellation after a resubscribe), which is exactly the re-arm case
+		// this fix must let notices fire again for.
+		resourceID, err := repository.OccurrenceResourceID(user.ID, repository.FormatOccurrenceTimestamp(user.RetentionExpiresAt))
+		if err != nil {
+			w.logger.Error("processRetentionNotices: missing retention occurrence discriminator",
+				"job_id", jobID, "user_id", user.ID, "notice", spec.noticeName, "error", err)
+			errorCount++
+			continue
+		}
+		token, claimed, err := w.claimsRepo.Claim(ctx, repository.ResourceTypeUser, resourceID, spec.action, retentionNoticeClaimLease)
 		if err != nil {
 			w.logger.Warn("failed to claim "+spec.noticeName+" retention notice",
 				"job_id", jobID, "user_id", user.ID, "error", err)
@@ -376,14 +396,14 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 		// claim and before the email actually goes out.
 		eligible, err := spec.isEligible(ctx, user.ID)
 		if err != nil {
-			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, err.Error())
+			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, err.Error())
 			w.logger.Warn("failed to re-verify "+spec.noticeName+" retention notice eligibility",
 				"job_id", jobID, "user_id", user.ID, "error", err)
 			errorCount++
 			continue
 		}
 		if !eligible {
-			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, "precondition lost since claim")
+			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, "precondition lost since claim")
 			w.logger.Info("skipping "+spec.noticeName+" retention notice — precondition lost since claim (comped, already sent, or window closed)",
 				"job_id", jobID, "user_id", user.ID)
 			skippedCount++
@@ -391,7 +411,7 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 		}
 
 		if sendErr := w.emailService.SendRetentionNoticeEmail(ctx, user.Email, spec.subject, spec.body); sendErr != nil {
-			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, sendErr.Error())
+			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, sendErr.Error())
 			w.logger.Warn("failed to send "+spec.noticeName+" retention notice",
 				"job_id", jobID, "user_id", user.ID, "error", sendErr)
 			errorCount++
@@ -404,14 +424,14 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 			// The email went out but we failed to record it. Release (not Complete) so the next
 			// run retries — see the residual note in the doc comment above: this risks a
 			// duplicate send, the deliberate at-least-once trade-off.
-			w.releaseClaimOnFailure(ctx, user.ID, spec.action, token, markErr.Error())
+			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, markErr.Error())
 			w.logger.Error("sent "+spec.noticeName+" retention notice but failed to record it — next run will retry and may re-send",
 				"job_id", jobID, "user_id", user.ID, "error", markErr)
 			errorCount++
 			continue
 		}
 
-		completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, spec.action, token)
+		completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, resourceID, spec.action, token)
 		if err != nil {
 			w.logger.Error("failed to mark "+spec.noticeName+" retention notice claim complete",
 				"job_id", jobID, "user_id", user.ID, "action", spec.action, "error", err)

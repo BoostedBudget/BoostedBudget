@@ -227,9 +227,14 @@ func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, para
 
 // releaseClaimOnFailure releases a work claim and logs any release failure.
 // Used to consolidate the repeated Release + Warn pattern in subscription-cancelled cleanup.
-func (w *SubscriptionWebhookWorker) releaseClaimOnFailure(ctx context.Context, userID, action, token, reason string) {
-	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, action, token, reason); releaseErr != nil {
-		w.logger.Warn("failed to release work claim", "user_id", userID, "action", action, "reason", reason, "error", releaseErr)
+//
+// userID and resourceID are both taken (rather than deriving one from the other) because, since
+// Issue #1413 P5, resourceID is a composite "{userID}:{Paddle event ID}" built by
+// repository.OccurrenceResourceID — userID stays available for clean, greppable log fields while
+// resourceID is what actually goes into the Release call.
+func (w *SubscriptionWebhookWorker) releaseClaimOnFailure(ctx context.Context, userID, resourceID, action, token, reason string) {
+	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, resourceID, action, token, reason); releaseErr != nil {
+		w.logger.Warn("failed to release work claim", "user_id", userID, "resource_id", resourceID, "action", action, "reason", reason, "error", releaseErr)
 	}
 }
 
@@ -841,13 +846,28 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	if w.claimsRepo == nil {
 		return fmt.Errorf("processSubscriptionCanceled: work claims repository not configured")
 	}
+	// Issue #1413 P5: the claim key must identify not just WHO (userID) and WHAT
+	// (ActionSubscriptionCancelledCleanup) but WHICH OCCURRENCE — otherwise cancel -> resubscribe
+	// -> cancel again would find this (user, action) pair already permanently completed from the
+	// FIRST cancellation, and this webhook would be silently acked without ever disconnecting
+	// Plaid or starting the retention clock on the second cancellation. webhook.EventID is
+	// Paddle's own idempotency key for this exact event (paddle_webhook_events.event_id is
+	// NOT NULL UNIQUE — see migration 000043): a redelivery of the SAME event reuses the same
+	// EventID (so a retry still collides, which is the whole point of the claim), while a
+	// genuinely new cancellation is a different Paddle event with a different EventID (even if
+	// it is the same user, or even the same subscription_id being cancelled a second time after a
+	// resubscribe).
+	resourceID, err := repository.OccurrenceResourceID(userID, webhook.EventID)
+	if err != nil {
+		return fmt.Errorf("processSubscriptionCanceled: %w", err)
+	}
 	// #1413 round-3 finding H3: ClaimOutcome (not bare Claim) because this caller — unlike the
 	// daily past-due/retention cron jobs, which re-run tomorrow regardless — MUST NOT treat
 	// "another worker holds this lease right now" the same as "already completed." Collapsing
 	// both into a skip here would get THIS webhook delivery marked processed even when the
 	// in-flight holder later crashes: nothing else would ever retrigger the Plaid disconnect or
 	// retention-clock write for this user again.
-	token, outcome, err := w.claimsRepo.ClaimOutcome(ctx, repository.ResourceTypeUser, userID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease)
+	token, outcome, err := w.claimsRepo.ClaimOutcome(ctx, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim subscription-cancelled cleanup for user %s: %w", userID, err)
 	}
@@ -871,11 +891,11 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// the claim and before the Plaid disconnect / retention-clock writes.
 	reVerified, err := w.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
-		w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
 		return fmt.Errorf("failed to re-verify user %s before subscription-cancelled cleanup: %w", userID, err)
 	}
 	if reVerified.HasActiveManualOverride() {
-		w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, "precondition lost — comp granted since last read")
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "precondition lost — comp granted since last read")
 		w.logger.Info("subscription-cancelled cleanup skipped — comp granted since last read", "user_id", userID)
 		return nil
 	}
@@ -899,7 +919,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 				w.logger.Info("subscription-cancelled Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", userID)
 			}
-			w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
+			w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items on cancellation for user %s: %w", userID, err)
 		}
 	}
@@ -913,7 +933,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// retry naturally reaches this write again.
 	now := time.Now()
 	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
-		w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
 		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
 	}
 
@@ -921,7 +941,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// another worker while we were doing the work above — that worker may have ALSO run the Plaid
 	// disconnect concurrently, which is precisely what this mechanism exists to make visible
 	// instead of silent.
-	completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionSubscriptionCancelledCleanup, token)
+	completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, token)
 	if err != nil {
 		w.logger.Error("failed to mark subscription-cancelled cleanup claim complete", "user_id", userID, "action", repository.ActionSubscriptionCancelledCleanup, "error", err)
 	} else if !completed {
