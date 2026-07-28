@@ -491,7 +491,6 @@ func (s *deletionService) requestDeletionTransactional(ctx context.Context, user
 	if err != nil {
 		return err
 	}
-	var cerr error
 	// Unconditional rollback-on-defer; see Gap Analysis Round 5, GT-7.
 	defer func() {
 		_ = tx.Rollback(ctx)
@@ -499,34 +498,28 @@ func (s *deletionService) requestDeletionTransactional(ctx context.Context, user
 
 	hhRepo := repository.NewHouseholdRepository(tx)
 
-	household, isOwner, found, cerr := hhRepo.GetHouseholdForUser(ctx, userID)
-	if cerr != nil {
-		cerr = fmt.Errorf("failed to check household ownership: %w", cerr)
-		return cerr
+	household, isOwner, found, err := hhRepo.GetHouseholdForUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check household ownership: %w", err)
 	}
 	if found && isOwner {
-		if _, cerr = hhRepo.LockHouseholdForUpdate(ctx, household.ID); cerr != nil {
-			cerr = fmt.Errorf("failed to lock household: %w", cerr)
-			return cerr
+		if _, err := hhRepo.LockHouseholdForUpdate(ctx, household.ID); err != nil {
+			return fmt.Errorf("failed to lock household: %w", err)
 		}
 		activeCount, err := hhRepo.CountActiveMembers(ctx, household.ID)
 		if err != nil {
-			cerr = fmt.Errorf("failed to count household members: %w", err)
-			return cerr
+			return fmt.Errorf("failed to count household members: %w", err)
 		}
 		if activeCount > 1 {
-			cerr = domain.ErrHouseholdHasActiveMembers
-			return cerr
+			return domain.ErrHouseholdHasActiveMembers
 		}
-		if cerr = repository.NewHouseholdInviteRepository(tx, nil).RevokeAllPendingForHousehold(ctx, household.ID); cerr != nil {
-			cerr = fmt.Errorf("failed to revoke pending household invites: %w", cerr)
-			return cerr
+		if err := repository.NewHouseholdInviteRepository(tx, nil).RevokeAllPendingForHousehold(ctx, household.ID); err != nil {
+			return fmt.Errorf("failed to revoke pending household invites: %w", err)
 		}
 	}
 
-	if cerr = repository.NewProfileRepository(tx, nil).MarkForDeletion(ctx, userID, scheduledAt); cerr != nil {
-		cerr = fmt.Errorf("failed to mark user for deletion: %w", cerr)
-		return cerr
+	if err := repository.NewProfileRepository(tx, nil).MarkForDeletion(ctx, userID, scheduledAt); err != nil {
+		return fmt.Errorf("failed to mark user for deletion: %w", err)
 	}
 
 	return tx.Commit(ctx)
