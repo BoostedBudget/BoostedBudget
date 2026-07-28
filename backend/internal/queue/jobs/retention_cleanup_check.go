@@ -168,6 +168,12 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			// Issue #1413 Task P4: generic last-success heartbeat — lets an alert fire on
+			// "this job has not succeeded in > 48h", which jobs_completed_total{status="failed"}
+			// alone cannot: that counter never increments at all if the job stops running
+			// entirely (crashes before Work() runs, or sits dead-lettered with no replay).
+			observability.RecordJobSuccess(job.Kind)
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
