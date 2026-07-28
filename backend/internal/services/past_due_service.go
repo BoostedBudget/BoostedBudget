@@ -244,7 +244,19 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	if s.claimsRepo == nil {
 		return fmt.Errorf("processGraceExpiry: work claims repository not configured")
 	}
-	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPastDueGraceCancel, pastDueClaimLease)
+	// Issue #1413 P5: the claim key must identify not just WHO (user.ID) and WHAT
+	// (ActionPastDueGraceCancel) but WHICH OCCURRENCE — otherwise the moment this flow completes
+	// once, the SAME user can never have grace-cancel run again for the lifetime of the
+	// work_claims row, even after a full recover→re-enter-past-due cycle. past_due_started_at is
+	// the dunning-cycle discriminator: it is set once when the user enters past_due and cleared
+	// (ClearPastDueStartedAt, below) only after this flow completes, so it is stable across
+	// retries of the SAME cycle and changes on the NEXT one. See
+	// internal/repository/work_claims_occurrence.go for the full rationale.
+	resourceID, err := repository.OccurrenceResourceID(user.ID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt))
+	if err != nil {
+		return fmt.Errorf("processGraceExpiry: %w", err)
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim grace-expiry cancellation for user %s: %w", user.ID, err)
 	}
@@ -268,11 +280,11 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// claim and before any irreversible external work.
 	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID)
 	if err != nil {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 		return fmt.Errorf("failed to re-verify user %s before grace expiry: %w", user.ID, err)
 	}
 	if !stillPastDue {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "precondition lost since claim")
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "precondition lost since claim")
 		return nil
 	}
 
@@ -296,7 +308,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 				s.logger.Info("grace-cancel Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", user.ID)
 			}
-			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
+			s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items for past_due user %s: %w", user.ID, err)
 		}
 	}
@@ -325,11 +337,11 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 			if errors.Is(subErr, ErrSideEffectClaimBusy) {
 				s.logger.Info("grace-cancel Paddle cancel deferred — side-effect claim held by another flow",
 					"user_id", user.ID)
-				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+				s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
 				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
 			}
 			if !errors.Is(subErr, ErrPaddleAlreadyCancelled) {
-				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+				s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
 				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
 			}
 			s.logger.Info("Paddle subscription already cancelled, continuing",
@@ -360,7 +372,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
 	flipped, err := s.repo.CancelIfPastDueWithRetention(ctx, user.ID, now, retentionExpires)
 	if err != nil {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 		return fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
 	}
 	if !flipped {
@@ -370,7 +382,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		// would permanently block reclaiming per the work_claims contract ("a completed claim is
 		// never re-granted"), stranding a user who must still be cancelled once a mid-flight comp
 		// lapses.
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDueWithRetention predicate lost during external work")
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDueWithRetention predicate lost during external work")
 		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
 			slog.String("user_id", user.ID))
 		return nil
@@ -401,7 +413,7 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// another worker while we were doing the work above — that worker may have ALSO run the
 	// Plaid/Paddle cleanup and CAS flip concurrently, which is precisely what this mechanism
 	// exists to make visible instead of silent.
-	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPastDueGraceCancel, token)
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, token)
 	if err != nil {
 		s.logger.Error("failed to mark grace-expiry claim complete", "user_id", user.ID, "action", repository.ActionPastDueGraceCancel, "error", err)
 	} else if !completed {
@@ -455,7 +467,14 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 	if s.claimsRepo == nil {
 		return fmt.Errorf("processPlaidDisconnectWindow: work claims repository not configured")
 	}
-	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
+	// Issue #1413 P5: same reasoning as processGraceExpiry — the claim key must include WHICH
+	// dunning-cycle OCCURRENCE this is, via past_due_started_at, or a completed disconnect in one
+	// cycle would permanently block disconnecting again in a later cycle.
+	resourceID, err := repository.OccurrenceResourceID(user.ID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt))
+	if err != nil {
+		return fmt.Errorf("processPlaidDisconnectWindow: %w", err)
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
 	if err != nil {
 		return fmt.Errorf("failed to claim Plaid disconnect for user %s: %w", user.ID, err)
 	}
@@ -475,11 +494,11 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 	// claim and before the external Plaid call.
 	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID)
 	if err != nil {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
 		return fmt.Errorf("failed to re-verify user %s before Plaid disconnect: %w", user.ID, err)
 	}
 	if !stillPastDue {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, "precondition lost since claim")
+		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, "precondition lost since claim")
 		s.logger.Info("past_due Plaid disconnect claim lost — user recovered or comped concurrently, skipping",
 			"user_id", user.ID)
 		return nil
@@ -503,7 +522,7 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 				s.logger.Info("past_due Plaid disconnect deferred — side-effect claim held by another flow",
 					"user_id", user.ID)
 			}
-			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
+			s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items in past_due window for user %s: %w", user.ID, err)
 		}
 		if s.analytics != nil {
@@ -512,7 +531,7 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 		s.createPlaidDisconnectedNotification(ctx, user)
 	}
 
-	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, user.ID, repository.ActionPlaidDisconnectPastDue, token)
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, token)
 	if err != nil {
 		s.logger.Error("failed to mark Plaid disconnect claim complete", "user_id", user.ID, "action", repository.ActionPlaidDisconnectPastDue, "error", err)
 	} else if !completed {
@@ -584,9 +603,14 @@ func (s *PastDueService) createCancelledNotification(ctx context.Context, user d
 
 // releaseClaimOnFailure releases a work claim and logs any release failure.
 // Used to consolidate the repeated Release + Warn pattern in grace-expiry/Plaid-disconnect paths.
-func (s *PastDueService) releaseClaimOnFailure(ctx context.Context, userID, action, token, reason string) {
-	if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, action, token, reason); releaseErr != nil {
-		s.logger.Warn("failed to release work claim", "user_id", userID, "action", action, "reason", reason, "error", releaseErr)
+//
+// userID and resourceID are both taken (rather than deriving one from the other) because, since
+// Issue #1413 P5, resourceID is a composite "{userID}:{occurrence discriminator}" built by
+// repository.OccurrenceResourceID — userID stays available for clean, greppable log fields while
+// resourceID is what actually goes into the Release call.
+func (s *PastDueService) releaseClaimOnFailure(ctx context.Context, userID, resourceID, action, token, reason string) {
+	if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, resourceID, action, token, reason); releaseErr != nil {
+		s.logger.Warn("failed to release work claim", "user_id", userID, "resource_id", resourceID, "action", action, "reason", reason, "error", releaseErr)
 	}
 }
 

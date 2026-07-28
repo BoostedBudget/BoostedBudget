@@ -211,6 +211,19 @@ func newAllowingWebhookClaimsRepo() *mockWorkClaimsRepository {
 	return m
 }
 
+// subscriptionCancelledResourceID computes the composite work_claims.resource_id expected for a
+// subscription-cancellation OCCURRENCE (Issue #1413 P5) — mirrors production's
+// repository.OccurrenceResourceID(userID, webhook.EventID), which processSubscriptionCanceled now
+// uses instead of the bare userID, so that cancel -> resubscribe -> cancel again is treated as a
+// NEW occurrence (a different Paddle event) rather than colliding with the first cancellation's
+// already-completed claim.
+func subscriptionCancelledResourceID(t *testing.T, userID string, webhook *domain.PaddleWebhookEvent) string {
+	t.Helper()
+	resourceID, err := repository.OccurrenceResourceID(userID, webhook.EventID)
+	require.NoError(t, err)
+	return resourceID
+}
+
 // loadWebhookFixture loads a webhook fixture from testdata
 func loadWebhookFixture(t *testing.T, filename string) *domain.PaddleWebhookEvent {
 	t.Helper()
@@ -1258,6 +1271,7 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *t
 		SubscriptionTier: "premium",
 	}
 	plaidErr := errors.New("plaid disconnect failed")
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(canceledUser, nil)
@@ -1265,17 +1279,17 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *t
 	// Unconditional trio still runs.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(plaidErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
 	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
@@ -1314,22 +1328,24 @@ func TestWorker_SubscriptionCanceled_PlaidSideEffectClaimBusy_Aborts_ReleasesCla
 		SubscriptionTier: "premium",
 	}
 
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
+
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(canceledUser, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(services.ErrSideEffectClaimBusy)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error()).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err, "a busy side-effect claim must propagate so River retries the whole webhook")
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error())
 	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
@@ -1782,23 +1798,24 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_Aborts_Rel
 		SubscriptionTier: "premium",
 	}
 	plaidErr := errors.New("plaid disconnect failed")
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(plaidErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error()).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
 	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 	mockNotifRepo.AssertNotCalled(t, "Create")
@@ -2866,6 +2883,7 @@ func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T)
 	job := createRiverJob(args)
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	var callOrder []string
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
@@ -2873,7 +2891,7 @@ func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "claim") }).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").
@@ -2882,7 +2900,7 @@ func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T)
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "set_retention") }).
 		Return(nil)
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -2919,6 +2937,7 @@ func TestWorker_SubscriptionCanceled_ClaimAlreadyCompleted_SkipsDestructive(t *t
 	job := createRiverJob(args)
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
@@ -2926,7 +2945,7 @@ func TestWorker_SubscriptionCanceled_ClaimAlreadyCompleted_SkipsDestructive(t *t
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	// The cleanup already ran to completion for this user — terminal, genuine skip.
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return("", repository.ClaimAlreadyCompleted, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -2959,6 +2978,7 @@ func TestWorker_SubscriptionCanceled_ClaimHeldByOther_ReturnsErrorForRetry(t *te
 	job := createRiverJob(args)
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
@@ -2966,7 +2986,7 @@ func TestWorker_SubscriptionCanceled_ClaimHeldByOther_ReturnsErrorForRetry(t *te
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	// Another worker holds an unexpired, incomplete lease RIGHT NOW — retryable, not a skip.
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return("", repository.ClaimHeldByOther, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
@@ -2997,24 +3017,25 @@ func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.
 	job := createRiverJob(args)
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
 	require.NoError(t, err)
 
-	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
 	mockPlaid.AssertCalled(t, "DisconnectAllUserItems", ctx, "user_2abc123def456")
 	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
 }
@@ -3038,25 +3059,26 @@ func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *
 	job := createRiverJob(args)
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
 		Return(false, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err, "the cleanup already ran; a lost lease at Complete time must not be reported as a failure")
-	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
 }
 
 // TestWorker_SubscriptionCanceled_SetRetentionDatesError_Aborts_ReleasesClaim is the regression
@@ -3081,24 +3103,25 @@ func TestWorker_SubscriptionCanceled_SetRetentionDatesError_Aborts_ReleasesClaim
 
 	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
 	retentionErr := errors.New("retention write failed")
+	resourceID := subscriptionCancelledResourceID(t, "user_2abc123def456", webhook)
 
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
-	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
+	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(retentionErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, retentionErr.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, retentionErr.Error()).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
 
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err, "a failed retention-clock write must abort the webhook so it retries, not complete silently")
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, "user_2abc123def456", repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, retentionErr.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, retentionErr.Error())
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 }
@@ -3120,4 +3143,46 @@ func TestSyncClerkMetadata_ReReadFailure_NoClerkCall(t *testing.T) {
 
 	mockClerk.AssertNotCalled(t, "UpdateUserMetadata")
 	mockProfileRepo.AssertExpectations(t)
+}
+
+// TestWorker_SubscriptionCanceled_EmptyEventID_ReturnsErrorWithoutClaiming pins the Issue #1413 P5
+// NULL-discriminator decision for the subscription-cancellation webhook: if webhook.EventID is
+// ever empty (should be impossible in practice — paddle_webhook_events.event_id is NOT NULL
+// UNIQUE, see migration 000043 — but this test constructs the case directly to exercise the
+// defensive path), the composite-key builder must refuse rather than silently claim on the bare
+// userID. mockClaims has NO expectations registered, so any ClaimOutcome/Complete/Release call
+// would panic — proving the claim layer is never reached at all. The unconditional trio (status
+// write, Clerk sync, past-due clear) DOES still run — it happens before the empty-EventID check
+// in processSubscriptionCanceled, and stays outside the claim by design (it records billing truth
+// regardless of claim outcome).
+func TestWorker_SubscriptionCanceled_EmptyEventID_ReturnsErrorWithoutClaiming(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockClaims := new(mockWorkClaimsRepository)
+	worker.SetWorkClaimsRepo(mockClaims)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	webhook.EventID = "" // deliberately empty
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	user := &domain.User{ID: "user_2abc123def456", ClerkUserID: "clerk_user_123", SubscriptionTier: "premium"}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err, "a missing occurrence discriminator must fail loudly, not silently claim on the bare userID")
+	assert.ErrorIs(t, err, repository.ErrMissingOccurrenceDiscriminator)
+	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 }

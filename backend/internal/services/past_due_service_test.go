@@ -142,6 +142,19 @@ func newAllowingPastDueClaimsRepo() *MockWorkClaimsRepository {
 // permissive ActionPaddleCancelSubscription stub returns.
 const testPastDuePaddleCancelSideEffectToken = "test-past-due-paddle-cancel-side-effect-token"
 
+// pastDueOccurrenceResourceID computes the composite work_claims.resource_id expected for a
+// past_due-cycle occurrence (Issue #1413 P5) — mirrors production's
+// repository.OccurrenceResourceID(userID, repository.FormatOccurrenceTimestamp(user.PastDueStartedAt)),
+// which processGraceExpiry/processPlaidDisconnectWindow now use instead of the bare userID, so
+// that a completed grace-cancel/Plaid-disconnect in ONE dunning cycle does not permanently block
+// the SAME action in a later cycle.
+func pastDueOccurrenceResourceID(t *testing.T, userID string, pastDueStartedAt time.Time) string {
+	t.Helper()
+	resourceID, err := repository.OccurrenceResourceID(userID, repository.FormatOccurrenceTimestamp(&pastDueStartedAt))
+	require.NoError(t, err)
+	return resourceID
+}
+
 func userWithPastDue(userID string, pastDueStartedAt time.Time) domain.User {
 	subID := "sub_test123"
 	return domain.User{
@@ -299,15 +312,18 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts
 	now := time.Now()
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
-	// Another flow (e.g. account deletion) already holds the side-effect claim.
+	// Another flow (e.g. account deletion) already holds the side-effect claim. Side-effect
+	// claims stay keyed on the BARE userID (unchanged by #1413 P5) — see
+	// plaid_item_cleanup_service.go's claimSideEffectAndRun.
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
 		Return("", false, nil)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	// paddle.CancelSubscription is deliberately left unstubbed — an unstubbed testify mock call
 	// panics, proving the collaborator is never reached.
@@ -318,7 +334,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts
 	assert.ErrorIs(t, err, ErrSideEffectClaimBusy)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDueWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
 	mockClaims.AssertNotCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, mock.Anything, mock.Anything)
 }
 
@@ -371,16 +387,17 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimLost_SkipsDisconnect(t 
 	now := time.Now()
 	pastDueStarted := now.Add(-15 * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	// The claim reports false — another worker holds it, or it's already completed.
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
 		Return("", false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
 
-	mockClaims.AssertCalled(t, "Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
+	mockClaims.AssertCalled(t, "Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease)
 	plaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Release", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -406,19 +423,20 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_PlaidFails_Releases
 	now := time.Now()
 	pastDueStarted := now.Add(-15 * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	plaidErr := errors.New("plaid API error")
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(plaidErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error()).
 		Return(true, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.Error(t, err, "Plaid failure must propagate so the daily job retries")
 
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken, plaidErr.Error())
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
@@ -441,19 +459,20 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_Success_CompletesCl
 	now := time.Now()
 	pastDueStarted := now.Add(-15 * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
 		Return(true, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 }
 
@@ -478,20 +497,21 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedN
 	now := time.Now()
 	pastDueStarted := now.Add(-15 * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken).
 		Return(false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 
 	assert.NoError(t, err, "the disconnect already ran; a lost lease at Complete time must not be reported as a failure")
-	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
 }
 
 // Test 5: Plaid-only window but re-read shows recovered — no-op
@@ -892,17 +912,18 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	var callOrder []string
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "claim") }).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "plaid_disconnect") }).
 		Return(nil)
 	// Issue #1413 H1: the Paddle-cancel step nests ActionPaddleCancelSubscription inside the flow
-	// claim above.
+	// claim above. Side-effect claims stay keyed on the BARE userID (unchanged by #1413 P5).
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
 		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
@@ -913,7 +934,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "cas_flip") }).
 		Return(true, nil)
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
 		Return(true, nil)
 	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
@@ -943,9 +964,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimLost_SkipsDestructive(t *te
 	now := time.Now()
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return("", false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
@@ -975,19 +997,20 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWon_PlaidFails_ReleasesClai
 	now := time.Now()
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	plaidErr := errors.New("plaid API error")
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(plaidErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error()).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error()).
 		Return(true, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.Error(t, err)
 
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error())
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, plaidErr.Error())
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDueWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -1014,9 +1037,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
@@ -1026,13 +1050,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	// CAS misses — recovered or comped during the external calls above.
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, nil)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -1057,9 +1081,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
@@ -1072,13 +1097,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
-	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
 		Return(false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 
 	assert.NoError(t, err, "the cancellation already ran; a lost lease at Complete time must not be reported as a failure")
-	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueWithRetentionError_Aborts_ReleasesClaim
@@ -1108,9 +1133,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueWithRetentionErro
 	user := userWithPastDue(userID, pastDueStarted)
 	subID := *user.PaddleSubscriptionID
 	dbErr := errors.New("db unavailable")
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
-	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
@@ -1119,15 +1145,73 @@ func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueWithRetentionErro
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, dbErr)
-	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 
 	require.Error(t, err, "a failed CAS+retention write must abort processing so the failure is loud, not complete silently")
-	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+// --- Issue #1413 P5: NULL occurrence discriminator ---
+//
+// The normal entry point, ProcessPastDueUser, guards against a nil PastDueStartedAt at its very
+// top (`if user.PastDueStartedAt == nil { return nil }`), so these two tests call
+// processGraceExpiry/processPlaidDisconnectWindow directly to exercise the defensive path a
+// caller bug (or a future code change removing that guard) could otherwise reach. The decision
+// pinned here: refuse via repository.ErrMissingOccurrenceDiscriminator rather than silently
+// collapsing to the bare userID — see work_claims_occurrence.go's doc comment for why a silent
+// collapse would reintroduce the exact permanent-block bug this task fixes. mockClaims has NO
+// expectations registered, so any Claim/Complete/Release call would panic — proving the claim
+// layer is never reached at all on this path.
+
+func TestPastDueService_ProcessGraceExpiry_NilPastDueStartedAt_ReturnsErrorWithoutClaiming(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	ctx := context.Background()
+	user := domain.User{ID: "user-nil-discriminator-grace", SubscriptionStatus: string(domain.SubscriptionStatusPastDue)}
+	// user.PastDueStartedAt is deliberately left nil.
+	freshUser := user
+	repo.On("GetUserByID", mock.Anything, user.ID).Return(&freshUser, nil)
+
+	err := svc.processGraceExpiry(ctx, user, time.Now())
+
+	require.Error(t, err, "a missing occurrence discriminator must fail loudly, not silently claim on the bare userID")
+	assert.ErrorIs(t, err, repository.ErrMissingOccurrenceDiscriminator)
+}
+
+func TestPastDueService_ProcessPlaidDisconnectWindow_NilPastDueStartedAt_ReturnsErrorWithoutClaiming(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	ctx := context.Background()
+	user := domain.User{ID: "user-nil-discriminator-plaid", SubscriptionStatus: string(domain.SubscriptionStatusPastDue)}
+	// user.PastDueStartedAt is deliberately left nil.
+	freshUser := user
+	repo.On("GetUserByID", mock.Anything, user.ID).Return(&freshUser, nil)
+
+	err := svc.processPlaidDisconnectWindow(ctx, user)
+
+	require.Error(t, err, "a missing occurrence discriminator must fail loudly, not silently claim on the bare userID")
+	assert.ErrorIs(t, err, repository.ErrMissingOccurrenceDiscriminator)
 }
