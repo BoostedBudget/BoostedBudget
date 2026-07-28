@@ -4,9 +4,9 @@
  * Reads THIS package's own manifest + spec index (never imported directly by
  * apps/web — see the module doc in apps/web/src/features/mcp/McpPage.tsx) and
  * writes an aggregates-only JSON file: total operations, allowed/read/write/
- * excluded/destructive-write counts, per-tag read counts, and exclusion groups
- * with their reason strings. No operation lists — keeps the committed file
- * small and free of anything that could grow into a spec dump.
+ * excluded/destructive-write counts, and a small set of curated public action
+ * boundaries. No operation lists or internal exclusion reasons — this keeps the
+ * committed file suitable for the public page.
  *
  * Run: bun run scripts/generate-mcp-capability-summary.ts
  * (or: bun run generate:mcp-summary, once wired into package.json by a later task)
@@ -19,21 +19,17 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getCapability } from '../src/manifest/capability-manifest'
+import { PUBLIC_BOUNDARY_IDS, getCapability, type PublicBoundaryId } from '../src/manifest/capability-manifest'
 import type { SpecIndex } from '../src/spec/search-runtime'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SPEC_INDEX_PATH = resolve(__dirname, '../src/spec/generated/spec-index.json')
-const OUTPUT_PATH = resolve(
-  __dirname,
-  '../../web/src/features/mcp/data/capabilitySummary.json',
-)
+const OUTPUT_PATH = resolve(__dirname, '../../web/src/features/mcp/data/capabilitySummary.json')
 
-export interface ExclusionGroup {
-  /** Human-readable exclusion reason, verbatim from the manifest. */
-  reason: string
-  /** Number of operations excluded for this reason. */
-  count: number
+export interface PublicBoundary {
+  id: PublicBoundaryId
+  title: string
+  description: string
 }
 
 export interface CapabilitySummary {
@@ -49,16 +45,37 @@ export interface CapabilitySummary {
   excludedOperations: number
   /** Allowed writes that destroy or permanently remove data. */
   destructiveWriteOperations: number
-  /** Allowed read-operation counts, keyed by OpenAPI tag (an op with N tags counts under each). */
-  readCountByTag: Record<string, number>
-  /** Exclusion reasons and how many operations cite each, largest group first. */
-  exclusionGroups: ExclusionGroup[]
+  /** Curated account-action boundaries suitable for public page copy. */
+  publicBoundaries: PublicBoundary[]
+}
+
+const PUBLIC_BOUNDARY_COPY: Record<PublicBoundaryId, PublicBoundary> = {
+  'bank-connections': {
+    id: 'bank-connections',
+    title: 'Bank connections',
+    description: 'Linking or disconnecting a bank connection stays in BoostedBudget.'
+  },
+  'household-sharing': {
+    id: 'household-sharing',
+    title: 'Household membership and sharing',
+    description: 'Invites, membership changes, sharing, and consent stay in BoostedBudget.'
+  },
+  'subscription-changes': {
+    id: 'subscription-changes',
+    title: 'Subscription changes',
+    description: 'Starting, changing, or cancelling a subscription stays in BoostedBudget.'
+  },
+  'account-deletion': {
+    id: 'account-deletion',
+    title: 'Account deletion',
+    description: 'Requesting or cancelling BoostedBudget account deletion stays in BoostedBudget.'
+  }
 }
 
 /**
  * Recomputes the capability summary from the committed spec index
  * (src/spec/generated/spec-index.json), cross-referencing the manifest for
- * fields the spec index doesn't carry (destructive flag, exclusion reason).
+ * fields the spec index doesn't carry (destructive flag, public boundary).
  *
  * Iterating the spec index (rather than the manifest's own operation list)
  * keeps `totalOperations` anchored to real, currently-specified API
@@ -70,8 +87,7 @@ export function computeCapabilitySummary(specIndex: SpecIndex): CapabilitySummar
   let writeOperations = 0
   let excludedOperations = 0
   let destructiveWriteOperations = 0
-  const readCountByTag: Record<string, number> = {}
-  const exclusionCounts = new Map<string, number>()
+  const publicBoundaryIds = new Set<PublicBoundaryId>()
 
   for (const entry of specIndex.entries) {
     const capability = getCapability(entry.operationId)
@@ -79,29 +95,21 @@ export function computeCapabilitySummary(specIndex: SpecIndex): CapabilitySummar
 
     if (entry.excluded) {
       excludedOperations++
-      const reason = capability.excludedReason ?? 'Unspecified'
-      exclusionCounts.set(reason, (exclusionCounts.get(reason) ?? 0) + 1)
+      if (capability.publicBoundary) publicBoundaryIds.add(capability.publicBoundary)
       continue
     }
 
     allowedOperations++
     if (entry.manifestClass === 'read') {
       readOperations++
-      for (const tag of entry.tags ?? []) {
-        readCountByTag[tag] = (readCountByTag[tag] ?? 0) + 1
-      }
     } else if (entry.manifestClass === 'write') {
       writeOperations++
       if (capability.destructive) destructiveWriteOperations++
     }
   }
 
-  const exclusionGroups: ExclusionGroup[] = [...exclusionCounts.entries()]
-    .map(([reason, count]) => ({ reason, count }))
-    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
-
-  const sortedReadCountByTag = Object.fromEntries(
-    Object.entries(readCountByTag).sort(([a], [b]) => a.localeCompare(b)),
+  const publicBoundaries = PUBLIC_BOUNDARY_IDS.filter((id) => publicBoundaryIds.has(id)).map(
+    (id) => PUBLIC_BOUNDARY_COPY[id]
   )
 
   return {
@@ -111,8 +119,7 @@ export function computeCapabilitySummary(specIndex: SpecIndex): CapabilitySummar
     writeOperations,
     excludedOperations,
     destructiveWriteOperations,
-    readCountByTag: sortedReadCountByTag,
-    exclusionGroups,
+    publicBoundaries
   }
 }
 
@@ -127,6 +134,6 @@ if (import.meta.main) {
   console.log(
     `✅ capabilitySummary.json generated: ${summary.totalOperations} operations ` +
       `(${summary.allowedOperations} allowed: ${summary.readOperations} read / ${summary.writeOperations} write, ` +
-      `${summary.excludedOperations} excluded, ${summary.destructiveWriteOperations} destructive)`,
+      `${summary.excludedOperations} excluded, ${summary.destructiveWriteOperations} destructive)`
   )
 }

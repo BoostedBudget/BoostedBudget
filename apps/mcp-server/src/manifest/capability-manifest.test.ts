@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import {
-  getCapability,
-  isAllowed,
-  isExcluded,
-  isWrite,
-  requiresConfirmation,
-} from './capability-manifest'
+import { getCapability, isAllowed, isExcluded, isWrite, requiresConfirmation } from './capability-manifest'
 
 // ── Deny-by-default ────────────────────────────────────────────────────────
 
@@ -131,6 +125,20 @@ describe('recipe operations', () => {
 // ── Excluded operations (permanently non-MCP) ─────────────────────────────
 
 describe('excluded operations', () => {
+  it('assigns public boundary metadata only to user-facing account actions', () => {
+    expect(getCapability('createLinkToken')?.publicBoundary).toBe('bank-connections')
+    expect(getCapability('disconnectInstitution')?.publicBoundary).toBe('bank-connections')
+    expect(getCapability('acceptHouseholdInvite')?.publicBoundary).toBe('household-sharing')
+    expect(getCapability('updatePrivacySettings')?.publicBoundary).toBe('household-sharing')
+    expect(getCapability('cancel-paddle-subscription')?.publicBoundary).toBe('subscription-changes')
+    expect(getCapability('requestDeletion')?.publicBoundary).toBe('account-deletion')
+
+    expect(getCapability('checkRole')?.publicBoundary).toBeUndefined()
+    expect(getCapability('qaAuthBypass')?.publicBoundary).toBeUndefined()
+    expect(getCapability('getHealth')?.publicBoundary).toBeUndefined()
+    expect(getCapability('updateUserProfile')?.publicBoundary).toBeUndefined()
+  })
+
   it('excludes all admin operations', () => {
     const adminOps = [
       'checkRole',
@@ -140,7 +148,7 @@ describe('excluded operations', () => {
       'bulkDeleteAdminDeadLetterJobs',
       'grantTrial',
       'get-admin-user-subscription',
-      'update-admin-user-tier',
+      'update-admin-user-tier'
     ]
     for (const opId of adminOps) {
       expect(isExcluded(opId)).toBe(true)
@@ -174,7 +182,7 @@ describe('excluded operations', () => {
       'enableBoost',
       'toggleBoost',
       'triggerBoost',
-      'testBoost',
+      'testBoost'
     ]
     for (const opId of boostWriteOps) {
       expect(isExcluded(opId)).toBe(true)
@@ -410,17 +418,12 @@ describe('issue #972: savings transfer automation operations', () => {
 // ── Issue #138: investment portfolio operations ────────────────────────────
 
 describe('issue #138: investment portfolio operations', () => {
-  const coreOps = [
-    'getHoldings',
-    'getPortfolioSummary',
-    'getPortfolioHistory',
-    'getInvestmentTransactions',
-  ]
+  const coreOps = ['getHoldings', 'getPortfolioSummary', 'getPortfolioHistory', 'getInvestmentTransactions']
   const analyticsOps = [
     'getPortfolioAllocationBreakdown',
     'getTopMovers',
     'getInvestmentGainLossSummary',
-    'getInvestmentIncomeSummary',
+    'getInvestmentIncomeSummary'
   ]
 
   it('classifies all 8 investment ops as read and allowed', () => {

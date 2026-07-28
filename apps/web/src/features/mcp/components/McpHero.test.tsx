@@ -11,8 +11,8 @@ import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { McpHero } from './McpHero'
 
-function renderHero(allowedOperationsCount = 133) {
-  return render(<McpHero allowedOperationsCount={allowedOperationsCount} />)
+function renderHero(capabilityCount = 133) {
+  return render(<McpHero capabilityCount={capabilityCount} />)
 }
 
 describe('McpHero', () => {
@@ -44,44 +44,38 @@ describe('McpHero', () => {
 
   it('renders the secondary CTA anchored to #capabilities', () => {
     renderHero()
-    const link = screen.getByRole('link', { name: /see exactly what it can do/i })
+    const link = screen.getByRole('link', {
+      name: /see exactly what it can do/i
+    })
     expect(link).toHaveAttribute('href', '#capabilities')
   })
 
   it('renders the verbatim under-CTA line', () => {
     renderHero()
-    expect(
-      screen.getByText('You paste a URL. There is no API key and no token to manage.')
-    ).toBeInTheDocument()
+    expect(screen.getByText('You paste a URL. There is no API key and no token to manage.')).toBeInTheDocument()
   })
 
-  it('renders the trust strip with best-effort audit language matching McpPage.tsx\'s detailed copy (audit-client.ts is a no-op when unconfigured and swallows failures; agent.ts fires audit.record without awaiting it, so a write can commit with no audit entry — round 3 of Codex review on this claim)', () => {
+  it('renders a user-facing trust strip without service architecture details', () => {
     renderHero()
     expect(
       screen.getByText(
-        /The Worker never touches the database\. Your credentials are injected server-side\. Tool calls are recorded to an audit log on a best-effort basis\./
+        /Your account permissions apply to every request\. Credentials are never shown to the agent\. Calls are recorded in an audit log on a best-effort basis\./
       )
     ).toBeInTheDocument()
-    // Reject the unconditional form ("...audit log." with no best-effort qualifier) —
-    // that overstates a guarantee the code doesn't provide.
-    expect(
-      screen.queryByText(
-        /Tool calls are recorded to an audit log\.(?! on a best-effort basis)/
-      )
-    ).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/worker|database/i)
   })
 
-  it('renders the proof chips, including the generated allowed-operations count', () => {
+  it('renders the proof chips, including the generated capability count', () => {
     renderHero(133)
-    expect(screen.getByText('133 allowed operations')).toBeInTheDocument()
+    expect(screen.getByText('133 capabilities')).toBeInTheDocument()
     expect(screen.getByText('Every write confirmed')).toBeInTheDocument()
     expect(screen.getByText('No API key')).toBeInTheDocument()
   })
 
-  it('renders a different allowed-operations count when the prop changes (proves the number is not hand-typed)', () => {
+  it('renders a different capability count when the prop changes', () => {
     renderHero(999)
-    expect(screen.getByText('999 allowed operations')).toBeInTheDocument()
-    expect(screen.queryByText('133 allowed operations')).not.toBeInTheDocument()
+    expect(screen.getByText('999 capabilities')).toBeInTheDocument()
+    expect(screen.queryByText('133 capabilities')).not.toBeInTheDocument()
   })
 
   it('fires MCP_PAGE_CTA_CLICKED when the primary CTA is clicked', () => {
