@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +54,11 @@ func (m *mockManualTierOverrideRemover) RemoveUserTierOverrideIfMatches(ctx cont
 func newTestManualTierOverrideExpiryJob(args ManualTierOverrideExpiryCheckArgs) *river.Job[ManualTierOverrideExpiryCheckArgs] {
 	return &river.Job[ManualTierOverrideExpiryCheckArgs]{
 		JobRow: &rivertype.JobRow{
-			ID:      1,
+			ID: 1,
+			// Kind mirrors what River itself sets at dequeue time (Args.Kind()) — needed so
+			// tests asserting on the observability.JobLastSuccessTimestamp{kind=...} heartbeat
+			// gauge exercise the REAL label, not an empty string.
+			Kind:    args.Kind(),
 			Attempt: 1,
 		},
 		Args: args,
@@ -406,6 +412,53 @@ func TestManualTierOverrideExpiryCheck_FetchError_ReturnsError(t *testing.T) {
 
 	require.Error(t, err)
 	mockRemover.AssertNotCalled(t, "RemoveUserTierOverrideIfMatches")
+}
+
+// --- Last-success heartbeat observability (Issue #1413 Task P4) ---
+
+// TestManualTierOverrideExpiryCheck_Success_RecordsHeartbeat proves a successful run advances
+// observability.JobLastSuccessTimestamp for this job's kind — the generic mechanism an alert reads
+// to detect "override-expiry has not succeeded in > 48h", independent of (and stronger than)
+// jobs_completed_total{status="failed"}, which never fires at all if the job silently stops
+// running altogether.
+func TestManualTierOverrideExpiryCheck_Success_RecordsHeartbeat(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return([]*domain.User{}, nil)
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	before := time.Now().Unix()
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	got := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	assert.GreaterOrEqual(t, got, float64(before),
+		"a successful run must advance the last-success heartbeat for this job's kind")
+}
+
+// TestManualTierOverrideExpiryCheck_FetchError_HeartbeatNotAdvanced proves a FAILED run does NOT
+// advance the heartbeat — advancing it on failure would defeat the entire point of the metric
+// (a job stuck failing every day would look identical to a healthy one).
+func TestManualTierOverrideExpiryCheck_FetchError_HeartbeatNotAdvanced(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(nil, errors.New("connection refused"))
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	err := worker.Work(ctx, job)
+	require.Error(t, err)
+
+	after := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	assert.Equal(t, before, after, "a failed run must NOT advance the last-success heartbeat")
 }
 
 // TestNewManualTierOverrideExpiryCheckWorker_DefaultLogger tests nil logger uses default.

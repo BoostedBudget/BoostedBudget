@@ -145,6 +145,12 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			// Issue #1413 Task P4: generic last-success heartbeat — lets an alert fire on
+			// "this job has not succeeded in > 48h", which jobs_completed_total{status="failed"}
+			// alone cannot: that counter never increments at all if the job stops running
+			// entirely (crashes before Work() runs, or sits dead-lettered with no replay).
+			observability.RecordJobSuccess(job.Kind)
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
@@ -206,8 +212,15 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 		// not "delayed by a day"). An explicit ERROR-level log here, on top of the per-user Error
 		// logs already emitted above and the job_kind-labeled jobs_completed_total{status="failed"}
 		// metric the deferred func at the top of Work() already increments (the repo's established
-		// River-job observability mechanism — see the observability skill), is what keeps that
-		// failure mode observable rather than silent.
+		// River-job observability mechanism — see the observability skill), is what keeps a FAILING
+		// run observable. Neither of those, by itself, catches the job simply not running at all
+		// (crashed before Work() started, dropped from the schedule, or dead-lettered with no
+		// replay) — that silent-stop case is what Task P4's two additions cover instead:
+		// observability.JobLastSuccessTimestamp (the deferred func's success branch calls
+		// RecordJobSuccess) lets an alert fire on "hasn't succeeded in > 48h", and
+		// repository.JobHealthRepository.GetOldestUnclearedExpiredManualTierOverrideAge (wired to
+		// a gauge in main.go) is the direct measure of the resulting hazard, independent of
+		// whether this job's OWN metrics are even being scraped.
 		w.logger.Error("manual tier override expiry check completed with failures",
 			"job_id", job.ID, "errors", errorCount, "total", len(users))
 	}

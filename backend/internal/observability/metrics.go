@@ -68,6 +68,23 @@ var (
 		Help: "Current number of jobs in the dead letter queue.",
 	})
 
+	// ManualTierOverrideOldestUnclearedExpiredSeconds tracks the age (in seconds) of the OLDEST
+	// manual_tier_override that has expired (manual_tier_ends_at in the past) but has not yet been
+	// cleared. Issue #1413 Task P4: the direct measure of the Critical finding C1 hazard —
+	// noManualOverrideAtAllPredicate (profile_repository.go) excludes a user from retention notice/
+	// hard-delete for as long as ANY override survives on their row, live or lapsed, and clearing a
+	// LAPSED one is exclusively manual_tier_override_expiry_check's job. Healthy is ~0; it climbs
+	// monotonically, in lockstep with wall-clock time, the moment that job stops clearing overrides
+	// — independent of whether that job's own jobs_completed_total/JobLastSuccessTimestamp metrics
+	// are even being scraped. Refreshed periodically from repository.JobHealthRepository (see
+	// cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
+	// internal/repository already imports internal/observability, so the reverse dependency this
+	// collector needs would be an import cycle if placed in this package).
+	ManualTierOverrideOldestUnclearedExpiredSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "manual_tier_override_oldest_uncleared_expired_seconds",
+		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{

@@ -116,6 +116,10 @@ func main() {
 		appLogger.Info("Database connection pool established (pgx v5)")
 		// Start DB pool metrics collection (runs until process exits)
 		observability.StartDBMetricsCollector(context.Background(), db)
+		// Issue #1413 Task P4: start the manual-tier-override job-health gauge collector (runs
+		// until process exits) — the direct, always-on measure of the C1 hazard, independent of
+		// whether manual_tier_override_expiry_check's own job metrics are being scraped.
+		startJobHealthMetricsCollector(context.Background(), repository.NewJobHealthRepository(db), appLogger)
 	} else {
 		appLogger.Warn("Running without database (set DATABASE_URL to enable)")
 	}
@@ -2176,6 +2180,35 @@ func createClerkCheck() func() error {
 		// Will be replaced with actual Clerk endpoint check when we add Clerk
 		return nil
 	}
+}
+
+// startJobHealthMetricsCollector runs a goroutine that periodically refreshes
+// observability.ManualTierOverrideOldestUnclearedExpiredSeconds from the database (Issue #1413
+// Task P4). Lives here — not in the observability package alongside
+// observability.StartDBMetricsCollector, which it otherwise mirrors — because it needs
+// repository.JobHealthRepository, and internal/repository already imports internal/observability;
+// putting this collector there would create an import cycle. A failed query is logged and
+// skipped (not fatal): a transient DB hiccup here must not crash the whole process, and the gauge
+// simply keeps its last-known value until the next tick succeeds. The goroutine stops when ctx is
+// cancelled.
+func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+				if err != nil {
+					logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
+					continue
+				}
+				observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
+			}
+		}
+	}()
 }
 
 func boolStatus(configured bool) string {

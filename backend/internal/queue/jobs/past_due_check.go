@@ -66,6 +66,8 @@ func (w *PastDueCheckWorker) Work(ctx context.Context, job *river.Job[PastDueChe
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			observability.RecordJobSuccess(job.Kind) // Issue #1413 P4: last-success heartbeat
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
@@ -112,7 +114,7 @@ func (w *PastDueCheckWorker) Work(ctx context.Context, job *river.Job[PastDueChe
 
 func PastDueCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
-		ByArgs: false,
+		ByArgs:   false,
 		ByPeriod: 1 * time.Hour,
 		ByState: []queue.JobState{
 			queue.JobStateAvailable,

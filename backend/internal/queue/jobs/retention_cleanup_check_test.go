@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/assert"
@@ -94,7 +96,11 @@ func (m *MockRetentionEmailService) SendRetentionNoticeEmail(ctx context.Context
 func newTestRetentionCleanupJob(args RetentionCleanupCheckArgs) *river.Job[RetentionCleanupCheckArgs] {
 	return &river.Job[RetentionCleanupCheckArgs]{
 		JobRow: &rivertype.JobRow{
-			ID:      1,
+			ID: 1,
+			// Kind mirrors what River itself sets at dequeue time (Args.Kind()) — needed so
+			// tests asserting on the observability.JobLastSuccessTimestamp{kind=...} heartbeat
+			// gauge exercise the REAL label, not an empty string.
+			Kind:    args.Kind(),
 			Attempt: 1,
 		},
 		Args: args,
@@ -942,4 +948,79 @@ func TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths(t *testing.T) {
 	})
 
 	assert.Equal(t, 6, worker.retentionMonths)
+}
+
+// --- Last-success heartbeat observability (Issue #1413 Task P4) ---
+
+// TestRetentionCleanupCheck_Success_RecordsHeartbeat proves a successful run advances
+// observability.JobLastSuccessTimestamp for this job's kind — the generic mechanism an alert
+// reads to detect this job has gone silent, independent of (and stronger than)
+// jobs_completed_total{status="failed"}, which never fires at all if the job stops running
+// entirely rather than merely failing.
+func TestRetentionCleanupCheck_Success_RecordsHeartbeat(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := time.Now().Unix()
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	got := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	assert.GreaterOrEqual(t, got, float64(before),
+		"a successful run must advance the last-success heartbeat for this job's kind")
+}
+
+// TestRetentionCleanupCheck_DeletionFailure_HeartbeatNotAdvanced proves a run that returns an
+// error (a partial deletion failure) does NOT advance the heartbeat — advancing it on failure
+// would defeat the entire point of the metric — AND that the failure is independently visible via
+// an ERROR-level log line (the pre-existing "failed to process expired retention deletions" log),
+// not merely a silently-unmoved gauge.
+func TestRetentionCleanupCheck_DeletionFailure_HeartbeatNotAdvanced(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(-24 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-fail-hb", Email: "fail-hb@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(users, nil)
+	mockDeletion.On("ExecuteDeletion", ctx, "user-fail-hb").Return(errors.New("deletion failed"))
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	err := worker.Work(ctx, job)
+	require.Error(t, err)
+
+	after := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
+	assert.Equal(t, before, after, "a failed run must NOT advance the last-success heartbeat")
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "a deletion failure must be logged at ERROR, not merely reflected in an unmoved gauge")
+	assert.Contains(t, logOutput, "failed to process expired retention deletions")
 }
