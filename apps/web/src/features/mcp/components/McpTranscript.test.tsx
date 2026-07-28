@@ -14,23 +14,21 @@ import { render, screen, within } from '@testing-library/react'
 import { McpTranscript } from './McpTranscript'
 
 const BASE_FIGCAPTION =
-  'Illustrative transcript. The tool names, operation IDs, and confirmation flow are exactly what the server does. The account names and dollar figures are synthetic sample data, not customer data.'
+  'Illustrative transcript. The conversation and confirmation flow reflect how MCP works. The account names and dollar figures are synthetic sample data, not customer data.'
 
 const turns = [
-  { speaker: 'You' as const, lines: ['My partner sent me a household invite. Accept it.'] },
   {
-    speaker: 'Agent' as const,
-    lines: [
-      'search({ query: "household invite", tag: "Household" })',
-      '→ getMyHousehold, listHouseholdInvites, getHouseholdInvitePreview',
-    ],
+    speaker: 'You' as const,
+    lines: ['My partner sent me a household invite. Accept it.']
   },
   {
     speaker: 'Agent' as const,
-    lines: [
-      "I can see the invite — it's from the account ending 8815 and it's still pending. I can't accept it.",
-    ],
+    lines: ['I found a pending household invite.', '→ I can review the invite details with you.']
   },
+  {
+    speaker: 'Agent' as const,
+    lines: ["I can see the invite — it's from the account ending 8815 and it's still pending. I can't accept it."]
+  }
 ]
 
 describe('McpTranscript', () => {
@@ -69,15 +67,9 @@ describe('McpTranscript', () => {
 
   it('renders each line of transcript content', () => {
     render(<McpTranscript turns={turns} />)
-    expect(
-      screen.getByText('My partner sent me a household invite. Accept it.')
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText('search({ query: "household invite", tag: "Household" })')
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText('→ getMyHousehold, listHouseholdInvites, getHouseholdInvitePreview')
-    ).toBeInTheDocument()
+    expect(screen.getByText('My partner sent me a household invite. Accept it.')).toBeInTheDocument()
+    expect(screen.getByText('I found a pending household invite.')).toBeInTheDocument()
+    expect(screen.getByText('→ I can review the invite details with you.')).toBeInTheDocument()
   })
 
   it('never renders real status emoji (✅/⚠️/❌)', () => {
@@ -88,7 +80,9 @@ describe('McpTranscript', () => {
 
   it('makes the transcript body a horizontally-scrollable, focusable region', () => {
     render(<McpTranscript turns={turns} />)
-    const region = screen.getByRole('region', { name: /illustrative agent transcript/i })
+    const region = screen.getByRole('region', {
+      name: /illustrative agent transcript/i
+    })
     expect(region).toHaveAttribute('tabIndex', '0')
   })
 })
