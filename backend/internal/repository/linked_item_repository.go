@@ -98,6 +98,16 @@ type LinkedItemRepository interface {
 	// stopping Plaid syncing. Unlike Delete, this does NOT cascade delete accounts/transactions.
 	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
 
+	// MarkItemsDisconnected marks the given SPECIFIC linked items (by their internal UUIDs) as
+	// 'disconnected', leaving any item NOT in ids untouched. Issue #1413 H2: unlike
+	// MarkAllUserItemsDisconnected (which marks every item for a user regardless of whether ITS
+	// OWN Plaid /item/remove call actually succeeded), this persists per-item cleanup outcome so
+	// a retry after a partial failure only re-attempts the items still outstanding — a failed
+	// item's status stays untouched (still visible to GetActiveItemsByUserID / still present in
+	// GetByUserID with a non-disconnected status) instead of being silently marked done alongside
+	// its successful siblings. A nil or empty ids is a no-op (not an error).
+	MarkItemsDisconnected(ctx context.Context, ids []string) error
+
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
@@ -955,6 +965,27 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 	`
 
 	_, err := r.db.Exec(ctx, query, now, userID)
+	return err
+}
+
+// MarkItemsDisconnected marks only the given linked items as 'disconnected' — see the interface
+// doc comment for why this differs from MarkAllUserItemsDisconnected (Issue #1413 H2).
+func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	now := time.Now()
+
+	query := `
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND status NOT IN ('disconnected', 'replaced')
+	`
+
+	_, err := r.db.Exec(ctx, query, now, ids)
 	return err
 }
 

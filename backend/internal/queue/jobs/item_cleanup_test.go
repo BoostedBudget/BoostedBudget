@@ -38,6 +38,14 @@ func (m *MockPlaidCleanupService) DisconnectAllUserItems(ctx context.Context, us
 	return args.Error(0)
 }
 
+// SetWorkClaimsRepo (Issue #1413 H1) is never called through this mock — item-cleanup job tests
+// exercise Work() on an already-constructed worker, not service wiring — so this is a bare no-op
+// (no m.Called) rather than a testify expectation, avoiding an unregistered-expectation panic.
+// Stubbed only to satisfy the widened services.PlaidItemCleanupService interface. Note: this is
+// one of the unavoidable, minimal, mechanical touches to internal/queue/jobs required by this
+// task (the package would otherwise fail to compile) — see the #1413 P3 report for detail.
+func (m *MockPlaidCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+
 // MockLinkedItemRepoForCleanup mocks the LinkedItemCleanupRepository interface
 // Named to avoid conflict with MockLinkedItemCleanupRepo in item_cleanup_check_test.go
 type MockLinkedItemRepoForCleanup struct {

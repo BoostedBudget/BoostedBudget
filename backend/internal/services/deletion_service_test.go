@@ -325,8 +325,23 @@ func newAllowingClaimsRepo() *MockWorkClaimsRepository {
 		Return(true, nil).Maybe()
 	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil).Maybe()
+
+	// Issue #1413 H1: cleanupPaddleResources nests a side-effect claim on
+	// ActionPaddleCancelSubscription inside the flow claim above. Tests exercising
+	// ExecuteDeletion's OTHER behavior (not the side-effect claim mechanism itself) need this
+	// permissive too, or any test reaching an active-subscription cancellation would panic on an
+	// unexpected Claim call. claimSideEffectAndRun always Releases (never Completes) — see its
+	// doc comment in plaid_item_cleanup_service.go for why.
+	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPaddleCancelSideEffectToken, true, nil).Maybe()
+	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionPaddleCancelSubscription, testPaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil).Maybe()
 	return m
 }
+
+// testPaddleCancelSideEffectToken is the fixed fencing token newAllowingClaimsRepo's permissive
+// ActionPaddleCancelSubscription stub returns.
+const testPaddleCancelSideEffectToken = "test-paddle-cancel-side-effect-token"
 
 // TestRequestDeletion_Success tests successful deletion request
 func TestRequestDeletion_Success(t *testing.T) {
@@ -677,6 +692,13 @@ func (m *MockPlaidItemCleanupService) DisconnectAllUserItems(ctx context.Context
 	args := m.Called(ctx, userID)
 	return args.Error(0)
 }
+
+// SetWorkClaimsRepo (Issue #1413 H1) is never called through this mock — DeletionService only
+// calls RemoveAllUserItems/DisconnectAllUserItems on its plaidCleanupSvc field; the claims repo
+// is wired directly onto the concrete PlaidItemCleanupService in main.go, not via DeletionService.
+// Bare no-op (no m.Called) to avoid an unregistered-expectation panic; stubbed only to satisfy
+// the widened PlaidItemCleanupService interface.
+func (m *MockPlaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
 
 // TestExecuteDeletion_CallsPlaidCleanupBeforeDBDelete verifies that
 // ExecuteDeletion calls PlaidCleanupService.RemoveAllUserItems before DeleteUserCascade
@@ -1086,6 +1108,12 @@ func TestExecuteDeletion_PaddleCancelFails_AbortsDeletion(t *testing.T) {
 		Return(testDeletionClaimToken, true, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
+	// Issue #1413 H1: cleanupPaddleResources nests ActionPaddleCancelSubscription inside the flow
+	// claim above, immediately around the Paddle call this test fails.
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, testPaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 
 	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
@@ -1124,6 +1152,12 @@ func TestExecuteDeletion_PaddleArchiveFails_AbortsDeletion(t *testing.T) {
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
 		Return(testDeletionClaimToken, true, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	// Issue #1413 H1: cleanupPaddleResources nests ActionPaddleCancelSubscription inside the flow
+	// claim above, immediately around the (here, successful) Paddle cancel call.
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionPaddleCancelSubscription, testPaddleCancelSideEffectToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	service.SetWorkClaimsRepo(mockClaims)
 

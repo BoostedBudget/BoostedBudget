@@ -8,10 +8,98 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+
+	"github.com/plaid/plaid-go/v23/plaid"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
+
+// ErrSideEffectClaimBusy is returned when another flow currently holds the OPERATION-keyed
+// side-effect claim this call needed (repository.ActionPlaidDisconnectUser or
+// repository.ActionPaddleCancelSubscription) — e.g. a subscription-cancellation webhook and the
+// past-due grace-cancel cron both trying to disconnect the SAME user's Plaid items, or cancel
+// the same Paddle subscription, at the same instant. Issue #1413 H1: the FOUR flow actions
+// (plaid_disconnect_past_due, past_due_grace_cancel, subscription_cancelled_cleanup,
+// account_deletion) are keyed by WORKFLOW, so they never exclude each other; the side-effect
+// claim is keyed by the OPERATION itself, so whichever flow is already mid-operation for this
+// user wins, and every other flow must back off rather than proceed as though the work had
+// already happened.
+//
+// Callers MUST treat this exactly like a lost flow claim: release their OWN flow claim (so a
+// later attempt can retry) and propagate this upward rather than swallowing it or proceeding as
+// though the side effect were done.
+var ErrSideEffectClaimBusy = errors.New("side-effect claim held by another flow")
+
+// plaidDisconnectSideEffectLease is the lease requested for repository.ActionPlaidDisconnectUser.
+// Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, pastDueClaimLease,
+// subscriptionCancelledCleanupClaimLease): this claim only needs to outlive the Plaid calls in
+// cleanupItems's loop, not any surrounding DB/CAS work the calling flow does before or after.
+const plaidDisconnectSideEffectLease = 10 * time.Minute
+
+// claimSideEffectAndRun claims the OPERATION-keyed side-effect action, runs fn, and ALWAYS
+// releases the claim afterward — on success AND on failure — rather than completing it.
+//
+// Unlike the six FLOW actions (each conceptually "once ever" per user — a deletion happens once,
+// a retention notice is sent once per retention cycle), a Plaid disconnect or a Paddle cancel can
+// legitimately recur across a user's lifetime (reconnect, then a LATER dunning cycle disconnects
+// again). Calling Complete here would permanently disable the operation for that user after its
+// first success, because work_claims never re-grants a completed claim. Release always leaves the
+// claim immediately reclaimable for the next legitimate need instead.
+//
+// Returns ErrSideEffectClaimBusy, without calling fn, when another flow currently holds the
+// claim. Issue #1413 H1.
+func claimSideEffectAndRun(ctx context.Context, claims repository.WorkClaimsRepository, action, userID string, lease time.Duration, fn func() error) error {
+	if claims == nil {
+		return fmt.Errorf("claimSideEffectAndRun(%s): work claims repository not configured", action)
+	}
+	token, claimed, err := claims.Claim(ctx, repository.ResourceTypeUser, userID, action, lease)
+	if err != nil {
+		return fmt.Errorf("failed to claim %s for user %s: %w", action, userID, err)
+	}
+	if !claimed {
+		slog.Default().Info("side-effect claim held by another flow; backing off",
+			"user_id", userID, "action", action)
+		return ErrSideEffectClaimBusy
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, releaseErr := claims.Release(rctx, repository.ResourceTypeUser, userID, action, token, "side-effect attempt finished"); releaseErr != nil {
+			slog.Default().Warn("failed to release side-effect claim", "user_id", userID, "action", action, "error", releaseErr)
+		}
+	}()
+	return fn()
+}
+
+// isPlaidItemAlreadyGone reports whether err represents Plaid's ITEM_NOT_FOUND error — returned
+// when calling an operation (including /item/remove) on an Item that no longer exists: it was
+// previously removed via /item/remove, the user depermissioned/deleted the Item at their
+// institution, or Plaid support deleted it following a data-deletion request. Verified against
+// Plaid's public error reference (https://plaid.com/docs/errors/item/#item_not_found) — the
+// error_code string is not a typed constant in plaid-go v23 (unlike Paddle's typed error vars),
+// so it is compared as a literal here, the same way domain.ClassifyPlaidError already does for
+// other Plaid error codes (internal/domain/transaction_sync.go).
+//
+// Treating this as "already gone" (success) is what makes a retried /item/remove call safe —
+// Issue #1413 H2, the single highest-value change in this fix: without it, a retry after a
+// reclaimed lease would re-attempt an item Plaid has already forgotten and surface a spurious
+// failure instead of the no-op it actually is.
+func isPlaidItemAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr plaid.GenericOpenAPIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	plaidErr, convErr := plaid.ToPlaidError(apiErr)
+	if convErr != nil {
+		return false
+	}
+	return plaidErr.ErrorCode == "ITEM_NOT_FOUND"
+}
 
 // PlaidItemCleanupService handles removal of Plaid items to minimize billing costs.
 // It calls Plaid's /item/remove endpoint to invalidate access tokens and stop
@@ -72,6 +160,20 @@ type PlaidItemCleanupService interface {
 	// Returns error only if the initial repository query fails.
 	// Plaid API errors are logged but processing continues.
 	DisconnectAllUserItems(ctx context.Context, userID string) error
+
+	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
+	// DisconnectAllUserItems require for EXCLUSIVITY on repository.ActionPlaidDisconnectUser
+	// before any Plaid /item/remove call (Issue #1413 Codex round-3 finding H1). Mirrors
+	// DeletionService/PastDueService/SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs,
+	// this is NOT an optional capability: a nil claims repo makes both methods fail loudly rather
+	// than silently disconnecting Plaid items with no cross-flow exclusivity at all.
+	//
+	// This single claim protects every caller of this shared service instance — deletion,
+	// past-due dunning (both windows), the subscription-cancellation webhook, and trial
+	// expiration all share ONE PlaidItemCleanupService instance in production (see main.go), so
+	// wiring it here closes the H1 race for all of them at once rather than requiring each
+	// caller to duplicate the claim/release ceremony around its own DisconnectAllUserItems call.
+	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
 }
 
 // linkedItemRepoForCleanup is a minimal interface for the repository operations
@@ -81,6 +183,10 @@ type linkedItemRepoForCleanup interface {
 	GetByID(ctx context.Context, id string) (*domain.LinkedItem, error)
 	GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 	MarkAllUserItemsDisconnected(ctx context.Context, userID string) error
+	// MarkItemsDisconnected persists per-item cleanup outcome (Issue #1413 H2) — see
+	// repository.LinkedItemRepository's doc comment for why this differs from
+	// MarkAllUserItemsDisconnected.
+	MarkItemsDisconnected(ctx context.Context, ids []string) error
 }
 
 // plaidServiceForCleanup is a minimal interface for the Plaid operations
@@ -93,6 +199,7 @@ type plaidServiceForCleanup interface {
 type plaidItemCleanupService struct {
 	linkedItemRepo linkedItemRepoForCleanup
 	plaidService   plaidServiceForCleanup
+	claimsRepo     repository.WorkClaimsRepository // Issue #1413 H1: required, see SetWorkClaimsRepo
 	logger         *slog.Logger
 }
 
@@ -111,6 +218,12 @@ func NewPlaidItemCleanupService(
 		plaidService:   plaidService,
 		logger:         slog.Default(),
 	}
+}
+
+// SetWorkClaimsRepo wires the durable work-claims mechanism this service requires. See the
+// PlaidItemCleanupService interface doc for why this is not treated as an optional capability.
+func (s *plaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+	s.claimsRepo = repo
 }
 
 // RemoveAllUserItems implements PlaidItemCleanupService.RemoveAllUserItems
@@ -132,37 +245,7 @@ func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID
 		"item_count", len(items),
 	)
 
-	// Process every item - continue on errors so a single bad item doesn't strand the rest
-	// still-linked and still-billing, but track failures to aggregate below (Issue #1413 H6).
-	var successCount, failCount int
-	var itemErrs []error
-	for _, item := range items {
-		if err := s.removeItemInternal(ctx, &item); err != nil {
-			s.logger.Warn("failed to remove Plaid item",
-				"item_id", item.ID,
-				"plaid_item_id", item.ItemID,
-				"user_id", userID,
-				"error", err,
-			)
-			failCount++
-			itemErrs = append(itemErrs, err)
-		} else {
-			successCount++
-		}
-	}
-
-	s.logger.Info("Plaid item removal completed",
-		"user_id", userID,
-		"success_count", successCount,
-		"fail_count", failCount,
-	)
-
-	if len(itemErrs) > 0 {
-		return fmt.Errorf("failed to remove %d of %d Plaid item(s) for user %s: %w",
-			failCount, len(items), userID, errors.Join(itemErrs...))
-	}
-
-	return nil
+	return s.cleanupItems(ctx, userID, items)
 }
 
 // RemoveItem implements PlaidItemCleanupService.RemoveItem
@@ -228,39 +311,89 @@ func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, us
 		"item_count", len(items),
 	)
 
-	// First, call Plaid /item/remove for each item to stop billing
-	// Continue on errors (graceful degradation)
-	var successCount, failCount int
-	for _, item := range items {
-		if err := s.removeItemInternal(ctx, &item); err != nil {
-			s.logger.Warn("failed to remove Plaid item from Plaid",
-				"item_id", item.ID,
-				"plaid_item_id", item.ItemID,
-				"user_id", userID,
-				"error", err,
-			)
-			failCount++
-		} else {
+	return s.cleanupItems(ctx, userID, items)
+}
+
+// cleanupItems is the shared per-item Plaid-removal loop used by both RemoveAllUserItems and
+// DisconnectAllUserItems (Issue #1413 H1/H2):
+//
+//   - Claims repository.ActionPlaidDisconnectUser (the OPERATION-keyed side-effect claim)
+//     BEFORE any external call, so at most one flow is ever mid-disconnect for this user at a
+//     time, regardless of which FLOW claim (plaid_disconnect_past_due, past_due_grace_cancel,
+//     subscription_cancelled_cleanup, account_deletion) is driving it. Returns
+//     ErrSideEffectClaimBusy, without calling Plaid at all, if another flow already holds it.
+//   - Skips items already marked 'disconnected' by a PRIOR attempt (durable per-item state, H2)
+//     without calling Plaid again for them — a retry after a partial failure only attempts the
+//     items still outstanding.
+//   - Treats Plaid's ITEM_NOT_FOUND response (the item was already removed, at Plaid or by an
+//     earlier attempt of this very operation) as success, not a failure — H2's idempotency fix,
+//     the single highest-value change in this task.
+//   - Persists per-item success (including "already gone") via MarkItemsDisconnected BEFORE
+//     returning, so the durable state survives even when other items in the same batch failed.
+//   - Aggregates genuine per-item failures into a non-nil returned error — every item is still
+//     attempted (a single bad item must not strand the rest still-linked and still-billing), but
+//     the caller (DeletionService.ExecuteDeletion in particular) needs to know when to abort.
+func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, items []domain.LinkedItem) error {
+	if s.claimsRepo == nil {
+		return fmt.Errorf("plaidItemCleanupService: work claims repository not configured")
+	}
+
+	return claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPlaidDisconnectUser, userID, plaidDisconnectSideEffectLease, func() error {
+		var successIDs []string
+		var itemErrs []error
+		var successCount, failCount, skippedCount int
+
+		for _, item := range items {
+			if item.Status == domain.LinkedItemStatusDisconnected {
+				// Already handled by a prior attempt (H2 per-item durable state) — do not call
+				// Plaid again for it.
+				skippedCount++
+				continue
+			}
+			if err := s.removeItemInternal(ctx, &item); err != nil {
+				if isPlaidItemAlreadyGone(err) {
+					s.logger.Info("Plaid item already gone, treating as success",
+						"item_id", item.ID, "plaid_item_id", item.ItemID, "user_id", userID)
+					successIDs = append(successIDs, item.ID)
+					successCount++
+					continue
+				}
+				s.logger.Warn("failed to remove Plaid item",
+					"item_id", item.ID,
+					"plaid_item_id", item.ItemID,
+					"user_id", userID,
+					"error", err,
+				)
+				failCount++
+				itemErrs = append(itemErrs, err)
+				continue
+			}
+			successIDs = append(successIDs, item.ID)
 			successCount++
 		}
-	}
 
-	// Now mark all items as disconnected in the database
-	// This preserves accounts and transactions
-	if err := s.linkedItemRepo.MarkAllUserItemsDisconnected(ctx, userID); err != nil {
-		s.logger.Error("failed to mark items as disconnected in database",
+		if len(successIDs) > 0 {
+			if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, successIDs); markErr != nil {
+				// Losing the per-item durable marker reopens H2's "duplicate call on retry" risk
+				// for these items — surface it rather than silently dropping it (a subsequent
+				// retry would just re-attempt them; ITEM_NOT_FOUND being mapped to success limits
+				// the actual damage to a wasted API call, not a real duplicate side effect, but a
+				// caller should still know this failed).
+				itemErrs = append(itemErrs, fmt.Errorf("failed to persist per-item cleanup state for %d item(s): %w", len(successIDs), markErr))
+			}
+		}
+
+		s.logger.Info("Plaid item cleanup pass completed",
 			"user_id", userID,
-			"error", err,
+			"success_count", successCount,
+			"fail_count", failCount,
+			"skipped_already_clean", skippedCount,
 		)
-		return fmt.Errorf("failed to mark items as disconnected: %w", err)
-	}
 
-	s.logger.Info("Plaid item disconnection completed",
-		"user_id", userID,
-		"plaid_removed_success", successCount,
-		"plaid_removed_fail", failCount,
-		"db_status_updated", true,
-	)
-
-	return nil
+		if len(itemErrs) > 0 {
+			return fmt.Errorf("failed to remove %d of %d Plaid item(s) for user %s: %w",
+				failCount, len(items), userID, errors.Join(itemErrs...))
+		}
+		return nil
+	})
 }
