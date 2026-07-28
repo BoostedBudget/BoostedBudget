@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -107,6 +108,14 @@ type deletionService struct {
 // repository.WorkClaimsRepository) makes a lease over-run detectable rather than silently
 // double-executing external work, so there is no correctness reason to size this tightly.
 const accountDeletionClaimLease = 15 * time.Minute
+
+// paddleCancelSideEffectLease is the lease requested for repository.ActionPaddleCancelSubscription
+// — the OPERATION-keyed side-effect claim (Issue #1413 H1) wrapped around the actual
+// CancelSubscriptionImmediately call, nested inside ExecuteDeletion's own ActionAccountDeletion
+// flow claim. Matches plaidDisconnectSideEffectLease's reasoning (plaid_item_cleanup_service.go):
+// shorter than the 15-minute flow-claim leases, since this only needs to outlive the single
+// Paddle call, not the surrounding cascade/DB work.
+const paddleCancelSideEffectLease = 10 * time.Minute
 
 // AuditLogger defines the interface for audit logging
 type AuditLogger interface {
@@ -404,6 +413,16 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// cascade that would strand an un-removed, still-billing Plaid item with no local record.
 	if s.plaidCleanupSvc != nil {
 		if err := s.plaidCleanupSvc.RemoveAllUserItems(ctx, userID); err != nil {
+			// Issue #1413 H1: RemoveAllUserItems can return ErrSideEffectClaimBusy when another
+			// flow (past_due grace-cancel, the subscription-cancellation webhook, or another
+			// deletion attempt) currently holds ActionPlaidDisconnectUser for this user. This is a
+			// normal, expected outcome — log it at Info distinctly from a genuine Plaid failure —
+			// but it must still abort THIS deletion attempt exactly like any other cleanup
+			// failure: release the flow claim and let the next run retry.
+			if errors.Is(err, ErrSideEffectClaimBusy) {
+				slog.Default().Info("deletion Plaid disconnect deferred — side-effect claim held by another flow",
+					"user_id", userID)
+			}
 			releaseClaim(err.Error())
 			return fmt.Errorf("aborting deletion — Plaid cleanup failed: %w", err)
 		}
@@ -593,7 +612,23 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	if user.PaddleSubscriptionID != nil {
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {
-			if err := s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID); err != nil {
+			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
+			// claim before calling Paddle, nested inside the ActionAccountDeletion flow claim
+			// already held by ExecuteDeletion. Without this, a concurrent past_due grace-cancel
+			// (the only other flow that cancels a Paddle subscription) could cancel the SAME
+			// subscription at the same instant. ErrSideEffectClaimBusy propagates up through this
+			// function's normal error path — the caller (ExecuteDeletion) already releases its own
+			// flow claim and aborts on ANY error from this function, which is exactly the required
+			// "another flow is mid-operation: release the flow claim, let the next run retry"
+			// response (see claimSideEffectAndRun's doc comment, plaid_item_cleanup_service.go).
+			err := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, userID, paddleCancelSideEffectLease, func() error {
+				return s.paddleCleanupSvc.CancelSubscriptionImmediately(ctx, *user.PaddleSubscriptionID)
+			})
+			if err != nil {
+				if errors.Is(err, ErrSideEffectClaimBusy) {
+					slog.Default().Info("deletion Paddle cancel deferred — side-effect claim held by another flow",
+						"user_id", userID)
+				}
 				if s.analytics != nil {
 					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
 				}

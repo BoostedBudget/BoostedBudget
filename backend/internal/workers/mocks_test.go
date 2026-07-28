@@ -157,6 +157,13 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 	return args.Error(0)
 }
 
+// MarkItemsDisconnected (Issue #1413 H2) is not exercised by these worker tests; stubbed to
+// satisfy the widened LinkedItemRepository interface.
+func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
 	return args.Error(0)

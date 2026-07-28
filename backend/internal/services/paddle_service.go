@@ -492,6 +492,20 @@ func (s *paddleService) UpdateSubscription(
 }
 
 // CancelSubscription cancels a subscription at the end of the billing period.
+//
+// Issue #1413 H2: already-cancelled is mapped to ErrPaddleAlreadyCancelled (defined in
+// past_due_service.go, same package) rather than a generic wrapped error. PastDuePaddleClient's
+// interface doc has always promised this — "the implementation must tolerate
+// paddle.ErrSubscriptionIsCanceledActionInvalid by mapping it to ErrPaddleAlreadyCancelled" — but
+// nothing actually did it until now, so PastDueService.processGraceExpiry's
+// `!errors.Is(err, ErrPaddleAlreadyCancelled)` tolerance check could never match, and a retried
+// grace-cancel against an already-cancelled subscription would hard-fail instead of continuing.
+// Verified against paddle.ErrSubscriptionIsCanceledActionInvalid's definition in the vendored SDK
+// (github.com/PaddleHQ/paddle-go-sdk/v4/subscriptions.go) — the exact error code
+// CancelSubscriptionImmediately already tolerates below, just mapped to the sentinel THIS
+// method's callers expect instead of a bare nil (CancelSubscription's callers still need to know
+// "already cancelled" happened, since they take a different branch than a fresh cancellation;
+// CancelSubscriptionImmediately's caller does not distinguish the two).
 func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID string) error {
 	s.logger.Info("canceling Paddle subscription",
 		"subscription_id", subscriptionID,
@@ -506,6 +520,12 @@ func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID s
 
 	canceledSub, err := s.client.CancelSubscription(ctx, req)
 	if err != nil {
+		if errors.Is(err, paddle.ErrSubscriptionIsCanceledActionInvalid) {
+			s.logger.Info("Paddle subscription already cancelled, tolerating",
+				"subscription_id", subscriptionID,
+			)
+			return ErrPaddleAlreadyCancelled
+		}
 		s.logger.Error("failed to cancel Paddle subscription",
 			"subscription_id", subscriptionID,
 			"error", err,

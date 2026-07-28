@@ -129,8 +129,21 @@ func newAllowingPastDueClaimsRepo() *MockWorkClaimsRepository {
 		m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, action, testPastDueClaimToken, mock.AnythingOfType("string")).
 			Return(true, nil).Maybe()
 	}
+
+	// Issue #1413 H1: processGraceExpiry's Paddle-cancel step nests ActionPaddleCancelSubscription
+	// inside the ActionPastDueGraceCancel flow claim above — permissive so tests exercising
+	// OTHER behavior aren't forced to plumb this through. Never Completed, only Released — see
+	// claimSideEffectAndRun's doc comment (plaid_item_cleanup_service.go) for why.
+	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil).Maybe()
+	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil).Maybe()
 	return m
 }
+
+// testPastDuePaddleCancelSideEffectToken is the fixed fencing token newAllowingPastDueClaimsRepo's
+// permissive ActionPaddleCancelSubscription stub returns.
+const testPastDuePaddleCancelSideEffectToken = "test-past-due-paddle-cancel-side-effect-token"
 
 func userWithPastDue(userID string, pastDueStartedAt time.Time) domain.User {
 	subID := "sub_test123"
@@ -856,6 +869,12 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "plaid_disconnect") }).
 		Return(nil)
+	// Issue #1413 H1: the Paddle-cancel step nests ActionPaddleCancelSubscription inside the flow
+	// claim above.
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "paddle_cancel") }).
 		Return(nil)
@@ -969,6 +988,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	// CAS misses — recovered or comped during the external calls above.
 	repo.On("CancelIfPastDue", mock.Anything, userID).Return(false, nil)
@@ -1009,6 +1032,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
 	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
@@ -1055,6 +1082,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_SetRetentionDatesError_Aborts_Re
 	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
 		Return(testPastDueClaimToken, true, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
 	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(retentionErr)

@@ -281,6 +281,16 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// caller (cron job) retries. The user stays past_due — no partial cancellation.
 	if s.plaidCleanup != nil {
 		if err := s.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); err != nil {
+			// Issue #1413 H1: DisconnectAllUserItems can return ErrSideEffectClaimBusy when
+			// another flow (the subscription-cancellation webhook, the Plaid-disconnect window
+			// pass, or another grace-cancel attempt) currently holds ActionPlaidDisconnectUser for
+			// this user. Log it distinctly at Info — this is expected contention, not a Plaid
+			// failure — but it must still release this flow claim and propagate exactly like any
+			// other Step 1 failure so tomorrow's run retries.
+			if errors.Is(err, ErrSideEffectClaimBusy) {
+				s.logger.Info("grace-cancel Plaid disconnect deferred — side-effect claim held by another flow",
+					"user_id", user.ID)
+			}
 			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items for past_due user %s: %w", user.ID, err)
 		}
@@ -299,10 +309,23 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		)
 	}
 	if s.paddleClient != nil && user.PaddleSubscriptionID != nil {
-		if err := s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID); err != nil {
-			if !errors.Is(err, ErrPaddleAlreadyCancelled) {
-				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
-				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, err)
+		// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
+		// claim before calling Paddle, nested inside this flow's own ActionPastDueGraceCancel
+		// claim. Without this, a concurrent account deletion (the only other flow that cancels a
+		// Paddle subscription) could cancel the SAME subscription at the same instant.
+		subErr := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, user.ID, paddleCancelSideEffectLease, func() error {
+			return s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID)
+		})
+		if subErr != nil {
+			if errors.Is(subErr, ErrSideEffectClaimBusy) {
+				s.logger.Info("grace-cancel Paddle cancel deferred — side-effect claim held by another flow",
+					"user_id", user.ID)
+				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
+			}
+			if !errors.Is(subErr, ErrPaddleAlreadyCancelled) {
+				s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
 			}
 			s.logger.Info("Paddle subscription already cancelled, continuing",
 				"user_id", user.ID,
@@ -477,6 +500,15 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 			// #1413 Codex review round 4: no longer tolerated with a bare log-and-continue — the
 			// work claim exists precisely so a failure here can be safely retried (Release makes
 			// it immediately reclaimable) instead of silently swallowed with no automatic retry.
+			//
+			// Issue #1413 H1: ErrSideEffectClaimBusy (another flow holds
+			// ActionPlaidDisconnectUser right now) gets the same treatment — logged distinctly at
+			// Info since it's expected contention, not a Plaid failure, but still released and
+			// propagated so tomorrow's run retries.
+			if errors.Is(err, ErrSideEffectClaimBusy) {
+				s.logger.Info("past_due Plaid disconnect deferred — side-effect claim held by another flow",
+					"user_id", user.ID)
+			}
 			s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items in past_due window for user %s: %w", user.ID, err)
 		}

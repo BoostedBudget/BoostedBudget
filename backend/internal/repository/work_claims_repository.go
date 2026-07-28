@@ -91,6 +91,27 @@ const (
 	ActionRetentionNotice30d           = "retention_notice_30d"
 	ActionRetentionNotice7d            = "retention_notice_7d"
 	ActionSubscriptionCancelledCleanup = "subscription_cancelled_cleanup"
+
+	// ActionPlaidDisconnectUser and ActionPaddleCancelSubscription are OPERATION-keyed
+	// side-effect actions (Issue #1413 Codex round-3 finding H1), not FLOW-keyed like the six
+	// actions above. Four different flows (plaid_disconnect_past_due, past_due_grace_cancel,
+	// subscription_cancelled_cleanup, account_deletion) each perform a Plaid disconnect and/or a
+	// Paddle cancel for the same user, but hold DIFFERENT flow-claim rows — so those flow claims
+	// alone do not stop two of them from calling Plaid/Paddle for the same user concurrently.
+	//
+	// These two actions close that gap: "one Plaid disconnect at a time for this user, whoever
+	// wants it" / "one Paddle cancel at a time for this user, whoever wants it" — claimed INSIDE
+	// a flow's own claim, immediately around the external call.
+	//
+	// IMPORTANT: unlike the six flow actions above (each conceptually "once ever" per user),
+	// Plaid disconnect and Paddle cancel can legitimately recur across a user's lifetime
+	// (reconnect, then a LATER dunning cycle disconnects again). Callers of these two actions
+	// MUST Release (never Complete) once the external call finishes, win or lose — Complete's
+	// "a completed claim is never re-granted" semantics would otherwise permanently disable the
+	// operation for that user after its first success. See plaid_item_cleanup_service.go's
+	// claimSideEffectAndRun for the enforced call shape.
+	ActionPlaidDisconnectUser      = "plaid_disconnect_user"
+	ActionPaddleCancelSubscription = "paddle_cancel_subscription"
 )
 
 // ResourceTypeUser is the work_claims.resource_type value for all current

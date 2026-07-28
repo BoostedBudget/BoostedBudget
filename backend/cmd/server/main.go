@@ -936,6 +936,13 @@ func main() {
 					linkedItemRepo,
 					plaidService,
 				)
+				// Issue #1413 H1: required for RemoveAllUserItems/DisconnectAllUserItems to gain
+				// EXCLUSIVITY on ActionPlaidDisconnectUser before any Plaid /item/remove call —
+				// closes the race where deletion, past-due dunning, the subscription-cancellation
+				// webhook, and trial expiration (all sharing this one service instance) could each
+				// hold their own, different flow claim and disconnect the same user's Plaid items
+				// concurrently.
+				plaidCleanupService.SetWorkClaimsRepo(workClaimsRepo)
 				appLogger.Info("Plaid item cleanup service initialized")
 
 				// Issue #668: Wire cleanup service to deletion service (resolves nil dependency from earlier)
