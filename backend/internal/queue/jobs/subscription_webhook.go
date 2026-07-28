@@ -16,6 +16,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 )
 
@@ -883,8 +884,21 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// ABORTS (Release + propagate) instead of being logged and swallowed — the work claim exists
 	// so this can be safely retried (Release makes it immediately reclaimable) rather than
 	// orphaning a still-connected, still-billing Plaid item with no automatic retry.
+	//
+	// Issue #1413 H1: DisconnectAllUserItems can return services.ErrSideEffectClaimBusy when
+	// another flow (the past-due grace-cancel cron, the Plaid-disconnect window pass, or another
+	// cancellation webhook delivery) currently holds the OPERATION-keyed
+	// ActionPlaidDisconnectUser claim for this user. Logged distinctly at Info — this is expected
+	// contention, not a Plaid failure — but this webhook delivery is one-shot (unlike the daily
+	// cron jobs), so it must still release this flow claim and return an ERROR so River retries
+	// the whole webhook, exactly like the ClaimHeldByOther handling above for the flow claim
+	// itself.
 	if w.plaidCleanupSvc != nil {
 		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+			if errors.Is(err, services.ErrSideEffectClaimBusy) {
+				w.logger.Info("subscription-cancelled Plaid disconnect deferred — side-effect claim held by another flow",
+					"user_id", userID)
+			}
 			w.releaseClaimOnFailure(ctx, userID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
 			return fmt.Errorf("failed to disconnect Plaid items on cancellation for user %s: %w", userID, err)
 		}
