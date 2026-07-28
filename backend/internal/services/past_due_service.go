@@ -36,16 +36,21 @@ type PastDueProfileRepository interface {
 	// GetUserByID retrieves a user by their internal UUID (used for race-condition re-read).
 	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
 
-	// CancelIfPastDue atomically flips subscription_status to 'cancelled' only if the user is
-	// still 'past_due' AND carries no currently-active manual tier override. Returns (true, nil)
-	// if the flip happened, (false, nil) if the user has already recovered (payment arrived
-	// between Plaid disconnect and this point) or an admin granted/extended a comp in that same
-	// window (Issue #1413 High finding H6, Codex review round 3: predicate extended to also
-	// close the comp race).
-	CancelIfPastDue(ctx context.Context, userID string) (bool, error)
-
-	// SetRetentionDates starts the 6-month retention clock.
-	SetRetentionDates(ctx context.Context, userID string, started, expires time.Time) error
+	// CancelIfPastDueWithRetention atomically flips subscription_status to 'cancelled' AND starts
+	// the 6-month retention clock in the SAME UPDATE, only if the user is still 'past_due' AND
+	// carries no currently-active manual tier override. Returns (true, nil) if the flip happened,
+	// (false, nil) if the user has already recovered (payment arrived between Plaid disconnect
+	// and this point) or an admin granted/extended a comp in that same window (Issue #1413 High
+	// finding H6, Codex review round 3: predicate extended to also close the comp race).
+	//
+	// Issue #1413 round-3 finding H5 residual: this REPLACES the earlier separate
+	// CancelIfPastDue + SetRetentionDates pair. That pair left a window where the CAS could
+	// succeed but the retention-clock write could still be lost (crash, dead-lettered job) — and
+	// because GetUsersInPastDue only selects subscription_status = 'past_due', the daily dunning
+	// job can never re-select a user this already flipped to 'cancelled', so that user would be
+	// cancelled forever with no retention clock: never warned, never deleted. One statement means
+	// either both land or neither does.
+	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
 
 	// ClearPastDueStartedAt clears the past_due_started_at timestamp after auto-cancel.
 	ClearPastDueStartedAt(ctx context.Context, userID string) error
@@ -334,16 +339,29 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		}
 	}
 
-	// Step 3: CAS flip subscription_status → cancelled.
-	// Only flips if the user is still 'past_due' — guards against a concurrent
-	// subscription.activated webhook that may have restored the user to 'active', or a comp
-	// granted, between the Plaid/Paddle calls above and this point. This is the final,
-	// authoritative correctness check (kept exactly as before) — the claim above provides
-	// exclusivity, this predicate still provides correctness.
-	flipped, err := s.repo.CancelIfPastDue(ctx, user.ID)
+	// Steps 3+4 (combined): CAS flip subscription_status → cancelled AND start the 6-month
+	// retention clock, in ONE atomic UPDATE.
+	//
+	// The CAS still only flips if the user is still 'past_due' — guarding against a concurrent
+	// subscription.activated webhook that restored the user to 'active', or a comp granted,
+	// between the Plaid/Paddle calls above and this point. This is the final, authoritative
+	// correctness check — the claim above provides exclusivity, this predicate still provides
+	// correctness.
+	//
+	// Issue #1413 round-3 finding H5 residual, closed for real: the two writes used to be
+	// separate (CancelIfPastDue then SetRetentionDates), so a lost/failed retention write after a
+	// successful CAS left the user cancelled with NO clock — and since GetUsersInPastDue only
+	// selects subscription_status = 'past_due', tomorrow's run could never re-reach them to
+	// retry (they are no longer past_due). CancelIfPastDueWithRetention makes both writes land
+	// together or not at all, closing that window on this path entirely. (A belt-and-braces
+	// repair query, RepairRetentionClock, also exists in profile_repository.go for any user
+	// already stuck in this state from before this fix, or from any other path — see
+	// retention_cleanup_check.go.)
+	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
+	flipped, err := s.repo.CancelIfPastDueWithRetention(ctx, user.ID, now, retentionExpires)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, err.Error())
-		return fmt.Errorf("CancelIfPastDue: %w", err)
+		return fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
 	}
 	if !flipped {
 		// User recovered, or was comped, during the external calls above — a narrow residual
@@ -352,34 +370,10 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		// would permanently block reclaiming per the work_claims contract ("a completed claim is
 		// never re-granted"), stranding a user who must still be cancelled once a mid-flight comp
 		// lapses.
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDue predicate lost during external work")
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, "CancelIfPastDueWithRetention predicate lost during external work")
 		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
 			slog.String("user_id", user.ID))
 		return nil
-	}
-
-	// Step 4: Start 6-month retention clock.
-	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
-	// #1413 round-3 finding H5: this write is REQUIRED, not best-effort. Both the retention-
-	// notice jobs and hard deletion require retention_expires_at IS NOT NULL — swallowing this
-	// error left the user cancelled (Step 3's CAS already committed) with no clock: never warned,
-	// never deleted, indefinitely.
-	//
-	// Known residual (documented per the #1413 design doc rather than silently accepted): unlike
-	// the cancellation webhook — where a retry naturally re-reaches this same write because
-	// nothing upstream is gated on subscription_status — Release + return-error here does NOT
-	// get retried by the next scheduled run. GetUsersInPastDue filters on
-	// subscription_status = 'past_due', and Step 3 already flipped this user to 'cancelled', so
-	// tomorrow's run will never select them again. Making the CAS and this write a single atomic
-	// transaction would close that gap, but doing so needs a new PastDueProfileRepository method
-	// (e.g. CancelIfPastDueWithRetention) implemented in profile_repository.go, which is outside
-	// this fix's scope — as would a periodic repair query for cancelled users with a NULL
-	// retention_expires_at. Returning the error at least makes this failure LOUD (job failure,
-	// dead-letter, alerting) instead of the prior silent swallow; closing the gap for good is a
-	// follow-up.
-	if retErr := s.repo.SetRetentionDates(ctx, user.ID, now, retentionExpires); retErr != nil {
-		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, retErr.Error())
-		return fmt.Errorf("failed to set retention dates for past_due user %s: %w", user.ID, retErr)
 	}
 
 	// Step 5: Clear the past_due_started_at stamp.

@@ -199,6 +199,21 @@ func (m *mockProfileRepo) CancelIfPastDue(ctx context.Context, userID string) (b
 	return false, nil
 }
 
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these Paddle checkout tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *mockProfileRepo) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *mockProfileRepo) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
+func (m *mockProfileRepo) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+	return false, nil
+}
+
 func (m *mockProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }

@@ -198,6 +198,21 @@ func (m *MockProfileRepoForWorker) CancelIfPastDue(ctx context.Context, userID s
 	return false, nil
 }
 
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these deletion-worker tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *MockProfileRepoForWorker) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
+func (m *MockProfileRepoForWorker) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+	return false, nil
+}
+
 func (m *MockProfileRepoForWorker) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
