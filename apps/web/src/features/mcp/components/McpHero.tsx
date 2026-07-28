@@ -2,7 +2,7 @@
  * McpHero — Persuade-opening hero for the public /mcp page (Issue #1411).
  *
  * Copy is verbatim per .superpowers/sdd/task-P8-brief.md § "Hero copy — verbatim".
- * The allowed-operations count is passed in (generated from the manifest via
+ * The capability count is passed in (generated from the manifest via
  * apps/mcp-server/scripts/generate-mcp-capability-summary.ts) rather than
  * hand-typed, so this line never drifts from the real capability manifest.
  */
@@ -12,11 +12,11 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 export interface McpHeroProps {
-  /** Generated count of allowed (non-excluded) operations — never hand-typed. */
-  allowedOperationsCount: number
+  /** Generated count of public MCP capabilities — never hand-typed. */
+  capabilityCount: number
 }
 
-export function McpHero({ allowedOperationsCount }: McpHeroProps) {
+export function McpHero({ capabilityCount }: McpHeroProps) {
   const trackEvent = useTrackEvent()
 
   const handlePrimaryCtaClick = () => {
@@ -30,9 +30,9 @@ export function McpHero({ allowedOperationsCount }: McpHeroProps) {
       </h1>
 
       <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-        BoostedBudget runs a remote MCP server. Point Claude or VS Code at one URL, sign
-        in once, and your agent can read across your accounts, transactions, budgets,
-        and portfolio — and change things only after you confirm each change.
+        BoostedBudget runs a remote MCP server. Point Claude or VS Code at one URL, sign in once, and your agent can
+        read across your accounts, transactions, budgets, and portfolio — and change things only after you confirm each
+        change.
       </p>
 
       <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
@@ -52,13 +52,11 @@ export function McpHero({ allowedOperationsCount }: McpHeroProps) {
         </a>
       </div>
 
-      <p className="mt-4 text-sm text-muted-foreground">
-        You paste a URL. There is no API key and no token to manage.
-      </p>
+      <p className="mt-4 text-sm text-muted-foreground">You paste a URL. There is no API key and no token to manage.</p>
 
       <ul className="mt-10 flex flex-wrap items-center justify-center gap-3">
         <li className="rounded-full border border-border bg-muted px-4 py-1.5 text-sm font-medium text-foreground">
-          {allowedOperationsCount} allowed operations
+          {capabilityCount} capabilities
         </li>
         <li className="rounded-full border border-border bg-muted px-4 py-1.5 text-sm font-medium text-foreground">
           Every write confirmed
@@ -70,8 +68,8 @@ export function McpHero({ allowedOperationsCount }: McpHeroProps) {
 
       <p className="mx-auto mt-10 flex max-w-2xl items-center justify-center gap-2 text-sm text-muted-foreground">
         <Shield className="h-4 w-4 shrink-0" aria-hidden="true" />
-        The Worker never touches the database. Your credentials are injected
-        server-side. Tool calls are recorded to an audit log on a best-effort basis.
+        Your account permissions apply to every request. Credentials are never shown to the agent. Calls are recorded in
+        an audit log on a best-effort basis.
       </p>
     </div>
   )

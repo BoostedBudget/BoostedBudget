@@ -23,10 +23,7 @@ import { computeCapabilitySummary, readSpecIndex } from '../../scripts/generate-
 import { ALL_OPERATION_IDS } from './capability-manifest'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const COMMITTED_JSON_PATH = resolve(
-  __dirname,
-  '../../../web/src/features/mcp/data/capabilitySummary.json',
-)
+const COMMITTED_JSON_PATH = resolve(__dirname, '../../../web/src/features/mcp/data/capabilitySummary.json')
 
 describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySummary.json)', () => {
   it('matches the aggregates freshly computed from the manifest + spec index', () => {
@@ -37,8 +34,39 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     expect(
       committed,
       'apps/web/src/features/mcp/data/capabilitySummary.json is stale — ' +
-        'regenerate with: bun run scripts/generate-mcp-capability-summary.ts (from apps/mcp-server)',
+        'regenerate with: bun run scripts/generate-mcp-capability-summary.ts (from apps/mcp-server)'
     ).toEqual(fresh)
+  })
+
+  it('contains only curated public boundaries, never internal exclusion reasons', () => {
+    const committedRaw = readFileSync(COMMITTED_JSON_PATH, 'utf-8')
+    const committed = JSON.parse(committedRaw)
+
+    expect(committed.exclusionGroups).toBeUndefined()
+    expect(committed.readCountByTag).toBeUndefined()
+    expect(committed.publicBoundaries).toEqual([
+      {
+        id: 'bank-connections',
+        title: 'Bank connections',
+        description: 'Linking or disconnecting a bank connection stays in BoostedBudget.'
+      },
+      {
+        id: 'household-sharing',
+        title: 'Household membership and sharing',
+        description: 'Invites, membership changes, sharing, and consent stay in BoostedBudget.'
+      },
+      {
+        id: 'subscription-changes',
+        title: 'Subscription changes',
+        description: 'Starting, changing, or cancelling a subscription stays in BoostedBudget.'
+      },
+      {
+        id: 'account-deletion',
+        title: 'Account deletion',
+        description: 'Requesting or cancelling BoostedBudget account deletion stays in BoostedBudget.'
+      }
+    ])
+    expect(committedRaw).not.toMatch(/Admin endpoints|QA\/testing|Internal service|follow-up issue/i)
   })
 
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
@@ -53,8 +81,7 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)
 
-    const exclusionTotal = fresh.exclusionGroups.reduce((sum, g) => sum + g.count, 0)
-    expect(exclusionTotal).toBe(fresh.excludedOperations)
+    expect(fresh.publicBoundaries).toHaveLength(4)
   })
 
   it('committed JSON ends with a trailing newline (matches the generator script)', () => {
@@ -78,7 +105,7 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
       'These operationIds are classified in capability-manifest.ts but have no spec-index ' +
         'entry, so they are invisible to the capabilitySummary.json aggregates above. Either ' +
         'they are stale manifest entries (remove them) or the spec index needs rebuilding ' +
-        '(bun run build:spec-index).',
+        '(bun run build:spec-index).'
     ).toEqual([])
 
     // And the reverse count check the summary itself relies on: no spec-index entry should
