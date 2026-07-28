@@ -41,9 +41,11 @@ func (m *mockPastDueProfileRepo) CancelIfPastDueWithRetention(ctx context.Contex
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *mockPastDueProfileRepo) ClearPastDueStartedAt(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
+// ClearPastDueStartedAtIfMatches is ClearPastDueStartedAt's occurrence-scoped sibling (Issue
+// #1413 round-4 finding H3) — see PastDueProfileRepository's doc comment.
+func (m *mockPastDueProfileRepo) ClearPastDueStartedAtIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expected)
+	return args.Bool(0), args.Error(1)
 }
 
 type mockPastDuePlaidCleanup struct {
@@ -211,7 +213,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.MatchedBy(func(m map[string]interface{}) bool {
 		return m["subscription_status"] == "cancelled"
 	})).Return(nil)
@@ -226,7 +228,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 	paddle.AssertCalled(t, "CancelSubscription", mock.Anything, subID)
 	repo.AssertCalled(t, "CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
-	repo.AssertCalled(t, "ClearPastDueStartedAt", mock.Anything, userID)
+	repo.AssertCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time"))
 	clerk.AssertCalled(t, "UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything)
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 }
@@ -255,7 +257,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *test
 	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "CancelIfPastDueWithRetention", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
@@ -281,7 +283,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 	// Paddle returns already-cancelled error — should be tolerated
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(ErrPaddleAlreadyCancelled)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
@@ -593,7 +595,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 
 	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	repo.AssertCalled(t, "CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
-	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }
@@ -656,7 +658,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testi
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
@@ -790,7 +792,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *test
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
@@ -851,7 +853,7 @@ func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
@@ -936,7 +938,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 		Return(true, nil)
 	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
 		Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 
@@ -1093,7 +1095,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
@@ -1104,6 +1106,60 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 
 	assert.NoError(t, err, "the cancellation already ran; a lost lease at Complete time must not be reported as a failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
+}
+
+// TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAnError is the H3
+// regression proof at the SERVICE (caller) level — Issue #1413 round-4 finding H3. By the time
+// Step 5 runs, the CAS above has already flipped THIS cycle to 'cancelled'; if
+// ClearPastDueStartedAtIfMatches reports (false, nil) — the column has already moved on to a
+// NEWER cycle's timestamp, e.g. a recover -> re-enter-past-due race that landed during the
+// Plaid/Paddle calls — that must be a logged skip, NOT a processing failure: the newer cycle's
+// timestamp must be left alone so a future run can still process it, and this flow's OWN
+// cancellation (which already succeeded) must still be reported as a success and still Complete
+// its claim.
+func TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAnError(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-clear-moved-on"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+	resourceID := pastDueOccurrenceResourceID(t, userID, pastDueStarted)
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, paddleCancelSideEffectLease).
+		Return(testPastDuePaddleCancelSideEffectToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	// The column has already moved on to a newer cycle by the time the clear step runs.
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(false, nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	assert.NoError(t, err, "a newer cycle's timestamp surviving the clear step is a legitimate skip, not a processing failure")
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
+	// This flow's own cancellation and notification still went through — the clear-step skip does
+	// not undo or block anything that already succeeded.
+	clerk.AssertCalled(t, "UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything)
+	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueWithRetentionError_Aborts_ReleasesClaim
@@ -1153,7 +1209,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueWithRetentionErro
 	require.Error(t, err, "a failed CAS+retention write must abort processing so the failure is loud, not complete silently")
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string"))
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
 }

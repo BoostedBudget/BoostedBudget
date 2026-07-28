@@ -202,7 +202,7 @@ func TestPastDueOccurrence_GraceCancel_NewCycle_AfterCompleted_CancelsAgain(t *t
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
-	repo.On("ClearPastDueStartedAt", mock.Anything, userID).Return(nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
 

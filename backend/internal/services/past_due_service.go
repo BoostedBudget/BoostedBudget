@@ -52,8 +52,21 @@ type PastDueProfileRepository interface {
 	// either both land or neither does.
 	CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error)
 
-	// ClearPastDueStartedAt clears the past_due_started_at timestamp after auto-cancel.
-	ClearPastDueStartedAt(ctx context.Context, userID string) error
+	// ClearPastDueStartedAtIfMatches clears the past_due_started_at timestamp after auto-cancel,
+	// but ONLY if the column still holds expected — the SAME timestamp this flow captured at the
+	// top of processGraceExpiry (Issue #1413 round-4 finding H3). The plain, unconditional
+	// ClearPastDueStartedAt (used by subscription_webhook.go's recovery-path callers, which have
+	// no "expected occurrence" to compare against) is WRONG here: between this flow's CAS flip
+	// and this clear step, the user could have recovered and re-entered a NEWER past_due cycle
+	// (a new past_due_started_at already stamped by the webhook) — an unconditional clear would
+	// erase that newer cycle's timestamp, and since GetUsersInPastDue requires
+	// past_due_started_at IS NOT NULL, that user would never be selected for dunning again.
+	//
+	// Returns (true, nil) when cleared, (false, nil) when the timestamp had already moved on to a
+	// newer cycle (a legitimate skip — see the call site), and (false, ErrUserNotFound) if the
+	// user genuinely no longer exists — a DIFFERENT condition the caller must be able to tell
+	// apart from the "moved on" skip (round-4 review requirement).
+	ClearPastDueStartedAtIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 }
 
 // PastDuePlaidCleanup defines the Plaid cleanup operation needed by PastDueService.
@@ -389,10 +402,22 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		return nil
 	}
 
-	// Step 5: Clear the past_due_started_at stamp.
-	if clearErr := s.repo.ClearPastDueStartedAt(ctx, user.ID); clearErr != nil {
+	// Step 5: Clear the past_due_started_at stamp — but ONLY if it still holds the SAME
+	// timestamp this flow captured at the top (Issue #1413 round-4 finding H3). By this point the
+	// CAS above has already flipped subscription_status to 'cancelled' for THIS cycle, so clearing
+	// is best-effort tidying, not correctness-critical for THIS cycle — but an unconditional clear
+	// could erase a NEWER cycle's timestamp if the user recovered and re-entered past_due again
+	// during the external Plaid/Paddle calls above, which would silently stop that newer cycle's
+	// dunning forever (GetUsersInPastDue requires the column non-NULL). A zero-rows/false result
+	// here is therefore a normal, expected skip — logged, not escalated — because leaving a newer
+	// cycle's stamp untouched is exactly the correct outcome, not a failure.
+	cleared, clearErr := s.repo.ClearPastDueStartedAtIfMatches(ctx, user.ID, *user.PastDueStartedAt)
+	if clearErr != nil {
 		s.logger.Warn("failed to clear past_due_started_at on auto-cancel",
 			"user_id", user.ID, "error", clearErr)
+	} else if !cleared {
+		s.logger.Warn("past_due_started_at had already moved on to a newer cycle when clearing — leaving it untouched so a future run can still process that cycle",
+			"user_id", user.ID)
 	}
 
 	// Step 6a: Sync Clerk metadata.
