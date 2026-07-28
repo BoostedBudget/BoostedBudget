@@ -319,35 +319,36 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// reconciled via Paddle's own dunning or a future webhook, but ops should be aware.
 	// Tolerate already-cancelled — the subscription may have been cancelled by Paddle's dunning
 	// before our job ran.
-	if s.paddleClient == nil && user.PaddleSubscriptionID != nil {
-		s.logger.Warn("skipping Paddle cancel in grace expiry: paddleClient not configured",
-			"user_id", user.ID,
-			"subscription_id", *user.PaddleSubscriptionID,
-		)
-	}
-	if s.paddleClient != nil && user.PaddleSubscriptionID != nil {
-		// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
-		// claim before calling Paddle, nested inside this flow's own ActionPastDueGraceCancel
-		// claim. Without this, a concurrent account deletion (the only other flow that cancels a
-		// Paddle subscription) could cancel the SAME subscription at the same instant.
-		subErr := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, user.ID, paddleCancelSideEffectLease, func() error {
-			return s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID)
-		})
-		if subErr != nil {
-			if errors.Is(subErr, ErrSideEffectClaimBusy) {
-				s.logger.Info("grace-cancel Paddle cancel deferred — side-effect claim held by another flow",
-					"user_id", user.ID)
-				s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
-				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
-			}
-			if !errors.Is(subErr, ErrPaddleAlreadyCancelled) {
-				s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
-				return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
-			}
-			s.logger.Info("Paddle subscription already cancelled, continuing",
+	if user.PaddleSubscriptionID != nil {
+		if s.paddleClient == nil {
+			s.logger.Warn("skipping Paddle cancel in grace expiry: paddleClient not configured",
 				"user_id", user.ID,
 				"subscription_id", *user.PaddleSubscriptionID,
 			)
+		} else {
+			// Issue #1413 H1: claim the OPERATION-keyed ActionPaddleCancelSubscription side-effect
+			// claim before calling Paddle, nested inside this flow's own ActionPastDueGraceCancel
+			// claim. Without this, a concurrent account deletion (the only other flow that cancels a
+			// Paddle subscription) could cancel the SAME subscription at the same instant.
+			subErr := claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPaddleCancelSubscription, user.ID, paddleCancelSideEffectLease, func() error {
+				return s.paddleClient.CancelSubscription(ctx, *user.PaddleSubscriptionID)
+			})
+			if subErr != nil {
+				if errors.Is(subErr, ErrSideEffectClaimBusy) {
+					s.logger.Info("grace-cancel Paddle cancel deferred — side-effect claim held by another flow",
+						"user_id", user.ID)
+					s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+					return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
+				}
+				if !errors.Is(subErr, ErrPaddleAlreadyCancelled) {
+					s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, subErr.Error())
+					return fmt.Errorf("failed to cancel Paddle subscription for past_due user %s: %w", user.ID, subErr)
+				}
+				s.logger.Info("Paddle subscription already cancelled, continuing",
+					"user_id", user.ID,
+					"subscription_id", *user.PaddleSubscriptionID,
+				)
+			}
 		}
 	}
 
