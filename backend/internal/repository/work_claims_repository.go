@@ -73,6 +73,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -159,12 +160,84 @@ type WorkClaimsRepository interface {
 	Release(ctx context.Context, resourceType, resourceID, action, token, reason string) (ok bool, err error)
 }
 
+// ClaimOutcome distinguishes WHY a ClaimOutcome call did or did not grant a fresh lease — the
+// ambiguity Codex round-3 review flagged as finding H3 against the bare bool Claim returns.
+//
+// claimed == false from Claim conflates two situations that need OPPOSITE caller responses:
+//   - another worker holds an unexpired, incomplete lease RIGHT NOW (retryable: if that worker
+//     crashes, the lease will expire and the work becomes claimable again, but only if someone
+//     retries the caller)
+//   - the action already ran to completion for this tuple (terminal: there is nothing to retry)
+//
+// Callers that re-run on their own schedule regardless of outcome (e.g. a daily cron job) can
+// safely treat both as "skip for now" — the next run tries again either way. A webhook is
+// different: returning nil for a HeldByOther outcome gets the webhook marked processed, and
+// nothing else will ever retry the work if the other worker crashed mid-lease. Such a caller
+// MUST turn HeldByOther into a retryable error instead of a silent ack.
+type ClaimOutcome int
+
+const (
+	// ClaimHeldByOther is the zero value deliberately: an uninitialized/zeroed ClaimOutcome must
+	// never be mistaken for ClaimWon by a caller that forgets to check err. It means another
+	// worker holds an unexpired, incomplete lease for this tuple right now.
+	ClaimHeldByOther ClaimOutcome = iota
+	// ClaimAlreadyCompleted means the action already ran to completion for this tuple — a
+	// genuine, terminal skip. There is nothing to retry.
+	ClaimAlreadyCompleted
+	// ClaimWon means the caller now holds a fresh, exclusive lease; token is non-empty.
+	ClaimWon
+)
+
+// String renders outcome for logging.
+func (o ClaimOutcome) String() string {
+	switch o {
+	case ClaimWon:
+		return "won"
+	case ClaimAlreadyCompleted:
+		return "already_completed"
+	case ClaimHeldByOther:
+		return "held_by_other"
+	default:
+		return "unknown"
+	}
+}
+
+// WorkClaimsOutcomeRepository extends WorkClaimsRepository with ClaimOutcome, which
+// disambiguates why a claim attempt did not win a fresh lease (issue #1413, Codex round-3
+// finding H3).
+//
+// This is a SEPARATE interface — embedding WorkClaimsRepository rather than widening it in
+// place — so every existing implementation and test double of WorkClaimsRepository (several of
+// which were under concurrent edit elsewhere on this branch when H3 was fixed) keeps compiling
+// with zero changes. The concrete *workClaimsRepository satisfies both interfaces; production
+// wiring opts a specific caller into the wider view via NewWorkClaimsOutcomeRepository only
+// where that caller's own logic actually depends on the HeldByOther/AlreadyCompleted
+// distinction (currently: the subscription-cancellation webhook, subscription_webhook.go).
+type WorkClaimsOutcomeRepository interface {
+	WorkClaimsRepository
+
+	// ClaimOutcome behaves exactly like Claim (same exclusivity guarantee, same lease
+	// semantics), but on a lost claim reports WHY via outcome instead of collapsing both cases
+	// into a bare false. token is non-empty only when outcome == ClaimWon.
+	ClaimOutcome(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (token string, outcome ClaimOutcome, err error)
+}
+
 type workClaimsRepository struct {
 	db DB
 }
 
 // NewWorkClaimsRepository creates a postgres-backed WorkClaimsRepository.
 func NewWorkClaimsRepository(db DB) WorkClaimsRepository {
+	return &workClaimsRepository{db: db}
+}
+
+// NewWorkClaimsOutcomeRepository creates the same postgres-backed repository as
+// NewWorkClaimsRepository, but returns it through the wider WorkClaimsOutcomeRepository view so
+// the caller can use ClaimOutcome. Kept as a second constructor (rather than changing
+// NewWorkClaimsRepository's return type) purely for call-site clarity about which callers need
+// outcome disambiguation — the two constructors return the same concrete type and can safely
+// share one underlying *pgxpool.Pool / work_claims table.
+func NewWorkClaimsOutcomeRepository(db DB) WorkClaimsOutcomeRepository {
 	return &workClaimsRepository{db: db}
 }
 
@@ -205,6 +278,85 @@ func (r *workClaimsRepository) Claim(ctx context.Context, resourceType, resource
 		return "", false, nil
 	}
 	return token, true, nil
+}
+
+// ClaimOutcome is Claim's exclusivity mechanism (same ON CONFLICT ... WHERE, same lease
+// semantics — see Claim's doc comment above) plus one further distinction on a lost claim:
+// WHY it was lost. A single statement determines both in one round trip, atomically:
+//
+//   - "attempt" is exactly Claim's INSERT ... ON CONFLICT DO UPDATE, with RETURNING added so a
+//     won claim (fresh insert OR reclaim of an expired lease) surfaces its own lease_token.
+//   - "existing" reads the row's pre-statement state (same snapshot Claim's WHERE clause would
+//     have evaluated against) purely to tell an unexpired-and-incomplete lease apart from a
+//     completed one when "attempt" did NOT win.
+//
+// This must stay one statement: reading "existing" via a separate round trip after a failed
+// Claim would race against a concurrent Complete/Release landing in between, misreporting a
+// since-completed claim as HeldByOther or vice versa. Within one statement, both CTEs and the
+// final SELECT share Postgres's single per-statement snapshot, so there is no such window.
+//
+// The final SELECT has no FROM clause (just scalar subqueries) deliberately: a FROM
+// work_claims clause would, for a genuinely fresh tuple, see zero rows under that same
+// snapshot rule (the INSERT's own row isn't visible to a sibling read in the same statement),
+// which would make the CASE expression evaluate against no rows at all and return nothing —
+// exactly the tuple this method most needs to report ClaimWon for.
+func (r *workClaimsRepository) ClaimOutcome(ctx context.Context, resourceType, resourceID, action string, lease time.Duration) (string, ClaimOutcome, error) {
+	if lease <= 0 {
+		return "", ClaimHeldByOther, fmt.Errorf("claim outcome %s/%s/%s: lease must be positive, got %s", resourceType, resourceID, action, lease)
+	}
+	token := uuid.New().String()
+	var state string
+	// sql.NullString (not *string): pgxmock's Scan only recognizes the database/sql
+	// Scanner interface as a fallback for a NULL column value, not a bare pointer-to-
+	// pointer — see TestWorkClaimsRepository_ClaimOutcome_HeldByOther/_AlreadyCompleted,
+	// where "lease_token" comes back NULL. Real pgx supports both; this keeps the unit
+	// tests (pgxmock) and the live-DB integration tests scanning the same way.
+	var wonToken sql.NullString
+	err := r.db.QueryRow(ctx, `
+		WITH attempt AS (
+			INSERT INTO work_claims (resource_type, resource_id, action, claimed_at, lease_expires_at, completed_at, attempts, last_error, lease_token)
+			VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4), NULL, 1, NULL, $5)
+			ON CONFLICT (resource_type, resource_id, action) DO UPDATE
+			SET claimed_at = NOW(),
+			    lease_expires_at = NOW() + make_interval(secs => $4),
+			    attempts = work_claims.attempts + 1,
+			    last_error = NULL,
+			    lease_token = $5
+			WHERE work_claims.completed_at IS NULL
+			  AND work_claims.lease_expires_at < NOW()
+			RETURNING lease_token
+		),
+		existing AS (
+			SELECT completed_at
+			FROM work_claims
+			WHERE resource_type = $1 AND resource_id = $2 AND action = $3
+		)
+		SELECT
+			CASE
+				WHEN EXISTS (SELECT 1 FROM attempt) THEN 'won'
+				WHEN EXISTS (SELECT 1 FROM existing WHERE completed_at IS NOT NULL) THEN 'already_completed'
+				ELSE 'held_by_other'
+			END,
+			(SELECT lease_token FROM attempt)
+	`, resourceType, resourceID, action, lease.Seconds(), token).Scan(&state, &wonToken)
+	if err != nil {
+		return "", ClaimHeldByOther, fmt.Errorf("claim outcome %s/%s/%s: %w", resourceType, resourceID, action, err)
+	}
+
+	switch state {
+	case "won":
+		if !wonToken.Valid {
+			// Defensive: RETURNING lease_token should never be NULL for a row we just
+			// wrote it into ourselves. Surface loudly rather than returning a false ClaimWon
+			// with an empty token, which a caller would treat as a usable lease.
+			return "", ClaimHeldByOther, fmt.Errorf("claim outcome %s/%s/%s: won but RETURNING lease_token was NULL", resourceType, resourceID, action)
+		}
+		return wonToken.String, ClaimWon, nil
+	case "already_completed":
+		return "", ClaimAlreadyCompleted, nil
+	default:
+		return "", ClaimHeldByOther, nil
+	}
 }
 
 // Complete marks the claim durably finished, but only for the row whose CURRENT

@@ -1024,3 +1024,49 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	assert.NoError(t, err, "the cancellation already ran; a lost lease at Complete time must not be reported as a failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
 }
+
+// TestPastDueService_ProcessUser_GraceExpiry_SetRetentionDatesError_Aborts_ReleasesClaim is the
+// regression test for #1413 round-3 finding H5: SetRetentionDates errors used to be logged and
+// swallowed, after which processing continued to ClearPastDueStartedAt/Clerk sync/notification
+// and the claim still completed. Both the retention-notice jobs and hard deletion require
+// retention_expires_at IS NOT NULL, so — with CancelIfPastDue's CAS already having flipped this
+// user to 'cancelled' — that user would be cancelled forever with no clock: never warned, never
+// deleted. The write is now REQUIRED: a failure releases the claim and propagates the error
+// instead of continuing past it.
+func TestPastDueService_ProcessUser_GraceExpiry_SetRetentionDatesError_Aborts_ReleasesClaim(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	mockClaims := new(MockWorkClaimsRepository)
+	svc.SetWorkClaimsRepo(mockClaims)
+
+	userID := "user-grace-retention-fail"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+	retentionErr := errors.New("retention write failed")
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
+	mockClaims.On("Claim", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, pastDueClaimLease).
+		Return(testPastDueClaimToken, true, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDue", mock.Anything, userID).Return(true, nil)
+	repo.On("SetRetentionDates", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(retentionErr)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, retentionErr.Error()).
+		Return(true, nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	require.Error(t, err, "a failed retention-clock write must abort processing so the failure is loud, not complete silently")
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, retentionErr.Error())
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "ClearPastDueStartedAt", mock.Anything, mock.Anything)
+	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
+	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}

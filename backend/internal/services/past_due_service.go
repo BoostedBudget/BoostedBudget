@@ -244,8 +244,16 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		return fmt.Errorf("failed to claim grace-expiry cancellation for user %s: %w", user.ID, err)
 	}
 	if !claimed {
-		// Another worker already holds this lease, or the action was already completed.
-		// Legitimate outcome, not an error.
+		// #1413 round-3 finding H3: this bare bool conflates "another worker holds this lease
+		// right now" with "already completed." That distinction matters for a webhook (see
+		// SubscriptionWebhookWorker.processSubscriptionCanceled, which uses ClaimOutcome and
+		// returns an error on HeldByOther instead) because a webhook delivery is a one-shot
+		// event — nothing else re-triggers it if the current holder crashes.
+		//
+		// This is a DELIBERATE, per-caller choice to keep the plain skip here, not an oversight:
+		// GetUsersInPastDue re-runs on its own daily schedule regardless of this call's outcome,
+		// so both "in-flight elsewhere" and "already done" self-heal on tomorrow's run without
+		// this service needing to distinguish them or propagate an error today.
 		s.logger.Info("past_due grace-expiry claim lost — another worker holds it, or it was already completed",
 			"user_id", user.ID)
 		return nil
@@ -329,9 +337,26 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 
 	// Step 4: Start 6-month retention clock.
 	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
+	// #1413 round-3 finding H5: this write is REQUIRED, not best-effort. Both the retention-
+	// notice jobs and hard deletion require retention_expires_at IS NOT NULL — swallowing this
+	// error left the user cancelled (Step 3's CAS already committed) with no clock: never warned,
+	// never deleted, indefinitely.
+	//
+	// Known residual (documented per the #1413 design doc rather than silently accepted): unlike
+	// the cancellation webhook — where a retry naturally re-reaches this same write because
+	// nothing upstream is gated on subscription_status — Release + return-error here does NOT
+	// get retried by the next scheduled run. GetUsersInPastDue filters on
+	// subscription_status = 'past_due', and Step 3 already flipped this user to 'cancelled', so
+	// tomorrow's run will never select them again. Making the CAS and this write a single atomic
+	// transaction would close that gap, but doing so needs a new PastDueProfileRepository method
+	// (e.g. CancelIfPastDueWithRetention) implemented in profile_repository.go, which is outside
+	// this fix's scope — as would a periodic repair query for cancelled users with a NULL
+	// retention_expires_at. Returning the error at least makes this failure LOUD (job failure,
+	// dead-letter, alerting) instead of the prior silent swallow; closing the gap for good is a
+	// follow-up.
 	if retErr := s.repo.SetRetentionDates(ctx, user.ID, now, retentionExpires); retErr != nil {
-		s.logger.Warn("failed to set retention dates on past_due auto-cancel",
-			"user_id", user.ID, "error", retErr)
+		s.releaseClaimOnFailure(ctx, user.ID, repository.ActionPastDueGraceCancel, token, retErr.Error())
+		return fmt.Errorf("failed to set retention dates for past_due user %s: %w", user.ID, retErr)
 	}
 
 	// Step 5: Clear the past_due_started_at stamp.
@@ -418,8 +443,12 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 		return fmt.Errorf("failed to claim Plaid disconnect for user %s: %w", user.ID, err)
 	}
 	if !claimed {
-		// Another worker already holds this lease, or the action was already completed.
-		// Legitimate outcome, not an error.
+		// #1413 round-3 finding H3: same deliberate per-caller choice as processGraceExpiry's
+		// Claim call above — this collapses "held by another worker right now" and "already
+		// completed" into one skip on purpose. GetUsersInPastDue re-runs daily regardless, so
+		// both cases self-heal on tomorrow's run without needing ClaimOutcome's finer-grained
+		// HeldByOther/AlreadyCompleted split (which the cancellation webhook DOES need, because a
+		// webhook delivery does not get a "tomorrow").
 		s.logger.Info("past_due Plaid disconnect claim lost — another worker holds it, or it was already completed",
 			"user_id", user.ID)
 		return nil
