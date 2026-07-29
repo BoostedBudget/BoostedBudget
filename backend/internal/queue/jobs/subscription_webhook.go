@@ -888,7 +888,18 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	}
 
 	// Re-verify the comp predicate against the freshest possible read, immediately after winning
-	// the claim and before the Plaid disconnect / retention-clock writes.
+	// the claim and before the Plaid disconnect / retention-clock writes — already as late as
+	// this check can be made; it sits directly above the Plaid disconnect call below, with only
+	// comments and log statements in between.
+	//
+	// Issue #1413 round-4 finding H2: a comp granted in the window between this re-check and the
+	// Plaid disconnect call is a DOCUMENTED, ACCEPTED residual, not something further tightening
+	// here can close — no database mechanism can make that window zero, and a worker already
+	// inside a Plaid call cannot be recalled. Unlike C1's residual (irreversible account
+	// deletion), this one is acceptable: a Plaid disconnect is recoverable (the user relinks),
+	// and the retention clock this run is about to start is cleared the moment the comp is
+	// applied — inconvenience, not data loss. See past_due_service.go's processGraceExpiry for
+	// the matching rationale on that flow's own equivalent re-check.
 	reVerified, err := w.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())

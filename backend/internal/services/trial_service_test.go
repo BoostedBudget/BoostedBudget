@@ -8,6 +8,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -67,6 +68,27 @@ func (m *mockPlaidCleanupService) DisconnectAllUserItems(ctx context.Context, us
 	return args.Error(0)
 }
 
+// testTrialExpirationClaimToken is the fixed fencing token newAllowingTrialClaimsRepo's Claim
+// stub returns. Tests that only care about ExpireTrial's OTHER behavior can assert Complete was
+// called with this exact value without plumbing a real per-test token through.
+const testTrialExpirationClaimToken = "test-trial-expiration-claim-token"
+
+// newAllowingTrialClaimsRepo returns a MockWorkClaimsRepository stubbed to always grant the
+// ActionTrialExpiration claim and always complete it successfully — Issue #1413 round-4 finding
+// H2. For tests that exercise ExpireTrial's OTHER behavior and aren't themselves testing the
+// claim mechanism. userID is wildcarded (mock.Anything) so one instance works across this file's
+// whole matrix of fixture users.
+func newAllowingTrialClaimsRepo() *MockWorkClaimsRepository {
+	m := new(MockWorkClaimsRepository)
+	m.On("Claim", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionTrialExpiration, trialExpirationClaimLease).
+		Return(testTrialExpirationClaimToken, true, nil).Maybe()
+	m.On("Complete", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionTrialExpiration, testTrialExpirationClaimToken).
+		Return(true, nil).Maybe()
+	m.On("Release", mock.Anything, repository.ResourceTypeUser, mock.Anything, repository.ActionTrialExpiration, testTrialExpirationClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil).Maybe()
+	return m
+}
+
 func setupTestTrialService(t *testing.T) (*TrialService, *mockTrialRepository, *mockPlaidCleanupService) {
 	t.Helper()
 
@@ -78,6 +100,11 @@ func setupTestTrialService(t *testing.T) (*TrialService, *mockTrialRepository, *
 	plaidCleanup := new(mockPlaidCleanupService)
 
 	service := NewTrialService(tierConfig, repo, plaidCleanup)
+	// Issue #1413 round-4 finding H2: ExpireTrial now requires a work claims repo. Wired
+	// permissively by default so every pre-existing test in this file exercising ExpireTrial's
+	// OTHER behavior doesn't have to plumb claim expectations through — tests that DO exercise
+	// the claim mechanism itself wire their own MockWorkClaimsRepository instead.
+	service.SetWorkClaimsRepo(newAllowingTrialClaimsRepo())
 
 	return service, repo, plaidCleanup
 }
@@ -407,6 +434,10 @@ func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
 // it — an admin can grant/extend a comp in that exact window. Here the initial read shows no
 // override (the guard passes), but ExpireTrialIfNoOverride reports claimed=false, simulating a
 // comp landing between the guard and the atomic write. Retention and Plaid must NOT run.
+//
+// NOTE on naming: "Claim" here is the CAS (ExpireTrialIfNoOverride) losing, predating the
+// round-4 H2 work_claims.Claim added below — see the "─── #1413 round-4 finding H2" section for
+// the tests proving the NEW work-claims-layer Claim's own lost/won behavior.
 func TestTrialService_ExpireTrial_ClaimLost_SkipsWithoutTouchingRetentionOrPlaid(t *testing.T) {
 	service, repo, plaidCleanup := setupTestTrialService(t)
 	ctx := context.Background()
@@ -425,6 +456,132 @@ func TestTrialService_ExpireTrial_ClaimLost_SkipsWithoutTouchingRetentionOrPlaid
 
 	require.NoError(t, err, "a lost claim is a normal skip, not a job failure")
 	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+}
+
+// ─── #1413 round-4 finding H2: trial_service gains a work_claims flow claim ────
+
+// TestTrialService_ExpireTrial_NoClaimsRepoConfigured_FailsLoudly proves this is a required
+// capability, not an optional one — mirroring DeletionService/PastDueService/
+// PlaidItemCleanupService's nil-claims-repo behavior. Constructs the service directly (bypassing
+// setupTestTrialService's permissive wiring) so claimsRepo is genuinely nil.
+func TestTrialService_ExpireTrial_NoClaimsRepoConfigured_FailsLoudly(t *testing.T) {
+	tierConfig, err := config.NewTierConfig("")
+	require.NoError(t, err)
+	repo := new(mockTrialRepository)
+	plaidCleanup := new(mockPlaidCleanupService)
+	svc := NewTrialService(tierConfig, repo, plaidCleanup) // SetWorkClaimsRepo never called
+
+	ctx := context.Background()
+	userID := "user-no-claims"
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	err = svc.ExpireTrial(ctx, userID)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "work claims repository not configured")
+	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+}
+
+// TestTrialService_ExpireTrial_WorkClaimLost_CollaboratorNotCalled is the direct proof the brief
+// requires: trial_service now takes a real work_claims flow claim, and losing it (another worker
+// holds ActionTrialExpiration, or it was already completed for this user) must skip EVERYTHING
+// below — including the CAS and the Plaid collaborator — rather than proceeding regardless.
+func TestTrialService_ExpireTrial_WorkClaimLost_CollaboratorNotCalled(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-claim-busy"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+
+	// Override the permissive default: this specific claim attempt loses.
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, trialExpirationClaimLease).
+		Return("", false, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err, "a lost work claim is a normal skip, not a job failure")
+	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestTrialService_ExpireTrial_WorkClaimWon_CompletedAfterSuccess proves the positive direction:
+// a won claim runs the whole flow and is marked durably Complete afterward.
+func TestTrialService_ExpireTrial_WorkClaimWon_CompletedAfterSuccess(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-claim-won"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	plaidCleanup.On("DisconnectAllUserItems", ctx, userID).Return(nil)
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, trialExpirationClaimLease).
+		Return("won-token", true, nil)
+	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, "won-token").
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, "won-token")
+	mockClaims.AssertNotCalled(t, "Release", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestTrialService_ExpireTrial_CompGrantedAfterCAS_SkipsPlaidButKeepsStatusFlip documents the
+// H2 residual behavior this task's brief explicitly asks for (not eliminate — narrow and
+// document): a comp granted AFTER ExpireTrialIfNoOverride's CAS succeeds but BEFORE the
+// late re-check immediately preceding the Plaid disconnect call must skip ONLY the Plaid
+// disconnect. The status flip and retention-clock write already committed via the CAS are NOT
+// undone — ComputeEffectiveStatus already treats a comped user as effectively active regardless
+// of the raw subscription_status column, and the retention clock this run started is cleared the
+// moment the comp is applied (ClearRetentionDates) — so the accepted outcome is "Plaid stays
+// connected a little longer than a comp-free run would have", not any form of data loss.
+func TestTrialService_ExpireTrial_CompGrantedAfterCAS_SkipsPlaidButKeepsStatusFlip(t *testing.T) {
+	service, repo, plaidCleanup := setupTestTrialService(t)
+	ctx := context.Background()
+	userID := "user-comped-after-cas"
+
+	trialEndsAt := time.Now().Add(-1 * time.Hour)
+	uncompedUser := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // now active
+	compedUser := &domain.User{
+		ID:                 userID,
+		SubscriptionStatus: "inactive", // already flipped by the CAS below
+		TrialEndsAt:        &trialEndsAt,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	// First read (top of ExpireTrial): no override. Second read (the late H2 re-check,
+	// immediately before the Plaid disconnect call): a comp landed in between.
+	repo.On("GetUserByID", ctx, userID).Return(uncompedUser, nil).Once()
+	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("GetUserByID", ctx, userID).Return(compedUser, nil).Once()
+
+	err := service.ExpireTrial(ctx, userID)
+
+	require.NoError(t, err)
+	// The CAS and retention write already ran — they are NOT rolled back.
+	repo.AssertCalled(t, "ExpireTrialIfNoOverride", ctx, userID)
+	repo.AssertCalled(t, "SetRetentionDates", ctx, userID, mock.Anything, mock.Anything)
+	// Only the Plaid disconnect is skipped — the documented, accepted residual.
 	plaidCleanup.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
 }
 
@@ -478,6 +635,7 @@ func TestTrialService_ExpireTrial_NilPlaidCleanup(t *testing.T) {
 
 	// Create with nil plaidCleanup (no Plaid configured)
 	svc := NewTrialService(tierConfig, repo, nil)
+	svc.SetWorkClaimsRepo(newAllowingTrialClaimsRepo())
 
 	ctx := context.Background()
 	userID := "user-456"

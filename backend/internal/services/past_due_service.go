@@ -301,7 +301,18 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	}
 
 	// Re-verify the predicate against the freshest possible read, immediately after winning the
-	// claim and before any irreversible external work.
+	// claim and before any irreversible external work. This is already as late as the code can
+	// make this check — it sits directly above Step 1's Plaid disconnect below, with nothing but
+	// a log statement in between.
+	//
+	// Issue #1413 round-4 finding H2: a comp granted in the window between this re-check and the
+	// Plaid disconnect call is a DOCUMENTED, ACCEPTED residual, not something further tightening
+	// here can close — no database mechanism can make that window zero (there is always some
+	// interval between the last possible check and an external API call), and a worker already
+	// inside a Plaid call cannot be recalled. Unlike C1's residual (irreversible account
+	// deletion), this one is acceptable: a Plaid disconnect is recoverable (the user relinks),
+	// and the retention clock this run is about to start is cleared the moment the comp is
+	// applied — inconvenience, not data loss.
 	stillPastDue, err := s.reReadStillPastDue(ctx, user.ID, occurrence)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
@@ -555,7 +566,11 @@ func (s *PastDueService) processPlaidDisconnectWindow(ctx context.Context, user 
 	}
 
 	// Re-verify the predicate against the freshest possible read, immediately after winning the
-	// claim and before the external Plaid call.
+	// claim and before the external Plaid call — already as late as this can be made. Issue
+	// #1413 round-4 finding H2: the residual window between this check and the Plaid call itself
+	// is documented and accepted, not further closeable here; see processGraceExpiry's matching
+	// comment above for the full rationale (recoverable disconnect, re-armed retention clock —
+	// inconvenience, not the irreversible-deletion class of harm C1 guards against).
 	stillPastDue, err = s.reReadStillPastDue(ctx, user.ID, occurrence)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPlaidDisconnectPastDue, token, err.Error())
