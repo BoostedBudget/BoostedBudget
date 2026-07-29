@@ -10,9 +10,15 @@ package services
 // predicate (admin_user_repository.go — removeUserTierOverrideSelectPrior) only re-arms
 // retention for those same three statuses, so removing a comp from a 'trial' user leaves
 // subscription_status untouched at 'trial' — never normalized to 'inactive' — even though the
-// trial's wall-clock expiry already passed. The user is consequently NOT read-only for up to one
-// more daily ExpireTrial run: a deliberately bounded, already-accepted window (see
-// trial_service.go's "Accepted cost (already ratified): ... volume is a handful of rows").
+// trial's wall-clock expiry already passed. The user is consequently NOT read-only until the
+// next ExpireTrial run for this user actually SUCCEEDS — an already-accepted window, but bounded
+// by successful job execution, not by a single run unconditionally (corrected per an independent
+// adversarial review: TrialExpirationCheckWorker logs and continues past a per-user ExpireTrial
+// failure, still reporting the job overall as successful, so a persistently failing Plaid
+// disconnect would extend this window across multiple runs, not just one). See
+// trial_service.go's "Accepted cost (already ratified): ... volume is a handful of rows" and the
+// function doc comment below for why this is a property ExpireTrial has for every expired trial,
+// comped-and-reverted or not.
 //
 // An independent review proposed normalizing trial -> inactive inside RemoveUserTierOverride's
 // clear CTE to close this window. THAT WAS REJECTED — do not implement it. ExpireTrial does
@@ -53,7 +59,17 @@ import (
 //     and a user at raw 'trial' is provably NOT read-only — the bounded, accepted gap.
 //  2. The next daily ExpireTrial run (simulating tomorrow's cron) must then actually flip the
 //     status AND perform the full expiry side effects, including the Plaid disconnect — proving
-//     the gap really is bounded to "one run", not "forever".
+//     the gap closes once a run for this user SUCCEEDS, not "forever". NOTE (corrected per an
+//     independent adversarial review — the original comment here overstated this as "bounded to
+//     one run"): the bound is on successful execution, not on run count. This test's plaidCleanup
+//     mock always returns nil, so it only proves the case where the very next run happens to
+//     succeed; TrialExpirationCheckWorker logs and continues past a per-user ExpireTrial error
+//     while still reporting the job overall as successful, so a Plaid disconnect that keeps
+//     failing would extend the window across further runs with no hard bound on run count. This
+//     is not unique to the comp-revert scenario pinned here — it is a property ExpireTrial's Plaid
+//     disconnect has for every expired trial, comped-and-reverted or not (see Issue #1413
+//     round-5's reordering fix in trial_service.go, which is what makes a failed disconnect
+//     retryable in the first place rather than silently permanent).
 func TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOneRun_ThenExpiresWithPlaidDisconnect(t *testing.T) {
 	pool := setupHouseholdServiceIntegrationDB(t)
 	enc := newTestFieldEncryptor(t)
