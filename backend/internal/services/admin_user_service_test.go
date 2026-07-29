@@ -1013,7 +1013,17 @@ func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 	mockClerk.AssertExpectations(t)
 }
 
-func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillAuditsAndSyncs(t *testing.T) {
+// TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillCallsRepoAndSyncsClerk
+// (#1413 G7: renamed from "...StillAuditsAndSyncs" — that name claimed an audit-log assertion
+// this test never made and, at this layer, cannot make: auditing is written by
+// AdminUserRepository.RemoveUserTierOverride's own SQL transaction, entirely inside the mocked
+// call below. What this test actually proves is (a) the service calls the repo unconditionally
+// even when Removed=false — i.e. does not short-circuit before the repo's audit-writing call —
+// via mockRepo.AssertExpectations, and (b) the Clerk re-sync still fires on that no-op path. The
+// real DB-level proof that a row lands in audit_logs lives at
+// TestRemoveUserTierOverride_Integration_AuditRow_ActorAndTarget
+// (internal/repository/admin_user_repository_remove_tier_override_integration_test.go:364).
+func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillCallsRepoAndSyncsClerk(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	mockClerk := new(MockClerkService)
 	service := NewAdminUserService(mockRepo, nil, mockClerk, 6, nil)
@@ -1024,7 +1034,8 @@ func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillAuditsA
 	reason := "repair stale metadata"
 
 	// No prior override (nil) -> Removed must be false, but the repo call (which writes the
-	// audit row internally) and the Clerk sync both still happen.
+	// audit row internally — proven at the repo integration test referenced above, not here) and
+	// the Clerk sync both still happen.
 	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
 		PriorManualTierOverride: nil,
 		Removed:                 false,
