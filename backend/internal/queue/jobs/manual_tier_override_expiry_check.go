@@ -250,6 +250,25 @@ func (w *ManualTierOverrideExpiryCheckWorker) syncClerkMetadata(ctx context.Cont
 
 // ManualTierOverrideExpiryCheckUniqueOpts returns the recommended uniqueness options.
 // Only one check job should run at a time to prevent duplicate expiry processing.
+//
+// Issue #1413 Task W (Codex review): ByState now matches River's own default
+// (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) exactly: Available, Completed, Pending,
+// Retryable, Running, Scheduled. It previously omitted Completed, which — per
+// river.UniqueOpts.ByState's doc comment (insert_opts.go) — meant a job that had ALREADY
+// completed within the current ByPeriod bucket did not block a duplicate insert. Combined with
+// ManualTierOverrideExpiryCheckPeriodicOpts's RunOnStart: true (a catch-up insert attempted on
+// every process restart/leader election), that let this daily job run on every boot on a
+// multiple-deploys-per-day cadence instead of once per ByPeriod window.
+//
+// Deliberately NOT Cancelled or Discarded, even though River documents both as safe to *add*:
+// river's canonical default (rivertype.UniqueOptsByStateDefault()) excludes both, and — more
+// importantly for this specific job — Discarded means every retry was exhausted without the run
+// ever completing its clear/re-arm-retention/audit work. Treating a discarded run as "already
+// handled this period" would let lapsed manual tier overrides go silently uncleared (and users
+// stay stuck out of the retention pipeline) for up to river's DiscardedJobRetentionPeriodDefault
+// (7 days) before another catch-up attempt could get through — exactly what RunOnStart exists to
+// prevent. Cancelled is excluded for the same reasoning (and is currently unreachable in this
+// codebase regardless: nothing cancels this job kind).
 func ManualTierOverrideExpiryCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent
@@ -261,6 +280,7 @@ func ManualTierOverrideExpiryCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+			queue.JobStateCompleted,
 		},
 	}
 }
