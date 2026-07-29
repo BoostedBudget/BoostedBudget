@@ -717,7 +717,18 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	// isComped reflects a currently-active admin manual tier override (Issue #1413). A comp
 	// dominates a trial and grants synthetic access when no real Paddle subscription exists,
 	// so it must be computed before the trial/status branches below decide how to respond.
-	isComped := user.HasActiveManualOverride()
+	//
+	// Round-5 finding: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+	// constraint. Use EffectiveStatusWithActiveOverride (not HasActiveManualOverride alone) and
+	// reject a malformed override the same way GetEffectiveSubscriptionStatusByUserID does on
+	// the access-granting path (profile_repository.go) — this REPRESENTATION path must never
+	// return a synthetic active-comp payload the read-only middleware would then 403 on write.
+	_, overrideValue, isComped := user.EffectiveStatusWithActiveOverride()
+	if isComped && !h.isConfiguredOverrideTier(overrideValue) {
+		h.logger.Warn("rejecting manual tier override in subscription/current response: value does not name a configured tier",
+			"user_id", user.ID, "manual_tier_override", overrideValue)
+		isComped = false
+	}
 
 	// Handle trial users separately — unless a comp is in effect, in which case the comp wins.
 	if user.SubscriptionStatus == "trial" && !isComped {
@@ -798,6 +809,28 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
 	}
 	return out, nil
+}
+
+// isConfiguredOverrideTier reports whether tierName names a real, currently-configured
+// subscription tier. HandleGetCurrentSubscription uses it so a malformed manual_tier_override
+// can't produce a synthetic active-comp payload — the same rule
+// GetEffectiveSubscriptionStatusByUserID enforces via its injected overrideTierValidator on the
+// access-granting path (profile_repository.go's SetOverrideTierValidator), reused here directly
+// via this handler's own tierConfig rather than a second func(string) bool seam, since this file
+// already validates tier names the same way at every other call site (see e.g. the tierConfig
+// lookups above in getPaddlePriceIDFromConfig/HandleUpdateSubscription).
+//
+// Nil-safe: h.tierConfig is always wired in production (main.go os.Exit(1)s at startup if the
+// tier config fails to load — see SetOverrideTierValidator's doc comment in
+// profile_repository.go for the identical reasoning), so a nil tierConfig only occurs in a
+// handler built without one (e.g. a test that never exercises comp-adjacent code), in which case
+// validation is skipped — permissive, not fail-closed — matching that same nil-safe convention.
+func (h *PaddleCheckoutHandler) isConfiguredOverrideTier(tierName string) bool {
+	if h.tierConfig == nil {
+		return true
+	}
+	_, err := h.tierConfig.GetTier(domain.TierName(tierName))
+	return err == nil
 }
 
 // compedOrNotFound returns the synthetic comped response when isComped is true, otherwise the

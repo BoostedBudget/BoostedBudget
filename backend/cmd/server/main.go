@@ -365,15 +365,19 @@ func main() {
 
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
-		// Issue #1413 G2: reject a manual_tier_override that names no configured tier on the
-		// access path (GetEffectiveSubscriptionStatusByUserID) — tierConfig was already loaded
-		// above (or the process would have os.Exit(1)'d), so this validator is wired for the
-		// entire lifetime of the process; see SetOverrideTierValidator's doc comment for the
-		// nil-validator fallback this deliberately never exercises in production.
-		profileRepo.SetOverrideTierValidator(func(tier string) bool {
+		// Issue #1413 G2 / round-5: reject a manual_tier_override that names no configured tier
+		// — both on the access-granting path (GetEffectiveSubscriptionStatusByUserID) and on the
+		// profile response's representation path (humaProfileHandler.SetOverrideTierValidator,
+		// wired below once it exists) — tierConfig was already loaded above (or the process
+		// would have os.Exit(1)'d), so this validator is wired for the entire lifetime of the
+		// process; see SetOverrideTierValidator's doc comment (profile_repository.go) for the
+		// nil-validator fallback this deliberately never exercises in production. Shared as one
+		// closure so both call sites can never drift apart on what counts as "configured".
+		overrideTierValidator := func(tier string) bool {
 			_, tierErr := tierConfig.GetTier(domain.TierName(tier))
 			return tierErr == nil
-		})
+		}
+		profileRepo.SetOverrideTierValidator(overrideTierValidator)
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
@@ -1893,6 +1897,10 @@ func main() {
 
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
+		// Issue #1413 round-5: same validator as profileRepo above, so the profile response's
+		// derived comp fields (effective_status/is_comped/comp_tier) can never report a comp the
+		// access-granting path would reject.
+		humaProfileHandler.SetOverrideTierValidator(overrideTierValidator)
 		operations.RegisterProfileRoutes(humaAPI, humaProfileHandler)
 		appLogger.Info("Huma profile routes registered")
 

@@ -2780,6 +2780,84 @@ func TestHandleGetCurrentSubscription_NotComped_IsCompedFalseInResponse(t *testi
 	mockService.AssertExpectations(t)
 }
 
+// TestHandleGetCurrentSubscription_MalformedOverride_NotComped is the RED test for Issue #1413
+// round-5 (adversarial review finding): a manual_tier_override naming NO configured tier
+// ('not_a_tier' — garbage, not a real tier name in config/subscription_tiers.yaml) must NOT
+// produce the synthetic active-comp payload, even though the raw override is non-expired
+// (future-dated). Before this fix, isComped was computed via
+// user.HasActiveManualOverride() alone — "non-empty and not expired" — with no check that the
+// override names a real tier, so GET /subscription/current could report a working comp for a
+// corrupt override the read-only middleware would then 403 on write (the exact
+// representation/access mismatch this fix closes).
+func TestHandleGetCurrentSubscription_MalformedOverride_NotComped(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "not_a_tier"
+	endsAt := time.Now().Add(30 * 24 * time.Hour) // future-dated: not expired
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "inactive",
+		PaddleSubscriptionID: nil,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	// A non-comped inactive user with no Paddle subscription must 404, not get a synthetic
+	// 200 comp payload.
+	require.Error(t, err)
+	assert.Nil(t, output)
+	var humaErr huma.StatusError
+	require.True(t, errors.As(err, &humaErr), "expected huma.StatusError")
+	assert.Equal(t, 404, humaErr.GetStatus())
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_ValidOverride_StillComped is the positive control demanded
+// alongside the RED test above: the tier-name validation added for the malformed-override fix
+// must not become over-tight and start hiding legitimate comps. A genuinely valid, configured
+// override tier ("premium") must still produce the synthetic active-comp payload.
+func TestHandleGetCurrentSubscription_ValidOverride_StillComped(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "premium"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "inactive",
+		PaddleSubscriptionID: nil,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     nil, // permanent comp
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.IsComped, "a validly-configured override tier must still report is_comped=true")
+	assert.Equal(t, "active", output.Body.Status)
+	assert.Equal(t, "premium", output.Body.Tier)
+
+	mockRepo.AssertExpectations(t)
+}
+
 // --- Context-aware pricing: HandleGetBillingPortalURL extended status tests ---
 
 // TestHandleGetBillingPortalURL_AllowsCancelled verifies cancelled users can get billing portal URL.
