@@ -450,6 +450,14 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // If the reverted status is NOT read-only (the user resubscribed while comped), or no prior
 // override existed, retention is left completely untouched — the normal webhook path (or
 // nothing, for the no-op case) is responsible for it.
+// #1413 PinnedRaw (G8): should_rearm_retention deliberately excludes 'trial' from the
+// read-only-status list, and the UPDATE below (removeUserTierOverrideUpdate) never touches
+// subscription_status at all — so removing a comp from a 'trial' user whose trial_ends_at has
+// already passed leaves them at raw 'trial', not normalized to 'inactive'. Do NOT "fix" this by
+// normalizing status here: GetUsersWithExpiredTrials selects on raw subscription_status =
+// 'trial', so a silent normalization would make TrialService.ExpireTrial's job never reselect
+// this user again, and its Plaid disconnect + retention-clock side effects would never run. See
+// internal/services/trial_expiry_comp_revert_integration_test.go for the pin and full reasoning.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
