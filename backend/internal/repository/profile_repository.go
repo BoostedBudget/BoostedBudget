@@ -870,48 +870,47 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// active/trialing, past_due too) clears it: that status is not one this repair pass targets,
 	// so nothing can legitimately be "pending" against it.
 	//
-	// Issue #1413 round-11 Fix 4 (High): the eligible branch's COALESCE is now additionally gated,
-	// LIVE IN SQL, on the row NOT currently carrying an active manual tier override
-	// (hasActiveManualOverrideSQLExpr) — per the invariant (domain.User.PlaidCleanupPendingAt's
-	// doc comment), a comped user is Plaid-ELIGIBLE regardless of the raw status this call is
-	// about to write (HasActiveManualOverride() forces EFFECTIVE status to active), so the marker
-	// must stay NULL. The bug this closes: subscription_webhook.go's processSubscriptionCanceled
-	// writes 'cancelled' as billing truth UNCONDITIONALLY — including for a comped user — and only
-	// checks HasActiveManualOverride() AFTER this write, to decide whether to skip the Plaid
-	// disconnect/retention-clock side effects. Before this fix, that ordering meant a comped
-	// user's cancellation still stamped the marker (the COALESCE only looked at the NEW status,
-	// never the override); when the comp later expired, removal's own COALESCE(existing, NOW())
-	// preserved that STALE marker instead of starting a fresh grace window, so a comp that outlived
-	// the marker's age by more than the grace period disconnected the user immediately at comp
-	// expiry, with no grace at all. Checking the override LIVE, inside this same atomic UPDATE,
-	// removes any dependency on caller ordering — this is correct no matter when in
-	// subscription_webhook.go (or any other caller) the override happens to be checked, because it
-	// reads the row's actual committed state at the instant of the write, not a Go-side snapshot
-	// taken earlier. This also uniformly protects every OTHER caller of this shared method (e.g.
-	// processSubscriptionUpdated, which can also drive status to 'cancelled' via a normalized
-	// paused/canceled value) without each needing its own override check.
-	//
-	// Issue #1413 round-12 Fix 4 (Medium): the eligible branch's CASE now ALSO gates the
-	// COALESCE-start on the row's OLD (pre-write) subscription_status NOT already being
-	// repair-eligible (`NOT (plaidDisconnectRepairEligibleStatusPredicate)`, evaluated against the
-	// row as it stood before this SET clause — Postgres resolves every right-hand-side column
-	// reference in an UPDATE's SET list against the pre-update row, never a sibling assignment in
-	// the same statement). This distinguishes a GENUINE transition into ineligibility (old status
-	// was active/trialing/past_due — the marker legitimately starts now) from a REDUNDANT terminal
+	// Issue #1413 round-12 Fix 4 (Medium): the eligible branch's CASE gates the COALESCE-start on
+	// the row's OLD (pre-write) subscription_status NOT already being repair-eligible
+	// (`NOT (plaidDisconnectRepairEligibleStatusPredicate)`, evaluated against the row as it stood
+	// before this SET clause — Postgres resolves every right-hand-side column reference in an
+	// UPDATE's SET list against the pre-update row, never a sibling assignment in the same
+	// statement). This distinguishes a GENUINE transition into ineligibility (old status was
+	// active/trialing/past_due — the marker legitimately starts now) from a REDUNDANT terminal
 	// event for a user ALREADY ineligible (old status was already inactive/cancelled — e.g. a
 	// second, distinct cancellation webhook, or subscription.updated re-reporting the same terminal
 	// status). The bug this closes: after repairPlaidDisconnects completes cleanup and clears the
 	// marker (ClearPlaidCleanupPendingIfMatches), a LATER, DISTINCT terminal webhook for the SAME
 	// still-cancelled episode used to reach the old bare `COALESCE(plaid_cleanup_pending_at, $N)` —
 	// with the marker now NULL, that COALESCE fired and manufactured a BRAND NEW marker timestamped
-	// AFTER the episode actually began, for cleanup that was already finished. The ELSE branch
-	// (neither comped nor a genuine transition) now leaves plaid_cleanup_pending_at completely
-	// untouched — whatever it currently is (NULL after a completed repair, or still running) is
-	// exactly what the invariant says it should be, and only a real transition is licensed to change
-	// it. CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
+	// AFTER the episode actually began, for cleanup that was already finished. The ELSE branch (not
+	// a genuine transition) leaves plaid_cleanup_pending_at completely untouched — whatever it
+	// currently is (NULL after a completed repair, or still running) is exactly what the invariant
+	// says it should be, and only a real transition is licensed to change it.
+	// CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
 	// need no equivalent guard: their own WHERE clauses already require the OLD status to be
 	// 'past_due'/'trial' (never already repair-eligible), so every successful write there is a
 	// transition into ineligibility by construction.
+	//
+	// Issue #1413 round-13: this eligible branch NO LONGER gates on whether the row currently
+	// carries a live manual tier override — round-11 Fix 4 added exactly that gate (checking
+	// hasActiveManualOverrideSQLExpr live, in this same atomic UPDATE, so a comped user's
+	// cancellation would leave the marker NULL instead of starting it), and round-13's
+	// investigation found it was the SAME class of bug as the round-13 P0 (admin-grant nulling the
+	// marker): it tied this column's SET-time value to "is there a live override RIGHT NOW" — a
+	// wall-clock-dependent fact that can flip from true to false with NO writer running. If Paddle
+	// cancels a user who already carries a live comp (a real path: processSubscriptionCanceled can
+	// fire for a comped user), the marker stayed NULL under the old gate; if that comp then lapsed
+	// with the daily comp-expiry job degraded or never run, NOTHING would ever re-stamp the
+	// marker — an identical permanent, invisible leak to the admin-grant P0, just reached via a
+	// different caller ordering (comp granted BEFORE the cancellation, rather than after). Per the
+	// restated invariant (domain.User.PlaidCleanupPendingAt's doc comment), this column tracks only
+	// the durable, override-independent fact "a raw-status ineligibility episode began, cleanup
+	// outstanding" — so a genuine transition into inactive/cancelled now ALWAYS starts/preserves
+	// the marker, comped or not. CURRENT eligibility (raw status AND live override) is evaluated
+	// separately, entirely at query time, by GetUsersNeedingPlaidDisconnectRepair's own
+	// noActiveManualOverridePredicate — which still correctly excludes a user with a currently-live
+	// comp from the repair pass, marker or no marker.
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
 	var query string
@@ -925,7 +924,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $7) ELSE plaid_cleanup_pending_at END WHERE id = $8 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $7) ELSE plaid_cleanup_pending_at END WHERE id = $8 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`
 		}
@@ -933,7 +932,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`
 		}
@@ -1779,22 +1778,6 @@ const noActiveManualOverridePredicate = `
 	  )
 `
 
-// hasActiveManualOverrideSQLExpr is the raw boolean SQL expression for "this row currently carries
-// a live (non-expired) manual tier override" — Issue #1413 round-11 Fix 4. Logically IDENTICAL to
-// the condition inside noActiveManualOverridePredicate's "AND NOT (...)" above (same three
-// sub-conditions, same NOW() boundary semantics), but expressed as a bare boolean rather than a
-// pre-wrapped "AND NOT (...)" WHERE-clause fragment, so it can be spliced directly into a CASE/WHEN
-// inside a SET clause (UpdateSubscriptionFromPaddle below) instead of only a WHERE clause.
-// Deliberately single-line (unlike noActiveManualOverridePredicate's historical multi-line
-// formatting) so a caller that embeds it inside an otherwise single-line UPDATE query string
-// doesn't end up with an unreadable mix of embedded newlines.
-//
-// Both constants must stay logically identical — TestHasActiveManualOverrideSQLExpr_MatchesNoActiveManualOverridePredicate
-// (profile_repository_test.go) guards against them drifting apart, mirroring this branch's
-// existing precedent for this exact failure class (noActiveManualOverridePredicate /
-// domain.User.HasActiveManualOverride(), TestNoActiveManualOverridePredicate_Integration_ParityWithGo).
-const hasActiveManualOverrideSQLExpr = `(manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW()))`
-
 // noManualOverrideAtAllPredicate excludes a user with ANY non-empty manual_tier_override —
 // live OR already-lapsed — from the retention notice/hard-delete queries (Issue #1413 Critical
 // finding C1, Codex review).
@@ -1971,9 +1954,10 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 //     a disconnect actually completes (it has to keep counting toward the separate 6-month
 //     retention/deletion clock regardless of Plaid state) — so a value written by a PRIOR cycle
 //     can silently survive a resubscribe-then-recancel and be mistaken for the CURRENT cycle's
-//     age. plaid_cleanup_pending_at cannot suffer this: it means exactly "ineligible since this
-//     instant, cleanup outstanding" and is NULL whenever nothing is pending (see
-//     domain.User.PlaidCleanupPendingAt's doc comment and ExpireTrialIfNoOverride/
+//     age. plaid_cleanup_pending_at cannot suffer this: it means exactly "a raw-status
+//     ineligibility episode began at this instant, cleanup outstanding" — a durable,
+//     override-independent fact (see domain.User.PlaidCleanupPendingAt's doc comment) — and is
+//     NULL whenever nothing is pending (see ExpireTrialIfNoOverride/
 //     CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle
 //     for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
 //     invent work from a derived signal.
@@ -1994,13 +1978,20 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 // is different in kind: it is RECOVERABLE (the user relinks), so the fail-safe direction here is
 // the other way — a lapsed-but-uncleared override must not permanently exempt a user from this
 // repair pass, or a stalled/dead-lettered expiry job would leave their bank connection live and
-// billable indefinitely, exactly the residual round-12 found (profile_repository.go's
-// noManualOverrideAtAllPredicate doc comment describes the race this predicate must NOT inherit).
-// This also now agrees with every SET/CLEAR site for plaid_cleanup_pending_at (see
-// domain.User.PlaidCleanupPendingAt's doc comment), which already use live-only override semantics
-// — a lapsed override never suppressed the marker in the first place, so excluding on "any override"
-// here was the one place this query disagreed with its own anchor column. Do NOT "unify" this back
-// to noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
+// billable indefinitely.
+//
+// Issue #1413 round-13: this predicate is now the ONLY place override state enters this query's
+// reasoning at all — per the restated invariant (domain.User.PlaidCleanupPendingAt's doc comment),
+// none of the SET/CLEAR sites for plaid_cleanup_pending_at reference manual_tier_override in any
+// form any more (the marker is a pure function of raw subscription_status transitions). CURRENT
+// eligibility — "should this user actually be disconnected right now" — is entirely this query's
+// job: plaidDisconnectRepairEligibleStatusPredicate plus this noActiveManualOverridePredicate,
+// evaluated fresh on every run against live, current row state. That split (a durable write-time
+// fact plus a live read-time predicate) is precisely what closes the round-13 P0: a comp granted
+// over an already-marked user survives the grant (the marker is untouched), and once that comp
+// lapses — with or without the daily expiry job ever running — this predicate simply stops
+// excluding the row on the very next scheduled run. Do NOT "unify" this with
+// noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
 // and this predicate's own doc comment for why the retention/deletion queries must stay as they are.
 func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
 	cutoff := time.Now().Add(-gracePeriod)

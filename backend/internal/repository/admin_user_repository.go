@@ -316,11 +316,28 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 // CTE + FOR UPDATE shape. The "prior" CTE's own is_deleted=FALSE guard is what causes a
 // missing/soft-deleted target to return zero rows from the join below (surfaced as
 // pgx.ErrNoRows -> ErrUserNotFound), so the outer UPDATE does not need to repeat that guard.
-// plaid_cleanup_pending_at is cleared unconditionally here — Issue #1413 round-10: granting (or
-// extending) a comp makes the user Plaid-eligible again regardless of their raw subscription
-// status (HasActiveManualOverride() forces effective status to active), so nothing can
-// legitimately be "pending" against the repair pass while a live override is in effect. Clearing
-// to NULL is idempotent whether or not anything was actually pending.
+//
+// plaid_cleanup_pending_at is deliberately left UNTOUCHED here — Issue #1413 round-13 (the P0
+// this comment replaces round-10's reasoning for). Round-10 through round-12 cleared this column
+// unconditionally on every grant, reasoning that a live comp makes the user Plaid-eligible again
+// (HasActiveManualOverride() forces EFFECTIVE status to active). That reasoning is true of
+// EFFECTIVE eligibility, but the marker (per domain.User.PlaidCleanupPendingAt's doc comment) no
+// longer records effective eligibility — it records a durable, write-time fact: "an ineligibility
+// EPISODE (raw subscription_status transition) began, cleanup outstanding". Granting a comp never
+// touches raw subscription_status, so it must not touch this column either. The bug the old
+// clear caused: comp an already inactive/cancelled user (a plausible real action — comping a
+// churned account) — the marker (correctly set by the earlier cancellation) was erased on grant;
+// if the comp later lapses and the daily comp-expiry job degrades or an admin never clicks
+// "Remove Override", NOTHING ever re-stamps the marker, because a comp lapsing is a read-time
+// fact (HasActiveManualOverride() vs. wall-clock time) with no write of its own. The user's live
+// Plaid connections then stay connected — and billable — forever, invisible to
+// GetUsersNeedingPlaidDisconnectRepair, which requires a non-NULL marker. Leaving the column
+// untouched here means: if the user was already ineligible with an outstanding marker before this
+// grant, that marker (and its original episode-start timestamp) survives the comp's entire
+// lifetime, live or lapsed — CURRENT eligibility is evaluated separately, at query time, by that
+// query's own noActiveManualOverridePredicate, which still correctly exempts a LIVE comp. If the
+// user was NOT already ineligible (raw status is 'active'/'trial'), no marker exists to touch in
+// the first place, so this is a genuine no-op — nothing to clear, nothing to preserve.
 const updateUserTierQuery = `
 	WITH prior AS (
 		SELECT manual_tier_override
@@ -329,8 +346,7 @@ const updateUserTierQuery = `
 		FOR UPDATE
 	)
 	UPDATE users u
-	SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW(),
-	    plaid_cleanup_pending_at = NULL
+	SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
 	FROM prior
 	WHERE u.id = $3
 	RETURNING u.clerk_user_id, u.subscription_tier, u.subscription_status, prior.manual_tier_override
@@ -465,15 +481,26 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // this user again, and its Plaid disconnect + retention-clock side effects would never run. See
 // internal/services/trial_expiry_comp_revert_integration_test.go for the pin and full reasoning.
 // should_mark_plaid_cleanup_pending (Issue #1413 round-10) is should_rearm_retention's narrower
-// sibling for the Plaid-disconnect-repair marker: a removed/expired comp must (re-)start
-// plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets.
-// Deliberately narrower than should_rearm_retention's ('inactive', 'cancelled', 'past_due') —
-// 'past_due' is excluded here for the SAME reason plaidDisconnectRepairEligibleStatusPredicate
-// excludes it: past_due has its own dunning timeline (past_due_service.go,
-// PastDueConfig.PlaidDisconnectDays) and must never be immediately Plaid-disconnected by this
-// repair pass. A comp removed while the reverted status is 'past_due' leaves
-// plaid_cleanup_pending_at untouched — it should already be NULL (past_due is never a state that
-// sets this marker), and past_due's own dunning flow owns that user's Plaid fate instead.
+// sibling for the Plaid-disconnect-repair marker: a removed/expired comp (re-)starts
+// plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets,
+// via COALESCE(u.plaid_cleanup_pending_at, NOW()) below. Deliberately narrower than
+// should_rearm_retention's ('inactive', 'cancelled', 'past_due') — 'past_due' is excluded here for
+// the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due has its own
+// dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays) and must never be
+// immediately Plaid-disconnected by this repair pass. A comp removed while the reverted status is
+// 'past_due' leaves plaid_cleanup_pending_at untouched — it should already be NULL (past_due is
+// never a state that sets this marker), and past_due's own dunning flow owns that user's Plaid
+// fate instead.
+//
+// Issue #1413 round-13: as of round-13, updateUserTierQuery (comp grant) no longer nulls this
+// marker, so in the ordinary case — a comp granted over an already inactive/cancelled user whose
+// marker was already set by the transition that made them ineligible — this COALESCE is a no-op:
+// the marker already survived the comp's entire lifetime untouched, and COALESCE(existing, NOW())
+// just preserves that existing (earlier, correct) value. This CASE now exists purely as a
+// defense-in-depth backstop for a row that reached an ineligible raw status WITHOUT ever passing
+// through one of the SET-site writers (e.g. an imported/backfilled row created directly with
+// subscription_status = 'inactive'/'cancelled') — the one case where the marker could still be
+// legitimately NULL despite the status already being repair-eligible.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''

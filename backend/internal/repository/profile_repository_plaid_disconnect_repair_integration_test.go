@@ -392,7 +392,8 @@ func TestPlaidDisconnectRepair_Integration_ExcludesActiveUser(t *testing.T) {
 // CURRENTLY-active override must still exclude a user from Plaid-disconnect repair —
 // noActiveManualOverridePredicate (Issue #1413 round-12 Fix 2) keeps this half of the old
 // noManualOverrideAtAllPredicate behavior; only the LAPSED half changes (see
-// TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired below).
+// TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LapsedNeverRemoved_StillRepaired
+// below).
 func TestPlaidDisconnectRepair_Integration_ExcludesLiveComp(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -432,29 +433,52 @@ func TestPlaidDisconnectRepair_Integration_ExcludesLiveComp(t *testing.T) {
 	}
 }
 
-// TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired is the Issue #1413 round-12 Fix 2
-// RED test: a stored override that has LAPSED (manual_tier_ends_at in the past, never cleared —
-// e.g. manual_tier_override_expiry_check dead-lettered) must NOT permanently exclude a user from
-// Plaid-disconnect repair, unlike the retention/deletion queries' deliberately conservative
-// noManualOverrideAtAllPredicate. A Plaid disconnect is recoverable (the user relinks); leaving a
-// lapsed-comp user's bank connection live and billable forever — because the SQL predicate
-// couldn't distinguish "still live" from "lapsed years ago" — is the round-12 finding this test
-// pins closed.
+// TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LapsedNeverRemoved_StillRepaired
+// is the Issue #1413 round-13 P0 regression test, built through PRODUCTION WRITERS ONLY — no raw
+// `UPDATE users SET manual_tier_override ...` or `SET plaid_cleanup_pending_at ...` anywhere in this
+// test's setup.
 //
-// Falsifiability: reverting GetUsersNeedingPlaidDisconnectRepair to noManualOverrideAtAllPredicate
-// makes this test fail — the lapsed-comp user would never be selected.
-func TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired(t *testing.T) {
+// Scenario: a user's Paddle subscription genuinely cancels (repo.UpdateSubscriptionFromPaddle sets
+// plaid_cleanup_pending_at, the normal path — this is a real, already-churned account). An admin
+// THEN comps this already-cancelled account (adminRepo.UpdateUserTier) — a plausible real action
+// (e.g. a support gesture). expiresAt is already in the past, modeling a comp that has lapsed by
+// the time anyone checks. RemoveUserTierOverride/RemoveUserTierOverrideIfMatches is deliberately
+// NEVER called — this models the daily comp-expiry job degrading or simply never running.
+//
+// Per the restated invariant (domain.User.PlaidCleanupPendingAt's doc comment), granting a comp no
+// longer nulls the marker: the marker records that an ineligibility EPISODE began and is durable
+// across the comp's entire lifetime, live or lapsed. CURRENT eligibility (a live override) is
+// evaluated separately, at query time, by GetUsersNeedingPlaidDisconnectRepair's own
+// noActiveManualOverridePredicate. With the comp lapsed and never removed, that predicate no longer
+// excludes this user, so the repair pass must find them — closing the leak where a comped-then
+// -lapsed-then-never-expired user's bank connections stayed live forever, invisible to every query
+// in the codebase.
+//
+// This replaces TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired, which passed only
+// because its setup used raw `pool.Exec` SQL to write manual_tier_override/manual_tier_ends_at (and
+// setPlaidCleanupPendingAt) directly. Under the OLD updateUserTierQuery — which unconditionally
+// nulled plaid_cleanup_pending_at on every grant — that combination (marker present AND an override
+// ever having been granted) was UNREACHABLE via any production writer: granting a comp always erased
+// the marker, so the old test's hand-built row state could never actually occur. This version
+// reaches the identical row state using only repo.UpdateSubscriptionFromPaddle and
+// adminRepo.UpdateUserTier.
+//
+// Falsifiability: reverting updateUserTierQuery to unconditionally NULL plaid_cleanup_pending_at on
+// grant makes this test fail — UpdateUserTier's own write would erase the marker this test relies on,
+// and the user would never be selected.
+func TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LapsedNeverRemoved_StillRepaired(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
 	ctx := context.Background()
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	user := &domain.User{
-		ClerkUserID:        "clerk_plaidlapsedcomp_" + suffix,
-		Email:              "plaidlapsedcomp-" + suffix + "@example.com",
+		ClerkUserID:        "clerk_complapsednevrm_" + suffix,
+		Email:              "complapsednevrm-" + suffix + "@example.com",
 		SubscriptionTier:   "premium",
-		SubscriptionStatus: "cancelled",
+		SubscriptionStatus: "active",
 		PrimaryRegion:      "iad",
 		IsActive:           true,
 	}
@@ -468,14 +492,29 @@ func TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired(t *testing.T)
 	})
 
 	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
-	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
 
-	// LAPSED override (ends in the past, stored but never cleared).
-	past := time.Now().Add(-24 * time.Hour)
-	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, past, user.ID)
+	// Real churn, via the real webhook-facing writer: the marker starts here (no override exists
+	// yet, so nothing suppresses it).
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+
+	// An admin comps this ALREADY-cancelled account. expiresAt is already in the past: the comp is
+	// modeled as having lapsed by the time anyone checks, without needing to sleep in real
+	// wall-clock time to simulate the passage of days.
+	lapsedExpiry := time.Now().Add(-1 * time.Hour)
+	_, err = adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: comp an already-churned account", &lapsedExpiry)
 	require.NoError(t, err)
 
-	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	// Deliberately NOT calling RemoveUserTierOverride / RemoveUserTierOverrideIfMatches — this
+	// models the comp-expiry job degrading or never running at all.
+
+	// The marker was stamped moments ago by UpdateSubscriptionFromPaddle's own Go time.Now(), in
+	// THIS process; the query's cutoff below is computed the same way (time.Now().Add(-gracePeriod))
+	// in this same process — this is a Go-time-to-Go-time comparison, not a Go-time-to-Postgres-NOW()
+	// comparison, so no cross-clock fencing is needed here. A short sleep plus a near-zero grace
+	// period is enough to deterministically put the marker "past grace" without any raw SQL
+	// backdating.
+	time.Sleep(5 * time.Millisecond)
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
 	require.NoError(t, err)
 	found := false
 	for _, c := range candidates {
@@ -483,7 +522,59 @@ func TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired(t *testing.T)
 			found = true
 		}
 	}
-	assert.True(t, found, "a user whose manual_tier_override has LAPSED (but is still stored) must still be selected for Plaid-disconnect repair — only a LIVE override should exempt them")
+	assert.True(t, found, "a comp granted over an already-cancelled user, then lapsed and never removed, must still be picked up by the repair pass — the marker must survive the grant")
+}
+
+// TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LiveComp_ExcludedFromRepair
+// is the P0 fix's positive control, built the identical way (production writers only): the SAME
+// "comp an already-cancelled account" scenario as the regression test above, but with the comp
+// still LIVE (manual_tier_ends_at in the future). The marker survives the grant exactly as above,
+// but the repair pass must still exclude this user — GetUsersNeedingPlaidDisconnectRepair's
+// noActiveManualOverridePredicate keeps a currently-comped (paying-by-comp) user's bank connection
+// untouched. Over-correcting the P0 leak into disconnecting a live comp would be worse than the
+// leak itself.
+//
+// Falsifiability: dropping noActiveManualOverridePredicate from GetUsersNeedingPlaidDisconnectRepair
+// makes this test fail — the user would be selected despite the live comp.
+func TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LiveComp_ExcludedFromRepair(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_complivenevrm_" + suffix,
+		Email:              "complivenevrm-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+
+	liveExpiry := time.Now().Add(30 * 24 * time.Hour)
+	_, err = adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: comp an already-churned account, still live", &liveExpiry)
+	require.NoError(t, err)
+
+	time.Sleep(5 * time.Millisecond)
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID, "a user with a CURRENTLY-LIVE comp must never be selected for Plaid-disconnect repair, even though the marker (correctly) survived the grant")
+	}
 }
 
 func TestPlaidDisconnectRepair_Integration_ExcludesDeletionPending(t *testing.T) {

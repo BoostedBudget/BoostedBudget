@@ -2,29 +2,37 @@
 
 package repository
 
-// Integration tests for Issue #1413 round-11: the plaid_cleanup_pending_at invariant.
+// Integration tests for Issue #1413 round-13: the plaid_cleanup_pending_at invariant.
 //
 // See domain.User.PlaidCleanupPendingAt's doc comment for the invariant every writer/clearer of
 // this column must maintain:
 //
-//	plaid_cleanup_pending_at is non-NULL EXACTLY WHEN the user is currently Plaid-ineligible
-//	(domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() is true
-//	AND the user carries no currently-active manual tier override) AND outstanding Plaid cleanup
-//	for that episode has not yet completed. Its value is the instant the CURRENT ineligibility
-//	episode began — never an earlier episode's, never a later one's.
+//	plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an ineligibility EPISODE has begun
+//	(domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() is true)
+//	AND outstanding Plaid cleanup for that episode has not yet completed. Its value is the instant
+//	the CURRENT episode began — never an earlier episode's, never a later one's.
+//
+//	Deliberately NOT part of this invariant: manual_tier_override. Whether a comp is currently
+//	live is a wall-clock fact (HasActiveManualOverride() vs. time.Now()), not a write — round-11/
+//	round-12 tied this column's SET-time value to "is there a live override right now", which
+//	silently required some LATER writer to re-stamp the marker the instant the override lapsed;
+//	if that writer never ran, the marker was wrong FOREVER with no writer at fault. Round-13's
+//	fix: the marker tracks only the durable, override-independent "episode began" fact; CURRENT
+//	eligibility (status AND live override) is evaluated separately, at query time, by
+//	GetUsersNeedingPlaidDisconnectRepair's own noActiveManualOverridePredicate.
 //
 // assertPlaidMarkerInvariant below is a direct, reusable encoding of that statement — every test
 // in this file calls it after every state-changing step, rather than asserting only the single
-// column value the specific fix under test cares about. This is deliberate: six prior remediation
-// rounds on this branch each closed the previous reviewer's single finding while introducing a
-// new one, precisely because each fix was checked only against its own narrow expectation. Round
-// 11's brief calls the sweep test in this file "the test that would have caught all four [round-11]
-// findings at once" — TestPlaidMarkerInvariant_Integration_Sweep below is that test; the other
-// tests in this file are the individual RED-then-GREEN regressions per fix.
+// column value the specific fix under test cares about. This is deliberate: several prior
+// remediation rounds on this branch each closed the previous reviewer's single finding while
+// introducing a new one, precisely because each fix was checked only against its own narrow
+// expectation. Round 11's brief calls the sweep test in this file "the test that would have caught
+// all four [round-11] findings at once" — TestPlaidMarkerInvariant_Integration_Sweep below is that
+// test; the other tests in this file are the individual RED-then-GREEN regressions per fix.
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestClearRetentionDates_Integration|TestUpdateTrialStatus_Integration|TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped|TestClearPlaidCleanupPendingIfMatches_Integration|TestPlaidMarkerInvariant' -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestClearRetentionDates_Integration|TestUpdateTrialStatus_Integration|TestUpdateSubscriptionFromPaddle_Integration|TestClearPlaidCleanupPendingIfMatches_Integration|TestPlaidMarkerInvariant' -tags integration -v
 
 import (
 	"context"
@@ -58,7 +66,11 @@ func readPlaidMarkerRow(t *testing.T, pool *pgxpool.Pool, userID string) plaidMa
 }
 
 // hasActiveOverride mirrors domain.User.hasActiveManualOverrideAt exactly (Issue #1413's existing
-// parity convention between the Go predicate and its SQL/test twins).
+// parity convention between the Go predicate and its SQL/test twins). No longer consulted by
+// assertPlaidMarkerInvariant (round-13 dropped override from the marker invariant entirely — see
+// the file header comment), but kept as a helper for tests that need to independently assert on a
+// row's override state directly (e.g. the positive control in
+// TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetButRepairExcludesLiveComp).
 func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 	if r.comp == nil || *r.comp == "" {
 		return false
@@ -67,37 +79,37 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 }
 
 // assertPlaidMarkerInvariant is THE invariant check: it re-derives, from the row's own committed
-// state, whether the user is currently Plaid-ineligible, and asserts plaid_cleanup_pending_at's
-// nullness agrees. This is the single reusable assertion every test in this file drives every
-// state-changing step through — see the file header comment for why that (not a
-// fix-specific spot-check) is the point of this file.
+// state, whether an ineligibility episode is currently open (raw subscription_status alone — see
+// the file header comment for why manual_tier_override is deliberately NOT part of this check as
+// of round-13), and asserts plaid_cleanup_pending_at's nullness agrees. This is the single
+// reusable assertion every test in this file drives every state-changing step through — see the
+// file header comment for why that (not a fix-specific spot-check) is the point of this file.
 func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
 	t.Helper()
 	row := readPlaidMarkerRow(t, pool, userID)
-	now := time.Now()
-	ineligible := domain.SubscriptionStatus(row.status).IsEligibleForPlaidDisconnectRepair() && !row.hasActiveOverride(now)
+	ineligible := domain.SubscriptionStatus(row.status).IsEligibleForPlaidDisconnectRepair()
 	if ineligible {
 		assert.NotNil(t, row.marker,
-			"[%s] invariant violated: user is Plaid-ineligible (status=%q, activeOverride=%v) but plaid_cleanup_pending_at is NULL",
-			context, row.status, row.hasActiveOverride(now))
+			"[%s] invariant violated: an ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is NULL",
+			context, row.status)
 	} else {
 		assert.Nil(t, row.marker,
-			"[%s] invariant violated: user is Plaid-eligible (status=%q, activeOverride=%v) but plaid_cleanup_pending_at is %v",
-			context, row.status, row.hasActiveOverride(now), row.marker)
+			"[%s] invariant violated: no ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is %v",
+			context, row.status, row.marker)
 	}
 }
 
 // assertPlaidMarkerInvariantCleanupComplete is assertPlaidMarkerInvariant's sibling for the ONE
-// state the plain helper cannot verify from the users row's status/override columns alone: an
-// ineligible user whose Plaid cleanup for the CURRENT episode has already completed (either
+// state the plain helper cannot verify from the users row's status column alone: an ineligible
+// user whose Plaid cleanup for the CURRENT episode has already completed (either
 // repairPlaidDisconnects's ClearPlaidCleanupPendingIfMatches, or Issue #1413 round-12 Fix 1's
 // synchronous clear-on-success in the cancellation/past-due webhook paths). The full invariant
-// (domain.User.PlaidCleanupPendingAt's doc comment) requires THREE conjuncts for non-NULL —
-// ineligible status, no active override, AND outstanding cleanup — and assertPlaidMarkerInvariant
-// above only checks the first two, silently assuming the third is always true, which held for every
-// writer prior to round-12 Fix 1. Once a writer can legitimately clear the marker while the user
-// remains ineligible, that assumption no longer holds, and asserting the plain helper immediately
-// after such a clear would fail against a state the invariant explicitly permits.
+// (domain.User.PlaidCleanupPendingAt's doc comment) requires TWO conjuncts for non-NULL —
+// ineligible (raw) status AND outstanding cleanup — and assertPlaidMarkerInvariant above only
+// checks the first, silently assuming the second is always true, which held for every writer
+// prior to round-12 Fix 1. Once a writer can legitimately clear the marker while the user remains
+// ineligible, that assumption no longer holds, and asserting the plain helper immediately after
+// such a clear would fail against a state the invariant explicitly permits.
 //
 // Callers must use this ONLY immediately after an explicit, deliberate "cleanup just completed"
 // clear call (ClearPlaidCleanupPendingIfMatches / ClearPlaidCleanupPending) — never as a
@@ -314,19 +326,29 @@ func TestClearPlaidCleanupPendingIfMatches_Integration_UserNotFound(t *testing.T
 	assert.ErrorIs(t, err, ErrUserNotFound)
 }
 
-// ─── Fix 4 (High): cancellation while comped must not set the marker ──
+// ─── Round-13: cancellation while comped now SETS the marker; a live override protects the user
+// only at query time, not by suppressing the marker ──
 
-// TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerStaysNull is the round-11
-// High RED test: writing subscription_status='cancelled' for a user with a LIVE manual tier
-// override must NOT set plaid_cleanup_pending_at — the user is still Plaid-ELIGIBLE (the comp
-// forces effective status to active), so per the invariant the marker must stay NULL. Before the
-// fix, UpdateSubscriptionFromPaddle's plaid_cleanup_pending_at COALESCE was driven purely by the
-// NEW status, with no live check of the override — so a comped user's cancellation would still
-// stamp the marker.
+// TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetButRepairExcludesLiveComp
+// is the Issue #1413 round-13 test, replacing the round-11 Fix 4 test of the same scenario with
+// the OPPOSITE marker assertion: writing subscription_status='cancelled' for a user with a LIVE
+// manual tier override now DOES set plaid_cleanup_pending_at — the marker tracks only the raw
+// subscription_status episode, independent of override (see the file header comment).
 //
-// Falsifiability: reverting UpdateSubscriptionFromPaddle's eligible-branch SQL to a bare
-// `COALESCE(plaid_cleanup_pending_at, $N)` (no override CASE) makes this test fail.
-func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerStaysNull(t *testing.T) {
+// Round-11 Fix 4's gate (null the marker while a live override exists) was itself an instance of
+// the round-13 P0's root cause: hasActiveManualOverrideSQLExpr checked "is there a live override
+// RIGHT NOW", a wall-clock fact, live in the write — correct at that instant, but if the comp later
+// lapsed with the daily expiry job degraded or never run, NOTHING would ever re-stamp the marker,
+// permanently hiding this user from the repair pass. Per the restated invariant, CURRENT
+// eligibility is instead entirely GetUsersNeedingPlaidDisconnectRepair's job, via its own
+// noActiveManualOverridePredicate, re-evaluated fresh on every run — which is what this test's
+// second half proves: the marker being set does NOT mean the user gets disconnected while the comp
+// is still live.
+//
+// Falsifiability: reverting UpdateSubscriptionFromPaddle's eligible-branch SQL to reintroduce the
+// hasActiveManualOverrideSQLExpr CASE (nulling the marker while a live override exists) makes the
+// first half of this test fail — the marker would be NULL instead of set.
+func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetButRepairExcludesLiveComp(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
@@ -343,35 +365,38 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerStaysN
 	// truth, unconditionally, regardless of the comp.
 	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
 
-	row := readPlaidMarkerRow(t, pool, user.ID)
-	assert.Equal(t, "cancelled", row.status, "billing truth (raw subscription_status) must still flip to cancelled regardless of the comp")
-	assert.Nil(t, row.marker, "the marker must stay NULL while an active override is in effect — the user is still Plaid-eligible")
+	beforeRemoval := readPlaidMarkerRow(t, pool, user.ID)
+	assert.Equal(t, "cancelled", beforeRemoval.status, "billing truth (raw subscription_status) must still flip to cancelled regardless of the comp")
+	require.NotNil(t, beforeRemoval.marker, "the marker must be SET — a genuine raw-status transition into ineligibility began an episode, independent of the live override")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after cancellation while comped")
 
-	// Follow-through: once the comp is later removed, the marker must pick up a FRESH NOW() (per
-	// the brief: "the comp-expiry/removal path already sets it, and its COALESCE(existing, NOW())
-	// will then correctly produce NOW() because there is no earlier value to preserve").
+	// The live comp is what actually protects this user from repair — proven at the query layer,
+	// not by suppressing the marker.
+	seedLinkedItem(t, pool, user.ID, "item-cancelwhilecomped-"+user.ID, "active")
+	candidatesWhileLive, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+	require.NoError(t, err)
+	for _, c := range candidatesWhileLive {
+		assert.NotEqual(t, user.ID, c.ID, "a user with a CURRENTLY-LIVE comp must never be selected for repair, even though the marker is now set")
+	}
+
+	// Follow-through: once the comp is later removed, the marker must be PRESERVED at its ORIGINAL
+	// (cancellation-time) value — round-13 changed this from round-11's "removal stamps a FRESH
+	// NOW()" behavior, because the marker was never nulled by the comp in the first place, so
+	// removeUserTierOverrideUpdate's COALESCE(existing, NOW()) has an existing value to keep.
 	adminRepo := NewAdminUserRepository(pool, enc)
-	// Fence from the DATABASE clock, not the Go process clock. The marker is written by Postgres
-	// NOW(); in CI Postgres runs in a separate container whose clock can lag the runner's by
-	// milliseconds, so comparing a Go-side time.Now() against a Postgres-side timestamp fails
-	// regardless of correctness — it did exactly that on run 30478315198 while passing locally,
-	// where both share one host clock. Mirrors the SELECT NOW() fencing this package's boundary
-	// tests already use (profile_repository_manual_override_retention_integration_test.go:439).
-	var before time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW()").Scan(&before))
 	_, err = adminRepo.RemoveUserTierOverride(ctx, "", user.ID, "test: comp removed", 6)
 	require.NoError(t, err)
 
 	afterRemoval := readPlaidMarkerRow(t, pool, user.ID)
-	require.NotNil(t, afterRemoval.marker, "removing the comp from a cancelled user must set a fresh plaid_cleanup_pending_at")
-	assert.False(t, afterRemoval.marker.Before(before), "the marker set on comp removal must be fresh (now), not an earlier value")
+	require.NotNil(t, afterRemoval.marker)
+	assert.True(t, afterRemoval.marker.Equal(*beforeRemoval.marker),
+		"removing the comp must PRESERVE the marker's original cancellation-time value, not reset it to a fresh NOW() — the episode began at cancellation, not at comp removal")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after comp removal")
 }
 
 // TestUpdateSubscriptionFromPaddle_Integration_CancelWhileOverrideLapsed_MarkerIsSet is the
-// positive control for Fix 4: a LAPSED (expired) override must NOT suppress the marker — only a
-// currently-active override does, matching HasActiveManualOverride()'s boundary semantics exactly.
+// positive control proving a LAPSED (expired) override never suppressed the marker either, before
+// or after round-13 — matching HasActiveManualOverride()'s boundary semantics exactly.
 func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileOverrideLapsed_MarkerIsSet(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -534,6 +559,39 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		_, err = adminRepo.RemoveUserTierOverride(ctx, "", user.ID, "test: remove", 6)
 		require.NoError(t, err)
 		assertPlaidMarkerInvariant(t, pool, user.ID, "comp: after remove")
+	})
+
+	// t.Run("comp_grant_then_lapse_never_removed", ...) is the Issue #1413 round-13 P0 path:
+	// unlike comp_grant_to_remove above (which always calls the unconditional admin removal
+	// immediately and so never models a stalled expiry job), this subtest grants a comp with an
+	// expiresAt ALREADY in the past — modeling a comp that has lapsed by the time anyone checks —
+	// and deliberately NEVER calls RemoveUserTierOverride/RemoveUserTierOverrideIfMatches, modeling
+	// the daily comp-expiry job degrading or never running at all. The invariant must still hold
+	// throughout (the marker survives the grant untouched), and the repair query must still find
+	// this user despite the override column still being populated (lapsed, never cleared) — proving
+	// the fix does not depend on any writer ever re-visiting this row again.
+	t.Run("comp_grant_then_lapse_never_removed", func(t *testing.T) {
+		user := createPlaidMarkerTestUser(t, pool, repo, "sweepcomplapse", "cancelled")
+		setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+		assertPlaidMarkerInvariant(t, pool, user.ID, "comp-lapse: cancelled with marker, before grant")
+
+		lapsedExpiry := time.Now().Add(-1 * time.Hour)
+		_, err := adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: comp an already-cancelled user", &lapsedExpiry)
+		require.NoError(t, err)
+		assertPlaidMarkerInvariant(t, pool, user.ID, "comp-lapse: after grant with already-past expiry")
+
+		// Deliberately NOT calling RemoveUserTierOverride / RemoveUserTierOverrideIfMatches — this
+		// is the whole point of this subtest: the expiry job never runs.
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
+		candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+		require.NoError(t, err)
+		found := false
+		for _, c := range candidates {
+			if c.ID == user.ID {
+				found = true
+			}
+		}
+		assert.True(t, found, "a comp granted over an already-cancelled user, lapsed and never removed, must still be found by the repair pass")
 	})
 
 	t.Run("past_due_to_grace", func(t *testing.T) {
