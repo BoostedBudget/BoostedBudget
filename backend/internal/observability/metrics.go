@@ -85,6 +85,62 @@ var (
 		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist.",
 	})
 
+	// PlaidCleanupOutstandingUsers and PlaidCleanupOldestOutstandingSeconds are the Issue #1413
+	// direct measure of the sibling hazard to the manual-tier-override one above:
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects (backend/internal/queue/jobs/retention_cleanup_check.go)
+	// is the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its
+	// per-user error isolation (`errorCount++; continue` — deliberate: one user's Plaid failure
+	// must never block the GDPR pre-deletion notices/deletion sweep the same run performs for
+	// everyone else) means Work() still takes its success path and RecordJobSuccess still fires
+	// while that user is silently re-selected on every subsequent run, forever. Before these
+	// gauges, repairedCount/skippedCount/errorCount were LOG FIELDS ONLY — no metric of any kind
+	// told an operator how many users have outstanding cleanup or how old the oldest is.
+	//
+	// Both are refreshed together from repository.JobHealthRepository.GetOutstandingPlaidCleanupStats
+	// (see cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, for the
+	// same import-cycle reason ManualTierOverrideOldestUnclearedExpiredSeconds's collector does).
+	//
+	// Healthy is 0 for both. CRITICAL: "plaid_cleanup_pending_at IS NOT NULL" alone is NOT a valid
+	// proxy for "cleanup outstanding" — migration 000119 stamped that marker on EVERY inactive/
+	// cancelled user regardless of whether they had ever linked a Plaid item at all, and 000120
+	// re-stamped those residue rows to its own NOW(). repairPlaidDisconnects's own candidate query
+	// (GetUsersNeedingPlaidDisconnectRepair) never reaches those rows — its live-linked-item EXISTS
+	// clause filters them out before the marker is ever cleared — so a query that skipped that same
+	// join would report a large PERMANENT phantom backlog on day one and get ignored forever. See
+	// GetOutstandingPlaidCleanupStats's doc comment for the query, which joins on the SAME liveness
+	// definition (a NULL linked_items.status counts as live) the repair query itself uses.
+	PlaidCleanupOutstandingUsers = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "plaid_cleanup_outstanding_users",
+		Help: "Number of users with outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at set, with at least one live linked item); 0 when none exist.",
+	})
+	PlaidCleanupOldestOutstandingSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "plaid_cleanup_oldest_outstanding_seconds",
+		Help: "Age in seconds of the oldest outstanding Plaid-disconnect cleanup (plaid_cleanup_pending_at with a live linked item); 0 when none exist.",
+	})
+
+	// PlaidDisconnectRepairUserFailuresTotal counts per-user failures inside
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects's per-user loop (retention_cleanup_check.go)
+	// — Issue #1413. Incremented at BOTH per-user failure sites: the pre-disconnect isStillEligible
+	// re-read erroring, and DisconnectAllUserItemsIfEligible itself failing for any reason other
+	// than the benign services.ErrSideEffectClaimBusy contention case (another flow already
+	// mid-disconnect for that user — expected, not a failure). Deliberately NOT labeled by user_id:
+	// an unbounded, per-entity Prometheus label is a cardinality/ops hazard this codebase avoids
+	// everywhere else (see JobsCompleted/PlaidAPIErrors above — every label here is a small, fixed
+	// set of values).
+	//
+	// This counter alone cannot distinguish "one user failed once" from "the same user has failed
+	// every run for weeks" — that distinction is made by reading it TOGETHER with
+	// PlaidCleanupOldestOutstandingSeconds and the per-user structured log line this counter's
+	// increment site already emits (`user_id`, `error`): a sustained nonzero rate on this counter
+	// while the oldest-outstanding-age gauge keeps climbing (rather than dropping back down within
+	// a run or two) means failures are NOT resolving — an operator can then grep the logs by
+	// user_id to find exactly who is stuck. A transient failure shows up here as a brief blip while
+	// the age gauge stays low, since that user's next run succeeds and clears their marker.
+	PlaidDisconnectRepairUserFailuresTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "plaid_disconnect_repair_user_failures_total",
+		Help: "Total number of per-user failures in RetentionCleanupCheckWorker's Plaid-disconnect repair pass.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{

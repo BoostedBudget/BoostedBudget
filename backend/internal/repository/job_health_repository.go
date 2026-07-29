@@ -27,6 +27,36 @@ type JobHealthRepository interface {
 	// GetUsersWithExpiredManualTierOverride's own candidate query uses, so this gauge and that job
 	// can never disagree about which rows count.
 	GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error)
+
+	// GetOutstandingPlaidCleanupStats returns the number of users with outstanding Plaid-disconnect
+	// cleanup, and how long the OLDEST such marker has been sitting uncleared — (0, 0) when there
+	// are none.
+	//
+	// This is the direct measure of the Issue #1413 sibling hazard to
+	// GetOldestUnclearedExpiredManualTierOverrideAge above:
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects (queue/jobs/retention_cleanup_check.go) is
+	// the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its per-user
+	// error isolation (deliberate — one user's Plaid failure must never block the GDPR notice/
+	// deletion steps the same run performs for everyone else) means a stuck user is silently
+	// re-selected on every subsequent run while the job's own success heartbeat keeps advancing.
+	//
+	// CRITICAL — "plaid_cleanup_pending_at IS NOT NULL" alone is NOT a valid proxy for "cleanup
+	// outstanding": migration 000119 stamped that marker on EVERY inactive/cancelled user
+	// regardless of whether they had ever linked a Plaid item at all, and 000120 re-stamped those
+	// residue rows to its own NOW(). repairPlaidDisconnects's own candidate query
+	// (GetUsersNeedingPlaidDisconnectRepair, profile_repository.go) never reaches those rows — its
+	// live-linked-item EXISTS clause filters them out before the marker is ever cleared. So this
+	// query joins on the EXACT SAME liveness definition that candidate query uses (a NULL
+	// linked_items.status counts as live — see that query's own doc comment for why a bare
+	// `status NOT IN (...)` would silently exclude such a row via SQL's three-valued logic), or it
+	// would report a large PERMANENT phantom backlog on day one and be ignored forever.
+	//
+	// Deliberately does NOT apply plaidDisconnectRepairGracePeriod's cutoff: this gauge measures
+	// the AGE of the backlog itself (so an operator can alert on "the oldest has been outstanding
+	// far longer than one grace window", the actual chronic-failure signal), not which users are
+	// due for repair RIGHT NOW — that eligibility decision stays exclusively
+	// GetUsersNeedingPlaidDisconnectRepair's.
+	GetOutstandingPlaidCleanupStats(ctx context.Context) (count int, oldestAge time.Duration, err error)
 }
 
 type jobHealthRepository struct {
@@ -55,4 +85,41 @@ func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx
 		ageSeconds = 0
 	}
 	return time.Duration(ageSeconds * float64(time.Second)), nil
+}
+
+// GetOutstandingPlaidCleanupStats implements the interface doc comment's query: count of users
+// with plaid_cleanup_pending_at set AND at least one live linked item, plus the age of the OLDEST
+// such marker. Reuses plaidDisconnectRepairEligibleStatusPredicate and
+// noActiveManualOverridePredicate — the exact same constants
+// GetUsersNeedingPlaidDisconnectRepair's own candidate query uses (profile_repository.go) — and
+// the identical live-linked-item EXISTS clause, so this gauge and that repair pass can never
+// disagree about which rows count. One round trip for both numbers.
+func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Context) (int, time.Duration, error) {
+	query := `
+		SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(plaid_cleanup_pending_at))), 0)
+		FROM users
+		WHERE ` + plaidDisconnectRepairEligibleStatusPredicate + `
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		  AND plaid_cleanup_pending_at IS NOT NULL
+		  AND EXISTS (
+		      SELECT 1 FROM linked_items
+		      WHERE linked_items.user_id = users.id
+		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
+		  )
+		` + noActiveManualOverridePredicate
+
+	var count int64
+	var ageSeconds float64
+	if err := r.db.QueryRow(ctx, query).Scan(&count, &ageSeconds); err != nil {
+		return 0, 0, fmt.Errorf("failed to query outstanding Plaid cleanup stats: %w", err)
+	}
+	if ageSeconds < 0 {
+		// Defensive only, mirroring GetOldestUnclearedExpiredManualTierOverrideAge's clamp above —
+		// the `plaid_cleanup_pending_at IS NOT NULL` clause means every row this aggregate
+		// considers already has a real timestamp in the past, so NOW() - MIN(...) should never go
+		// negative, but never let a clock-skew edge case report a negative "age".
+		ageSeconds = 0
+	}
+	return int(count), time.Duration(ageSeconds * float64(time.Second)), nil
 }
