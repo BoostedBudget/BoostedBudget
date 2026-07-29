@@ -1317,7 +1317,11 @@ func main() {
 								},
 							}
 					},
-					&river.PeriodicJobOpts{RunOnStart: false},
+					// Issue #1413 P0: RunOnStart MUST be true — see
+					// jobs.RetentionCleanupCheckPeriodicOpts()'s doc comment for the full
+					// River in-memory-scheduler rationale. Safe only because the InsertOpts
+					// above carries UniqueOpts.
+					jobs.RetentionCleanupCheckPeriodicOpts(),
 				))
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
 			}
@@ -1344,7 +1348,11 @@ func main() {
 							TriggerSource: "periodic",
 						}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
 					},
-					&river.PeriodicJobOpts{RunOnStart: false},
+					// Issue #1413 P0: RunOnStart MUST be true — see
+					// jobs.ManualTierOverrideExpiryCheckPeriodicOpts()'s doc comment for the
+					// full River in-memory-scheduler rationale. Safe only because
+					// ManualTierOverrideExpiryCheckInsertOpts() above always carries UniqueOpts.
+					jobs.ManualTierOverrideExpiryCheckPeriodicOpts(),
 				))
 				appLogger.Info("Manual tier override expiry check periodic job configured (daily)")
 			}

@@ -547,3 +547,46 @@ func TestManualTierOverrideExpiryCheckInsertOpts_CarriesUniqueOpts(t *testing.T)
 		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
 	}
 }
+
+// ─── Issue #1413 P0: RunOnStart must be true ───────────────────────────────────────────────
+//
+// River's periodic scheduler keeps only in-memory state (river.NewPeriodicJob's own doc
+// comment): every process restart or leader election recomputes nextRunAt as ScheduleFunc(now)
+// unless PeriodicJobOpts.ID is set (it isn't, here or anywhere in main.go), and skips the
+// catch-up insert entirely when RunOnStart is false (river@v0.38.0
+// internal/maintenance/periodic_job_enqueuer.go:409-426). This repo deploys several times a
+// day, so RunOnStart: false let this daily job — the ONLY thing bounding how long
+// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline — be enqueued zero
+// times, ever, silently leaving lapsed manual tier overrides uncleared forever.
+
+// TestManualTierOverrideExpiryCheckPeriodicOpts_RunOnStart is the RED test for Issue #1413 P0.
+func TestManualTierOverrideExpiryCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := ManualTierOverrideExpiryCheckPeriodicOpts()
+
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart,
+		"RunOnStart must be true — without it, a process restart or leader election (this repo "+
+			"deploys several times a day) can push this daily job's next-run time forward forever, "+
+			"leaving lapsed manual tier overrides uncleared and users out of the retention pipeline "+
+			"indefinitely (Issue #1413 P0)")
+}
+
+// TestManualTierOverrideExpiryCheckPeriodicOpts_PairedWithUniqueOpts proves RunOnStart: true is
+// only safe here because ManualTierOverrideExpiryCheckInsertOpts()'s dedup (asserted above)
+// exists alongside it — the two are only safe together. A future edit that weakens
+// ManualTierOverrideExpiryCheckUniqueOpts() to a zero value while leaving RunOnStart: true in
+// place would let a start-of-process catch-up run double-fire alongside an already-scheduled
+// run; this test fails first.
+func TestManualTierOverrideExpiryCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	periodicOpts := ManualTierOverrideExpiryCheckPeriodicOpts()
+	require.True(t, periodicOpts.RunOnStart, "this pairing guarantee only matters when RunOnStart is true")
+
+	insertOpts := ManualTierOverrideExpiryCheckInsertOpts()
+	require.NotNil(t, insertOpts)
+	assert.NotZero(t, insertOpts.UniqueOpts.ByPeriod,
+		"RunOnStart: true's catch-up insert is only safe when the paired InsertOpts carries a "+
+			"non-zero ByPeriod window")
+	require.NotEmpty(t, insertOpts.UniqueOpts.ByState,
+		"RunOnStart: true's catch-up insert is only safe when the paired InsertOpts carries a "+
+			"non-empty ByState constraint")
+}

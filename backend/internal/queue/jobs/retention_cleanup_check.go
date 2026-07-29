@@ -984,3 +984,28 @@ func RetentionCleanupCheckUniqueOpts() *queue.UniqueOpts {
 		},
 	}
 }
+
+// RetentionCleanupCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's periodic
+// registration in main.go must use.
+//
+// Issue #1413 P0: RunOnStart MUST be true. This worker is the only place that runs
+// retention-clock repair, the 30-day and 7-day GDPR pre-deletion notices, deleteExpiredAccounts,
+// AND the Plaid-disconnect repair pass — and none of it has a manual or admin trigger.
+// river.NewPeriodicJob's own doc comment says the periodic scheduler keeps only in-memory
+// state: "anytime a process quits or a new leader is elected, the whole process starts over
+// without regard for the state of the last scheduler." Concretely (river v0.38.0
+// internal/maintenance/periodic_job_enqueuer.go:409-414), nextRunAt is restored from persisted
+// state only when PeriodicJobOpts.ID is set — this job (like all 14 in main.go) leaves ID
+// unset — so nextRunAt is always recomputed as ScheduleFunc(now), i.e. now+24h. :424-426 skips
+// the catch-up insert entirely when RunOnStart is false. Since this repo deploys several times
+// a day, every deploy or leader election pushes the target time forward another 24h before it
+// is ever reached: RunOnStart: false let this daily job be enqueued zero times, ever.
+//
+// RunOnStart: true is only safe here because RetentionCleanupCheckUniqueOpts()'s ByPeriod/
+// ByState dedup — carried into the InsertOpts this job's periodic registration in main.go
+// builds — prevents a start-of-process catch-up run from double-firing alongside an
+// already-scheduled run. The two are only safe together: do not flip this to true for a job
+// whose InsertOpts lacks an equivalent UniqueOpts.
+func RetentionCleanupCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true}
+}
