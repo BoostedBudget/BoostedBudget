@@ -478,8 +478,14 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // already passed leaves them at raw 'trial', not normalized to 'inactive'. Do NOT "fix" this by
 // normalizing status here: GetUsersWithExpiredTrials selects on raw subscription_status =
 // 'trial', so a silent normalization would make TrialService.ExpireTrial's job never reselect
-// this user again, and its Plaid disconnect + retention-clock side effects would never run. See
-// internal/services/trial_expiry_comp_revert_integration_test.go for the pin and full reasoning.
+// this user again, and its retention-clock side effect (SetRetentionDates) would never run — the
+// only side effect that survives this reasoning today. (A pre-round-7 version of this comment
+// also cited a Plaid disconnect ExpireTrial performed directly; that no longer exists — the
+// disconnect moved entirely to the repair pass in round-7, and that repair pass is separately
+// gated on plaid_cleanup_pending_at, which should_mark_plaid_cleanup_pending below already
+// excludes for a reverted 'trial' status, so this pin has no bearing on Plaid disconnect
+// eligibility either way.) See internal/services/trial_expiry_comp_revert_integration_test.go for
+// the pin and full reasoning.
 // should_mark_plaid_cleanup_pending (Issue #1413 round-10) is should_rearm_retention's narrower
 // sibling for the Plaid-disconnect-repair marker: a removed/expired comp (re-)starts
 // plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets,

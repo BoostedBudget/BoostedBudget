@@ -249,14 +249,23 @@ func main() {
 
 	// Issue #1413 (Task 9): Declare manual tier override expiry check worker (the
 	// time-triggered twin of the admin "remove override" endpoint — Issue #1414 / Task 7).
-	// Not gated on DELETION_TOKEN_SECRET like retention's worker, since it depends on
-	// adminUserRepo/clerkService, not deletionService.
+	// Not gated on DELETION_TOKEN_SECRET — it depends on adminUserRepo/clerkService, not
+	// deletionService. (Stale as of round-8: this used to be a contrast with retention's worker,
+	// which WAS gated on DELETION_TOKEN_SECRET at the time. Issue #1413 round-8 Blocker 2 moved
+	// retention's worker's own construction outside that gate too — see its construction site
+	// below — so both are now unconditional on DELETION_TOKEN_SECRET specifically. Neither is
+	// truly ungated, though: both still sit inside the OUTER `if db != nil && cfg.ClerkSecretKey
+	// != ""` block this whole function body lives in — a real, separate gate, filed as its own
+	// issue.)
 	var manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
 
 	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
 	// (purges household_members rows removed 30+ days ago). Constructed once
-	// householdService is available (below); not gated on DELETION_TOKEN_SECRET like
-	// retention's worker, since it depends on householdService, not deletionService.
+	// householdService is available (below); not gated on DELETION_TOKEN_SECRET either — it
+	// depends on householdService, not deletionService. See
+	// manualTierOverrideExpiryCheckWorker's declaration comment above for why this is no longer a
+	// useful contrast with retention's worker (round-8 made that unconditional too), and for the
+	// real outer gate both still sit inside.
 	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
 
 	// Issue #1371 — Phase 7 (Task 6): Declare household over-capacity check worker

@@ -544,9 +544,15 @@ func TestRetentionCleanupCheck_PlaidRepair_RecheckWiredToGetUserByID(t *testing.
 }
 
 // TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser proves the belt-and-braces comp guard: even
-// though GetUsersNeedingPlaidDisconnectRepair already excludes any override (live or lapsed) at
-// the SQL level, a comped user surfaced by a stale candidate list must never have
-// DisconnectAllUserItemsIfEligible called for them.
+// though GetUsersNeedingPlaidDisconnectRepair already excludes a currently-ACTIVE override at the
+// SQL level (noActiveManualOverridePredicate), a comped user surfaced by a stale candidate list
+// must never have DisconnectAllUserItemsIfEligible called for them. Unlike the retention/deletion
+// queries — which exclude ANY override, live or lapsed, via noManualOverrideAtAllPredicate,
+// because deletion is irreversible and must fail safe by staying excluded — this Plaid-repair
+// query and this belt-and-braces guard deliberately use the live-only rule: a Plaid disconnect is
+// recoverable (the user relinks), so a LAPSED override must not permanently exempt a user here.
+// See TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp immediately below, which proves
+// exactly that lapsed-override case proceeds rather than being skipped.
 func TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser(t *testing.T) {
 	ctx := context.Background()
 

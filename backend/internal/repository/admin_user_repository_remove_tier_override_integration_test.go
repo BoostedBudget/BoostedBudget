@@ -546,7 +546,11 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	override := "household_2"
 	endsAt := time.Now().Add(-1 * time.Hour) // expired — exactly what the worker would have selected
 	setManualOverride(t, pool, target.ID, &override, &endsAt)
+	// retention_started_at/expires_at/notice flags and plaid_cleanup_pending_at all remain NULL
+	// from creation — same starting state as
+	// TestRemoveUserTierOverride_Integration_InitialisesRetention_WhenClockNeverRan.
 
+	beforeCall := time.Now()
 	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
 		ctx, actor.ID, target.ID, "expiry worker: lapsed comp", testRetentionMonths, &override, &endsAt)
 	require.NoError(t, err)
@@ -558,6 +562,21 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
 	assert.Nil(t, snap.ManualTierOverride, "manual_tier_override must be cleared on a CAS match")
 	assert.Nil(t, snap.ManualTierEndsAt, "manual_tier_ends_at must be cleared on a CAS match")
+
+	// The comment above promises retention behavior "identical to the unconditional path" — assert
+	// it, don't just claim it. Reverted status is 'cancelled' (read-only) with a prior override,
+	// so should_rearm_retention fires the same as the unconditional RemoveUserTierOverride path.
+	require.NotNil(t, snap.RetentionStartedAt, "retention_started_at must be (re-)armed on a CAS-matched clear, same as the unconditional path")
+	require.NotNil(t, snap.RetentionExpiresAt, "retention_expires_at must be (re-)armed on a CAS-matched clear, same as the unconditional path")
+	assert.WithinDuration(t, beforeCall, *snap.RetentionStartedAt, 10*time.Second,
+		"retention_started_at must be ~now")
+	assert.WithinDuration(t, beforeCall.AddDate(0, testRetentionMonths, 0), *snap.RetentionExpiresAt, 10*time.Second,
+		"retention_expires_at must be ~now+retentionMonths, honoring the parameter (not hardcoded 6)")
+	assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled on a CAS-matched clear")
+	assert.Nil(t, snap.RetentionNotice7d, "7d notice flag must be nulled on a CAS-matched clear")
+	require.NotNil(t, snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must be (re-)armed too — reverted status 'cancelled' is Plaid-repair-eligible")
+	assert.WithinDuration(t, beforeCall, *snap.PlaidCleanupPendingAt, 10*time.Second,
+		"plaid_cleanup_pending_at must be ~now")
 
 	audit := fetchLatestAuditRow(t, pool, target.ID, "remove_manual_tier")
 	assert.Equal(t, actor.ID, *audit.UserID, "the CAS variant must still write an audit row")
