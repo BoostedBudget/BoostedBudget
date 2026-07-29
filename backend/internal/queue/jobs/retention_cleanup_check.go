@@ -700,10 +700,46 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			continue
 		}
 
+		// Issue #1413 round-8 High 3 (Codex review): anchor-soundness guard. retention_started_at
+		// is normally refreshed atomically alongside every subscription-status flip into read-only
+		// status, but two documented, currently-accepted swallowed-failure paths (ClearRetentionDates
+		// on resubscribe, subscription_webhook.go; SetRetentionDates in TrialService.ExpireTrial) can
+		// in principle leave a STALE, non-NULL value in place across a later cycle —
+		// repairRetentionClocks (Step 0, above) only detects and fixes a NULL retention_expires_at,
+		// not a stale-but-present one. Treat an anchor older than the full configured retention
+		// period as too unreliable to base an IMMEDIATE Plaid-only disconnect decision on: by
+		// construction, retention_expires_at (= retention_started_at + retentionMonths) would ALSO
+		// have already passed for any genuinely self-consistent pair this old, so
+		// GetUsersWithExpiredRetention/deleteExpiredAccounts (Step 3, later in this SAME Work() pass)
+		// independently picks this user up for FULL deletion — which itself disconnects every Plaid
+		// item via RemoveAllUserItems (deletion_service.go) as part of the cascade. Skipping the
+		// Plaid-only disconnect here therefore never strands a live item: either deletion runs this
+		// same pass and cleans it up, or the anchor was not actually implausibly old (the overwhelming
+		// common case), in which case this guard never fires at all. This can never make a user
+		// permanently un-disconnectable — a user who is NOT past this bound is completely unaffected,
+		// widening (never narrowing) only the population Step 0b defers to Step 3.
+		//
+		// This does NOT (and, without a dedicated status-transition timestamp independent of the
+		// retention/deletion clock, structurally cannot) catch a narrower case: a stale anchor
+		// younger than the full retention period, left over from a resubscribe-then-recancel cycle
+		// where BOTH swallowed-failure paths above fired for the SAME user. That data is
+		// indistinguishable from a legitimate long-pending read-only user with the current schema —
+		// closing it fully needs a new column (out of scope here; see the round-8 report's follow-up
+		// recommendation).
+		if user.RetentionStartedAt != nil {
+			anchorCutoff := time.Now().AddDate(0, -w.retentionMonths, 0)
+			if user.RetentionStartedAt.Before(anchorCutoff) {
+				w.logger.Warn("Plaid-disconnect repair skipped — retention_started_at is older than the full retention period and cannot be trusted for an immediate disconnect decision; full account deletion (if warranted) will handle Plaid cleanup as part of its own cascade",
+					"job_id", jobID, "user_id", user.ID, "retention_started_at", user.RetentionStartedAt)
+				skippedCount++
+				continue
+			}
+		}
+
 		userID := user.ID
 
 		// isStillEligible re-verifies, against the freshest possible read, that userID is still
-		// read-only-status and uncomped. Unlike RepairRetentionClock's conditional UPDATE (which
+		// eligible-status and uncomped. Unlike RepairRetentionClock's conditional UPDATE (which
 		// gets this for free from its own WHERE clause), the repair action here — a Plaid
 		// /item/remove call — has no atomic DB guard, so a stale candidate who resubscribed (or was
 		// comped) since the query ran must be caught explicitly; otherwise this repair pass would
@@ -714,12 +750,21 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// is invoked PER ITEM (not just once before the whole call) — a disconnect fans out into
 		// one Plaid call per linked item, so a single upfront check would leave every item after
 		// the first exposed to a resubscribe happening mid-loop.
+		//
+		// Issue #1413 round-8 High 4 (Codex review): uses IsEligibleForPlaidDisconnectRepair(), NOT
+		// IsReadOnlySubscription() — the latter also returns true for 'past_due', but the repair SQL
+		// (GetUsersNeedingPlaidDisconnectRepair) selects only 'inactive'/'cancelled'. Using the wider
+		// read-only definition here let an old inactive/cancelled candidate that transitioned into a
+		// NEW past_due cycle before this re-read still pass and be disconnected immediately —
+		// bypassing past_due's own dunning timeline (past_due_service.go). See
+		// domain.SubscriptionStatus.IsEligibleForPlaidDisconnectRepair's doc comment for the full
+		// rationale and the parity test that keeps this in agreement with the SQL predicate.
 		isStillEligible := func(rctx context.Context) (bool, error) {
 			current, err := w.profileRepo.GetUserByID(rctx, userID)
 			if err != nil {
 				return false, fmt.Errorf("failed to re-read user %s before Plaid-disconnect repair: %w", userID, err)
 			}
-			if !domain.SubscriptionStatus(current.SubscriptionStatus).IsReadOnlySubscription() {
+			if !domain.SubscriptionStatus(current.SubscriptionStatus).IsEligibleForPlaidDisconnectRepair() {
 				return false, nil
 			}
 			if current.HasAnyManualOverride() {
@@ -767,7 +812,22 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 }
 
 // deleteExpiredAccounts finds users with expired retention and executes deletion.
+//
+// Issue #1413 round-8 Blocker 2 (Codex review): RetentionCleanupCheckWorker is now constructed
+// unconditionally in main.go (no longer gated on cfg.DeletionTokenSecret != ""), so w.deletionService
+// can genuinely be nil here — DELETION_TOKEN_SECRET is a hard-deletion-specific secret (used only by
+// DeletionService.RequestDeletion's cancellation-link JWT) that has nothing to do with Steps 0/0b/1/2
+// above (retention-clock repair, Plaid-disconnect repair, 30d/7d notices), none of which touch
+// w.deletionService at all. Calling a method on a nil interface panics rather than erroring, so this
+// guard is required, not optional — it degrades this ONE step (auto-deletion) gracefully while
+// leaving the load-bearing Plaid-disconnect repair pass completely unaffected.
 func (w *RetentionCleanupCheckWorker) deleteExpiredAccounts(ctx context.Context, jobID int64) error {
+	if w.deletionService == nil {
+		w.logger.Warn("skipping expired-account auto-deletion — no deletion service configured (DELETION_TOKEN_SECRET unset); retention-clock repair and Plaid-disconnect repair still ran this pass",
+			"job_id", jobID)
+		return nil
+	}
+
 	users, err := w.profileRepo.GetUsersWithExpiredRetention(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to fetch users with expired retention: %w", err)
