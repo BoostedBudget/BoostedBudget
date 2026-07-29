@@ -1,8 +1,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -1941,11 +1943,11 @@ func TestExecuteDeletion_BothClaimsGranted_ProceedsWithFullCleanupAndCompletes(t
 // Complete time (another worker reclaimed this tuple while we were mid-flight — the exact
 // scenario the fencing token exists to detect) does not silently pass as success: ExecuteDeletion
 // must still return nil (the deletion genuinely happened; there's nothing left to retry), but the
-// caller-visible contract is that this case is surfaced loudly rather than swallowed. Since the
-// production code logs via slog.Default() rather than an injectable logger, this test's only
-// direct assertion is that ExecuteDeletion does not error or panic when Complete reports ok=false
-// — the loud-logging behavior itself is inspected in the source (see ExecuteDeletion's Complete
-// handling) and is not independently mechanically asserted here for lack of an injectable sink.
+// caller-visible contract is that this case is surfaced loudly rather than swallowed. The
+// production code logs via slog.Default() (not an injectable field), so slog.Default() is
+// swapped for a buffer-backed logger for the duration of the call and restored via defer
+// afterward — this makes the ERROR-level log record from ExecuteDeletion's Complete handling
+// directly assertable rather than merely inspected in the source.
 func TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	ctx := context.Background()
 	mockRepo := new(MockProfileRepositoryForDeletion)
@@ -1978,11 +1980,20 @@ func TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
 	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
 
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(prevLogger)
+
 	err := service.ExecuteDeletion(ctx, user.ID)
 
 	assert.NoError(t, err, "the cascade already ran; a lost lease at Complete time must not be reported as a deletion failure")
 	mockRepo.AssertCalled(t, "DeleteUserCascade", ctx, user.ID, mock.Anything)
 	mockClaims.AssertCalled(t, "Complete", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "a lost lease at Complete time must be logged at ERROR, not swallowed")
+	assert.Contains(t, logOutput, user.ID, "the ERROR log must carry the identifying user_id")
 }
 
 // --- Issue #1413 finding H4: every path that wins the work claim must release it unless
