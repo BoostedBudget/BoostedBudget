@@ -656,8 +656,10 @@ func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
 			// Verify normalized status appears in SQL. wantStatus is always "cancelled" here
 			// (eligible for Plaid-disconnect repair), so plaid_cleanup_pending_at is started via
 			// COALESCE, gated on the row not carrying a live manual tier override — Issue #1413
-			// round-10 / round-11 Fix 4.
-			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN (manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())) THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $5) END WHERE id = $6 AND is_deleted = FALSE`)).
+			// round-10 / round-11 Fix 4 — AND (round-12 Fix 4) only when the row's OLD
+			// subscription_status wasn't ALREADY repair-eligible (a genuine transition, not a
+			// redundant terminal event for a user already ineligible).
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN (manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())) THEN NULL WHEN NOT (subscription_status IN ('inactive', 'cancelled')) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`)).
 				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
 				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 

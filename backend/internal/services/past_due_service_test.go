@@ -52,6 +52,14 @@ func (m *mockPastDueProfileRepo) ClearPastDueStartedAtIfMatches(ctx context.Cont
 	return args.Bool(0), args.Error(1)
 }
 
+// ClearPlaidCleanupPendingIfMatches is Issue #1413 round-12 Fix 1's CAS-guarded marker clear,
+// called after processGraceExpiry's synchronous Plaid disconnect (Step 1) plus CAS flip
+// (Steps 3-4) both succeed — see PastDueProfileRepository's doc comment.
+func (m *mockPastDueProfileRepo) ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expected)
+	return args.Bool(0), args.Error(1)
+}
+
 type mockPastDuePlaidCleanup struct {
 	mock.Mock
 }
@@ -248,6 +256,54 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
 }
 
+// TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaidMarker is the Issue
+// #1413 round-12 Fix 1 (Blocker) RED test for the past-due path. Ordering here is Plaid disconnect
+// FIRST (Step 1), then the CAS flip that WRITES plaid_cleanup_pending_at (Steps 3-4) — so by the
+// time the flip succeeds, a synchronous disconnect has ALREADY completed cleanup for this episode.
+// Before this fix, the marker the flip just wrote was never cleared, leaving the invariant violated
+// even though nothing is actually outstanding.
+//
+// Falsifiability: reverting processGraceExpiry to omit the post-flip clear step makes this test
+// fail — ClearPlaidCleanupPendingIfMatches would never be called.
+func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaidMarker(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+
+	userID := "user-grace-clears-marker"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	pendingSince := time.Now().Add(-time.Minute)
+	postFlipUser := userWithPastDue(userID, pastDueStarted)
+	postFlipUser.SubscriptionStatus = string(domain.SubscriptionStatusCancelled)
+	postFlipUser.PlaidCleanupPendingAt = &pendingSince
+
+	// The two reReadStillPastDue calls (pre-claim, post-claim re-verify) must see the user as
+	// STILL past_due to proceed; the clear step's OWN read (after the CAS flip) sees the row as it
+	// stands AFTER CancelIfPastDueOccurrenceWithRetention's real SQL would have written it.
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Twice()
+	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince).Return(true, nil)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+	require.NoError(t, err)
+
+	repo.AssertCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince)
+}
+
 // Test 2: Plaid failure stops the flow — no cancel, no status flip
 func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
@@ -275,6 +331,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *test
 	repo.AssertNotCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+	// Issue #1413 round-12 Fix 1 positive control: a FAILED disconnect must leave
+	// plaid_cleanup_pending_at untouched (still set, once the flip even runs) — the clear only ever
+	// follows a SUCCESSFUL disconnect AND CAS flip, neither of which happen here.
+	repo.AssertNotCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // Test 3: Paddle already-cancelled error is tolerated — flow continues

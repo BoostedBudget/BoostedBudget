@@ -87,6 +87,29 @@ func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string,
 	}
 }
 
+// assertPlaidMarkerInvariantCleanupComplete is assertPlaidMarkerInvariant's sibling for the ONE
+// state the plain helper cannot verify from the users row's status/override columns alone: an
+// ineligible user whose Plaid cleanup for the CURRENT episode has already completed (either
+// repairPlaidDisconnects's ClearPlaidCleanupPendingIfMatches, or Issue #1413 round-12 Fix 1's
+// synchronous clear-on-success in the cancellation/past-due webhook paths). The full invariant
+// (domain.User.PlaidCleanupPendingAt's doc comment) requires THREE conjuncts for non-NULL —
+// ineligible status, no active override, AND outstanding cleanup — and assertPlaidMarkerInvariant
+// above only checks the first two, silently assuming the third is always true, which held for every
+// writer prior to round-12 Fix 1. Once a writer can legitimately clear the marker while the user
+// remains ineligible, that assumption no longer holds, and asserting the plain helper immediately
+// after such a clear would fail against a state the invariant explicitly permits.
+//
+// Callers must use this ONLY immediately after an explicit, deliberate "cleanup just completed"
+// clear call (ClearPlaidCleanupPendingIfMatches / ClearPlaidCleanupPending) — never as a
+// general-purpose substitute for assertPlaidMarkerInvariant.
+func assertPlaidMarkerInvariantCleanupComplete(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
+	t.Helper()
+	row := readPlaidMarkerRow(t, pool, userID)
+	assert.Nil(t, row.marker,
+		"[%s] cleanup was just completed for this episode — plaid_cleanup_pending_at must be NULL even though the user remains ineligible (status=%q)",
+		context, row.status)
+}
+
 // createPlaidMarkerTestUser creates a minimal user with the given initial status for these tests.
 func createPlaidMarkerTestUser(t *testing.T, pool *pgxpool.Pool, repo *profileRepository, namePrefix, status string) *domain.User {
 	t.Helper()
@@ -366,6 +389,90 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileOverrideLapsed_Mark
 	row := readPlaidMarkerRow(t, pool, user.ID)
 	require.NotNil(t, row.marker, "a LAPSED override must not suppress the marker — only a currently-active one does")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after cancellation with a lapsed override")
+}
+
+// ─── Round-12 Fix 4 (Medium): a later terminal webhook must not resurrect a completed marker ──
+
+// TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResurrectClearedMarker is
+// the Issue #1413 round-12 Fix 4 RED test. Sequence modeled: a user cancels (marker set); the
+// Plaid-disconnect repair pass completes and clears the marker
+// (ClearPlaidCleanupPendingIfMatches) — cleanup for THIS episode is done; a DISTINCT, LATER
+// terminal webhook for the SAME still-cancelled subscription then arrives (e.g. a redelivered or
+// duplicate subscription.updated/canceled event that is not a genuine status transition) and calls
+// UpdateSubscriptionFromPaddle with status='cancelled' again. Before the fix, the eligible branch's
+// bare `COALESCE(plaid_cleanup_pending_at, $N)` saw a NULL marker and manufactured a BRAND NEW one
+// — for cleanup that had already completed, timestamped AFTER the episode actually began.
+//
+// Falsifiability: reverting the eligible-branch SQL to `COALESCE(plaid_cleanup_pending_at, $N)`
+// (dropping the "genuine transition" WHEN clause) makes this test fail — the marker would be
+// resurrected non-NULL.
+func TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResurrectClearedMarker(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createPlaidMarkerTestUser(t, pool, repo, "laterterminalnoresurrect", "active")
+
+	// The FIRST cancellation: genuine transition into ineligibility — marker starts.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+	afterFirstCancel := readPlaidMarkerRow(t, pool, user.ID)
+	require.NotNil(t, afterFirstCancel.marker, "the first cancellation must start the marker")
+	assertPlaidMarkerInvariant(t, pool, user.ID, "after first cancellation")
+
+	// The repair pass completes cleanup and clears the marker for this episode.
+	cleared, err := repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, *afterFirstCancel.marker)
+	require.NoError(t, err)
+	require.True(t, cleared, "precondition: the repair pass must successfully clear the marker")
+	assertPlaidMarkerInvariantCleanupComplete(t, pool, user.ID, "after repair pass clears the marker")
+
+	// A DISTINCT, LATER terminal webhook for the SAME still-cancelled subscription arrives — NOT a
+	// genuine transition (the row was already 'cancelled' before this call).
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+
+	row := readPlaidMarkerRow(t, pool, user.ID)
+	assert.Equal(t, "cancelled", row.status)
+	assert.Nil(t, row.marker, "a later terminal webhook for a user ALREADY cancelled must NOT resurrect a new marker — cleanup for this episode already completed")
+	assertPlaidMarkerInvariantCleanupComplete(t, pool, user.ID, "after later distinct terminal event for the same episode")
+}
+
+// TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker is the positive
+// control for round-12 Fix 4: a REAL new ineligibility episode (resubscribe, then cancel again)
+// must still get its OWN fresh marker — proving the "genuine transition" guard isn't a blanket
+// suppression that breaks the ordinary repeat-cancellation case.
+func TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createPlaidMarkerTestUser(t, pool, repo, "genuinenewepisode", "active")
+
+	// Episode 1: cancel, then repair completes and clears.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+	episode1 := readPlaidMarkerRow(t, pool, user.ID)
+	require.NotNil(t, episode1.marker)
+	cleared, err := repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, *episode1.marker)
+	require.NoError(t, err)
+	require.True(t, cleared)
+
+	// Genuine resubscribe: status flips back to active — a real transition OUT of ineligibility.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "active", nil, nil, nil))
+	assertPlaidMarkerInvariant(t, pool, user.ID, "after genuine resubscribe")
+
+	// Fence from the DATABASE clock (never compare Go time.Now() against a Postgres-written
+	// timestamp — CI's Postgres container clock can lag the runner's).
+	var before time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW()").Scan(&before))
+
+	// Episode 2: a GENUINE new cancellation — the row's old status is 'active', not already
+	// eligible, so this must get its OWN fresh marker, not be suppressed.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+
+	row := readPlaidMarkerRow(t, pool, user.ID)
+	require.NotNil(t, row.marker, "a genuine NEW cancellation episode must get its own fresh marker")
+	assert.False(t, row.marker.Before(before), "the new episode's marker must be fresh (>= the fence), not suppressed or resurrected from episode 1")
+	assertPlaidMarkerInvariant(t, pool, user.ID, "after genuine second cancellation")
 }
 
 // ─── The invariant sweep — the single most valuable test in this task (per the round-11 brief):

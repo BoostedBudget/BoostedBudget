@@ -310,9 +310,14 @@ type ProfileRepository interface {
 	// is covered uniformly regardless of which writer put them there.
 	//
 	// Predicate otherwise mirrors GetUsersNeedingRetentionClockRepair's shape (subscription_status
-	// IN ('inactive', 'cancelled'), not deleted, no outstanding GDPR deletion request, no
-	// manual_tier_override at all — live or lapsed) so a comped or already-deletion-pending user is
-	// never touched, plus the live-linked-item existence check.
+	// IN ('inactive', 'cancelled'), not deleted, no outstanding GDPR deletion request) with ONE
+	// deliberate divergence: override exclusion uses noActiveManualOverridePredicate ("live right
+	// now"), NOT noManualOverrideAtAllPredicate ("live or lapsed") — Issue #1413 round-12 Fix 2. A
+	// lapsed-but-uncleared override must NOT permanently exempt a user from this repair pass the way
+	// it deliberately does for retention/deletion: deletion is irreversible so that query fails safe
+	// by staying excluded indefinitely if the expiry job stalls, but a Plaid disconnect is
+	// RECOVERABLE (the user relinks), so the correct fail-safe direction here is the opposite — see
+	// this method's implementation doc comment (profile_repository.go) for the full reasoning.
 	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error)
 }
 
@@ -885,6 +890,28 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// taken earlier. This also uniformly protects every OTHER caller of this shared method (e.g.
 	// processSubscriptionUpdated, which can also drive status to 'cancelled' via a normalized
 	// paused/canceled value) without each needing its own override check.
+	//
+	// Issue #1413 round-12 Fix 4 (Medium): the eligible branch's CASE now ALSO gates the
+	// COALESCE-start on the row's OLD (pre-write) subscription_status NOT already being
+	// repair-eligible (`NOT (plaidDisconnectRepairEligibleStatusPredicate)`, evaluated against the
+	// row as it stood before this SET clause — Postgres resolves every right-hand-side column
+	// reference in an UPDATE's SET list against the pre-update row, never a sibling assignment in
+	// the same statement). This distinguishes a GENUINE transition into ineligibility (old status
+	// was active/trialing/past_due — the marker legitimately starts now) from a REDUNDANT terminal
+	// event for a user ALREADY ineligible (old status was already inactive/cancelled — e.g. a
+	// second, distinct cancellation webhook, or subscription.updated re-reporting the same terminal
+	// status). The bug this closes: after repairPlaidDisconnects completes cleanup and clears the
+	// marker (ClearPlaidCleanupPendingIfMatches), a LATER, DISTINCT terminal webhook for the SAME
+	// still-cancelled episode used to reach the old bare `COALESCE(plaid_cleanup_pending_at, $N)` —
+	// with the marker now NULL, that COALESCE fired and manufactured a BRAND NEW marker timestamped
+	// AFTER the episode actually began, for cleanup that was already finished. The ELSE branch
+	// (neither comped nor a genuine transition) now leaves plaid_cleanup_pending_at completely
+	// untouched — whatever it currently is (NULL after a completed repair, or still running) is
+	// exactly what the invariant says it should be, and only a real transition is licensed to change
+	// it. CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
+	// need no equivalent guard: their own WHERE clauses already require the OLD status to be
+	// 'past_due'/'trial' (never already repair-eligible), so every successful write there is a
+	// transition into ineligibility by construction.
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
 	var query string
@@ -898,7 +925,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $7) END WHERE id = $8 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $7) ELSE plaid_cleanup_pending_at END WHERE id = $8 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`
 		}
@@ -906,7 +933,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $5) END WHERE id = $6 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`
 		}
@@ -1957,6 +1984,24 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 //     linked_items.status is nullable (migration 000013) and defaults to 'active' only for rows
 //     inserted after that default was added, a live item with a NULL status would otherwise never
 //     be repaired, precisely the leak this pass exists to prevent.
+//
+// Issue #1413 round-12 Fix 2: uses noActiveManualOverridePredicate ("live right now"), NOT
+// noManualOverrideAtAllPredicate ("not even a lapsed one") — deliberately the OPPOSITE choice from
+// every retention/deletion query above. Those queries must fail safe toward NEVER hard-deleting a
+// user whose comp merely lapsed uncleaned (deletion is irreversible), so they exclude on ANY
+// override, live or lapsed, and stay excluded until manual_tier_override_expiry_check actually
+// clears the column — an unbounded delay is the acceptable failure mode there. A Plaid disconnect
+// is different in kind: it is RECOVERABLE (the user relinks), so the fail-safe direction here is
+// the other way — a lapsed-but-uncleared override must not permanently exempt a user from this
+// repair pass, or a stalled/dead-lettered expiry job would leave their bank connection live and
+// billable indefinitely, exactly the residual round-12 found (profile_repository.go's
+// noManualOverrideAtAllPredicate doc comment describes the race this predicate must NOT inherit).
+// This also now agrees with every SET/CLEAR site for plaid_cleanup_pending_at (see
+// domain.User.PlaidCleanupPendingAt's doc comment), which already use live-only override semantics
+// — a lapsed override never suppressed the marker in the first place, so excluding on "any override"
+// here was the one place this query disagreed with its own anchor column. Do NOT "unify" this back
+// to noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
+// and this predicate's own doc comment for why the retention/deletion queries must stay as they are.
 func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
 	cutoff := time.Now().Add(-gracePeriod)
 	query := userSelectQuery + `
@@ -1970,7 +2015,7 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 		      WHERE linked_items.user_id = users.id
 		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
 		  )
-	` + noManualOverrideAtAllPredicate + `
+	` + noActiveManualOverridePredicate + `
 		ORDER BY updated_at ASC
 	`
 	users, err := r.queryUsers(ctx, query, cutoff)

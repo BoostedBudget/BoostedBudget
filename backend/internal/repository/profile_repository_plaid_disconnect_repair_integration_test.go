@@ -388,7 +388,12 @@ func TestPlaidDisconnectRepair_Integration_ExcludesActiveUser(t *testing.T) {
 	}
 }
 
-func TestPlaidDisconnectRepair_Integration_ExcludesComped(t *testing.T) {
+// TestPlaidDisconnectRepair_Integration_ExcludesLiveComp is the Fix 2 positive control: a
+// CURRENTLY-active override must still exclude a user from Plaid-disconnect repair —
+// noActiveManualOverridePredicate (Issue #1413 round-12 Fix 2) keeps this half of the old
+// noManualOverrideAtAllPredicate behavior; only the LAPSED half changes (see
+// TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired below).
+func TestPlaidDisconnectRepair_Integration_ExcludesLiveComp(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
@@ -415,17 +420,70 @@ func TestPlaidDisconnectRepair_Integration_ExcludesComped(t *testing.T) {
 	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
 	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
 
-	// Lapsed override (ends in the past) — noManualOverrideAtAllPredicate excludes ANY override,
-	// live or lapsed, mirroring the other retention/repair queries.
+	// LIVE override (ends in the future) — noActiveManualOverridePredicate must still exclude this.
+	future := time.Now().Add(24 * time.Hour)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, future, user.ID)
+	require.NoError(t, err)
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID, "a user with a CURRENTLY-ACTIVE manual_tier_override must never be a repair candidate")
+	}
+}
+
+// TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired is the Issue #1413 round-12 Fix 2
+// RED test: a stored override that has LAPSED (manual_tier_ends_at in the past, never cleared —
+// e.g. manual_tier_override_expiry_check dead-lettered) must NOT permanently exclude a user from
+// Plaid-disconnect repair, unlike the retention/deletion queries' deliberately conservative
+// noManualOverrideAtAllPredicate. A Plaid disconnect is recoverable (the user relinks); leaving a
+// lapsed-comp user's bank connection live and billable forever — because the SQL predicate
+// couldn't distinguish "still live" from "lapsed years ago" — is the round-12 finding this test
+// pins closed.
+//
+// Falsifiability: reverting GetUsersNeedingPlaidDisconnectRepair to noManualOverrideAtAllPredicate
+// makes this test fail — the lapsed-comp user would never be selected.
+func TestPlaidDisconnectRepair_Integration_LapsedCompStillRepaired(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_plaidlapsedcomp_" + suffix,
+		Email:              "plaidlapsedcomp-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
+
+	// LAPSED override (ends in the past, stored but never cleared).
 	past := time.Now().Add(-24 * time.Hour)
 	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, past, user.ID)
 	require.NoError(t, err)
 
 	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
 	require.NoError(t, err)
+	found := false
 	for _, c := range candidates {
-		assert.NotEqual(t, user.ID, c.ID, "a user with ANY manual_tier_override (live or lapsed) must never be a repair candidate")
+		if c.ID == user.ID {
+			found = true
+		}
 	}
+	assert.True(t, found, "a user whose manual_tier_override has LAPSED (but is still stored) must still be selected for Plaid-disconnect repair — only a LIVE override should exempt them")
 }
 
 func TestPlaidDisconnectRepair_Integration_ExcludesDeletionPending(t *testing.T) {

@@ -102,6 +102,13 @@ func (m *mockSubscriptionProfileRepository) ClearPastDueStartedAt(ctx context.Co
 	return args.Error(0)
 }
 
+// ClearPlaidCleanupPendingIfMatches is Issue #1413 round-12 Fix 1's CAS-guarded marker clear,
+// called after a successful synchronous Plaid disconnect completes cleanup for the current episode.
+func (m *mockSubscriptionProfileRepository) ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expected)
+	return args.Bool(0), args.Error(1)
+}
+
 // mockClerkService is a mock for ClerkService
 type mockClerkService struct {
 	mock.Mock
@@ -1199,6 +1206,65 @@ func TestWorker_SubscriptionCanceled_DisconnectsPlaidItems(t *testing.T) {
 	mockClerk.AssertExpectations(t)
 }
 
+// TestWorker_SubscriptionCanceled_SuccessfulDisconnect_ClearsPlaidMarker is the Issue #1413
+// round-12 Fix 1 (Blocker) RED test: a SUCCESSFUL synchronous Plaid disconnect must clear
+// plaid_cleanup_pending_at via the CAS-guarded ClearPlaidCleanupPendingIfMatches — before this fix,
+// the handler set the marker (via UpdateSubscriptionFromPaddle) and successfully disconnected
+// Plaid, but never cleared it, leaving the invariant violated: the user's Plaid cleanup is complete
+// but the marker still claims it's outstanding.
+//
+// Falsifiability: reverting processSubscriptionCanceled to omit the clear step makes this test
+// fail — ClearPlaidCleanupPendingIfMatches would never be called.
+func TestWorker_SubscriptionCanceled_SuccessfulDisconnect_ClearsPlaidMarker(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	preCancelUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+	pendingSince := time.Now().Add(-time.Hour)
+	postCancelUser := &domain.User{
+		ID:                    "user_2abc123def456",
+		ClerkUserID:           "clerk_user_123",
+		SubscriptionTier:      "premium",
+		SubscriptionStatus:    "cancelled",
+		PlaidCleanupPendingAt: &pendingSince,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// First read (before the write) returns the pre-cancellation snapshot; every subsequent read
+	// (the post-write re-read, syncClerkMetadata's own read, and the pre-disconnect re-verify) sees
+	// the row as it stands AFTER UpdateSubscriptionFromPaddle's real SQL would have written it —
+	// status='cancelled' plus the marker this call started.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(preCancelUser, nil).Once()
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(postCancelUser, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockProfileRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince).Return(true, nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertCalled(t, "ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince)
+}
+
 // TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds tests that a nil plaidCleanupSvc is skipped gracefully.
 // Issue #896: Nil guard ensures existing tests continue to pass without wiring.
 func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {
@@ -1297,6 +1363,10 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *t
 	// Unconditional trio ran despite the claim-guarded work aborting.
 	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
 	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
+	// Issue #1413 round-12 Fix 1 positive control: a FAILED disconnect must leave
+	// plaid_cleanup_pending_at untouched (still set) so RetentionCleanupCheckWorker's repair pass
+	// retries — the clear only ever follows a SUCCESSFUL disconnect.
+	mockProfileRepo.AssertNotCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_PlaidSideEffectClaimBusy_Aborts_ReleasesClaim proves Issue

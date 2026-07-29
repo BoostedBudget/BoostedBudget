@@ -745,11 +745,20 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 
 	var repairedCount, skippedCount, errorCount int
 	for _, user := range users {
-		// Belt-and-braces: a comped user must never have their Plaid items disconnected, even
-		// though the candidate query already excludes any override (live or lapsed) via
-		// noManualOverrideAtAllPredicate. Mirrors repairRetentionClocks's same defensive pattern.
-		if user.HasAnyManualOverride() {
-			w.logger.Info("skipping Plaid-disconnect repair for user with a manual tier override (live or lapsed)",
+		// Belt-and-braces: a user with a LIVE comp must never have their Plaid items disconnected,
+		// even though the candidate query already excludes one via noActiveManualOverridePredicate.
+		//
+		// Issue #1413 round-12 Fix 2: deliberately HasActiveManualOverride(), NOT HasAnyManualOverride()
+		// — unlike repairRetentionClocks's belt-and-braces guard just above (which correctly stays on
+		// HasAnyManualOverride(), matching that repair's noManualOverrideAtAllPredicate candidate
+		// query), a LAPSED override must NOT skip Plaid-disconnect repair: deletion must fail safe by
+		// staying excluded indefinitely if the comp-expiry job stalls (irreversible), but a Plaid
+		// disconnect is recoverable (the user relinks), so leaving a lapsed-comp user's bank
+		// connection live and billable forever is the wrong default here. See
+		// GetUsersNeedingPlaidDisconnectRepair's doc comment (profile_repository.go) for the full
+		// reasoning this guard must match.
+		if user.HasActiveManualOverride() {
+			w.logger.Info("skipping Plaid-disconnect repair for user with a currently-active manual tier override",
 				"job_id", jobID, "user_id", user.ID)
 			skippedCount++
 			continue
@@ -821,7 +830,11 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			if !domain.SubscriptionStatus(current.SubscriptionStatus).IsEligibleForPlaidDisconnectRepair() {
 				return false, nil
 			}
-			if current.HasAnyManualOverride() {
+			// Issue #1413 round-12 Fix 2: HasActiveManualOverride() (live-only), not
+			// HasAnyManualOverride() — see the belt-and-braces guard above this loop for the full
+			// reasoning. A lapsed override must not abort an in-progress repair; only a comp granted
+			// (or still live) since the candidate query ran does.
+			if current.HasActiveManualOverride() {
 				return false, nil
 			}
 			if repository.FormatOccurrenceTimestamp(current.PlaidCleanupPendingAt) != expectedOccurrence {
