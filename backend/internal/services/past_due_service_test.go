@@ -218,8 +218,19 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
+	// #1413 G7: tightened from a subscription_status-only check to the full canonical payload
+	// (subscription_tier, subscription_status, AND the orphaned-key "tier": nil cleanup),
+	// matching the sibling assertion at admin_user_service_test.go's
+	// TestAdminUserService_UpdateUserTier_PushesEffectiveOverrideTier_Household4. The previous
+	// matcher would pass unchanged even if subscription_tier were wrong or the "tier" key were
+	// missing entirely.
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.MatchedBy(func(m map[string]interface{}) bool {
-		return m["subscription_status"] == "cancelled"
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "cancelled" &&
+			hasNilTierKey && nilTierVal == nil
 	})).Return(nil)
 	notif.On("Create", mock.Anything, mock.MatchedBy(func(n *domain.Notification) bool {
 		return n.Type == "subscription_cancelled" && n.UserID == userID
