@@ -3,8 +3,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -483,9 +485,11 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_ClaimWon_Success_CompletesCl
 // TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedNotSwallowed proves a
 // lost lease at Complete time (another worker reclaimed this tuple while we were mid-flight) does
 // not silently pass as success and is not reported as a processing failure — mirrors
-// deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed. The
-// loud-logging behavior itself is inspected in the source (processPlaidDisconnectWindow's Complete
-// handling) and is not independently mechanically asserted here for lack of an injectable log sink.
+// deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed. Unlike
+// that test, PastDueService's logger is a stored field (captured from slog.Default() at
+// construction), so it's swapped for a buffer-backed logger here and the resulting ERROR-level log
+// record from processPlaidDisconnectWindow's Complete handling is asserted directly, not merely
+// inspected in the source.
 func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -494,6 +498,8 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedN
 	notif := &mockPastDueNotificationRepo{}
 
 	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	var logBuf bytes.Buffer
+	svc.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 	mockClaims := new(MockWorkClaimsRepository)
 	svc.SetWorkClaimsRepo(mockClaims)
 
@@ -516,6 +522,10 @@ func TestPastDueService_ProcessUser_PlaidDisconnect_CompleteReturnsFalse_LoggedN
 
 	assert.NoError(t, err, "the disconnect already ran; a lost lease at Complete time must not be reported as a failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPlaidDisconnectPastDue, testPastDueClaimToken)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "a lost lease at Complete time must be logged at ERROR, not swallowed")
+	assert.Contains(t, logOutput, userID, "the ERROR log must carry the identifying user_id")
 }
 
 // Test 5: Plaid-only window but re-read shows recovered — no-op
@@ -1172,9 +1182,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 
 // TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSwallowed mirrors
 // deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed: a lost
-// lease at Complete time must not be reported as a processing failure. The loud-logging behavior
-// itself is inspected in the source (processGraceExpiry's Complete handling) and is not
-// independently mechanically asserted here for lack of an injectable log sink.
+// lease at Complete time must not be reported as a processing failure. PastDueService's logger is a
+// stored field (captured from slog.Default() at construction), so it's swapped for a buffer-backed
+// logger here and the resulting ERROR-level log record from processGraceExpiry's Complete handling
+// is asserted directly, not merely inspected in the source.
 func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -1183,6 +1194,8 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	notif := &mockPastDueNotificationRepo{}
 
 	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	var logBuf bytes.Buffer
+	svc.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 	mockClaims := new(MockWorkClaimsRepository)
 	svc.SetWorkClaimsRepo(mockClaims)
 
@@ -1214,6 +1227,10 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 
 	assert.NoError(t, err, "the cancellation already ran; a lost lease at Complete time must not be reported as a failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "a lost lease at Complete time must be logged at ERROR, not swallowed")
+	assert.Contains(t, logOutput, userID, "the ERROR log must carry the identifying user_id")
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAnError is the H3

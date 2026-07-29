@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -3042,12 +3043,17 @@ func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.
 
 // TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed mirrors
 // deletion_service_test.go's TestExecuteDeletion_CompleteReturnsFalse_LoggedNotSwallowed: a lost
-// lease at Complete time must not be reported as a webhook-processing failure. The loud-logging
-// behavior itself is inspected in the source (processSubscriptionCanceled's Complete handling) and
-// is not independently mechanically asserted here for lack of an injectable log sink.
+// lease at Complete time must not be reported as a webhook-processing failure. Unlike that
+// service, this worker's logger is a stored field set via SubscriptionWebhookWorkerDeps.Logger, so
+// it's swapped for a buffer-backed logger here (same package, so the unexported field is directly
+// reachable) and the resulting ERROR-level log record from processSubscriptionCanceled's Complete
+// handling is asserted directly, not merely inspected in the source.
 func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *testing.T) {
 	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
 	ctx := context.Background()
+
+	var logBuf bytes.Buffer
+	worker.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	mockPlaid := new(mockPlaidItemCleanupService)
 	worker.SetPlaidCleanupService(mockPlaid)
@@ -3079,6 +3085,10 @@ func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *
 
 	require.NoError(t, err, "the cleanup already ran; a lost lease at Complete time must not be reported as a failure")
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "a lost lease at Complete time must be logged at ERROR, not swallowed")
+	assert.Contains(t, logOutput, "user_2abc123def456", "the ERROR log must carry the identifying user_id")
 }
 
 // TestWorker_SubscriptionCanceled_SetRetentionDatesError_Aborts_ReleasesClaim is the regression
