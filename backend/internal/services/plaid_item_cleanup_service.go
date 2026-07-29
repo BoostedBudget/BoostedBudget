@@ -227,25 +227,12 @@ func (s *plaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRe
 }
 
 // RemoveAllUserItems implements PlaidItemCleanupService.RemoveAllUserItems
+//
+// Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
+// closure — see that function's doc comment for why reading it here, before the claim, would
+// reopen the race a concurrent LinkAccounts call could exploit.
 func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
-	// Get all linked items for the user
-	items, err := s.linkedItemRepo.GetByUserID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get linked items for user %s: %w", userID, err)
-	}
-
-	// No items to remove
-	if len(items) == 0 {
-		s.logger.Info("no linked items to remove for user", "user_id", userID)
-		return nil
-	}
-
-	s.logger.Info("removing Plaid items for user",
-		"user_id", userID,
-		"item_count", len(items),
-	)
-
-	return s.cleanupItems(ctx, userID, items)
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID)
 }
 
 // RemoveItem implements PlaidItemCleanupService.RemoveItem
@@ -293,35 +280,31 @@ func IsItemNotFoundError(err error) bool {
 
 // DisconnectAllUserItems implements PlaidItemCleanupService.DisconnectAllUserItems
 // Issue #679, #680: Trial expiration - disconnect items while preserving history
+//
+// Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
+// closure — see that function's doc comment.
 func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	// Get all active linked items for the user (non-replaced, non-disconnected)
-	items, err := s.linkedItemRepo.GetActiveItemsByUserID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get active linked items for user %s: %w", userID, err)
-	}
-
-	// No items to disconnect
-	if len(items) == 0 {
-		s.logger.Info("no active linked items to disconnect for user", "user_id", userID)
-		return nil
-	}
-
-	s.logger.Info("disconnecting Plaid items for user",
-		"user_id", userID,
-		"item_count", len(items),
-	)
-
-	return s.cleanupItems(ctx, userID, items)
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID)
 }
 
+// fetchLinkedItemsFn matches linkedItemRepoForCleanup.GetByUserID / GetActiveItemsByUserID —
+// the two ways cleanupItems's callers select which items are in scope.
+type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.LinkedItem, error)
+
 // cleanupItems is the shared per-item Plaid-removal loop used by both RemoveAllUserItems and
-// DisconnectAllUserItems (Issue #1413 H1/H2):
+// DisconnectAllUserItems (Issue #1413 H1/H2/round-4 C2):
 //
 //   - Claims repository.ActionPlaidDisconnectUser (the OPERATION-keyed side-effect claim)
 //     BEFORE any external call, so at most one flow is ever mid-disconnect for this user at a
 //     time, regardless of which FLOW claim (plaid_disconnect_past_due, past_due_grace_cancel,
 //     subscription_cancelled_cleanup, account_deletion) is driving it. Returns
 //     ErrSideEffectClaimBusy, without calling Plaid at all, if another flow already holds it.
+//   - Issue #1413 round-4 Critical finding C2: fetch is called ONLY after the claim is won,
+//     INSIDE the claimed closure — not before. Reading the item list before the claim (the
+//     previous shape) left a window where LinkAccounts could create a NEW item, after the read
+//     but before the claim, that this pass would never learn about and so would never send to
+//     Plaid for removal. Fetching fresh, immediately before the loop below, closes that specific
+//     ordering hazard: any item that exists by the time the claim is won is included.
 //   - Skips items already marked 'disconnected' by a PRIOR attempt (durable per-item state, H2)
 //     without calling Plaid again for them — a retry after a partial failure only attempts the
 //     items still outstanding.
@@ -333,12 +316,27 @@ func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, us
 //   - Aggregates genuine per-item failures into a non-nil returned error — every item is still
 //     attempted (a single bad item must not strand the rest still-linked and still-billing), but
 //     the caller (DeletionService.ExecuteDeletion in particular) needs to know when to abort.
-func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, items []domain.LinkedItem) error {
+func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, fetch fetchLinkedItemsFn) error {
 	if s.claimsRepo == nil {
 		return fmt.Errorf("plaidItemCleanupService: work claims repository not configured")
 	}
 
 	return claimSideEffectAndRun(ctx, s.claimsRepo, repository.ActionPlaidDisconnectUser, userID, plaidDisconnectSideEffectLease, func() error {
+		items, err := fetch(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to get linked items for user %s: %w", userID, err)
+		}
+
+		if len(items) == 0 {
+			s.logger.Info("no linked items to clean up for user", "user_id", userID)
+			return nil
+		}
+
+		s.logger.Info("cleaning up Plaid items for user",
+			"user_id", userID,
+			"item_count", len(items),
+		)
+
 		var successIDs []string
 		var itemErrs []error
 		var successCount, failCount, skippedCount int

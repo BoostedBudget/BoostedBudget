@@ -112,8 +112,9 @@ func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID s
 func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error {
 	return m.Called(ctx, userID).Error(0)
 }
-func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error {
-	return m.Called(ctx, userID).Error(0)
+func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
+	return args.Bool(0), args.Error(1)
 }
 
 // Issue #679, #680: Trial expiration methods

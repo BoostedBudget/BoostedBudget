@@ -150,7 +150,9 @@ func (m *mockProfileRepo) UpdateSubscriptionFromPaddle(ctx context.Context, user
 func (m *mockProfileRepo) CreateUserTx(ctx context.Context, tx pgx.Tx, user *domain.User) error {
 	return nil
 }
-func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string) error { return nil }
+func (m *mockProfileRepo) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	return true, nil
+}
 func (m *mockProfileRepo) GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }

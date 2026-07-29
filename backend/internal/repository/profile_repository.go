@@ -122,8 +122,42 @@ type ProfileRepository interface {
 	// GetUsersScheduledForDeletion returns users whose deletion date has passed
 	GetUsersScheduledForDeletion(ctx context.Context) ([]*domain.User, error)
 
-	// DeleteUserCascade performs application-level cascade deletion of all user data
-	DeleteUserCascade(ctx context.Context, userID string) error
+	// DeleteUserCascade performs application-level cascade deletion of all user data, but ONLY
+	// after re-verifying, INSIDE the same transaction that performs the destructive statements,
+	// that deletion is STILL authorised at the instant of the act — not merely at the earlier
+	// ClaimForDeletion instant, which the external-cleanup window (Paddle cancel, Plaid
+	// disconnect — potentially many seconds of network calls) can separate from this call by a
+	// meaningful amount of time (Issue #1413 round-4 Critical finding C1).
+	//
+	// expectedDeletionRequestedAt must be the deletion_requested_at value the caller observed
+	// for this user BEFORE calling ClaimForDeletion (nil for the retention-triggered path, which
+	// never sets it). Re-verifying this EXACT value (not merely whether it is nil) is required
+	// to catch the case Codex round-4 review flagged as the most serious residual in this task:
+	// reusing claimForDeletionPredicate alone is NOT sufficient, because that predicate treats
+	// "no manual_tier_override at all" as sufficient authorization REGARDLESS of
+	// deletion_requested_at — so an uncomped user who explicitly cancels their own deletion
+	// request (CancelDeletion) during the external-cleanup window would otherwise still pass it
+	// (cancelling sets deletion_requested_at to NULL, and "no override" was already true). Adding
+	// `deletion_requested_at IS NOT DISTINCT FROM expectedDeletionRequestedAt` closes this: a
+	// cancellation (non-null -> null) is a mismatch, and so is a same-instant cancel-then-new-
+	// request (a new, later timestamp the original claim never verified) — both correctly abort,
+	// leaving the user to be picked up by whichever flow's own schedule next applies to them.
+	//
+	// Also refuses to proceed while any of the user's linked_items rows still need Plaid-side
+	// cleanup (status <> 'disconnected') — Issue #1413 round-4 Critical finding C2: deleting the
+	// local linked_items rows (Step 3 below) while any remain un-cleaned would orphan a live,
+	// still-billing Plaid access token with no local record it ever existed. See
+	// plaid_item_cleanup_service.go's cleanupItems for the companion fix (re-reading the item
+	// list INSIDE the side-effect claim, immediately before cleanup, instead of relying on a
+	// snapshot taken outside it) that narrows how an item could reach this check un-cleaned in
+	// the first place.
+	//
+	// Returns (true, nil) if the cascade ran and the user was deleted. Returns (false, nil) — a
+	// NORMAL, EXPECTED outcome, NOT an error — when either guard fails: an admin granted/extended
+	// a comp, the user cancelled their own deletion request, or un-cleaned Plaid items remain.
+	// The caller MUST release its work claim (never Complete) on a (false, nil) result and let
+	// the next scheduled run re-evaluate from scratch — it must NOT treat this as an error.
+	DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error)
 
 	// Dunning: past_due tracking methods (Issue #898)
 
@@ -843,28 +877,98 @@ func (r *profileRepository) GetUsersScheduledForDeletion(ctx context.Context) ([
 	return r.queryUsers(ctx, query, time.Now())
 }
 
-// DeleteUserCascade performs application-level cascade deletion of all user data
-// This implements the 10-step deletion process to maintain audit trail
-func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string) error {
+// DeleteUserCascade performs application-level cascade deletion of all user data, guarded by a
+// re-verification of eligibility INSIDE this same transaction — see the interface doc comment
+// for the full Issue #1413 round-4 C1/C2 rationale. This implements the 10-step deletion process
+// to maintain audit trail.
+func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
 	// Start a transaction for atomicity
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Issue #1413 round-4 Critical finding C1: re-verify eligibility INSIDE this transaction,
+	// immediately before any destructive statement — closing the window between ClaimForDeletion
+	// (which the external cleanup above this call in ExecuteDeletion can separate from here by
+	// many seconds) and this cascade. FOR UPDATE locks the user row so a concurrent CancelDeletion
+	// or comp-grant must either commit before this SELECT runs (and be seen by it) or block until
+	// this transaction ends (by which point the outcome here is already decided and committed).
+	//
+	// Reuses claimForDeletionPredicate UNCHANGED for the comp-vs-GDPR-request precedence rule —
+	// the SAME rule ClaimForDeletion already enforces, so a user's own outstanding GDPR deletion
+	// request still beats a live comp here exactly as it does there. See that predicate's own doc
+	// comment; it is deliberately not "fixed" or restated here.
+	//
+	// ADDITIONALLY requires deletion_requested_at to be EXACTLY the value the caller observed
+	// before calling ClaimForDeletion (IS NOT DISTINCT FROM handles the NULL case) — this is the
+	// part claimForDeletionPredicate cannot provide by itself: that predicate treats "no
+	// manual_tier_override at all" as sufficient authorization REGARDLESS of
+	// deletion_requested_at, so an uncomped user who explicitly cancels their own deletion
+	// request between the claim and this point would otherwise still pass it (cancelling makes
+	// deletion_requested_at NULL, and "no override" was already true) — this is the C1 finding's
+	// most serious case: an explicitly-cancelled deletion must not still happen.
+	var stillEligible bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE id = $1 AND is_deleted = FALSE
+			  AND deletion_requested_at IS NOT DISTINCT FROM $2
+	`+claimForDeletionPredicate+`
+			FOR UPDATE
+		)
+	`, userID, expectedDeletionRequestedAt).Scan(&stillEligible)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: eligibility re-check: %w", err)
+	}
+	if !stillEligible {
+		// Legitimate, expected abort — NOT an error. The deferred tx.Rollback(ctx) above discards
+		// everything; the caller must release its work claim and let the next scheduled run
+		// re-evaluate from scratch.
+		return false, nil
+	}
+
+	// Issue #1413 round-4 Critical finding C2: refuse to delete the local linked_items rows (the
+	// only pointer to a live Plaid access token — Step 3 below deletes them without ever calling
+	// Plaid itself, by design, since that call is DeletionService's job before this method runs)
+	// while ANY item still needs Plaid-side cleanup. The FOR UPDATE lock just taken above also
+	// blocks a concurrent LinkAccounts INSERT for this user from committing until this
+	// transaction ends (linked_items.user_id's FK check requires a FOR KEY SHARE lock on this
+	// exact users row, which conflicts with FOR UPDATE) — so this check sees any item created
+	// before this point that the caller's Plaid cleanup pass could not have known about. An item
+	// whose INSERT commits AFTER this transaction's own commit is a residual this check cannot
+	// close (see plaid_item_cleanup_service.go's re-read-inside-claim fix for why that window is
+	// already as narrow as this branch makes it) — but this check must not make that window any
+	// WIDER by proceeding while a KNOWN un-cleaned item still exists.
+	var uncleanedItemsExist bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM linked_items WHERE user_id = $1 AND status <> 'disconnected'
+		)
+	`, userID).Scan(&uncleanedItemsExist)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: un-cleaned Plaid item check: %w", err)
+	}
+	if uncleanedItemsExist {
+		// Legitimate, expected abort — NOT an error. Preferring to abort and retry over silently
+		// orphaning a live Plaid token: an undeleted user is recoverable, an orphaned Plaid item
+		// is not.
+		return false, nil
+	}
 
 	now := time.Now()
 
 	// Step 1: Delete all boosts
 	_, err = tx.Exec(ctx, `DELETE FROM boosts WHERE user_id = $1`, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Step 2: Delete all transactions
 	_, err = tx.Exec(ctx, `DELETE FROM transactions WHERE user_id = $1`, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Step 3: Delete all linked items (bank connections)
@@ -872,51 +976,38 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// before calling this method to stop Plaid billing
 	_, err = tx.Exec(ctx, `DELETE FROM linked_items WHERE user_id = $1`, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Step 4: Delete all accounts
 	_, err = tx.Exec(ctx, `DELETE FROM accounts WHERE user_id = $1`, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	// Step 5: Delete all recurring patterns
-	_, err = tx.Exec(ctx, `DELETE FROM recurring_patterns WHERE user_id = $1`, userID)
-	if err != nil {
-		return err
-	}
-
-	// Step 6: Delete all user preferences
-	_, err = tx.Exec(ctx, `DELETE FROM user_preferences WHERE user_id = $1`, userID)
-	if err != nil {
-		return err
-	}
+	// Steps 5/6/8/9 (recurring_patterns, user_preferences, an audit_logs.metadata anonymization
+	// UPDATE, user_sessions) were removed here as an incidental fix while adding this task's
+	// C1/C2 real-DB integration coverage: none of recurring_patterns/user_preferences/
+	// user_sessions exist in this schema (no migration ever creates them — the first two appear
+	// to predate a later redesign, and user_sessions predates the Clerk-JWT auth model, which
+	// keeps no server-side session table), and audit_logs has never had a metadata column —
+	// migration 000053 converted its former JSONB `changes` column to encrypted TEXT, and no
+	// migration ever added `metadata`. Every one of these four statements unconditionally
+	// errored, meaning DeleteUserCascade — and therefore every real ExecuteDeletion call — has
+	// never been able to run to completion against this schema. This was invisible before
+	// because no real-database integration test previously exercised this method end-to-end
+	// (only pgxmock, which matches query text and cannot catch a table/column that doesn't
+	// exist). Out of scope for #1413's concurrency findings — properly redacting PII from the
+	// now-encrypted audit_logs.changes column is a separate design decision this fix does not
+	// make — but leaving these in place would have made this task's own required "ordinary
+	// eligible user still deletes" regression coverage impossible to satisfy honestly. Worth its
+	// own follow-up issue: audit-log PII redaction on deletion is a real GDPR gap, just not one
+	// this task can respond to by inventing a redaction scheme unilaterally.
 
 	// Step 7: Delete all notifications
 	_, err = tx.Exec(ctx, `DELETE FROM notifications WHERE user_id = $1`, userID)
 	if err != nil {
-		return err
-	}
-
-	// Step 8: Anonymize audit logs (keep for legal/compliance, but remove PII)
-	_, err = tx.Exec(ctx, `
-		UPDATE audit_logs
-		SET metadata = jsonb_set(
-			COALESCE(metadata, '{}'::jsonb),
-			'{anonymized}',
-			'true'::jsonb
-		)
-		WHERE user_id = $1
-	`, userID)
-	if err != nil {
-		return err
-	}
-
-	// Step 9: Delete user sessions
-	_, err = tx.Exec(ctx, `DELETE FROM user_sessions WHERE user_id = $1`, userID)
-	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Step 10: Mark user as deleted — encrypt the tombstone values and clear blind indexes
@@ -925,12 +1016,12 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 
 	encryptedDeletedEmail, err := r.enc.EncryptString(deletedEmail)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt deleted email: %w", err)
+		return false, fmt.Errorf("failed to encrypt deleted email: %w", err)
 	}
 
 	encryptedDeletedClerkUserID, err := r.enc.EncryptString(deletedClerkUserID)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt deleted clerk_user_id: %w", err)
+		return false, fmt.Errorf("failed to encrypt deleted clerk_user_id: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -950,15 +1041,15 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		WHERE id = $4
 	`, encryptedDeletedEmail, encryptedDeletedClerkUserID, now, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Commit the transaction
 	if err = tx.Commit(ctx); err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return true, nil
 }
 
 // claimForDeletionPredicate expresses the ratified product rule that a user's own GDPR
