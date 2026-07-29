@@ -61,6 +61,24 @@ const SUB_DETAIL_WITH_OVERRIDE = {
     manual_tier_ends_at: null,
 }
 
+// deletion_requested_at/deletion_scheduled_at (Issue #1413 Fix 6/AC 10) are now real fields on
+// the generated AdminSubscriptionDetailOutputBody type (backend + codegen plumbed them through),
+// not an off-type field hand-fed onto the mock — these fixtures read exactly like SUB_DETAIL_WITH_OVERRIDE
+// above, no intersection/cast required.
+const SUB_DETAIL_DELETION_REQUESTED = {
+    ...SUB_DETAIL,
+    deletion_requested_at: '2026-08-01T00:00:00Z',
+}
+
+// Both dates present: deletion_scheduled_at must win over deletion_requested_at (the notice
+// period has resolved into a firm date). Months are chosen far apart (January vs. November) so
+// the assertion is unambiguous regardless of the test runner's local timezone.
+const SUB_DETAIL_DELETION_SCHEDULED = {
+    ...SUB_DETAIL,
+    deletion_requested_at: '2026-01-15T12:00:00Z',
+    deletion_scheduled_at: '2026-11-15T12:00:00Z',
+}
+
 describe('SubscriptionOverrideModal', () => {
     beforeEach(() => {
         mockUseGetAdminUserSubscription.mockClear()
@@ -119,7 +137,7 @@ describe('SubscriptionOverrideModal', () => {
     it('warns when the target user has requested account deletion (Fix 6)', async () => {
         mockUseGetAdminUserSubscription.mockReturnValue({
             isLoading: false,
-            data: { ...SUB_DETAIL, deletion_requested_at: '2026-08-01T00:00:00Z' },
+            data: SUB_DETAIL_DELETION_REQUESTED,
         })
         render(
             <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
@@ -139,6 +157,24 @@ describe('SubscriptionOverrideModal', () => {
 
         expect(await screen.findByText(/test@example\.com/i)).toBeInTheDocument()
         expect(screen.queryByText(/requested account deletion/i)).not.toBeInTheDocument()
+    })
+
+    it('prefers deletion_scheduled_at over deletion_requested_at when both are present (Fix 6)', async () => {
+        mockUseGetAdminUserSubscription.mockReturnValue({
+            isLoading: false,
+            data: SUB_DETAIL_DELETION_SCHEDULED,
+        })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+
+        const alert = await screen.findByText(/requested account deletion/i)
+        expect(alert).toBeInTheDocument()
+        // deletion_scheduled_at (November) must be the date shown, not deletion_requested_at
+        // (January) — the resolution is `deletion_scheduled_at ?? deletion_requested_at`.
+        expect(screen.getByText(/Nov/)).toBeInTheDocument()
+        expect(screen.queryByText(/Jan/)).not.toBeInTheDocument()
     })
 
     it('submits override when form is valid', async () => {

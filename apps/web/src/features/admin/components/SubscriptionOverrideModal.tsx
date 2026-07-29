@@ -41,18 +41,6 @@ import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverrid
  * email, same rationale as DisbandHouseholdDialog's `CONFIRM_TEXT = 'DISBAND'`. */
 const REMOVE_CONFIRM_TEXT = 'REMOVE'
 
-// The backend deliberately leaves a user's own GDPR deletion request alone when an admin comps
-// their tier — the deletion path is untouched, so a comp will NOT cancel it (a ratified product
-// decision, Issue #1413 Fix 6). Neither `deletion_requested_at` nor `deletion_scheduled_at` is
-// exposed on AdminSubscriptionDetailOutputBody yet (codegen for the admin endpoint hasn't added
-// them), so this is typed as a defensive intersection on top of the generated shape — same
-// pattern as subscriptionPresentation.ts's `UserWithCompFields` — rather than editing the
-// generated model. It activates automatically once the backend/codegen add the field.
-type SubDetailWithDeletion = NonNullable<ReturnType<typeof useAdminSubscriptionDetail>['data']> & {
-    deletion_requested_at?: string
-    deletion_scheduled_at?: string
-}
-
 const TIER_DISPLAY: Record<string, string> = {
     premium: 'Premium',
     household_2: 'Household (2)',
@@ -184,9 +172,7 @@ function SubscriptionOverrideForm({
     // Fix 6: a user's own GDPR deletion request beats an admin comp — the backend deliberately
     // leaves the deletion path alone, so comping will NOT cancel it. Prefer the scheduled date
     // (when the notice period has resolved into a firm date) over the originally-requested one.
-    const subWithDeletion = sub as SubDetailWithDeletion | undefined
-    const deletionDate =
-        subWithDeletion?.deletion_scheduled_at ?? subWithDeletion?.deletion_requested_at
+    const deletionDate = sub?.deletion_scheduled_at ?? sub?.deletion_requested_at
 
     const inputClass = 'w-full px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60 disabled:cursor-not-allowed'
 

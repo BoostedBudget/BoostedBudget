@@ -344,6 +344,97 @@ func TestGetUserSubscription_EffectiveStatus_NoOverride_MirrorsRawStatus(t *test
 	mockAdmin.AssertExpectations(t)
 }
 
+// TestGetUserSubscription_IncludesDeletionFields_WhenPending proves deletion_requested_at and
+// deletion_scheduled_at (Issue #1413 AC 10 — the admin override modal must warn when comping a
+// deletion-scheduled user) are surfaced on the subscription-detail response, sourced from the
+// same AdminUserService.GetUserDetail() call already made for base_tier/status — no second
+// query. Values are read via a raw map (not a partial struct) so the omitempty behaviour proven
+// by the companion "omits" test below is meaningfully exercised by the same decoding path.
+func TestGetUserSubscription_IncludesDeletionFields_WhenPending(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	requestedAt := time.Now().Add(-48 * time.Hour)
+	scheduledAt := time.Now().Add(30 * 24 * time.Hour)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                  targetUserID,
+			SubscriptionTier:    "premium",
+			SubscriptionStatus:  "active",
+			EffectiveStatus:     "active",
+			DeletionRequestedAt: &requestedAt,
+			DeletionScheduledAt: &scheduledAt,
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var asMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &asMap))
+	requestedRaw, hasRequested := asMap["deletion_requested_at"]
+	scheduledRaw, hasScheduled := asMap["deletion_scheduled_at"]
+	require.True(t, hasRequested, "deletion_requested_at must be present when a deletion is pending")
+	require.True(t, hasScheduled, "deletion_scheduled_at must be present when a deletion is pending")
+
+	gotRequested, err := time.Parse(time.RFC3339, requestedRaw.(string))
+	require.NoError(t, err)
+	assert.WithinDuration(t, requestedAt, gotRequested, time.Second)
+
+	gotScheduled, err := time.Parse(time.RFC3339, scheduledRaw.(string))
+	require.NoError(t, err)
+	assert.WithinDuration(t, scheduledAt, gotScheduled, time.Second)
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion proves the two deletion
+// fields are absent (not merely null) from the JSON body for a user with no pending GDPR
+// deletion — the modal's warning must not accidentally fire for every user.
+func TestGetUserSubscription_OmitsDeletionFields_WhenNoPendingDeletion(t *testing.T) {
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var asMap map[string]interface{}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &asMap))
+	_, hasRequested := asMap["deletion_requested_at"]
+	_, hasScheduled := asMap["deletion_scheduled_at"]
+	assert.False(t, hasRequested, "deletion_requested_at must be omitted when no deletion is pending")
+	assert.False(t, hasScheduled, "deletion_scheduled_at must be omitted when no deletion is pending")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
 func TestCreateSubscriptionOverride_RouteRegistered(t *testing.T) {
 	api, _, mockAdminSvc := setupAdminSubscriptionsAPI(t)
 
