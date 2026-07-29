@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -33,10 +34,11 @@ type HouseholdEntitlementResolver interface {
 // entitlement row exists. Never mutates domain.User.SubscriptionTier for members — that
 // invariant is what this whole layer exists to preserve.
 type HouseholdEntitlementService struct {
-	entitlementRepo repository.EntitlementRepository
-	userRepo        userLoader
-	householdRepo   repository.HouseholdRepository
-	tierConfig      *config.TierConfig
+	entitlementRepo       repository.EntitlementRepository
+	userRepo              userLoader
+	householdRepo         repository.HouseholdRepository
+	tierConfig            *config.TierConfig
+	overrideTierValidator func(tierName string) bool
 }
 
 // NewHouseholdEntitlementService creates a new HouseholdEntitlementService.
@@ -52,6 +54,37 @@ func NewHouseholdEntitlementService(
 		householdRepo:   householdRepo,
 		tierConfig:      tierConfig,
 	}
+}
+
+// SetOverrideTierValidator injects a function that reports whether a manual_tier_override
+// value names a real, currently-configured tier. ResolveEffectiveEntitlement uses it to stop
+// a malformed household-OWNER override from covering every member of the household with write
+// access — the mutation bypass this task closes (Issue #1413): manual_tier_override is an
+// unconstrained VARCHAR(50) with no CHECK constraint, so its value can be garbage (a legacy
+// row, a direct SQL write, a write made while the tier config was nil). Earlier work on this
+// branch (G2/round-5) stopped such a value from granting write access on the AFFECTED USER'S
+// OWN request path — profile_repository.go's GetEffectiveSubscriptionStatusByUserID and
+// internal/huma/operations/profile.go's enrichUserProfile — but this resolver's owner-lapse
+// gate kept reading the bare, unvalidated ComputeEffectiveStatus(): a garbage OWNER override
+// was correctly denied on the owner's own access, yet still made the owner look "active" here,
+// so IsCoveredByHousehold(member) returned true and the read-only middleware permitted the
+// MEMBER's mutation — access granted to someone other than the user whose row is corrupt.
+//
+// Same setter-injection convention, same func(string) bool signature, and the same nil-safe
+// "skip, don't deny" semantics as the other two call sites above — see
+// profile_repository.go's SetOverrideTierValidator doc comment for the full rationale, which
+// applies here unchanged: main.go loads the tier config once at startup and os.Exit(1)s if
+// that fails, so in production this validator is either wired for the entire process lifetime
+// or the server never boots. If never called, validation is skipped and an active override is
+// trusted — the pre-fix behavior — rather than denying every comp, which would turn a future
+// wiring oversight into an instant outage for every currently-comped household.
+//
+// Deliberately reuses this existing seam rather than reading h.tierConfig directly the way
+// PaddleCheckoutHandler.isConfiguredOverrideTier does (this service already holds a tierConfig
+// field, used by GetEntitlementSummary) — a third distinct mechanism for the identical check
+// would only make the existing two definitions of "configured tier" likelier to drift apart.
+func (s *HouseholdEntitlementService) SetOverrideTierValidator(validator func(tierName string) bool) {
+	s.overrideTierValidator = validator
 }
 
 // ResolveEffectiveEntitlement returns the user's effective tier+status. Solo users (no
@@ -99,20 +132,44 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		return domain.EffectiveEntitlement{}, err
 	}
 
-	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	// Issue #1413 — household-owner mutation bypass: manual_tier_override is an unconstrained
+	// VARCHAR(50) with no CHECK constraint, so it can hold a value naming no configured tier.
+	// Validate it here via the injected overrideTierValidator (see SetOverrideTierValidator)
+	// before trusting the "active" status it would otherwise force — the same rule
+	// GetEffectiveSubscriptionStatusByUserID enforces on the owner's OWN access path
+	// (profile_repository.go). A rejected override falls back to the owner's RAW status,
+	// exactly like that sibling call site, and is logged at warn for the same reason: a silent
+	// denial here would be indistinguishable from the original bypass from the member's point
+	// of view. EffectiveStatusWithActiveOverride is a single shared clock read, so this check
+	// and the Status field returned below can never disagree about whether the override was
+	// live.
+	ownerStatus, ownerOverrideValue, ownerHasOverride := owner.EffectiveStatusWithActiveOverride()
+	if ownerHasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(ownerOverrideValue) {
+		slog.WarnContext(ctx, "rejecting household owner's manual tier override: value does not name a configured tier",
+			"owner_id", owner.ID, "manual_tier_override", ownerOverrideValue)
+		ownerStatus = owner.SubscriptionStatus
+	}
+
+	if domain.SubscriptionStatus(ownerStatus).IsReadOnlySubscription() {
 		// Owner lost active coverage (past_due/cancelled/inactive), and isn't currently
-		// comped via an active manual_tier_override — member reverts to own tier (#1413).
+		// comped via an active, VALID manual_tier_override — member reverts to own tier (#1413).
 		return own, nil
 	}
 
-	// #1413: Status must be the owner's EFFECTIVE status, matching the Tier line above.
-	// Reporting an effective tier next to a raw status is precisely the asymmetry that caused
-	// this issue in the first place — a comped owner would surface here as "household coverage
-	// at tier household_4, status inactive", which is self-contradictory. No consumer reads
-	// this field today, which is exactly why it would rot unnoticed until one did.
+	// #1413: Status must be the owner's EFFECTIVE (validated) status, matching the Tier line
+	// above. Reporting an effective tier next to a raw status is precisely the asymmetry that
+	// caused this issue in the first place — a comped owner would surface here as "household
+	// coverage at tier household_4, status inactive", which is self-contradictory. No consumer
+	// reads this field today, which is exactly why it would rot unnoticed until one did.
+	//
+	// Tier deliberately still reads owner.ComputeEffectiveTier() unvalidated here — matching
+	// enrichUserProfile's identical, deliberate asymmetry (profile.go: EffectiveTier is set
+	// unconditionally before that function's own override validation) — tier-axis validation
+	// at this call site is out of scope for this fix; see household_entitlement_service.go's
+	// GetEntitlementSummary/GetTier call for the one remaining site tracked separately.
 	return domain.EffectiveEntitlement{
 		Tier:        owner.ComputeEffectiveTier(),
-		Status:      owner.ComputeEffectiveStatus(),
+		Status:      ownerStatus,
 		Source:      domain.EntitlementSourceHousehold,
 		PayerUserID: ent.PayerUserID,
 		HouseholdID: ent.HouseholdID,
