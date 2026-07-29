@@ -365,6 +365,15 @@ func main() {
 
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
+		// Issue #1413 G2: reject a manual_tier_override that names no configured tier on the
+		// access path (GetEffectiveSubscriptionStatusByUserID) — tierConfig was already loaded
+		// above (or the process would have os.Exit(1)'d), so this validator is wired for the
+		// entire lifetime of the process; see SetOverrideTierValidator's doc comment for the
+		// nil-validator fallback this deliberately never exercises in production.
+		profileRepo.SetOverrideTierValidator(func(tier string) bool {
+			_, tierErr := tierConfig.GetTier(domain.TierName(tier))
+			return tierErr == nil
+		})
 		privacyRepo := repository.NewPrivacyRepository(db)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
@@ -1288,15 +1297,22 @@ func main() {
 			// Task 7). HasActiveManualOverride() derives comp state at read time only, so
 			// nothing else re-arms retention / re-syncs Clerk / audits a comp that lapses on
 			// its own without an admin manually clearing it.
+			//
+			// Issue #1413 G3: InsertOpts (Queue + UniqueOpts) is built by
+			// jobs.ManualTierOverrideExpiryCheckInsertOpts() rather than hand-written here —
+			// a previous version of this literal omitted UniqueOpts entirely, silently
+			// leaving ManualTierOverrideExpiryCheckUniqueOpts()'s documented dedup
+			// unenforced. That job is the ONLY thing bounding how long
+			// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline
+			// (profile_repository.go), so duplicate or missed runs directly affect whether
+			// accounts are ever deleted.
 			if manualTierOverrideExpiryCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.ManualTierOverrideExpiryCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-							}
+							TriggerSource: "periodic",
+						}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
 					},
 					&river.PeriodicJobOpts{RunOnStart: false},
 				))

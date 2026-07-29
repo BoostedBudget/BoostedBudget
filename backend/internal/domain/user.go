@@ -170,6 +170,34 @@ func (u *User) ComputeEffectiveStatus() string {
 	return u.computeEffectiveStatusAt(time.Now())
 }
 
+// EffectiveStatusWithActiveOverride returns the same value ComputeEffectiveStatus() would,
+// plus the raw manual_tier_override string when (and only when) a currently-active override is
+// what produced that status.
+//
+// Added for Issue #1413 G2: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint, so its value can be garbage (a legacy row, a direct SQL write, a write made while
+// the tier config was nil). A caller on the access path — e.g.
+// GetEffectiveSubscriptionStatusByUserID (backend/internal/repository/profile_repository.go) —
+// needs to validate that the override names a real configured tier before trusting "active",
+// which domain cannot do itself without importing config (forbidden: domain must stay
+// config-agnostic; see CLAUDE.md).
+//
+// Both values are computed from a single time.Now() read, exactly like ClerkPublicMetadata does
+// above, rather than having the caller separately call ComputeEffectiveStatus() and
+// HasActiveManualOverride() (each reading time.Now() independently) — that would risk the two
+// disagreeing about whether the override was active in the nanoseconds around the expiry
+// boundary. See TestEffectiveTierAndStatusAt_AgreeAtSharedBoundary for why that boundary matters.
+//
+// hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
+// that case status is simply the raw SubscriptionStatus and overrideValue is "".
+func (u *User) EffectiveStatusWithActiveOverride() (status string, overrideValue string, hasOverride bool) {
+	now := time.Now()
+	if u.hasActiveManualOverrideAt(now) {
+		return string(SubscriptionStatusActive), *u.ManualTierOverride, true
+	}
+	return u.SubscriptionStatus, "", false
+}
+
 // ClerkPublicMetadata returns the canonical Clerk publicMetadata payload for this user.
 //
 // The "tier" key is deliberately included with an explicit nil value rather than being

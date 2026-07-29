@@ -1468,3 +1468,123 @@ func TestGetEffectiveSubscriptionStatusByUserID_NoRows_ReturnsErrUserNotFound(t 
 	assert.Equal(t, "", status)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ─── Issue #1413 G2: malformed manual_tier_override must not grant access ──────────────────
+//
+// manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so it can hold
+// a value that names no configured tier at all — a legacy row, a direct SQL write, a data
+// migration, or a write made while the tier config was nil (see
+// TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation in admin_user_service_test.go
+// for why write-time validation alone cannot prevent this). Before this fix,
+// GetEffectiveSubscriptionStatusByUserID only checked "non-empty and not expired" and would
+// return "active" for ANY such value, which the read-only middleware (clerk.go) treats as full
+// write access. The fix validates the override value against an injected tier-name validator on
+// this access path ONLY — the retention/deletion queries' noManualOverrideAtAllPredicate (which
+// must keep treating any non-empty override, valid or not, as "hands off" — see
+// profile_repository_manual_override_retention_integration_test.go) is deliberately untouched.
+
+// fakeOverrideTierValidator returns a validator func accepting only the given tier names,
+// standing in for a real *config.TierConfig-backed check without this package needing to import
+// config or call config.LoadTierConfig() (a process-wide sync.Once singleton that must never be
+// invoked from a test — see CLAUDE.md).
+func fakeOverrideTierValidator(validTiers ...string) func(string) bool {
+	allowed := make(map[string]bool, len(validTiers))
+	for _, t := range validTiers {
+		allowed[t] = true
+	}
+	return func(tier string) bool { return allowed[tier] }
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_DoesNotGrantActive is the RED
+// test for G2: a user with manual_tier_override = 'not_a_tier' (garbage — not a configured tier
+// name) and a raw "inactive" status must NOT resolve to "active". Before the fix, this returned
+// "active" for any non-empty, non-expired override string regardless of validity — the exact
+// security hole G2 closes.
+func TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_DoesNotGrantActive(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t))
+	repo.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("inactive", stringPtr("not_a_tier"), nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.NotEqual(t, "active", status, "a manual_tier_override naming no configured tier must never grant the active effective status")
+	assert.Equal(t, "inactive", status, "an invalid override must fall back to the raw subscription_status, not some other sentinel")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_ValidOverride_WithValidator_GrantsActive is the
+// positive control demanded alongside the RED test above: an over-tight validator that denies
+// every comp — even a real, correctly-configured one — must not sail through unnoticed. With a
+// validator wired, a genuinely valid override tier (e.g. "household_3") must still resolve to
+// "active".
+func TestGetEffectiveSubscriptionStatusByUserID_ValidOverride_WithValidator_GrantsActive(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewProfileRepository(mock, newTestFieldEncryptor(t))
+	repo.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("inactive", stringPtr("household_3"), nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "active", status, "a validly-configured override tier must still grant active status")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_NoValidatorConfigured_GrantsActive
+// states the explicit decision for "what happens if the tier config is unavailable at read
+// time": when no validator has been injected at all (SetOverrideTierValidator never called —
+// e.g. some future construction path that forgets to wire one), validation is SKIPPED, not
+// deny-by-default. main.go's actual wiring loads the tier config once at process startup and
+// os.Exit(1)s the whole process if that fails, so in production the validator is either present
+// for the entire process lifetime or the process never starts — there is no "config blip" that
+// can leave a running server without one. Failing closed here regardless (denying every comp
+// whenever a validator merely happens not to be wired) would turn any future construction site
+// that forgets to call SetOverrideTierValidator into an instant, silent outage for every
+// currently-comped user. This is the SAME nil-safe convention admin_user_service.go's write-time
+// check already uses (see TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation).
+func TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_NoValidatorConfigured_GrantsActive(t *testing.T) {
+	mock, repo := setupMockDB(t) // no SetOverrideTierValidator call — validator left nil
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"subscription_status", "manual_tier_override", "manual_tier_ends_at"}).
+		AddRow("inactive", stringPtr("not_a_tier"), nil)
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT subscription_status, manual_tier_override, manual_tier_ends_at FROM users WHERE id = $1 AND is_deleted = FALSE`)).
+		WithArgs(userID).
+		WillReturnRows(rows)
+
+	status, err := repo.GetEffectiveSubscriptionStatusByUserID(ctx, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "active", status)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

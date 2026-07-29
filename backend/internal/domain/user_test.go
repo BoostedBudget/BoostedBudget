@@ -576,3 +576,56 @@ func TestUser_PaddleSubscriptionID_EmptyString(t *testing.T) {
 	assert.NotNil(t, unmarshaled.PaddleSubscriptionID)
 	assert.Equal(t, "", *unmarshaled.PaddleSubscriptionID)
 }
+
+// ─── Issue #1413 G2: EffectiveStatusWithActiveOverride ──────────────────────
+// See the method's doc comment above (why domain can't validate the override itself, and why
+// status/overrideValue share a single time.Now() read) for the full rationale.
+
+// TestEffectiveStatusWithActiveOverride_NoOverride_ReturnsRawStatusAndNoOverride verifies that
+// with no manual override at all, the raw status passes through and hasOverride is false.
+func TestEffectiveStatusWithActiveOverride_NoOverride_ReturnsRawStatusAndNoOverride(t *testing.T) {
+	user := &User{SubscriptionStatus: "inactive"}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverride()
+
+	assert.Equal(t, "inactive", status)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveStatusWithActiveOverride_ActiveOverride_ReturnsActiveAndValue verifies that a
+// live (non-expired) override reports status "active" alongside the override's raw string
+// value, so a caller can validate it.
+func TestEffectiveStatusWithActiveOverride_ActiveOverride_ReturnsActiveAndValue(t *testing.T) {
+	override := "not_a_tier"
+	user := &User{
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil,
+	}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverride()
+
+	assert.Equal(t, string(SubscriptionStatusActive), status)
+	assert.Equal(t, "not_a_tier", overrideValue)
+	assert.True(t, hasOverride)
+}
+
+// TestEffectiveStatusWithActiveOverride_ExpiredOverride_ReturnsRawStatusAndNoOverride verifies
+// an expired override falls back to the raw status with hasOverride false, mirroring
+// ComputeEffectiveStatus's own expiry behavior.
+func TestEffectiveStatusWithActiveOverride_ExpiredOverride_ReturnsRawStatusAndNoOverride(t *testing.T) {
+	override := "premium"
+	expired := time.Now().Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionStatus: "cancelled",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverride()
+
+	assert.Equal(t, "cancelled", status)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
