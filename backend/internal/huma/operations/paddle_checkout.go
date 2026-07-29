@@ -582,9 +582,7 @@ func (h *PaddleCheckoutHandler) checkDowngradeSeatCapacity(ctx context.Context, 
 	// the site's own doc comment's "clean, no half-applied billing" 500 turned into a clean 409
 	// instead.
 	effectiveTier, overrideValue, hasOverride := simulatedUser.EffectiveTierWithActiveOverride()
-	if hasOverride && !h.isConfiguredOverrideTier(overrideValue) {
-		h.logger.Warn("rejecting manual tier override in seat-capacity check: value does not name a configured tier",
-			"user_id", user.ID, "manual_tier_override", overrideValue)
+	if hasOverride && h.rejectedOverride(user.ID, overrideValue, "seat-capacity check") {
 		effectiveTier = simulatedUser.SubscriptionTier
 	}
 
@@ -735,9 +733,7 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	// the access-granting path (profile_repository.go) — this REPRESENTATION path must never
 	// return a synthetic active-comp payload the read-only middleware would then 403 on write.
 	_, overrideValue, isComped := user.EffectiveStatusWithActiveOverride()
-	if isComped && !h.isConfiguredOverrideTier(overrideValue) {
-		h.logger.Warn("rejecting manual tier override in subscription/current response: value does not name a configured tier",
-			"user_id", user.ID, "manual_tier_override", overrideValue)
+	if isComped && h.rejectedOverride(user.ID, overrideValue, "subscription/current response") {
 		isComped = false
 	}
 
@@ -854,6 +850,21 @@ func (h *PaddleCheckoutHandler) isConfiguredOverrideTier(tierName string) bool {
 	}
 	_, err := h.tierConfig.GetTier(domain.TierName(tierName))
 	return err == nil
+}
+
+// rejectedOverride reports whether overrideValue fails isConfiguredOverrideTier, logging the
+// shared warning shape when it does. Consolidates the identical "validate, warn, fall back"
+// block that used to be pasted separately in checkDowngradeSeatCapacity (tier axis) and
+// HandleGetCurrentSubscription (status axis) — both call sites already used the exact same
+// isConfiguredOverrideTier check and log message, differing only in which axis the caller resets
+// on rejection, so callerContext is the only thing that still varies between them.
+func (h *PaddleCheckoutHandler) rejectedOverride(userID, overrideValue, callerContext string) bool {
+	if h.isConfiguredOverrideTier(overrideValue) {
+		return false
+	}
+	h.logger.Warn("rejecting manual tier override in "+callerContext+": value does not name a configured tier",
+		"user_id", userID, "manual_tier_override", overrideValue)
+	return true
 }
 
 // compedOrNotFound returns the synthetic comped response when isComped is true, otherwise the
