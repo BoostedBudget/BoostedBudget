@@ -679,6 +679,163 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_LogsAndSkips(t *testing.T) 
 	mockRepo.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
 }
 
+// ─── Issue #1413 round-8 High 3 (Codex review): anchor-soundness — a stale retention_started_at
+// must delay a Plaid disconnect, never accelerate it ──
+
+// TestRetentionCleanupCheck_PlaidRepair_StaleAnchorBeyondRetentionPeriod_Skipped is the RED test
+// for round-8 High 3. GetUsersNeedingPlaidDisconnectRepair's query trusts retention_started_at
+// directly as the grace-window anchor, but two documented, currently-accepted swallowed-failure
+// paths (ClearRetentionDates on resubscribe, subscription_webhook.go; SetRetentionDates in
+// TrialService.ExpireTrial) can in principle leave a STALE, non-NULL value in place across a later
+// cycle — repairRetentionClocks (Step 0) only detects and fixes a NULL retention_expires_at, never
+// a stale-but-present one. An anchor older than the full configured retention period can never be
+// trusted for an IMMEDIATE Plaid-only disconnect decision: by construction, a genuinely
+// self-consistent (retention_started_at, retention_expires_at) pair this old would ALSO have
+// retention_expires_at already in the past, so GetUsersWithExpiredRetention/deleteExpiredAccounts
+// (Step 3, later in this SAME Work() pass) independently picks the user up for FULL deletion —
+// which itself disconnects every Plaid item via RemoveAllUserItems (deletion_service.go) as part of
+// the cascade. Skipping the Plaid-ONLY disconnect here therefore never strands a live item: either
+// deletion runs this same pass and cleans it up, or the anchor was not actually implausibly old (the
+// overwhelming common case), in which case this guard never fires at all. This can never make a
+// user permanently un-disconnectable — a user who is NOT past this bound is completely unaffected,
+// and one who IS past it is handled by deletion in the same run.
+//
+// Falsifiability: removing the anchor-soundness check makes this test fail —
+// DisconnectAllUserItemsIfEligible would be called immediately, well before any genuine 72-hour
+// grace period for the CURRENT cycle could have elapsed.
+func TestRetentionCleanupCheck_PlaidRepair_StaleAnchorBeyondRetentionPeriod_Skipped(t *testing.T) {
+	ctx := context.Background()
+
+	staleStartedAt := time.Now().AddDate(0, -7, 0) // 7 months ago — beyond the 6-month RetentionMonths
+	user := &domain.User{
+		ID: "user-stale-anchor", Email: "staleanchor@example.com", SubscriptionStatus: "inactive",
+		RetentionStartedAt: &staleStartedAt,
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// GetUserByID / DisconnectAllUserItemsIfEligible are deliberately left unstubbed: an unexpected
+	// call panics, proving the anchor-soundness guard runs BEFORE even the re-read.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
+}
+
+// TestRetentionCleanupCheck_PlaidRepair_FreshAnchorWithinRetentionPeriod_NotSkipped is the
+// positive-control sibling: a plausible, well-within-retention-period anchor (past the 72h grace,
+// nowhere near the 6-month retention period) must NOT be caught by the new guard — proving it
+// doesn't over-fire on the ordinary, non-stale case that TestRetentionCleanupCheck_RepairsPlaidDisconnect
+// already covers (with a nil RetentionStartedAt fixture) — this test uses a REALISTIC non-nil value.
+func TestRetentionCleanupCheck_PlaidRepair_FreshAnchorWithinRetentionPeriod_NotSkipped(t *testing.T) {
+	ctx := context.Background()
+
+	freshStartedAt := time.Now().Add(-100 * time.Hour) // past the 72h grace, well within 6 months
+	user := &domain.User{
+		ID: "user-fresh-anchor", Email: "freshanchor@example.com", SubscriptionStatus: "inactive",
+		RetentionStartedAt: &freshStartedAt,
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-fresh-anchor").Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-fresh-anchor", mock.Anything).Return(nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertCalled(t, "DisconnectAllUserItemsIfEligible", ctx, "user-fresh-anchor", mock.Anything)
+}
+
+// ─── Issue #1413 round-8 High 4 (Codex review): the per-item recheck must use the EXACT SAME
+// status set as the repair SQL, not a wider "read-only" notion ──
+
+// TestRetentionCleanupCheck_PlaidRepairSkipsIfTransitionedToPastDueSinceQuery is the RED test for
+// round-8 High 4. The repair SQL (GetUsersNeedingPlaidDisconnectRepair) selects only 'inactive' and
+// 'cancelled' candidates, but the per-item recheck used domain.SubscriptionStatus.
+// IsReadOnlySubscription(), which ALSO includes 'past_due'. An old inactive/cancelled candidate
+// that transitions into a NEW past_due cycle (e.g. a resubscribe followed by a failed payment)
+// before this re-read still passed the recheck and could be disconnected immediately — bypassing
+// past_due's own dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays), which
+// exists precisely to give a paying-but-behind user time before Plaid access is touched.
+//
+// Falsifiability: reverting the recheck to IsReadOnlySubscription() makes this test fail —
+// DisconnectAllUserItemsIfEligible would be called for a user who is now 'past_due', not
+// inactive/cancelled.
+func TestRetentionCleanupCheck_PlaidRepairSkipsIfTransitionedToPastDueSinceQuery(t *testing.T) {
+	ctx := context.Background()
+
+	staleUser := &domain.User{ID: "user-now-pastdue", Email: "nowpastdue@example.com", SubscriptionStatus: "inactive"}
+	users := []*domain.User{staleUser}
+	currentUser := &domain.User{ID: "user-now-pastdue", Email: "nowpastdue@example.com", SubscriptionStatus: "past_due"}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return(users, nil)
+	mockRepo.On("GetUserByID", ctx, "user-now-pastdue").Return(currentUser, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// DisconnectAllUserItemsIfEligible is deliberately left unstubbed: an unexpected call panics.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // --- 30-day notice tests ---
 
 func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
@@ -898,6 +1055,64 @@ func TestNewRetentionCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	})
 
 	assert.NotNil(t, worker.logger)
+}
+
+// ─── Issue #1413 round-8 Blocker 2 (Codex review): the repair pass must not depend on
+// DELETION_TOKEN_SECRET ──
+
+// TestRetentionCleanupCheck_NilDeletionService_SkipsAutoDeleteButRepairStepsStillRun is the RED
+// test for round-8 Blocker 2: RetentionCleanupCheckWorker used to be constructed ONLY inside
+// `if cfg.DeletionTokenSecret != ""` in main.go, coupling repairPlaidDisconnects — the ONLY place
+// a read-only user's Plaid items are ever disconnected — to an unrelated secret that production
+// validation didn't even check. A deployment with good Plaid credentials but no
+// DELETION_TOKEN_SECRET would silently never disconnect anyone. The fix constructs the worker
+// unconditionally, so DeletionService can genuinely be nil here; deleteExpiredAccounts (Step 3)
+// must degrade gracefully (log and skip) rather than panic on a nil interface method call, while
+// the retention-clock repair (Step 0) and Plaid-disconnect repair (Step 0b) — neither of which
+// touches DeletionService at all — must still run in the SAME pass.
+//
+// Falsifiability: calling w.deletionService.ExecuteDeletion without a nil guard panics
+// ("invalid memory address or nil pointer dereference") the moment GetUsersWithExpiredRetention
+// returns a non-empty list against a nil DeletionService — this test's expired-user fixture
+// exists specifically to trigger that path.
+func TestRetentionCleanupCheck_NilDeletionService_SkipsAutoDeleteButRepairStepsStillRun(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(-24 * time.Hour)
+	expiredUsers := []*domain.User{
+		{ID: "user-would-be-deleted", Email: "wouldbedeleted@example.com", RetentionExpiresAt: &retentionExpiresAt},
+	}
+	plaidRepairUser := &domain.User{ID: "user-needs-plaid-repair-nodeletion", Email: "plaidrepairnodeletion@example.com", SubscriptionStatus: "inactive"}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{plaidRepairUser}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-needs-plaid-repair-nodeletion").Return(plaidRepairUser, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-needs-plaid-repair-nodeletion", mock.Anything).Return(nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return(expiredUsers, nil)
+	// DeletionService is nil — there is no mock to call ExecuteDeletion on; an unguarded call
+	// panics instead of erroring, which is why this test asserts via require.NoError plus
+	// completing without a panic, not via an AssertNotCalled expectation.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: nil,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a nil DeletionService must not fail (or panic) the whole job — it only disables Step 3 (auto-deletion)")
+	mockPlaid.AssertCalled(t, "DisconnectAllUserItemsIfEligible", ctx, "user-needs-plaid-repair-nodeletion", mock.Anything)
 }
 
 // ─── #1413: comped users are exempt from retention cleanup (belt-and-braces worker guard;
