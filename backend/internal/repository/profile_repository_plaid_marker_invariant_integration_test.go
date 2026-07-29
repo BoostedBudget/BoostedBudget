@@ -210,11 +210,18 @@ func TestClearRetentionDates_Integration_StaleActiveClearDoesNotClobberFresherCa
 
 	user := createPlaidMarkerTestUser(t, pool, repo, "staleactiveclear", "active")
 
-	// The newer cancellation webhook already committed: status='cancelled' plus a fresh marker.
-	freshMarker := time.Now()
-	_, err := pool.Exec(ctx, `UPDATE users SET subscription_status = 'cancelled', plaid_cleanup_pending_at = $1 WHERE id = $2`,
-		freshMarker, user.ID)
-	require.NoError(t, err)
+	// The newer cancellation webhook already committed: status='cancelled' plus a fresh marker —
+	// via the REAL production writer for this joint transition, UpdateSubscriptionFromPaddle, not
+	// a raw SQL UPDATE that could silently drift from what that writer actually does (Issue #1413
+	// Task W, Codex review: this file's entire purpose is auditing writers against the marker
+	// invariant — a setup that bypasses the writer under test cannot detect a writer that violates
+	// it). The row's OLD status is 'active' (not already repair-eligible), so this is a genuine
+	// transition and the writer's own COALESCE(plaid_cleanup_pending_at, now) freshly stamps the
+	// marker, exactly modeling "the newer cancellation webhook already committed."
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+	freshMarkerRow := readPlaidMarkerRow(t, pool, user.ID)
+	require.NotNil(t, freshMarkerRow.marker, "precondition: the cancellation webhook must have started the marker")
+	freshMarker := *freshMarkerRow.marker
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after newer cancellation webhook lands")
 
 	// The STALE "active" webhook, from before the cancellation, now finally calls
@@ -398,12 +405,20 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetBut
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
 	ctx := context.Background()
 
 	user := createPlaidMarkerTestUser(t, pool, repo, "cancelwhilecomped", "active")
 	compEnds := time.Now().Add(24 * time.Hour) // live
-	_, err := pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`,
-		compEnds, user.ID)
+	// Grant the live comp through the REAL production writer (AdminUserRepository.UpdateUserTier),
+	// not a raw SQL UPDATE — Issue #1413 Task W (Codex review): this file's entire purpose is
+	// auditing writers against the marker invariant, and TestPlaidMarkerInvariant_Integration_Sweep
+	// (this same file, comp_grant_to_remove/comp_grant_then_lapse_never_removed) already grants
+	// comps this way — a raw SQL grant here was inconsistent with that standard, and (per
+	// updateUserTierQuery's own doc comment) a setup that bypasses the writer under test cannot
+	// detect a writer that violates it. UpdateUserTier deliberately leaves plaid_cleanup_pending_at
+	// untouched, so this substitution changes nothing this test observes.
+	_, err := adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: grant live comp", &compEnds)
 	require.NoError(t, err)
 	assertPlaidMarkerInvariant(t, pool, user.ID, "before cancellation, while comped")
 
@@ -429,7 +444,6 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetBut
 	// (cancellation-time) value — round-13 changed this from round-11's "removal stamps a FRESH
 	// NOW()" behavior, because the marker was never nulled by the comp in the first place, so
 	// removeUserTierOverrideUpdate's COALESCE(existing, NOW()) has an existing value to keep.
-	adminRepo := NewAdminUserRepository(pool, enc)
 	_, err = adminRepo.RemoveUserTierOverride(ctx, "", user.ID, "test: comp removed", 6)
 	require.NoError(t, err)
 
@@ -447,12 +461,17 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileOverrideLapsed_Mark
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
 	ctx := context.Background()
 
 	user := createPlaidMarkerTestUser(t, pool, repo, "cancelwhilelapsed", "active")
 	lapsedEnds := time.Now().Add(-24 * time.Hour) // already expired
-	_, err := pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`,
-		lapsedEnds, user.ID)
+	// Grant the (already-lapsed) comp through the REAL production writer
+	// (AdminUserRepository.UpdateUserTier), not a raw SQL UPDATE — same rationale as the sibling
+	// test above, and matching TestPlaidMarkerInvariant_Integration_Sweep's
+	// comp_grant_then_lapse_never_removed subtest (this same file), which grants an
+	// already-past-expiry comp through this exact writer.
+	_, err := adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: grant already-lapsed comp", &lapsedEnds)
 	require.NoError(t, err)
 
 	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
