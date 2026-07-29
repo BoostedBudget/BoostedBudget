@@ -96,7 +96,7 @@ describe('createApiClient', () => {
         count += Object.values(ns as object).filter((v) => typeof v === 'function').length
       }
     }
-    // 192 total ops − 59 excluded = 133 allowed; mirrors capability-manifest.test.ts
+    // 193 total ops − 60 excluded = 133 allowed; mirrors capability-manifest.test.ts
     // +7 from #957: getMerchants, getMerchantOverrides, getMerchantDuplicateSuggestions,
     //               setMerchantOverride, clearMerchantOverride, bulkSetMerchantOverrides,
     //               mergeMerchants
