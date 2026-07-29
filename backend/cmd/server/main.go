@@ -469,6 +469,11 @@ func main() {
 		householdInviteRepo := repository.NewHouseholdInviteRepository(db, fieldEncryptor)
 		householdShareRepo := repository.NewHouseholdShareRepository(db)
 		householdEntitlementService := services.NewHouseholdEntitlementService(entitlementRepo, profileRepo, householdRepo, tierConfig)
+		// Issue #1413 — closes the household-owner mutation bypass: same validator as
+		// profileRepo/humaProfileHandler above, so a malformed owner override can no longer
+		// make ResolveEffectiveEntitlement report the owner (and therefore every member) as
+		// covered. See HouseholdEntitlementService.SetOverrideTierValidator's doc comment.
+		householdEntitlementService.SetOverrideTierValidator(overrideTierValidator)
 		subscriptionService.SetEntitlementResolver(householdEntitlementService) // nil-safe injection; dormant until Phase 3 seeds rows
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)

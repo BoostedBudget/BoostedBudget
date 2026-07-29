@@ -468,6 +468,94 @@ func TestResolveEffectiveEntitlement_CompedOwnerRawInactive_MemberCoveredAtCompT
 	assert.Equal(t, "active", eff.Status, "a comped owner's coverage must report an effective status consistent with its effective tier")
 }
 
+// ─── Issue #1413 — household-owner mutation bypass: malformed owner override ────────────
+
+// TestResolveEffectiveEntitlement_OwnerMalformedOverride_MemberFallsBackToOwn is the
+// regression test for the mutation bypass this task closes: manual_tier_override is an
+// unconstrained VARCHAR(50) with no CHECK constraint, so it can hold a value naming no
+// configured tier (a legacy row, a direct SQL write, a write made while tierConfig was nil).
+// Earlier work on this branch (G2/round-5) stopped such a value from granting write access on
+// the AFFECTED USER'S OWN request path (profile_repository.go, profile.go) — but this
+// resolver's owner-lapse gate kept reading the bare, unvalidated ComputeEffectiveStatus(), so a
+// garbage OWNER override made every MEMBER of the household look covered, even though the
+// owner's real (raw) subscription is read-only. With a validator wired that rejects
+// "not-a-real-tier", the owner's raw past_due status must win and the member must revert to
+// their own tier/source.
+func TestResolveEffectiveEntitlement_OwnerMalformedOverride_MemberFallsBackToOwn(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "past_due", // owner's REAL billing status is read-only
+		ManualTierOverride: strPtr("not-a-real-tier"), // garbage — no CHECK constraint stops this
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" || tier == "premium" })
+
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial"}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, "premium", eff.Tier, "member should revert to own tier when the owner's override is malformed")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source, "a malformed owner override must not confer household coverage on members")
+}
+
+// TestResolveEffectiveEntitlement_OwnerValidOverride_MemberStillCovered is the POSITIVE
+// CONTROL for the fix above, and the single most important assertion in this test file: with
+// the exact same validator wired, a VALID live owner override must still cover the household's
+// members. This is the whole point of requirement 5 of this work — an over-tight fix that also
+// rejects legitimate comps would lock out paying households, which is worse than the bypass it
+// closes.
+func TestResolveEffectiveEntitlement_OwnerValidOverride_MemberStillCovered(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "inactive", // real subscription lapsed
+		ManualTierOverride: strPtr("household_2"), ManualTierEndsAt: &futureEnd, // valid, currently-configured comp tier
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" || tier == "premium" })
+
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial"}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, domain.EntitlementSourceHousehold, eff.Source, "a VALID owner override must still cover members — over-tightening here would lock out paying households")
+	assert.Equal(t, "household_2", eff.Tier)
+	assert.Equal(t, "active", eff.Status)
+}
+
+// TestResolveEffectiveEntitlement_NilValidator_MalformedOverride_PreFixBehaviorPreserved pins
+// the documented nil-validator semantics (see SetOverrideTierValidator's doc comment): if the
+// validator is never wired, a garbage owner override must still cover members exactly as it
+// did before this fix. main.go os.Exit(1)s at startup if the tier config fails to load, so
+// failing closed on a nil validator would turn a future wiring oversight into an instant
+// outage for every currently-comped household, not just a silent regression.
+func TestResolveEffectiveEntitlement_NilValidator_MalformedOverride_PreFixBehaviorPreserved(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "past_due",
+		ManualTierOverride: strPtr("not-a-real-tier"),
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil) // SetOverrideTierValidator never called
+
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial"}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, domain.EntitlementSourceHousehold, eff.Source, "nil validator must skip validation, not deny — see SetOverrideTierValidator doc comment")
+}
+
 // TestResolveEffectiveEntitlement_OwnerOverrideExpired_MemberFallsBackToOwnTier proves an
 // owner's EXPIRED comp does not leak coverage: once ManualTierEndsAt is in the past,
 // ComputeEffectiveStatus() returns the owner's raw (read-only) status unchanged, so the
@@ -645,6 +733,65 @@ func TestIsCoveredByHousehold_OwnerReadOnly_False(t *testing.T) {
 	covered, err := svc.IsCoveredByHousehold(context.Background(), "member-1")
 	require.NoError(t, err)
 	assert.False(t, covered, "member whose owner lost active coverage should not be treated as covered")
+}
+
+// TestIsCoveredByHousehold_OwnerMalformedOverride_False is the IsCoveredByHousehold-level
+// sibling of TestResolveEffectiveEntitlement_OwnerMalformedOverride_MemberFallsBackToOwn —
+// this is the exact boolean the read-only middleware (read_only.go) consults to decide
+// whether to permit a member's mutation, so pinning it directly here is closer to the real
+// bypass than asserting on ResolveEffectiveEntitlement's Source field alone.
+func TestIsCoveredByHousehold_OwnerMalformedOverride_False(t *testing.T) {
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "inactive"}
+	owner := &domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "past_due",
+		ManualTierOverride: strPtr("not-a-real-tier"),
+	}
+
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").Return(member, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+
+	entRepo := &mockEntitlementRepo{}
+	payerID := "owner-1"
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
+	}, nil)
+
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" })
+
+	covered, err := svc.IsCoveredByHousehold(context.Background(), "member-1")
+	require.NoError(t, err)
+	assert.False(t, covered, "a malformed owner override must not confer household coverage — closes the #1413 owner mutation bypass")
+}
+
+// TestIsCoveredByHousehold_OwnerValidOverride_True is the IsCoveredByHousehold-level positive
+// control (requirement 5): the SAME validator, with a VALID live owner override, must still
+// report the member as covered.
+func TestIsCoveredByHousehold_OwnerValidOverride_True(t *testing.T) {
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "inactive"}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	owner := &domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "inactive",
+		ManualTierOverride: strPtr("household_2"), ManualTierEndsAt: &futureEnd,
+	}
+
+	userRepo := &mockUserLoader{}
+	userRepo.On("GetUserByID", mock.Anything, "member-1").Return(member, nil)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(owner, nil)
+
+	entRepo := &mockEntitlementRepo{}
+	payerID := "owner-1"
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, PayerUserID: &payerID,
+	}, nil)
+
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" })
+
+	covered, err := svc.IsCoveredByHousehold(context.Background(), "member-1")
+	require.NoError(t, err)
+	assert.True(t, covered, "a VALID owner override must still cover members — positive control per requirement 5")
 }
 
 func TestIsCoveredByHousehold_SoloUser_False(t *testing.T) {
