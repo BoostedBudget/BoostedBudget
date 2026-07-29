@@ -157,7 +157,12 @@ func TestExpireTrialIfNoOverride_Integration_SetsPlaidCleanupPendingAt(t *testin
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
 
-	before := time.Now()
+	// Fence from the DATABASE clock — plaid_cleanup_pending_at is written by Postgres NOW(), and in
+	// CI Postgres is a separate container whose clock can lag the runner's. The previous form here
+	// compared against a Go-side time.Now() and papered over that with a 1-second slop; reading the
+	// fence from the same clock that writes the value removes the need for arbitrary tolerance.
+	var before time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW()").Scan(&before))
 	claimed, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
 	require.NoError(t, err)
 	require.True(t, claimed)
@@ -165,7 +170,7 @@ func TestExpireTrialIfNoOverride_Integration_SetsPlaidCleanupPendingAt(t *testin
 	var pendingAt *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&pendingAt))
 	require.NotNil(t, pendingAt, "plaid_cleanup_pending_at must be set the instant trial expiry flips the status")
-	assert.False(t, pendingAt.Before(before.Add(-time.Second)), "plaid_cleanup_pending_at must be set to approximately now")
+	assert.False(t, pendingAt.Before(before), "plaid_cleanup_pending_at must be set to approximately now")
 }
 
 // TestExpireTrialIfNoOverride_Integration_NonTrialStatus_NoFlip proves the predicate also
