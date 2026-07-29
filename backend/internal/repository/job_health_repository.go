@@ -56,6 +56,20 @@ type JobHealthRepository interface {
 	// far longer than one grace window", the actual chronic-failure signal), not which users are
 	// due for repair RIGHT NOW — that eligibility decision stays exclusively
 	// GetUsersNeedingPlaidDisconnectRepair's.
+	//
+	// Deliberately does NOT apply noActiveManualOverridePredicate, unlike
+	// GetUsersNeedingPlaidDisconnectRepair (Task X / Codex review round on PR #1443, M3): a user
+	// under a currently-live manual tier override genuinely has outstanding Plaid cleanup — the
+	// comp only exempts them from being ACTED ON this run, via the repair query's own predicate, not
+	// from the cleanup existing at all. A comp can live for months; a gauge whose whole purpose is
+	// surfacing a stuck backlog must not go blind to a comped user's backlog for that entire window.
+	// This is a deliberate, permanent divergence between this gauge and the repair query's row set —
+	// see GetUsersNeedingPlaidDisconnectRepair's own doc comment for why ITS exclusion is correct.
+	// The two are NOT required to agree on which rows count; they answer different questions ("how
+	// much is outstanding" vs. "whom do I act on this run"), and this predicate difference is
+	// exactly that divergence, not a bug. See
+	// TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_StillCounted
+	// (job_health_repository_plaid_cleanup_integration_test.go).
 	GetOutstandingPlaidCleanupStats(ctx context.Context) (count int, oldestAge time.Duration, err error)
 }
 
@@ -89,11 +103,14 @@ func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx
 
 // GetOutstandingPlaidCleanupStats implements the interface doc comment's query: count of users
 // with plaid_cleanup_pending_at set AND at least one live linked item, plus the age of the OLDEST
-// such marker. Reuses plaidDisconnectRepairEligibleStatusPredicate and
-// noActiveManualOverridePredicate — the exact same constants
-// GetUsersNeedingPlaidDisconnectRepair's own candidate query uses (profile_repository.go) — and
-// the identical live-linked-item EXISTS clause, so this gauge and that repair pass can never
-// disagree about which rows count. One round trip for both numbers.
+// such marker. Reuses plaidDisconnectRepairEligibleStatusPredicate and the identical
+// live-linked-item EXISTS clause GetUsersNeedingPlaidDisconnectRepair's own candidate query uses
+// (profile_repository.go) — both queries agree on eligible status and item liveness.
+//
+// This query deliberately does NOT also reuse noActiveManualOverridePredicate — see the interface
+// doc comment above for why this gauge and that repair pass are intentionally allowed to disagree
+// on that one axis: a comped user still has outstanding cleanup; the comp only defers WHEN it gets
+// acted on, not WHETHER it counts here. One round trip for both numbers.
 func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Context) (int, time.Duration, error) {
 	query := `
 		SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(plaid_cleanup_pending_at))), 0)
@@ -107,7 +124,7 @@ func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Contex
 		      WHERE linked_items.user_id = users.id
 		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
 		  )
-		` + noActiveManualOverridePredicate
+	`
 
 	var count int64
 	var ageSeconds float64

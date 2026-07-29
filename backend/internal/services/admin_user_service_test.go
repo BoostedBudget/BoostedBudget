@@ -829,11 +829,15 @@ func TestAdminUserService_UpdateUserTier_PushesEffectiveOverrideTier_Household4(
 			SubscriptionTier:   "premium", // raw base tier, unaffected by the override
 			SubscriptionStatus: "cancelled",
 		}, nil)
+	// Task X (L3, Codex review round on PR #1443): also pin the exact key count — see the three
+	// RemoveUserTierOverride matchers below for why a per-key-only check would miss a regression
+	// that ADDS a key to this payload.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_household4_user", mock.MatchedBy(func(m map[string]interface{}) bool {
 		tierVal, hasTierKey := m["subscription_tier"]
 		statusVal, hasStatusKey := m["subscription_status"]
 		nilTierVal, hasNilTierKey := m["tier"]
-		return hasTierKey && tierVal == "household_4" && // the OVERRIDE tier, not the raw "premium"
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "household_4" && // the OVERRIDE tier, not the raw "premium"
 			hasStatusKey && statusVal == "active" && // override forces status to active
 			hasNilTierKey && nilTierVal == nil // orphaned "tier" key retroactively cleaned up
 	})).Return(nil)
@@ -1089,11 +1093,18 @@ func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 	// above and manual_tier_override_expiry_check_test.go's expiry-path matcher) — mock.Anything
 	// here would let a regression that re-emits a stale premium claim, or drops the "tier": nil
 	// poisoned-user cleanup, pass silently.
+	//
+	// Task X (L3, Codex review round on PR #1443): also assert the exact key COUNT, not just
+	// these three keys' values — otherwise a regression that ADDS a key (e.g. reintroducing a
+	// stale tier claim under a different name) would still satisfy every check above and pass
+	// silently. len(m) == 3 pins the payload to exactly {subscription_tier, subscription_status,
+	// tier} — domain.User.ClerkPublicMetadata's full key set, no more, no less.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_123", mock.MatchedBy(func(m map[string]interface{}) bool {
 		tierVal, hasTierKey := m["subscription_tier"]
 		statusVal, hasStatusKey := m["subscription_status"]
 		nilTierVal, hasNilTierKey := m["tier"]
-		return hasTierKey && tierVal == "premium" &&
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
 			hasStatusKey && statusVal == "active" &&
 			hasNilTierKey && nilTierVal == nil
 	})).Return(nil)
@@ -1141,11 +1152,15 @@ func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillCallsRe
 	// #1413 AC-15: assert key-by-key, same as the grant path and TestAdminUserService_
 	// RemoveUserTierOverride_Success above — mock.Anything would hide a stale-premium-claim or
 	// dropped "tier": nil regression on this no-op repair path too.
+	//
+	// Task X (L3): also pin the exact key count (len(m) == 3) — see the Success test above for
+	// why a per-key-only check would miss a regression that ADDS a key.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_456", mock.MatchedBy(func(m map[string]interface{}) bool {
 		tierVal, hasTierKey := m["subscription_tier"]
 		statusVal, hasStatusKey := m["subscription_status"]
 		nilTierVal, hasNilTierKey := m["tier"]
-		return hasTierKey && tierVal == "premium" &&
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
 			hasStatusKey && statusVal == "active" &&
 			hasNilTierKey && nilTierVal == nil
 	})).Return(nil)
@@ -1214,11 +1229,15 @@ func TestAdminUserService_RemoveUserTierOverride_ClerkFailure_StillSucceeds(t *t
 	// #1413 AC-15: assert key-by-key even though this call errors — the payload sent must still
 	// be correct (a failed sync should not mask what would have gone out), same key set as the
 	// grant path and the two tests above.
+	//
+	// Task X (L3): also pin the exact key count (len(m) == 3) — see the Success test above for
+	// why a per-key-only check would miss a regression that ADDS a key.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_789", mock.MatchedBy(func(m map[string]interface{}) bool {
 		tierVal, hasTierKey := m["subscription_tier"]
 		statusVal, hasStatusKey := m["subscription_status"]
 		nilTierVal, hasNilTierKey := m["tier"]
-		return hasTierKey && tierVal == "premium" &&
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
 			hasStatusKey && statusVal == "cancelled" &&
 			hasNilTierKey && nilTierVal == nil
 	})).Return(errors.New("clerk is down"))

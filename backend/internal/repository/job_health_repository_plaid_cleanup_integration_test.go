@@ -148,6 +148,49 @@ func TestJobHealthRepository_Integration_MarkedUserNoLiveItems_NotCounted(t *tes
 	assert.Equal(t, before, after, "a marked user with NO live linked items (migration-residue case) must not be counted")
 }
 
+// TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_StillCounted is the Task X
+// M3 RED test (Codex adversarial review round on PR #1443): a user with a marker set AND a live
+// linked item AND a CURRENTLY-LIVE manual tier override must still count toward this gauge.
+//
+// GetUsersNeedingPlaidDisconnectRepair correctly excludes such a user from being acted on THIS
+// run — that predicate answers "whom do I repair right now", and a live comp must pause repair.
+// But this gauge answers a different question — "how much cleanup is outstanding" — and a comp
+// can live for months. A comped user genuinely has outstanding cleanup; they are merely exempt
+// from being acted on right now. Hiding them from the gauge for the entire duration of the comp
+// defeats its whole purpose of making a stuck backlog visible.
+//
+// Falsifiability: this test fails against the pre-fix query (which appended
+// noActiveManualOverridePredicate to this gauge's WHERE clause) — the comped user vanishes from
+// the count. It passes once that predicate is removed from GetOutstandingPlaidCleanupStats
+// (the predicate itself, and the repair query's use of it, are unchanged and correct).
+func TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_StillCounted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewJobHealthRepository(pool)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	skipIfPlaidCleanupBaselineNonZero(t, repo, ctx)
+
+	suffix := fmt.Sprintf("jh_plaid_livecomp_%d", time.Now().UnixNano())
+	user := createPlaidCleanupTestUser(t, pool, enc, suffix, "cancelled")
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-5*24*time.Hour))
+
+	// Grant a currently-live comp through the real production writer (AdminUserRepository), not
+	// raw SQL — this is a state a production admin action genuinely reaches.
+	compEnds := time.Now().Add(48 * time.Hour) // still live
+	_, err := adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: live comp must not hide backlog", &compEnds)
+	require.NoError(t, err)
+
+	count, age, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "a user under a CURRENTLY-LIVE comp still has outstanding cleanup and must be counted — the comp only exempts them from being repaired THIS run, not from the outstanding-backlog gauge")
+	assert.InDelta(t, (5 * 24 * time.Hour).Seconds(), age.Seconds(), 30,
+		"age must still reflect the actual time since plaid_cleanup_pending_at was set")
+}
+
 // TestJobHealthRepository_Integration_UserWithLiveItemsNoMarker_NotCounted is the mirror-image
 // negative control: a user with a perfectly live linked item but NO plaid_cleanup_pending_at
 // marker (the overwhelming common case — nothing pending) must not be counted.

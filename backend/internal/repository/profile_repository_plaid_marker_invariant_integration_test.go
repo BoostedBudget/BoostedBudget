@@ -81,22 +81,68 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 // assertPlaidMarkerInvariant is THE invariant check: it re-derives, from the row's own committed
 // state, whether an ineligibility episode is currently open (raw subscription_status alone — see
 // the file header comment for why manual_tier_override is deliberately NOT part of this check as
-// of round-13), and asserts plaid_cleanup_pending_at's nullness agrees. This is the single
-// reusable assertion every test in this file drives every state-changing step through — see the
-// file header comment for why that (not a fix-specific spot-check) is the point of this file.
+// of round-13), and asserts plaid_cleanup_pending_at's nullness agrees with BOTH conjuncts of the
+// invariant — not just the first. This is the single reusable assertion every test in this file
+// drives every state-changing step through — see the file header comment for why that (not a
+// fix-specific spot-check) is the point of this file.
+//
+// Task X (L2, Codex review round on PR #1443): the invariant has TWO conjuncts — non-NULL EXACTLY
+// WHEN an episode is open AND cleanup for it has not completed — and this helper previously only
+// checked the first, so a marker sitting on a user with no cleanup work left at all (e.g. every
+// linked item already disconnected/replaced) silently passed. "Outstanding cleanup" here uses the
+// SAME liveness definition GetUsersNeedingPlaidDisconnectRepair / GetOutstandingPlaidCleanupStats
+// both use (profile_repository.go / job_health_repository.go): at least one linked_items row that
+// isn't 'disconnected'/'replaced' (a NULL status counts as live).
+//
+// #1453 allowance — the ONLY case this helper permits a non-NULL marker with zero live items: the
+// user has ZERO linked_items rows at all. Production writers set this marker unconditionally on
+// every genuine transition into inactive/cancelled, regardless of whether the user ever linked
+// Plaid (see UpdateSubscriptionFromPaddle's doc comment) — so an ordinary Plaid-less cancellation
+// and true migration-000119/000120 residue are indistinguishable at the row level, and BOTH are
+// legitimate, reachable states; #1453 tracks exactly this shape. This is an explicit, named
+// allowance, not a silently weakened assertion: it does NOT cover a user who HAS linked_items rows
+// that are ALL now disconnected/replaced — for that user real cleanup already ran to completion,
+// the marker should have been cleared (see assertPlaidMarkerInvariantCleanupComplete's sibling
+// job), and leaving it set IS a genuine violation this helper must catch, not silently allow.
 func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
 	t.Helper()
 	row := readPlaidMarkerRow(t, pool, userID)
 	ineligible := domain.SubscriptionStatus(row.status).IsEligibleForPlaidDisconnectRepair()
-	if ineligible {
-		assert.NotNil(t, row.marker,
-			"[%s] invariant violated: an ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is NULL",
-			context, row.status)
-	} else {
+	if !ineligible {
 		assert.Nil(t, row.marker,
 			"[%s] invariant violated: no ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is %v",
 			context, row.status, row.marker)
+		return
 	}
+	if !assert.NotNil(t, row.marker,
+		"[%s] invariant violated: an ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is NULL",
+		context, row.status) {
+		return
+	}
+
+	total, live := plaidMarkerLinkedItemCounts(t, pool, userID)
+	if live > 0 {
+		return
+	}
+	assert.Equal(t, 0, total,
+		"[%s] invariant violated: status=%q is ineligible and plaid_cleanup_pending_at is set, but this user HAS %d linked_items row(s) and every one is already disconnected/replaced — cleanup for this episode already completed and the marker should have been cleared (see assertPlaidMarkerInvariantCleanupComplete); the ONLY allowed exception is a user with ZERO linked_items rows at all (#1453 migration-residue / never-linked-Plaid shape)",
+		context, row.status, total)
+}
+
+// plaidMarkerLinkedItemCounts returns the total number of linked_items rows for userID, and how
+// many of those are "live" — the SAME liveness definition
+// GetUsersNeedingPlaidDisconnectRepair/GetOutstandingPlaidCleanupStats use (a NULL status counts
+// as live; only 'disconnected'/'replaced' don't). Used exclusively by assertPlaidMarkerInvariant's
+// second-conjunct check above.
+func plaidMarkerLinkedItemCounts(t *testing.T, pool *pgxpool.Pool, userID string) (total, live int) {
+	t.Helper()
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+		FROM linked_items
+		WHERE user_id = $1
+	`, userID).Scan(&total, &live))
+	return total, live
 }
 
 // assertPlaidMarkerInvariantCleanupComplete is assertPlaidMarkerInvariant's sibling for the ONE
