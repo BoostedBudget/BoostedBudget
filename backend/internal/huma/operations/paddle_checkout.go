@@ -223,6 +223,17 @@ func validateBillingInterval(interval string) error {
 }
 
 // isSubscriptionModifiable checks if a subscription status allows modifications
+//
+// #1413 PinnedRaw: every call site (HandlePreviewSubscriptionUpdate, HandleUpdateSubscription,
+// HandleCancelSubscription) deliberately passes user.SubscriptionStatus (raw), never
+// ComputeEffectiveStatus(). This function answers "is there a real Paddle subscription to
+// mutate" — a comped user with no real subscription must still be rejected here (there is
+// nothing for Paddle to preview/update/cancel), even though their effective status is "active".
+// Passing effective status would turn an honest "No active subscription to update" 400 into a
+// confusing attempt to mutate a Paddle subscription that doesn't exist. See
+// TestHandlePreviewSubscriptionUpdate_CompedUser_NoRealSubscription_Rejected,
+// TestHandleUpdateSubscription_CompedUser_NoRealSubscription_Rejected, and
+// TestHandleCancelSubscription_CompedUser_NoRealSubscription_Rejected for the pin.
 func isSubscriptionModifiable(status string) bool {
 	return status == "active" || status == "trialing"
 }
@@ -259,6 +270,15 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	}
 
 	// Prevent duplicate subscriptions
+	//
+	// #1413 PinnedRaw: these two checks deliberately read the RAW user.SubscriptionStatus, not
+	// ComputeEffectiveStatus(). A comped user's raw status is whatever their real Paddle
+	// subscription last left it (typically "inactive" or "cancelled") while their EFFECTIVE
+	// status is forced to "active" by the override — if this read effective status, a comped
+	// user could never reach checkout at all, and would be hard-locked out of ever buying a real
+	// subscription the moment the comp lapses (issue #1413 AC 4). See
+	// TestHandleCreateCheckoutSession_CompedUser_RawInactive_AllowedToCheckout /
+	// TestHandleCreateCheckoutSession_CompedUser_RawCancelled_AllowedToCheckout for the pin.
 	if user.SubscriptionStatus == "active" {
 		h.logger.Warn("active user attempted duplicate purchase", "user_id", user.ID, "requested_tier", input.Body.Tier)
 		return nil, huma.Error409Conflict("You already have an active subscription. Use the upgrade flow to change plans.")

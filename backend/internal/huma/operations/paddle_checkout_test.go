@@ -707,6 +707,46 @@ func TestHandlePreviewSubscriptionUpdate_NoActiveSubscription(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestHandlePreviewSubscriptionUpdate_CompedUser_NoRealSubscription_Rejected is a #1413 pin
+// test: isSubscriptionModifiable (paddle_checkout.go:226) is deliberately called with the RAW
+// user.SubscriptionStatus, not ComputeEffectiveStatus(). A comped user with no real Paddle
+// subscription has nothing for this endpoint to preview a change against, so it must still be
+// rejected — this locks in that a future "make everything effective" sweep doesn't convert this
+// call site and silently turn an honest 400 into an attempt to preview a nonexistent Paddle
+// subscription.
+func TestHandlePreviewSubscriptionUpdate_CompedUser_NoRealSubscription_Rejected(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "cancelled", // real subscription lapsed
+		SubscriptionTier:     "premium",
+		PaddleSubscriptionID: nil, // no real Paddle subscription at all
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &futureEnd, // admin comp, still active -> effective status is "active"
+	}
+
+	input := &PreviewUpdateInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "household_3"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandlePreviewSubscriptionUpdate(ctx, input)
+
+	require.Error(t, err, "a comped user with no real Paddle subscription has nothing to preview, "+
+		"regardless of their effective status")
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "No active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
 // TestNewPaddleCheckoutHandler tests handler initialization
 func TestNewPaddleCheckoutHandler(t *testing.T) {
 	mockService := new(mockPaddleCheckoutService)
@@ -946,6 +986,45 @@ func TestHandleUpdateSubscription_NoActiveSubscription(t *testing.T) {
 	output, err := handler.HandleUpdateSubscription(ctx, input)
 
 	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "No active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleUpdateSubscription_CompedUser_NoRealSubscription_Rejected is a #1413 pin test:
+// isSubscriptionModifiable (paddle_checkout.go:226) is deliberately called with the RAW
+// user.SubscriptionStatus, not ComputeEffectiveStatus(). A comped user with no real Paddle
+// subscription has nothing for this endpoint to update, so it must still be rejected — this
+// locks in that a future "make everything effective" sweep doesn't convert this call site and
+// silently turn an honest 400 into an attempt to update a nonexistent Paddle subscription.
+func TestHandleUpdateSubscription_CompedUser_NoRealSubscription_Rejected(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "inactive", // real subscription lapsed
+		SubscriptionTier:     "premium",
+		PaddleSubscriptionID: nil, // no real Paddle subscription at all
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &futureEnd, // admin comp, still active -> effective status is "active"
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "user_123"
+	input.Body.NewTier = "household_3"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err, "a comped user with no real Paddle subscription has nothing to update, "+
+		"regardless of their effective status")
 	assert.Nil(t, output)
 	assert.Contains(t, err.Error(), "No active subscription")
 
@@ -1414,6 +1493,43 @@ func TestHandleCancelSubscription_NoActiveSubscription(t *testing.T) {
 	output, err := handler.HandleCancelSubscription(ctx, input)
 
 	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "No active subscription")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleCancelSubscription_CompedUser_NoRealSubscription_Rejected is a #1413 pin test:
+// isSubscriptionModifiable (paddle_checkout.go:226) is deliberately called with the RAW
+// user.SubscriptionStatus, not ComputeEffectiveStatus(). A comped user with no real Paddle
+// subscription has nothing for this endpoint to cancel, so it must still be rejected — this
+// locks in that a future "make everything effective" sweep doesn't convert this call site and
+// silently turn an honest 400 into an attempt to cancel a nonexistent Paddle subscription.
+func TestHandleCancelSubscription_CompedUser_NoRealSubscription_Rejected(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "household_2"
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionStatus:   "inactive", // real subscription lapsed
+		SubscriptionTier:     "premium",
+		PaddleSubscriptionID: nil, // no real Paddle subscription at all
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &futureEnd, // admin comp, still active -> effective status is "active"
+	}
+
+	input := &CancelSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+
+	output, err := handler.HandleCancelSubscription(ctx, input)
+
+	require.Error(t, err, "a comped user with no real Paddle subscription has nothing to cancel, "+
+		"regardless of their effective status")
 	assert.Nil(t, output)
 	assert.Contains(t, err.Error(), "No active subscription")
 
@@ -1939,6 +2055,91 @@ func TestHandleCreateCheckoutSession_CancelledUser_Allowed(t *testing.T) {
 	output, err := handler.HandleCreateCheckoutSession(ctx, input)
 
 	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_CompedUser_RawInactive_AllowedToCheckout is a #1413 pin test
+// AND this issue's AC 4 ("a comped user can still purchase a real subscription"). The duplicate-
+// purchase guard (paddle_checkout.go:262-270) deliberately reads the RAW user.SubscriptionStatus,
+// never ComputeEffectiveStatus(). A comped user's real Paddle subscription lapsed (raw
+// "inactive") while their override forces effective status to "active" — if this guard read
+// effective status, a comped user could never reach checkout, and would be hard-locked out of
+// ever buying a real subscription the moment the comp lapses. This test proves checkout still
+// succeeds for exactly that user.
+func TestHandleCreateCheckoutSession_CompedUser_RawInactive_AllowedToCheckout(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	override := "household_2"
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "inactive", // real subscription lapsed
+		PaddleCustomerID:   &customerID,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd, // admin comp, still active -> effective status is "active"
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "year"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_456", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err, "a comped user with a lapsed real subscription must still reach "+
+		"checkout — the guard must read raw status, not the comp-forced effective status")
+	require.NotNil(t, output)
+	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_CompedUser_RawCancelled_AllowedToCheckout is the sibling of
+// the above with raw status "cancelled" instead of "inactive" — the other read-only raw status
+// duplicate-purchase applies to for a comped user whose real subscription was cancelled before
+// the comp was granted.
+func TestHandleCreateCheckoutSession_CompedUser_RawCancelled_AllowedToCheckout(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	override := "household_3"
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled", // real subscription cancelled
+		PaddleCustomerID:   &customerID,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil, // permanent comp -> effective status is "active"
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_789", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err, "a comped user with a cancelled real subscription must still reach "+
+		"checkout — the guard must read raw status, not the comp-forced effective status")
 	require.NotNil(t, output)
 	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
 
