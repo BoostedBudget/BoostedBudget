@@ -68,6 +68,15 @@ type User struct {
 	// Dunning: tracks when a user entered past_due state (Issue #898)
 	PastDueStartedAt *time.Time `json:"past_due_started_at,omitempty" db:"past_due_started_at"`
 
+	// PlaidCleanupPendingAt is the Issue #1413 round-10 explicit marker: set the instant a user
+	// transitions into a Plaid-disconnect-repair-eligible status (inactive/cancelled) with cleanup
+	// not yet complete, cleared on resubscribe/comp-grant or once a repair pass successfully
+	// disconnects the user's Plaid items. NULL means nothing pending. This REPLACES
+	// RetentionStartedAt as RetentionCleanupCheckWorker.repairPlaidDisconnects's grace-window
+	// anchor — see GetUsersNeedingPlaidDisconnectRepair's doc comment (profile_repository.go) for
+	// why the derived anchor could not be made sound.
+	PlaidCleanupPendingAt *time.Time `json:"plaid_cleanup_pending_at,omitempty" db:"plaid_cleanup_pending_at"`
+
 	// Timezone settings (Issue #972)
 	// Timezone stores the user's IANA timezone string (default "UTC").
 	// TimezoneSource tracks how it was set: "default", "auto" (browser-detected), or "user" (explicit choice).

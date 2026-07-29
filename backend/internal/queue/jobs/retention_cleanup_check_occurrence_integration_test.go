@@ -92,6 +92,11 @@ func TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain(t *te
 		Logger:          slog.Default(),
 	})
 	worker.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1413 round-10: repairPlaidDisconnects now treats a nil plaidCleanup as a hard
+	// configuration error — this test doesn't care about Plaid-repair mechanics (the candidate
+	// list above is stubbed empty), but needs a wired, otherwise-inert collaborator to avoid
+	// failing the whole job on that account alone.
+	worker.SetPlaidCleanup(new(MockRetentionPlaidCleanup))
 
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
 	err = worker.Work(ctx, job)
@@ -146,6 +151,9 @@ func TestRetentionCleanupCheck_Occurrence_SameCycle_SecondRunDoesNotResend(t *te
 		Logger:          slog.Default(),
 	})
 	worker.SetWorkClaimsRepo(claimsRepo)
+	// Issue #1413 round-10: see the matching comment in
+	// TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain above.
+	worker.SetPlaidCleanup(new(MockRetentionPlaidCleanup))
 
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
 

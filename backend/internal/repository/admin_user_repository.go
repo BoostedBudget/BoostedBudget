@@ -316,6 +316,11 @@ func (r *adminUserRepository) GetUserDetail(ctx context.Context, userID string) 
 // CTE + FOR UPDATE shape. The "prior" CTE's own is_deleted=FALSE guard is what causes a
 // missing/soft-deleted target to return zero rows from the join below (surfaced as
 // pgx.ErrNoRows -> ErrUserNotFound), so the outer UPDATE does not need to repeat that guard.
+// plaid_cleanup_pending_at is cleared unconditionally here — Issue #1413 round-10: granting (or
+// extending) a comp makes the user Plaid-eligible again regardless of their raw subscription
+// status (HasActiveManualOverride() forces effective status to active), so nothing can
+// legitimately be "pending" against the repair pass while a live override is in effect. Clearing
+// to NULL is idempotent whether or not anything was actually pending.
 const updateUserTierQuery = `
 	WITH prior AS (
 		SELECT manual_tier_override
@@ -324,7 +329,8 @@ const updateUserTierQuery = `
 		FOR UPDATE
 	)
 	UPDATE users u
-	SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW()
+	SET manual_tier_override = $1, manual_tier_ends_at = $2, updated_at = NOW(),
+	    plaid_cleanup_pending_at = NULL
 	FROM prior
 	WHERE u.id = $3
 	RETURNING u.clerk_user_id, u.subscription_tier, u.subscription_status, prior.manual_tier_override
@@ -458,10 +464,22 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // 'trial', so a silent normalization would make TrialService.ExpireTrial's job never reselect
 // this user again, and its Plaid disconnect + retention-clock side effects would never run. See
 // internal/services/trial_expiry_comp_revert_integration_test.go for the pin and full reasoning.
+// should_mark_plaid_cleanup_pending (Issue #1413 round-10) is should_rearm_retention's narrower
+// sibling for the Plaid-disconnect-repair marker: a removed/expired comp must (re-)start
+// plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets.
+// Deliberately narrower than should_rearm_retention's ('inactive', 'cancelled', 'past_due') —
+// 'past_due' is excluded here for the SAME reason plaidDisconnectRepairEligibleStatusPredicate
+// excludes it: past_due has its own dunning timeline (past_due_service.go,
+// PastDueConfig.PlaidDisconnectDays) and must never be immediately Plaid-disconnected by this
+// repair pass. A comp removed while the reverted status is 'past_due' leaves
+// plaid_cleanup_pending_at untouched — it should already be NULL (past_due is never a state that
+// sets this marker), and past_due's own dunning flow owns that user's Plaid fate instead.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
-	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention
+	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention,
+	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
+	        AND subscription_status IN ('inactive', 'cancelled')) AS should_mark_plaid_cleanup_pending
 	FROM users
 	WHERE id = $1 AND is_deleted = FALSE
 `
@@ -486,7 +504,8 @@ const removeUserTierOverrideUpdate = `
 	    retention_started_at = CASE WHEN prior.should_rearm_retention THEN NOW() ELSE u.retention_started_at END,
 	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN NOW() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
 	    retention_notice_30d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_30d_sent_at END,
-	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END
+	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END,
+	    plaid_cleanup_pending_at = CASE WHEN prior.should_mark_plaid_cleanup_pending THEN COALESCE(u.plaid_cleanup_pending_at, NOW()) ELSE u.plaid_cleanup_pending_at END
 	FROM prior
 	WHERE u.id = $1
 	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override
