@@ -1093,6 +1093,49 @@ func TestRetentionCleanupCheckUniqueOpts(t *testing.T) {
 	assert.Contains(t, opts.ByState, queue.JobStateRunning)
 }
 
+// ─── Issue #1413 P0: RunOnStart must be true ───────────────────────────────────────────────
+//
+// River's periodic scheduler keeps only in-memory state (river.NewPeriodicJob's own doc
+// comment): every process restart or leader election recomputes nextRunAt as ScheduleFunc(now)
+// unless PeriodicJobOpts.ID is set (it isn't, here or anywhere in main.go), and skips the
+// catch-up insert entirely when RunOnStart is false (river@v0.38.0
+// internal/maintenance/periodic_job_enqueuer.go:409-426). This repo deploys several times a
+// day, so RunOnStart: false let this daily job — the only place that runs retention-clock
+// repair, the 30-day/7-day GDPR pre-deletion notices, deleteExpiredAccounts, and the
+// Plaid-disconnect repair pass — be enqueued zero times, ever.
+
+// TestRetentionCleanupCheckPeriodicOpts_RunOnStart is the RED test for Issue #1413 P0.
+func TestRetentionCleanupCheckPeriodicOpts_RunOnStart(t *testing.T) {
+	opts := RetentionCleanupCheckPeriodicOpts()
+
+	require.NotNil(t, opts)
+	assert.True(t, opts.RunOnStart,
+		"RunOnStart must be true — without it, a process restart or leader election (this repo "+
+			"deploys several times a day) can push this daily job's next-run time forward forever, "+
+			"silently disabling GDPR pre-deletion notices, account deletion, retention-clock repair, "+
+			"and Plaid-disconnect repair (Issue #1413 P0)")
+}
+
+// TestRetentionCleanupCheckPeriodicOpts_PairedWithUniqueOpts proves RunOnStart: true is only
+// safe here because RetentionCleanupCheckUniqueOpts()'s dedup exists alongside it — the two
+// are only safe together. A future edit that weakens UniqueOpts to a zero value (no ByPeriod,
+// no ByState — which River treats as "no uniqueness constraint at all") while leaving
+// RunOnStart: true in place would let a start-of-process catch-up run double-fire alongside an
+// already-scheduled run; this test fails first.
+func TestRetentionCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
+	opts := RetentionCleanupCheckPeriodicOpts()
+	require.True(t, opts.RunOnStart, "this pairing guarantee only matters when RunOnStart is true")
+
+	unique := RetentionCleanupCheckUniqueOpts()
+	require.NotNil(t, unique)
+	assert.NotZero(t, unique.ByPeriod,
+		"RunOnStart: true's catch-up insert is only safe when deduped against an "+
+			"already-scheduled run by a non-zero ByPeriod window")
+	require.NotEmpty(t, unique.ByState,
+		"RunOnStart: true's catch-up insert is only safe when deduped against an "+
+			"already-scheduled run by a non-empty ByState constraint")
+}
+
 // TestNewRetentionCleanupCheckWorker_DefaultLogger tests that nil logger uses default.
 func TestNewRetentionCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)

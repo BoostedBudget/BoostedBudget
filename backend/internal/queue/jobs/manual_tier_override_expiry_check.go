@@ -297,3 +297,27 @@ func ManualTierOverrideExpiryCheckInsertOpts() *river.InsertOpts {
 		},
 	}
 }
+
+// ManualTierOverrideExpiryCheckPeriodicOpts returns the *river.PeriodicJobOpts this job's
+// periodic registration in main.go must use.
+//
+// Issue #1413 P0: RunOnStart MUST be true. This job's own doc comment (see the periodic
+// registration in main.go) already establishes that it is the ONLY thing bounding how long
+// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline — so a duplicate OR
+// A MISSED run directly affects whether accounts are ever deleted. Round 8 (Issue #1413 G3)
+// fixed the duplicate half by extracting ManualTierOverrideExpiryCheckInsertOpts() above. This
+// fixes the missed half: river.NewPeriodicJob's doc comment says the periodic scheduler keeps
+// only in-memory state — every process restart or leader election recomputes nextRunAt as
+// ScheduleFunc(now) (now+24h) unless PeriodicJobOpts.ID is set, which this job (like all 14 in
+// main.go) leaves unset. With RunOnStart false, the catch-up insert is skipped
+// (river@v0.38.0 internal/maintenance/periodic_job_enqueuer.go:424-426), so on a repo that
+// deploys several times a day this daily job could be enqueued zero times, ever.
+//
+// RunOnStart: true is only safe here because ManualTierOverrideExpiryCheckInsertOpts() (used by
+// main.go's periodic registration) always carries ManualTierOverrideExpiryCheckUniqueOpts()'s
+// dedup, preventing a start-of-process catch-up run from double-firing alongside an
+// already-scheduled run. The two are only safe together: do not flip this to true for a job
+// whose InsertOpts lacks an equivalent UniqueOpts.
+func ManualTierOverrideExpiryCheckPeriodicOpts() *river.PeriodicJobOpts {
+	return &river.PeriodicJobOpts{RunOnStart: true}
+}
