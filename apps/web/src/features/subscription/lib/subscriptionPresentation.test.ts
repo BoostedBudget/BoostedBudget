@@ -16,12 +16,6 @@ describe('getSubscriptionPresentation', () => {
       expect(result.hasWriteAccess).toBe(true)
     })
 
-    it('suppresses billing nags', () => {
-      const result = getSubscriptionPresentation({ status: 'inactive', isComped: true })
-
-      expect(result.suppressBillingNags).toBe(true)
-    })
-
     it('carries compEndsAt when the comp has an end date', () => {
       const result = getSubscriptionPresentation({
         status: 'inactive',
@@ -82,12 +76,11 @@ describe('getSubscriptionPresentation', () => {
     )
 
     it.each(['inactive', 'cancelled', 'past_due'] as const)(
-      'denies write access for "%s" without suppressing billing nags',
+      'denies write access for "%s"',
       (status) => {
         const result = getSubscriptionPresentation({ status })
 
         expect(result.hasWriteAccess).toBe(false)
-        expect(result.suppressBillingNags).toBe(false)
       },
     )
   })

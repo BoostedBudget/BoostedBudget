@@ -369,7 +369,15 @@ describe('SubscriptionStatusBanner', () => {
       expect(mockTrackEvent).toHaveBeenCalledWith('subscription_banner_viewed', { status: 'comped' })
     })
 
-    it('uses the shared bannerCtaVariants primary variant for its CTA', () => {
+    // G9 (Issue #1413 AC 5): "no expiry banner, no upgrade nag" for comped users. The ratified
+    // refinement is that a comp ending within 14 days gets the dismissible, informative "ending
+    // soon" banner above — and it STAYS, that's not the nag. What must never appear alongside it
+    // is the upgrade/"View plans" CTA. (This replaces a prior test that asserted the opposite —
+    // that a `bannerCtaVariants` CTA link was present here — which was the bug: the CTA was
+    // reachable for exactly this comped-and-ending-soon case, since it's the only reachable
+    // state once `isComped` is true here at all — a permanent comp never reaches this render
+    // path in the first place.)
+    it('does not render the upgrade/View plans CTA for the ending-soon banner, only the dismiss control', () => {
       mockUseGetUserProfile.mockReturnValue({
         data: makeUser({ subscription_status: 'inactive', is_comped: true, comp_ends_at: inFuture(5) }),
         isLoading: false,
@@ -377,8 +385,13 @@ describe('SubscriptionStatusBanner', () => {
         refetch: () => Promise.resolve(),
       })
       render(<SubscriptionStatusBanner />)
-      const links = screen.getAllByRole('link')
-      expect(links.some((link) => link.className === bannerCtaVariants({ variant: 'primary' }))).toBe(true)
+      // Banner presence: the informative "ending soon" banner is a ratified design decision.
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      // CTA absence: no upgrade nag alongside it.
+      expect(screen.queryByText(/view plans/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('link')).not.toBeInTheDocument()
+      // The dismiss control is unaffected by the CTA removal.
+      expect(screen.getByRole('button', { name: /dismiss banner/i })).toBeInTheDocument()
     })
   })
 

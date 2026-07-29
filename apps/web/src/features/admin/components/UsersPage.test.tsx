@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
@@ -165,18 +165,36 @@ describe('UsersPage', () => {
     })
 
     it('should display tier using override-aware logic', () => {
+      // G7.4: the previous fixture had both rows independently render "Premium" — one via
+      // subscription_tier, one via manual_tier_override — so `getAllByText('Premium').length > 0`
+      // passed under override-AWARE logic (using manual_tier_override) and would have passed
+      // just as well under override-BLIND logic (using subscription_tier alone), since it never
+      // checked which source produced the badge. This fixture gives the override a DIFFERENT
+      // tier than subscription_tier so the two logics diverge and only the correct one passes.
+      const usersWithDivergentOverride = [
+        {
+          ...mockUsers[0],
+          subscription_tier: 'household_2',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: null,
+        },
+      ]
+
       mockUseListAdminUsers.mockReturnValue({
-        data: mockListResponse,
+        data: { ...mockListResponse, users: usersWithDivergentOverride, total_count: 1 },
         isLoading: false,
         error: null,
       })
 
       render(<UsersPage />, { wrapper: createWrapper() })
 
-      // user-2 has manual_tier_override='premium', so tier badge should show 'Premium'
-      // user-1 has no override, shows 'Premium' from subscription_tier
-      const tierBadges = screen.getAllByText('Premium')
-      expect(tierBadges.length).toBeGreaterThan(0)
+      // Scoped to the table: the tier filter dropdown also has a "Premium" <option>, which
+      // getByText('Premium') would otherwise ambiguously match too.
+      const table = screen.getByRole('table')
+      // Override-aware: shows the live override tier (Premium), never the raw subscription_tier
+      // (Household 2) it's overriding.
+      expect(within(table).getByText('Premium')).toBeInTheDocument()
+      expect(within(table).queryByText('Household 2')).not.toBeInTheDocument()
     })
 
     it('should show "—" in override status column when no override', () => {
