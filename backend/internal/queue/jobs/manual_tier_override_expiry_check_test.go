@@ -496,3 +496,54 @@ func TestManualTierOverrideExpiryCheckUniqueOpts(t *testing.T) {
 	assert.False(t, opts.ByArgs)
 	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
 }
+
+// ─── Issue #1413 G3: main.go must actually consume ManualTierOverrideExpiryCheckUniqueOpts ──
+//
+// main.go's periodic-job registration passed only &river.InsertOpts{Queue: "low"} — a
+// hand-written literal that never called ManualTierOverrideExpiryCheckUniqueOpts() (tested
+// above) at all, so the dedup it documents was never actually enforced in production: nothing
+// stopped two overlapping daily runs (or a duplicate periodic-job registration from a
+// redeployed/rolling River client) from both claiming the same lapsed overrides. That job is the
+// ONLY thing bounding how long noManualOverrideAtAllPredicate keeps a user out of the retention
+// pipeline (profile_repository.go), so duplicate or missed runs directly affect whether accounts
+// are ever deleted.
+//
+// ManualTierOverrideExpiryCheckInsertOpts extracts the FULL *river.InsertOpts construction (not
+// just the UniqueOpts) into this package so main.go can call a single function instead of
+// hand-writing a literal — main.go is not unit-testable itself, so this extraction is what turns
+// TestManualTierOverrideExpiryCheckInsertOpts_CarriesUniqueOpts below from an assertion about an
+// unconsumed struct into a real guarantee about what main.go's periodic-job registration ships,
+// once main.go calls this function directly (no more separate hand-copied literal to drift from
+// it, unlike the sibling jobs' RetentionCleanupCheckUniqueOpts / HouseholdMemberCleanupCheckUniqueOpts
+// / HouseholdOverCapacityCheckUniqueOpts, which main.go still hand-duplicates inline).
+
+// TestManualTierOverrideExpiryCheckInsertOpts_Queue verifies the extracted InsertOpts helper
+// sets Queue: "low", matching every other periodic maintenance job registered in main.go.
+func TestManualTierOverrideExpiryCheckInsertOpts_Queue(t *testing.T) {
+	opts := ManualTierOverrideExpiryCheckInsertOpts()
+
+	assert.Equal(t, "low", opts.Queue)
+}
+
+// TestManualTierOverrideExpiryCheckInsertOpts_CarriesUniqueOpts is the RED test for G3: proves
+// the InsertOpts this function returns — the value main.go's periodic-job registration will
+// call directly once wired — carries river-native UniqueOpts matching
+// ManualTierOverrideExpiryCheckUniqueOpts() field for field. Before this fix, main.go's
+// &river.InsertOpts{Queue: "low"} literal had a zero-value UniqueOpts (ByArgs: false,
+// ByPeriod: 0, ByState: nil), which River treats as "no uniqueness constraint at all" — this
+// test would have failed against that literal.
+func TestManualTierOverrideExpiryCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := ManualTierOverrideExpiryCheckInsertOpts()
+	want := ManualTierOverrideExpiryCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	assert.Equal(t, want.ByQueue, opts.UniqueOpts.ByQueue)
+
+	require.Len(t, opts.UniqueOpts.ByState, len(want.ByState),
+		"ByState must carry every state ManualTierOverrideExpiryCheckUniqueOpts() documents — an "+
+			"extra or missing entry changes which job states are deduplicated against")
+	for i, s := range want.ByState {
+		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
+	}
+}

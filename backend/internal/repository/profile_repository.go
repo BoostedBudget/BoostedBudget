@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -275,8 +276,26 @@ type ProfileRepository interface {
 
 // profileRepository implements ProfileRepository using PostgreSQL
 type profileRepository struct {
-	db  DB
-	enc *appcrypto.FieldEncryptor
+	db                    DB
+	enc                   *appcrypto.FieldEncryptor
+	overrideTierValidator func(tierName string) bool
+}
+
+// SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
+// names a real, currently-configured tier. GetEffectiveSubscriptionStatusByUserID uses it to
+// deny "active" for a malformed override (Issue #1413 G2) — see that method's doc comment.
+//
+// Setter injection (matching this codebase's existing SetAnalytics() convention — see
+// CLAUDE.md's Analytics Instrumentation section) rather than a NewProfileRepository parameter:
+// NewProfileRepository has ~70 call sites across this codebase's tests, and adding a required
+// constructor parameter would force every one of them to thread a tier validator through even
+// when the test never touches GetEffectiveSubscriptionStatusByUserID.
+//
+// Nil-safe: if this is never called, GetEffectiveSubscriptionStatusByUserID skips validation
+// entirely rather than denying every comp — see that method's doc comment for why "no validator"
+// is deliberately treated as permissive, not fail-closed.
+func (r *profileRepository) SetOverrideTierValidator(validator func(tierName string) bool) {
+	r.overrideTierValidator = validator
 }
 
 // NewProfileRepository creates a new ProfileRepository instance.
@@ -1164,9 +1183,35 @@ func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID
 // otherwise the raw subscription_status (Issue #1413). Used by the read-only middleware
 // (#930) for efficient per-request status checks.
 //
-// The override predicate is computed in Go via domain.User.ComputeEffectiveStatus rather
-// than in SQL, so this row-level read shares exactly one definition of "is the override
+// The override predicate is computed in Go via domain.User.EffectiveStatusWithActiveOverride
+// rather than in SQL, so this row-level read shares exactly one definition of "is the override
 // active" with every other caller of ComputeEffectiveStatus/ComputeEffectiveTier.
+//
+// Issue #1413 G2 — malformed override fails closed on THIS access path only: manual_tier_override
+// is an unconstrained VARCHAR(50) with no CHECK constraint (a migration adding one would fail on
+// any existing bad row, and tolerating such rows safely at read time is the whole point here), so
+// its value can be garbage — a legacy row, a direct SQL write, or a write made while the tier
+// config was nil (write-time validation in admin_user_service.go can be bypassed by all three).
+// When an active override is in effect, its value is checked against the injected
+// overrideTierValidator (see SetOverrideTierValidator) before "active" is trusted; a rejected
+// override falls back to the RAW subscription_status and is logged at warn (a silent denial here
+// would be indistinguishable from the original #1413 bug from the user's point of view).
+//
+// Deliberately NOT applied to the retention/deletion queries (noManualOverrideAtAllPredicate,
+// below): "fail closed" means the OPPOSITE thing on that axis — a malformed override must still
+// block deletion, not merely access, so those queries keep treating ANY non-empty override,
+// valid tier name or not, as "hands off". Unifying the two would either reopen this access hole
+// or start hard-deleting accounts whose only defect is a bad string in this column.
+//
+// If overrideTierValidator is nil (never wired via SetOverrideTierValidator), validation is
+// skipped and an active override grants "active" unconditionally — the pre-G2 behavior. This is
+// deliberate, not an oversight: main.go loads the tier config once at process startup and calls
+// os.Exit(1) if that fails, so in production the validator is either wired for the entire process
+// lifetime or the server never starts — there is no "config unavailable at read time" case to
+// handle for the real deployment. Failing closed on a nil validator instead (denying every comp
+// whenever some future construction path forgets to call SetOverrideTierValidator) would turn a
+// wiring oversight into an instant outage for every currently-comped user, which is its own
+// class of bug this fix is not trying to introduce.
 //
 // NOTE: this rename (from GetSubscriptionStatusByUserID) is deliberate, not cosmetic — the
 // old name described a raw column read; this method returns a computed value. Keeping the
@@ -1183,7 +1228,15 @@ func (r *profileRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.C
 	if err != nil {
 		return "", err
 	}
-	return u.ComputeEffectiveStatus(), nil
+
+	status, overrideValue, hasOverride := u.EffectiveStatusWithActiveOverride()
+	if hasOverride && r.overrideTierValidator != nil && !r.overrideTierValidator(overrideValue) {
+		slog.WarnContext(ctx, "rejecting manual tier override on access path: value does not name a configured tier",
+			"user_id", userID, "manual_tier_override", overrideValue)
+		return u.SubscriptionStatus, nil
+	}
+
+	return status, nil
 }
 
 // GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at

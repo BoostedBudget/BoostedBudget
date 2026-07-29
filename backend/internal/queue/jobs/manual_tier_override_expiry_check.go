@@ -19,6 +19,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // expireManualTierOverrideReason is the audit-log "reason" recorded for every system-initiated
@@ -258,6 +259,41 @@ func ManualTierOverrideExpiryCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+		},
+	}
+}
+
+// ManualTierOverrideExpiryCheckInsertOpts returns the *river.InsertOpts this job's periodic
+// registration in main.go must use — Queue: "low" plus the uniqueness options from
+// ManualTierOverrideExpiryCheckUniqueOpts(), converted from this package's queue-runner-agnostic
+// queue.UniqueOpts to the river.UniqueOpts type river.InsertOpts.UniqueOpts actually requires
+// (the same conversion internal/queue/river/client.go's toRiverUniqueOpts performs for the
+// general-purpose enqueue path).
+//
+// Issue #1413 G3: main.go's periodic-job registration previously passed only
+// &river.InsertOpts{Queue: "low"} — a hand-written literal that never called
+// ManualTierOverrideExpiryCheckUniqueOpts() at all, so the dedup that function documents (and
+// TestManualTierOverrideExpiryCheckUniqueOpts asserts) was never actually enforced in
+// production. main.go now calls THIS function directly instead of hand-writing the InsertOpts
+// literal, so main.go is no longer a second, independently-maintained expression of the same
+// shape (unlike this package's other periodic jobs' *UniqueOpts() helpers, which main.go still
+// hand-duplicates inline) — a future change to ManualTierOverrideExpiryCheckUniqueOpts()
+// automatically propagates to what actually ships.
+func ManualTierOverrideExpiryCheckInsertOpts() *river.InsertOpts {
+	unique := ManualTierOverrideExpiryCheckUniqueOpts()
+
+	states := make([]rivertype.JobState, len(unique.ByState))
+	for i, s := range unique.ByState {
+		states[i] = rivertype.JobState(s)
+	}
+
+	return &river.InsertOpts{
+		Queue: "low",
+		UniqueOpts: river.UniqueOpts{
+			ByArgs:   unique.ByArgs,
+			ByPeriod: unique.ByPeriod,
+			ByQueue:  unique.ByQueue,
+			ByState:  states,
 		},
 	}
 }

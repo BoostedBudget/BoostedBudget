@@ -239,6 +239,55 @@ func TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared(t *te
 	}
 }
 
+// TestRetentionQueries_Integration_MalformedOverride_StillExcluded is the "opposite pull" half
+// of the Issue #1413 G2 required test pair (see profile_repository_test.go's
+// TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_DoesNotGrantActive for the other
+// half, which proves the SAME override value denies access): a user whose manual_tier_override
+// names NO configured tier at all ('not_a_tier' — garbage, not a real tier name) must still be
+// EXCLUDED from every retention/deletion query, exactly as a validly-tiered override would be.
+// G2 only changes the ACCESS axis (GetEffectiveSubscriptionStatusByUserID) —
+// noManualOverrideAtAllPredicate must keep treating ANY non-empty override, garbage or not, as
+// "hands off". If a future change made this predicate tier-aware too, a malformed value in this
+// single unconstrained VARCHAR(50) column would silently flip from "denied write access" (safe)
+// to "eligible for hard deletion" (data loss) — the exact over-correction this test guards
+// against.
+func TestRetentionQueries_Integration_MalformedOverride_StillExcluded(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	tests := []struct {
+		name               string
+		retentionExpiresAt time.Time
+		query              func(context.Context) ([]*domain.User, error)
+	}{
+		{"30d_notice", time.Now().Add(15 * 24 * time.Hour), repo.GetUsersNeedingRetention30dNotice},
+		{"7d_notice", time.Now().Add(3 * 24 * time.Hour), repo.GetUsersNeedingRetention7dNotice},
+		{"expired_retention", time.Now().Add(-1 * time.Hour), repo.GetUsersWithExpiredRetention},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("malformed_%s_%d", tt.name, time.Now().UnixNano())
+			garbage := "not_a_tier"
+			user := createRetentionFixtureUser(t, ctx, pool, repo, suffix, tt.retentionExpiresAt, &garbage, nil)
+
+			users, err := tt.query(ctx)
+			require.NoError(t, err)
+
+			for _, u := range users {
+				if u.ID == user.ID {
+					t.Fatalf("user %s with a malformed manual_tier_override (%q, names no configured "+
+						"tier) must be EXCLUDED from retention/deletion selection — the retention "+
+						"predicate must treat ANY non-empty override as hands-off, valid tier name or "+
+						"not (Issue #1413 G2)", user.ID, garbage)
+				}
+			}
+		})
+	}
+}
+
 // TestNoActiveManualOverridePredicate_Integration_ParityWithGo is the point of Part B: the
 // override predicate now has two independent expressions of the SAME rule — Go
 // (domain.User.HasActiveManualOverride, used for row-level reads) and SQL
