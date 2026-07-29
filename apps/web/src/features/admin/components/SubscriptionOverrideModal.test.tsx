@@ -23,7 +23,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactNode } from 'react'
 // Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
 // Inline mock.module('sonner') would clobber the global mock and pollute other tests.
-import { mockToastSuccess, mockToastError } from '@/test/mocks/sonner'
+import { mockToastSuccess, mockToastError, mockToastWarning } from '@/test/mocks/sonner'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import {
@@ -45,6 +45,7 @@ const SUB_DETAIL = {
     base_tier: 'premium',
     effective_tier: 'premium',
     subscription_status: 'active',
+    effective_status: 'active',
     limits: {
         transaction_history_days: 730,
     },
@@ -56,6 +57,18 @@ const SUB_DETAIL = {
 const SUB_DETAIL_WITH_OVERRIDE = {
     ...SUB_DETAIL,
     base_tier: 'premium',
+    effective_tier: 'household_4',
+    manual_tier_override: 'household_4',
+    manual_tier_ends_at: null,
+}
+
+// G10 (AC 6): the raw subscription is inactive, but a LIVE manual override forces effective
+// access to active — a fixture where raw and effective genuinely diverge, so a test can tell
+// "shows both" apart from "shows raw only" (the pre-fix behavior).
+const SUB_DETAIL_EFFECTIVE_VIA_OVERRIDE = {
+    ...SUB_DETAIL,
+    subscription_status: 'inactive',
+    effective_status: 'active',
     effective_tier: 'household_4',
     manual_tier_override: 'household_4',
     manual_tier_ends_at: null,
@@ -88,6 +101,8 @@ describe('SubscriptionOverrideModal', () => {
         mockToastSuccess.mockClear()
         // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastError.mockClear()
+        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+        mockToastWarning.mockClear()
         mockTrackEvent.mockClear()
         mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
     })
@@ -121,6 +136,30 @@ describe('SubscriptionOverrideModal', () => {
         expect(screen.getAllByText(/Premium/i)).not.toHaveLength(0)
         expect(screen.getByText(/Status: active/i)).toBeInTheDocument()
         expect(screen.getByText('730d')).toBeInTheDocument()
+    })
+
+    // G10 (AC 6): this is the surface where an admin actually decides to grant or revoke a
+    // comp, so it must show BOTH raw and effective status — not raw alone. Reuses the shared
+    // subscriptionPresentation derivation + existing badge variants, and follows the users
+    // table's colour-independence precedent (an aria-label and a word, not colour alone).
+    it('shows both the raw and the effective status, not raw alone (G10)', async () => {
+        mockUseGetAdminUserSubscription.mockReturnValue({
+            isLoading: false,
+            data: SUB_DETAIL_EFFECTIVE_VIA_OVERRIDE,
+        })
+        render(
+            <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+            { wrapper }
+        )
+
+        // Raw status renders unchanged.
+        expect(await screen.findByText(/Status: inactive/i)).toBeInTheDocument()
+        // Effective status renders alongside it — a live override makes this user "Complimentary"
+        // (the shared derivation's comped kind/label), which genuinely diverges from the raw
+        // "inactive" status above, so this cannot be satisfied by raw status alone.
+        const effectiveBadge = screen.getByLabelText(/effective status: complimentary/i)
+        expect(effectiveBadge).toBeInTheDocument()
+        expect(effectiveBadge).toHaveTextContent('Complimentary')
     })
 
     it('masks the user email for PostHog session replay (Fix 5)', async () => {
@@ -225,10 +264,75 @@ describe('SubscriptionOverrideModal', () => {
         fireEvent.click(screen.getByRole('button', { name: /save override/i }))
 
         await waitFor(() => {
+            // G7.3: assert the exact applied payload (mirrors the ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED
+            // assertion below) — `expect.anything()` would pass even if `had_expiry` were dropped or
+            // `tier` sent the wrong value.
             expect(mockTrackEvent).toHaveBeenCalledWith(
                 ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED,
-                expect.anything()
+                { tier: 'household_2', had_expiry: false }
             )
+        })
+    })
+
+    // G4: the backend computes a warning when comping a household owner DOWN to a smaller tier
+    // risks LIFO-offboarding active members (admin_user_service.go:253-267), and appends it to
+    // the response `message` (admin_subscriptions.go:117-120). Before this fix the modal's
+    // onSuccess took no argument at all, so that warning never reached the admin — they only
+    // ever saw a generic "Subscription tier updated successfully" toast.
+    describe('Downgrade seat/offboard warning (G4)', () => {
+        const WARNING_MESSAGE =
+            'User subscription tier updated successfully Warning: "premium" includes 1 seat(s), ' +
+            'but this household has 4 active member(s); excess members may eventually be ' +
+            'offboarded unless the tier is increased or members are removed.'
+
+        it('shows a warning-styled toast (not a plain success) when the response message carries a seat warning', async () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { message: string }) => void } | undefined) => {
+                options?.onSuccess?.({ message: WARNING_MESSAGE })
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+            const onClose = mock(() => { })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={onClose} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'premium' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Gift for the holidays' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            await waitFor(() => {
+                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+                expect(mockToastWarning).toHaveBeenCalledWith(expect.stringContaining('Warning:'))
+                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+                expect(mockToastSuccess).not.toHaveBeenCalled()
+                expect(onClose).toHaveBeenCalled()
+            })
+        })
+
+        it('keeps the plain success toast when the response has no warning', async () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { message: string }) => void } | undefined) => {
+                options?.onSuccess?.({ message: 'User subscription tier updated successfully' })
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL })
+            mockUseUpdateAdminUserTier.mockReturnValue({ mutate: mockMutate, isPending: false })
+
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByLabelText(/new tier/i), { target: { value: 'household_2' } })
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'Happy birthday' } })
+            fireEvent.click(screen.getByRole('button', { name: /save override/i }))
+
+            await waitFor(() => {
+                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+                expect(mockToastSuccess).toHaveBeenCalledWith('Subscription tier updated successfully')
+                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+                expect(mockToastWarning).not.toHaveBeenCalled()
+            })
         })
     })
 
@@ -455,6 +559,53 @@ describe('SubscriptionOverrideModal', () => {
 
             expect(screen.getByRole('button', { name: /save override/i })).toBeDisabled()
             expect(screen.getByRole('button', { name: /removing/i })).toBeDisabled()
+        })
+    })
+
+    // G7 Fix 8: two structural properties that are implemented correctly today but were
+    // asserted nowhere, so a refactor could silently reintroduce either with a fully green
+    // suite. These assertions would fail if either were moved.
+    describe('Structural invariants (G7 Fix 8)', () => {
+        it('keeps the confirmation dialog mounted independently of the main dialog (sibling, not nested)', () => {
+            // ConfirmationDialog sits alongside <Dialog>, both children of the same top-level
+            // fragment — NOT nested inside <Dialog>/<DialogContent>. If it were ever moved to be a
+            // JSX descendant of the main Dialog instead, Radix would unmount it the moment the main
+            // dialog's `open` prop goes false, even though the confirmation's own `confirmRemove`
+            // state is untouched. Toggling `open` on the wrapper (a prop this test fully controls)
+            // while the confirmation is showing exercises exactly that.
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
+            const { rerender } = render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'No longer needed' } })
+            fireEvent.click(screen.getByRole('button', { name: /remove override/i }))
+            expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+            rerender(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={false} onClose={() => { }} />
+            )
+
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+            expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+        })
+
+        it('renders the Reason field outside the "Set Override" section so it visibly governs both actions', () => {
+            // Reason is shared by Save Override AND Remove Override — it sits as its own sibling
+            // section below "Set Override", not nested inside that fieldset. If it were ever moved
+            // inside "Set Override", it would misleadingly read as governing only Save Override.
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            const setOverrideSection = screen.getByText('Set Override').closest('div')
+            const reasonTextarea = screen.getByPlaceholderText(/gifted upgrade/i)
+
+            expect(setOverrideSection).not.toBeNull()
+            expect(setOverrideSection?.contains(reasonTextarea)).toBe(false)
         })
     })
 })

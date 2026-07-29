@@ -39,7 +39,6 @@ export interface SubscriptionPresentation {
   kind: SubscriptionKind
   hasWriteAccess: boolean // -> PremiumRoute's ReadOnlyProvider
   isUnknown: boolean // -> PremiumRoute's Navigate-to-/pricing branch
-  suppressBillingNags: boolean // -> banners, frozen banner, upgrade CTAs
   isComped: boolean
   compEndsAt?: string
   badgeVariant: NonNullable<BadgeProps['variant']>
@@ -134,7 +133,6 @@ export function getSubscriptionPresentation(signals: SubscriptionSignals): Subsc
     kind,
     hasWriteAccess: WRITABLE_KINDS.has(kind),
     isUnknown: kind === 'unknown',
-    suppressBillingNags: isComped,
     isComped,
     compEndsAt: signals.compEndsAt,
     badgeVariant: BADGE_VARIANT_BY_KIND[kind],

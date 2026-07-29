@@ -4,24 +4,23 @@
  * Issue #1413/#1414 Task 13b: Remove Override mutation hook + onSuccess invalidation coverage.
  *
  * Uses centralized mocks from src/test/mocks/admin-subscriptions-api.ts
+ *
+ * Issue #1413 Fix 7 (G7.5): this file previously called `mock.module()` on the api-client
+ * module directly, WITHOUT spreading the real module — replacing it with a 4-export stub
+ * process-globally for every file loaded later in the same bun process (the exact fragility
+ * SubscriptionOverrideModal.test.tsx was migrated away from — see
+ * feedback_bun_test_mock_module_global.md). Now it consumes the centralized, spread-based mock
+ * in src/test/mocks/admin-subscriptions-api.ts (preloaded via bunfig.toml) instead, same as
+ * SubscriptionOverrideModal.test.tsx — no local mock.module() call needed at all.
  */
-
-import { mock } from 'bun:test'
-
-// Mock the generated API client BEFORE importing anything else
-const mockUseGetAdminUserSubscription = mock(() => ({}))
-const mockUseUpdateAdminUserTier = mock((_options?: unknown) => ({}))
-const mockUseRemoveAdminUserTierOverride = mock((_options?: unknown) => ({}))
-
-mock.module('@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions', () => ({
-    useGetAdminUserSubscription: mockUseGetAdminUserSubscription,
-    useUpdateAdminUserTier: mockUseUpdateAdminUserTier,
-    useRemoveAdminUserTierOverride: mockUseRemoveAdminUserTierOverride,
-    getGetAdminUserSubscriptionQueryKey: (id: string) => [`/api/v1/admin/users/${id}/subscription`],
-}))
 
 import { describe, it, expect, beforeEach, spyOn } from 'bun:test'
 import { renderHook } from '@testing-library/react'
+import {
+    mockUseGetAdminUserSubscription,
+    mockUseUpdateAdminUserTier,
+    mockUseRemoveAdminUserTierOverride,
+} from '@/test/mocks/admin-subscriptions-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { getListAdminUsersQueryKey } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from './useAdminSubscription'

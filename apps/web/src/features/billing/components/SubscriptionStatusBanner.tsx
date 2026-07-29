@@ -100,15 +100,14 @@ export function SubscriptionStatusBanner() {
 
   const renderCta = () => {
     if (isComped) {
-      return (
-        <a
-          href="/pricing"
-          onClick={handleCtaClick}
-          className={bannerCtaVariants({ variant: 'primary' })}
-        >
-          View plans
-        </a>
-      )
+      // G9 (Issue #1413 AC 5): "no expiry banner, no upgrade nag" for comped users. This
+      // branch is only reached when `config` is non-null, which for a comped user only happens
+      // when the comp is ending soon (a permanent comp yields `config = null` above and never
+      // renders at all) — so an upgrade/"View plans" CTA here would show ONLY to a comped user
+      // approaching expiry, which is exactly the nag the AC forbids. The dismissible "ending
+      // soon" banner itself is a ratified, informative surface and stays; it just never gets a
+      // CTA next to it.
+      return null
     }
     if (isPastDue) {
       const portalUrl = billingPortalQuery.data?.portal_url

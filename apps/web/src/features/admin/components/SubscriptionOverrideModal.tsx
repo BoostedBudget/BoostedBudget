@@ -19,6 +19,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import {
@@ -34,6 +35,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from '../hooks/useAdminSubscription'
 
@@ -122,8 +124,19 @@ function SubscriptionOverrideForm({
                 },
             },
             {
-                onSuccess: () => {
-                    toast.success('Subscription tier updated successfully')
+                onSuccess: (data) => {
+                    // Defect 5 / G4: the backend appends a seat/offboard warning to `message`
+                    // when comping a household owner DOWN to a smaller tier risks LIFO-offboarding
+                    // active members (admin_user_service.go:253-267) — a destructive side effect of
+                    // what the admin intends as a gift. A plain green success toast would bury that
+                    // warning; surface it as a warning-styled toast instead so it reads as "this
+                    // needs your attention", never as an unqualified success.
+                    const message = data?.message
+                    if (message && message.includes('Warning:')) {
+                        toast.warning(message)
+                    } else {
+                        toast.success('Subscription tier updated successfully')
+                    }
                     trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED, {
                         tier: selectedTier,
                         had_expiry: !!expiresAt,
@@ -168,6 +181,21 @@ function SubscriptionOverrideForm({
     const hasOverride = !!sub?.manual_tier_override
     const isExpired =
         sub?.manual_tier_ends_at && new Date(sub.manual_tier_ends_at) < new Date()
+
+    // G10 (AC 6): this is the surface where an admin actually decides to grant or revoke a
+    // comp, so it must show both raw AND effective status — not raw alone. Reuses the shared
+    // derivation (and its existing badge variants) rather than a bespoke mapping, exactly like
+    // UsersPage's "Comped" chip. `AdminSubscriptionDetailOutputBody` has no server-computed
+    // `is_comped` — only `effective_status` (does this user have write access right now), which
+    // answers a different question than "is this user comped by a LIVE override" — an expired
+    // override must not still read as comped, so isComped is derived from the same
+    // hasOverride/isExpired predicate as the rest of this modal, not from effective_status.
+    const presentation = getSubscriptionPresentation({
+        status: sub?.subscription_status ?? '',
+        effectiveStatus: sub?.effective_status,
+        isComped: hasOverride && !isExpired,
+        compEndsAt: sub?.manual_tier_ends_at ?? undefined,
+    })
 
     // Fix 6: a user's own GDPR deletion request beats an admin comp — the backend deliberately
     // leaves the deletion path alone, so comping will NOT cancel it. Prefer the scheduled date
@@ -225,6 +253,17 @@ function SubscriptionOverrideForm({
                                     </span>
                                     <span className="inline-flex items-center gap-1">
                                         <TrendingUp size={14} /> Status: {sub.subscription_status}
+                                    </span>
+                                    <span className="inline-flex items-center gap-1">
+                                        Effective:
+                                        <Badge
+                                            variant={presentation.badgeVariant}
+                                            size="sm"
+                                            aria-label={`Effective status: ${presentation.badgeLabel}`}
+                                            title={`Effective status: ${presentation.badgeLabel}`}
+                                        >
+                                            {presentation.badgeLabel}
+                                        </Badge>
                                     </span>
                                 </div>
 
