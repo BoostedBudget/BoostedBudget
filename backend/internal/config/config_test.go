@@ -68,9 +68,37 @@ func TestLoad_ProductionValidation_PassesWithAllRequiredFields(t *testing.T) {
 	t.Setenv("PADDLE_API_KEY", "test-api-key")
 	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
 	t.Setenv("CF_ORIGIN_SECRET", "a3f9e2c1b0d84726f5e3a1c0b9d87264a3f9e2c1b0d84726f5e3a1c0b9d87264")
+	t.Setenv("DELETION_TOKEN_SECRET", "test-deletion-token-secret")
 
 	_, err := Load()
 	assert.NoError(t, err)
+}
+
+// TestLoad_ProductionValidation_RequiresDeletionTokenSecret is the RED test for Issue #1413
+// round-8 Blocker 2 (Codex review): RetentionCleanupCheckWorker.repairPlaidDisconnects is the ONLY
+// place a read-only user's Plaid items are ever disconnected, and (before this fix) the worker was
+// constructed only when DELETION_TOKEN_SECRET was set — but production/staging validation never
+// checked that secret was present at all. A deployment with valid Plaid/Paddle credentials but no
+// DELETION_TOKEN_SECRET would pass validation and silently never disconnect anyone. This test
+// proves validate() now catches that misconfiguration as belt-and-braces, independent of the
+// main.go construction fix (which decouples the worker's construction from this secret so the
+// repair pass runs even when this validation is somehow bypassed).
+func TestLoad_ProductionValidation_RequiresDeletionTokenSecret(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
+	t.Setenv("CLERK_SECRET_KEY", "sk_live_test")
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://boostedbudget.com")
+	t.Setenv("PLAID_CLIENT_ID", "test-client-id")
+	t.Setenv("PLAID_SECRET", "test-secret")
+	t.Setenv("PADDLE_API_KEY", "test-api-key")
+	t.Setenv("PADDLE_WEBHOOK_SECRET", "test-webhook-secret")
+	t.Setenv("CF_ORIGIN_SECRET", "a3f9e2c1b0d84726f5e3a1c0b9d87264a3f9e2c1b0d84726f5e3a1c0b9d87264")
+	// Intentionally NOT setting DELETION_TOKEN_SECRET
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DELETION_TOKEN_SECRET")
 }
 
 func TestLoad_ProductionValidation_RequiresCFOriginSecret(t *testing.T) {
@@ -194,6 +222,7 @@ func TestLoad_ProductionValidation_AggregatesErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "PLAID")
 	assert.Contains(t, err.Error(), "PADDLE")
 	assert.Contains(t, err.Error(), "CF_ORIGIN_SECRET")
+	assert.Contains(t, err.Error(), "DELETION_TOKEN_SECRET")
 }
 
 func TestLoad_DevelopmentSkipsValidation(t *testing.T) {

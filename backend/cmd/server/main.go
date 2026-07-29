@@ -696,21 +696,6 @@ func main() {
 			})
 			appLogger.Info("Scheduled deletion check worker created (River)")
 
-			// Issue #930: Create retention cleanup check worker
-			// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
-			retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
-				ProfileRepo:     profileRepo,
-				DeletionService: deletionService,
-				RetentionMonths: cfg.RetentionPeriodMonths,
-				Logger:          appLogger,
-			})
-			// Issue #1413 Medium finding M9 (Codex review round 3): required for
-			// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
-			// before a notice email is sent — replaces the old ClaimRetentionNotice30dSent/7dSent,
-			// which stamped the *_sent_at marker BEFORE the send was attempted.
-			retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
-			appLogger.Info("Retention cleanup check worker created (River)")
-
 			// Issue #633: Create DLQ cleanup worker
 			dlqCleanupCheckWorker = jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{
 				Repo:          deadLetterJobRepo,
@@ -719,8 +704,33 @@ func main() {
 			})
 			appLogger.Info("DLQ cleanup check worker created (River)")
 		} else {
-			appLogger.Warn("Deletion services disabled (requires DELETION_TOKEN_SECRET)")
+			appLogger.Warn("Hard-deletion services disabled (requires DELETION_TOKEN_SECRET) — account-deletion routes/workers unavailable; retention-clock repair and Plaid-disconnect repair are unaffected (constructed unconditionally below)")
 		}
+
+		// Issue #930: Create retention cleanup check worker. Issue #1413 round-8 Blocker 2
+		// (Codex review): this MUST be constructed unconditionally, outside the
+		// cfg.DeletionTokenSecret gate above — retentionCleanupCheckWorker.repairPlaidDisconnects
+		// is the ONLY place a read-only user's Plaid items are ever disconnected (see that
+		// function's doc comment), so gating its construction on an unrelated secret meant a
+		// production deployment with perfectly good Plaid credentials but no
+		// DELETION_TOKEN_SECRET would silently never disconnect anyone. deletionService may
+		// still be nil here (DELETION_TOKEN_SECRET unset) — that only disables Step 3's
+		// auto-deletion (deleteExpiredAccounts nil-guards it and logs a warning instead of
+		// panicking); Steps 0/0b/1/2 (retention-clock repair, Plaid-disconnect repair, 30d/7d
+		// notices) all run regardless, since none of them touch deletionService at all.
+		// Note: EmailService is nil in MVP — notice emails are skipped until Phase 3 email templates
+		retentionCleanupCheckWorker = jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{
+			ProfileRepo:     profileRepo,
+			DeletionService: deletionService,
+			RetentionMonths: cfg.RetentionPeriodMonths,
+			Logger:          appLogger,
+		})
+		// Issue #1413 Medium finding M9 (Codex review round 3): required for
+		// send30dNotices/send7dNotices to gain EXCLUSIVITY on ActionRetentionNotice30d/7d
+		// before a notice email is sent — replaces the old ClaimRetentionNotice30dSent/7dSent,
+		// which stamped the *_sent_at marker BEFORE the send was attempted.
+		retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
+		appLogger.Info("Retention cleanup check worker created (River)")
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
 		if cfg.PaddleAPIKey != "" {
