@@ -791,6 +791,10 @@ func main() {
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
 		// #1367 — Phase 3: exempt actively covered household members from trial expiry.
 		trialService.SetHouseholdChecker(householdEntitlementService)
+		// Issue #1413 round-4 finding H2: required for ExpireTrial to gain EXCLUSIVITY on
+		// ActionTrialExpiration before its Plaid disconnect — trial_service was the one
+		// destructive flow in this branch with no work_claims flow claim at all.
+		trialService.SetWorkClaimsRepo(workClaimsRepo)
 		appLogger.Info("Trial service initialized")
 
 		// Issue #898: Create PastDueService unconditionally; plaidCleanup wired later if Plaid is configured.

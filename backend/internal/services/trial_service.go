@@ -11,6 +11,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // TrialRepository defines the repository methods needed by TrialService
@@ -45,6 +46,13 @@ type PlaidCleanupForTrial interface {
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 }
 
+// trialExpirationClaimLease is the lease duration requested for ActionTrialExpiration — matches
+// ExecuteDeletion's accountDeletionClaimLease and PastDueService's pastDueClaimLease (Issue
+// #1413 round-4 finding H2). Generous beats tight, and the fencing token
+// (repository.WorkClaimsRepository) makes a lease over-run detectable rather than silently
+// re-granted to a second worker.
+const trialExpirationClaimLease = 15 * time.Minute
+
 // householdCoverageCheckerForTrial is the narrow capability TrialService needs to
 // detect an active household-sourced entitlement, so the daily trial-expiry job
 // doesn't flip a covered member to inactive and disconnect their Plaid items despite
@@ -61,6 +69,7 @@ type TrialService struct {
 	repo             TrialRepository
 	plaidCleanup     PlaidCleanupForTrial
 	householdChecker householdCoverageCheckerForTrial // #1367 — Phase 3: nil skips the exemption
+	claimsRepo       repository.WorkClaimsRepository  // #1413 round-4 H2: required, see SetWorkClaimsRepo
 	retentionMonths  int                              // #930: Months before auto-deletion after trial expiry
 	logger           *slog.Logger
 }
@@ -100,6 +109,17 @@ func (s *TrialService) SetRetentionMonths(months int) {
 // ExpireTrial already nil-guards plaidCleanup before calling it.
 func (s *TrialService) SetPlaidCleanup(svc PlaidCleanupForTrial) {
 	s.plaidCleanup = svc
+}
+
+// SetWorkClaimsRepo wires the durable work-claims mechanism ExpireTrial requires for
+// EXCLUSIVITY on ActionTrialExpiration before its Plaid disconnect. Issue #1413 round-4 finding
+// H2: trial_service was the one destructive flow in this branch with no work_claims flow claim
+// at all — every sibling flow (DeletionService, PastDueService, SubscriptionWebhookWorker,
+// PlaidItemCleanupService) already requires one. Mirrors those services' SetWorkClaimsRepo: not
+// an optional capability — a nil claims repo makes ExpireTrial fail loudly rather than silently
+// falling back to CAS-only behavior.
+func (s *TrialService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
+	s.claimsRepo = repo
 }
 
 // GrantTrial grants a trial to a user
@@ -231,17 +251,42 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		"previous_status", user.SubscriptionStatus,
 	)
 
+	// Issue #1413 round-4 finding H2: gain EXCLUSIVITY via a durable work claim BEFORE any
+	// destructive work — mirrors PastDueService.processGraceExpiry's shape (Claim, then
+	// re-verify via a CAS, then external work, then Complete/Release). ExpireTrialIfNoOverride's
+	// own conditional UPDATE already gives this write its correctness against a comp granted in
+	// the window since the plain read above; this claim adds the same EXCLUSIVITY guarantee
+	// every other destructive flow in this branch already has, and — the practical benefit here
+	// — turns the Plaid-disconnect collaborator call below into something a lost claim can
+	// legitimately skip, rather than one that always runs regardless.
+	if s.claimsRepo == nil {
+		return fmt.Errorf("ExpireTrial: work claims repository not configured")
+	}
+	token, claimed, err := s.claimsRepo.Claim(ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, trialExpirationClaimLease)
+	if err != nil {
+		return fmt.Errorf("failed to claim trial expiration for user %s: %w", userID, err)
+	}
+	if !claimed {
+		// Another worker already holds this lease, or trial expiration was already completed
+		// for this user. Legitimate, expected outcome — not an error.
+		s.logger.Info("trial expiry claim lost — another worker holds it, or it was already completed",
+			"user_id", userID)
+		return nil
+	}
+
 	// #1413 High finding H5 (Codex review round 3): the HasActiveManualOverride() guard above is
 	// a plain read and is NOT atomic with this write — an admin can grant/extend a comp in the
 	// window between that check and here. Replace the unconditional status write with a
 	// conditional transition that re-verifies "still trial, still no live override" against
 	// committed state at the moment of the write itself. A lost claim is a legitimate skip (the
 	// comp already granted access), not a failure — retention and Plaid must NOT be touched.
-	claimed, err := s.repo.ExpireTrialIfNoOverride(ctx, userID)
+	flipped, err := s.repo.ExpireTrialIfNoOverride(ctx, userID)
 	if err != nil {
+		s.releaseClaimOnFailure(ctx, userID, token, err.Error())
 		return fmt.Errorf("failed to expire trial status: %w", err)
 	}
-	if !claimed {
+	if !flipped {
+		s.releaseClaimOnFailure(ctx, userID, token, "precondition lost — comp granted concurrently")
 		s.logger.Info("trial expiry claim lost — user comped concurrently, skipping",
 			"user_id", userID)
 		return nil
@@ -253,15 +298,44 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
 	}
 
-	// Disconnect all Plaid items (preserves transaction history)
+	// Disconnect all Plaid items (preserves transaction history).
+	//
+	// Issue #1413 round-4 finding H2: re-check the comp predicate ONE more time, as late as the
+	// code can make it — immediately before this external call — narrowing (not eliminating) the
+	// window a comp granted after the CAS above could slip through. No database mechanism can
+	// make this window zero: there is always some interval between the last possible check and
+	// an external API call, and a worker already inside a Plaid call cannot be recalled — so this
+	// is a best-effort narrowing, not a closure, and the residual left after it is DELIBERATELY
+	// accepted rather than built further against (see the caution in this issue's brief against
+	// overbuilding H2). Unlike C1's irreversible-deletion residual, the consequence here is
+	// acceptable: a Plaid disconnect is recoverable (the user relinks their accounts), and the
+	// retention clock this run just started is cleared the moment the comp is applied (see
+	// ClearRetentionDates, called wherever a comp/resubscription is granted) — inconvenience, not
+	// data loss.
 	if s.plaidCleanup != nil {
-		err = s.plaidCleanup.DisconnectAllUserItems(ctx, userID)
-		if err != nil {
-			// Log but don't fail - the subscription status is already updated
-			s.logger.Warn("failed to disconnect Plaid items during trial expiration",
-				"user_id", userID,
-				"error", err,
-			)
+		shouldDisconnect := true
+		if latest, err := s.repo.GetUserByID(ctx, userID); err != nil {
+			s.logger.Warn("failed to re-read user before trial-expiry Plaid disconnect; proceeding with disconnect",
+				"user_id", userID, "error", err)
+		} else if latest.HasActiveManualOverride() {
+			shouldDisconnect = false
+			s.logger.Info("skipping trial-expiry Plaid disconnect — comp granted since the status flip",
+				"user_id", userID)
+		}
+		if shouldDisconnect {
+			if err := s.plaidCleanup.DisconnectAllUserItems(ctx, userID); err != nil {
+				// Log but don't fail - the subscription status is already updated. Matches this
+				// flow's pre-existing graceful-degradation contract (unlike PastDueService/
+				// DeletionService, which abort-and-release on a Plaid failure) — not something
+				// this task's H2 fix is asked to change (see the brief's "do not overbuild"
+				// caution). The claim is still completed below regardless, since nothing in this
+				// codebase would ever retry a failed disconnect here either way: once flipped out
+				// of 'trial', GetUsersWithExpiredTrials never reselects this user again.
+				s.logger.Warn("failed to disconnect Plaid items during trial expiration",
+					"user_id", userID,
+					"error", err,
+				)
+			}
 		}
 	}
 
@@ -270,7 +344,24 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		"new_status", domain.SubscriptionStatusInactive,
 	)
 
+	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, token)
+	if err != nil {
+		s.logger.Error("failed to mark trial expiration claim complete", "user_id", userID, "action", repository.ActionTrialExpiration, "error", err)
+	} else if !completed {
+		s.logger.Error("trial expiration claim lease lost mid-flight — Plaid disconnect may have run twice",
+			"user_id", userID, "action", repository.ActionTrialExpiration)
+	}
+
 	return nil
+}
+
+// releaseClaimOnFailure releases the ActionTrialExpiration work claim and logs any release
+// failure. Mirrors PastDueService.releaseClaimOnFailure's consolidation of the repeated
+// Release + Warn pattern.
+func (s *TrialService) releaseClaimOnFailure(ctx context.Context, userID, token, reason string) {
+	if _, releaseErr := s.claimsRepo.Release(ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, token, reason); releaseErr != nil {
+		s.logger.Warn("failed to release trial expiration work claim", "user_id", userID, "reason", reason, "error", releaseErr)
+	}
 }
 
 // CanGrantTrial returns true if the user can receive a trial
