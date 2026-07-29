@@ -440,3 +440,88 @@ func TestPlaidDisconnectRepair_Integration_ExcludesDeletionPending(t *testing.T)
 		assert.NotEqual(t, user.ID, c.ID, "a user with an outstanding GDPR deletion request must never be a repair candidate")
 	}
 }
+
+// TestPlaidDisconnectRepairEligibleStatus_Integration_ParityWithGo is the Issue #1413 round-8
+// High 4 parity test (Codex review): proves plaidDisconnectRepairEligibleStatusPredicate (the SQL
+// half, profile_repository.go) and domain.SubscriptionStatus.IsEligibleForPlaidDisconnectRepair()
+// (the Go half, used by retention_cleanup_check.go's per-item recheck) agree for every subscription
+// status value. Mirrors this branch's existing precedent for this exact failure class —
+// noActiveManualOverridePredicate / domain.User.HasActiveManualOverride(), guarded by
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo
+// (profile_repository_manual_override_retention_integration_test.go) — one shared definition of
+// "which statuses are eligible", kept honest by running the EXACT production SQL constant against
+// the EXACT production Go method, not a hand-copied re-statement of either.
+//
+// Falsifiability: reverting the Go recheck (or this predicate) to include/exclude 'past_due'
+// differently than the other makes this test fail.
+func TestPlaidDisconnectRepairEligibleStatus_Integration_ParityWithGo(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	statuses := []domain.SubscriptionStatus{
+		domain.SubscriptionStatusActive,
+		domain.SubscriptionStatusInactive,
+		domain.SubscriptionStatusTrial,
+		domain.SubscriptionStatusTrialing,
+		domain.SubscriptionStatusCancelled,
+		domain.SubscriptionStatusPastDue,
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	type statusRow struct {
+		status domain.SubscriptionStatus
+		userID string
+	}
+	var rows []statusRow
+
+	for i, status := range statuses {
+		id := fmt.Sprintf("plaidstatusparity_%s_%d", suffix, i)
+		user := &domain.User{
+			ClerkUserID:        "clerk_" + id,
+			Email:              id + "@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: string(status),
+			PrimaryRegion:      "iad",
+			IsActive:           true,
+		}
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+		require.NoError(t, tx.Commit(ctx))
+		userID := user.ID
+		t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) }) //nolint:errcheck
+
+		rows = append(rows, statusRow{status: status, userID: userID})
+	}
+
+	require.Len(t, rows, len(statuses), "one fixture per known subscription status")
+
+	// Ask the SQL predicate, for every inserted row, which ids it considers eligible. This runs
+	// the EXACT production constant, not a hand-copied re-statement of it.
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.userID
+	}
+
+	sqlRows, err := pool.Query(ctx, `SELECT id FROM users WHERE id = ANY($1) AND `+plaidDisconnectRepairEligibleStatusPredicate, ids)
+	require.NoError(t, err)
+	sqlEligible := make(map[string]bool, len(rows))
+	for sqlRows.Next() {
+		var id string
+		require.NoError(t, sqlRows.Scan(&id))
+		sqlEligible[id] = true
+	}
+	require.NoError(t, sqlRows.Err())
+	sqlRows.Close()
+
+	for _, r := range rows {
+		goSaysEligible := r.status.IsEligibleForPlaidDisconnectRepair()
+		sqlSaysEligible := sqlEligible[r.userID]
+		if goSaysEligible != sqlSaysEligible {
+			t.Errorf("parity mismatch for status=%q: Go.IsEligibleForPlaidDisconnectRepair()=%v, SQL plaidDisconnectRepairEligibleStatusPredicate says eligible=%v",
+				r.status, goSaysEligible, sqlSaysEligible)
+		}
+	}
+}

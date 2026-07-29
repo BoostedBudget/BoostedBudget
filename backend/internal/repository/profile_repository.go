@@ -1706,6 +1706,22 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 	return ct.RowsAffected() > 0, nil
 }
 
+// plaidDisconnectRepairEligibleStatusPredicate is the SQL twin of
+// domain.SubscriptionStatus.IsEligibleForPlaidDisconnectRepair() — Issue #1413 round-8 High 4
+// (Codex review). Deliberately NARROWER than the read-only notion used by the retention-notice/
+// hard-delete queries above (which also don't include past_due, but for a different family of
+// predicates entirely): 'past_due' is read-only, but must never be immediately Plaid-disconnected
+// by THIS repair pass — it has its own dunning timeline (past_due_service.go,
+// PastDueConfig.PlaidDisconnectDays) that exists precisely to give a paying-but-behind user time
+// before Plaid access is touched. This branch already has a precedent for this exact failure class
+// — an override predicate existing in both SQL and Go, kept honest by a parity test
+// (noActiveManualOverridePredicate / domain.User.HasActiveManualOverride(), guarded by
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — this constant and
+// TestPlaidDisconnectRepairEligibleStatus_Integration_ParityWithGo
+// (profile_repository_plaid_disconnect_repair_integration_test.go) do the same here: one shared
+// definition of "which statuses are eligible" instead of a third divergent copy.
+const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('inactive', 'cancelled')`
+
 // GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-7 grace-window repair
 // path — see the interface doc comment for the full rationale. Mirrors
 // GetUsersNeedingRetentionClockRepair's predicate shape, plus:
@@ -1720,7 +1736,7 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
 	cutoff := time.Now().Add(-gracePeriod)
 	query := userSelectQuery + `
-		WHERE subscription_status IN ('inactive', 'cancelled')
+		WHERE ` + plaidDisconnectRepairEligibleStatusPredicate + `
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND retention_started_at < $1
