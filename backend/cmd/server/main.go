@@ -988,6 +988,14 @@ func main() {
 				pastDueService.SetPlaidCleanup(plaidCleanupService)
 				appLogger.Info("Plaid cleanup service wired to past-due service")
 
+				// Issue #1413 round-6: wire Plaid cleanup to the retention cleanup check worker's
+				// Plaid-disconnect repair pass (created before this Plaid block, with nil cleanup —
+				// same late-binding pattern as trial/past-due service above).
+				if retentionCleanupCheckWorker != nil {
+					retentionCleanupCheckWorker.SetPlaidCleanup(plaidCleanupService)
+					appLogger.Info("Plaid cleanup service wired to retention cleanup check worker")
+				}
+
 				// Issue #36: Transaction Monitor Service for auto-detecting completed transfers
 				transactionMonitorService := services.NewTransactionMonitorService(transferSuggestionRepo)
 

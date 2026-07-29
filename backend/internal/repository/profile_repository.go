@@ -272,6 +272,24 @@ type ProfileRepository interface {
 	// deletion requested, or status changed) since the candidate query ran — a legitimate skip,
 	// not an error.
 	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
+
+	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
+	// (inactive/cancelled) but still have at least one LIVE linked item (status NOT IN
+	// ('disconnected', 'replaced') — see LinkedItemRepository.GetActiveItemsByUserID for how
+	// "live" is already expressed). Issue #1413 round-6 repair path: TrialService.ExpireTrial's
+	// round-5 reordering (disconnect Plaid BEFORE the CAS flip) was itself the regression this
+	// closes — it opened a writable window on 'trial' (a WRITABLE status, unlike past_due), so a
+	// concurrent checkout or account-linking request could race the disconnect. The fix restores
+	// CAS-FIRST ordering (flip, then disconnect), which eliminates that writable window instead of
+	// narrowing it — but it also means a disconnect that fails, or never runs at all (process
+	// killed between the flip and the disconnect call), now leaves the user stuck: already
+	// read-only, but with live Plaid items GetUsersWithExpiredTrials can never re-select them to
+	// retry, since their subscription_status is no longer 'trial'. This query is the backstop, and
+	// its predicate mirrors GetUsersNeedingRetentionClockRepair's shape exactly (subscription_status
+	// IN ('inactive', 'cancelled'), not deleted, no outstanding GDPR deletion request, no
+	// manual_tier_override at all — live or lapsed) so a comped or already-deletion-pending user is
+	// never touched, plus the live-linked-item existence check.
+	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error)
 }
 
 // profileRepository implements ProfileRepository using PostgreSQL
@@ -1661,6 +1679,34 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 		return false, fmt.Errorf("RepairRetentionClock: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
+}
+
+// GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-6 repair path — see the
+// interface doc comment for the full rationale. Mirrors GetUsersNeedingRetentionClockRepair's
+// predicate shape, plus an EXISTS check for at least one linked item that is still "live" — not
+// 'disconnected' or 'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID
+// already uses to decide what DisconnectAllUserItems has left to do.
+func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+	query := userSelectQuery + `
+		WHERE subscription_status IN ('inactive', 'cancelled')
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		  AND EXISTS (
+		      SELECT 1 FROM linked_items
+		      WHERE linked_items.user_id = users.id
+		        AND linked_items.status NOT IN ('disconnected', 'replaced')
+		  )
+	` + noManualOverrideAtAllPredicate + `
+		ORDER BY updated_at ASC
+	`
+	users, err := r.queryUsers(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if users == nil {
+		return []*domain.User{}, nil
+	}
+	return users, nil
 }
 
 // expiredManualTierOverridePredicate selects users with a manual tier override that has

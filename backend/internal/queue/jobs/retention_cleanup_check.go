@@ -4,6 +4,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 )
 
@@ -58,6 +60,25 @@ type RetentionProfileRepository interface {
 	// clobbering it), unlike the destructive external side effects work_claims exists to guard.
 	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
 
+	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
+	// (inactive/cancelled) but still have at least one LIVE linked item — Issue #1413 round-6
+	// repair path. See ProfileRepository.GetUsersNeedingPlaidDisconnectRepair's doc comment
+	// (profile_repository.go) for the full rationale: TrialService.ExpireTrial's CAS-first
+	// reordering means a Plaid disconnect that fails, or never runs at all (process killed between
+	// the flip and the disconnect call), leaves the user stuck read-only with live Plaid items that
+	// GetUsersWithExpiredTrials can no longer re-select. repairPlaidDisconnects (below) is the
+	// consumer, mirroring repairRetentionClocks's shape for the retention clock.
+	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error)
+
+	// GetUserByID retrieves a user by their internal UUID — used by repairPlaidDisconnects to
+	// re-verify a candidate is STILL read-only-status and uncomped immediately before calling
+	// DisconnectAllUserItems. Unlike RepairRetentionClock, the repair action here is an external
+	// Plaid call with no atomic DB guard of its own, so this re-read is what stands in for that
+	// guard — without it, a stale candidate who resubscribed since the query ran would have their
+	// genuinely-live Plaid items disconnected, reproducing the exact harm this repair pass exists
+	// to fix via a different code path.
+	GetUserByID(ctx context.Context, userID string) (*domain.User, error)
+
 	// IsRetentionNotice30dEligibleForOccurrence re-verifies, at the moment the caller already
 	// holds an exclusive work_claims claim on repository.ActionRetentionNotice30d, that a user is
 	// still eligible for the 30-day notice: still in the notice window, still unsent, carrying no
@@ -99,6 +120,19 @@ type RetentionEmailService interface {
 	SendRetentionNoticeEmail(ctx context.Context, toEmail, subject, body string) error
 }
 
+// RetentionPlaidCleanup defines the Plaid cleanup operation needed by repairPlaidDisconnects —
+// Issue #1413 round-6 repair path. Narrow, single-method interface mirroring this codebase's
+// existing per-consumer convention (PastDuePlaidCleanup, PlaidCleanupForTrial,
+// PlaidItemCleanupForWebhook) rather than depending on the full services.PlaidItemCleanupService.
+// DisconnectAllUserItems is itself idempotent and self-claiming (repository.ActionPlaidDisconnectUser,
+// via services.claimSideEffectAndRun) — repairPlaidDisconnects does not need its own additional
+// claim around this call.
+type RetentionPlaidCleanup interface {
+	// DisconnectAllUserItems calls Plaid /item/remove for all items then marks them as
+	// 'disconnected' (preserves transaction history).
+	DisconnectAllUserItems(ctx context.Context, userID string) error
+}
+
 // RetentionCleanupCheckWorker processes retention cleanup check jobs.
 // It handles the daily lifecycle of inactive/cancelled accounts:
 //   - 30d before expiry: warn user via email
@@ -110,6 +144,10 @@ type RetentionCleanupCheckWorker struct {
 	profileRepo     RetentionProfileRepository
 	deletionService RetentionDeletionService
 	emailService    RetentionEmailService
+	// plaidCleanup backs repairPlaidDisconnects (Issue #1413 round-6 repair path). Nil-safe: wired
+	// via SetPlaidCleanup() after Plaid is configured, mirroring TrialService/PastDueService's own
+	// SetPlaidCleanup convention — nil simply skips the repair pass (logged) rather than panicking.
+	plaidCleanup RetentionPlaidCleanup
 	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
 	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
 	// finding M9, Codex review round 3). See SetWorkClaimsRepo — like
@@ -156,6 +194,15 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 // every candidate rather than silently reverting to the old conflated claim-marker behavior.
 func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {
 	w.claimsRepo = repo
+}
+
+// SetPlaidCleanup wires the Plaid cleanup collaborator repairPlaidDisconnects requires — Issue
+// #1413 round-6 repair path. Called after Plaid is configured (main.go), mirroring
+// TrialService.SetPlaidCleanup/PastDueService.SetPlaidCleanup's late-binding convention. Nil-safe:
+// an unset (nil) plaidCleanup makes repairPlaidDisconnects log and skip rather than panic, so
+// existing deployments without Plaid configured are unaffected.
+func (w *RetentionCleanupCheckWorker) SetPlaidCleanup(c RetentionPlaidCleanup) {
+	w.plaidCleanup = c
 }
 
 // releaseClaimOnFailure releases a work claim and logs any release failure. Mirrors
@@ -211,6 +258,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	// block deletion processing, which is the more time-sensitive step.
 	if repairErr := w.repairRetentionClocks(ctx, job.ID); repairErr != nil {
 		w.logger.Error("failed to repair retention clocks",
+			"job_id", job.ID,
+			"error", repairErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0b: Repair any read-only-status user whose Plaid disconnect failed or never ran —
+	// Issue #1413 round-6 repair path. TrialService.ExpireTrial's CAS-first reordering means the
+	// status flip no longer depends on a successful Plaid disconnect, so a disconnect failure (or a
+	// process killed between the flip and the disconnect call) can leave a user read-only with live
+	// Plaid items that GetUsersWithExpiredTrials can no longer re-select. Non-fatal like Step 0/1/2.
+	if repairErr := w.repairPlaidDisconnects(ctx, job.ID); repairErr != nil {
+		w.logger.Error("failed to repair Plaid disconnects",
 			"job_id", job.ID,
 			"error", repairErr,
 		)
@@ -535,6 +595,94 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 	}
 
 	w.logger.Info("retention clock repair processed",
+		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount)
+	return nil
+}
+
+// repairPlaidDisconnects finds users stuck read-only-status with at least one live linked item
+// and re-attempts the disconnect — Issue #1413 round-6 repair path. TrialService.ExpireTrial's
+// CAS-first reordering (see that file's ExpireTrial doc comment) makes the status flip happen
+// BEFORE the Plaid disconnect, closing the writable-window regression round-5 introduced — but it
+// also means a disconnect that fails, or never runs at all (process killed between the flip and
+// the call), leaves the user permanently unretryable via GetUsersWithExpiredTrials, since their
+// subscription_status is no longer 'trial'. This mirrors repairRetentionClocks's shape exactly,
+// except the repair action here is an external Plaid call (not a conditional DB write), so a fresh
+// per-user re-read stands in for the atomic WHERE-clause guard RepairRetentionClock gets for free.
+func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context, jobID int64) error {
+	users, err := w.profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch users needing Plaid-disconnect repair: %w", err)
+	}
+	if len(users) == 0 {
+		w.logger.Info("no users needing Plaid-disconnect repair", "job_id", jobID)
+		return nil
+	}
+	w.logger.Info("found users needing Plaid-disconnect repair", "job_id", jobID, "user_count", len(users))
+
+	if w.plaidCleanup == nil {
+		w.logger.Warn("Plaid-disconnect repair candidates found but no Plaid cleanup service configured — skipping this pass",
+			"job_id", jobID, "user_count", len(users))
+		return nil
+	}
+
+	var repairedCount, skippedCount, errorCount int
+	for _, user := range users {
+		// Belt-and-braces: a comped user must never have their Plaid items disconnected, even
+		// though the candidate query already excludes any override (live or lapsed) via
+		// noManualOverrideAtAllPredicate. Mirrors repairRetentionClocks's same defensive pattern.
+		if user.HasAnyManualOverride() {
+			w.logger.Info("skipping Plaid-disconnect repair for user with a manual tier override (live or lapsed)",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+
+		// Re-verify against the freshest possible read immediately before the external call.
+		// Unlike RepairRetentionClock's conditional UPDATE (which gets this for free from its own
+		// WHERE clause), the repair action here — a Plaid /item/remove call — has no atomic DB
+		// guard, so a stale candidate who resubscribed (or was comped) since the query ran must be
+		// caught explicitly here; otherwise this repair pass would disconnect a genuinely-active
+		// user's live Plaid items, reproducing the round-5 regression via a different code path.
+		current, err := w.profileRepo.GetUserByID(ctx, user.ID)
+		if err != nil {
+			w.logger.Warn("failed to re-read user before Plaid-disconnect repair",
+				"job_id", jobID, "user_id", user.ID, "error", err)
+			errorCount++
+			continue
+		}
+		if !domain.SubscriptionStatus(current.SubscriptionStatus).IsReadOnlySubscription() {
+			w.logger.Info("Plaid-disconnect repair skipped — user no longer read-only-status since the query ran",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+		if current.HasAnyManualOverride() {
+			w.logger.Info("Plaid-disconnect repair skipped — comp granted since the query ran",
+				"job_id", jobID, "user_id", user.ID)
+			skippedCount++
+			continue
+		}
+
+		if disconnectErr := w.plaidCleanup.DisconnectAllUserItems(ctx, user.ID); disconnectErr != nil {
+			// ErrSideEffectClaimBusy is benign, expected contention (another flow is already
+			// mid-disconnect for this user) — logged at Info, not Warn, mirroring
+			// past_due_service.go's processGraceExpiry precedent for the same distinction.
+			if errors.Is(disconnectErr, services.ErrSideEffectClaimBusy) {
+				w.logger.Info("Plaid-disconnect repair deferred — side-effect claim held by another flow",
+					"job_id", jobID, "user_id", user.ID)
+			} else {
+				w.logger.Warn("failed to repair Plaid disconnect",
+					"job_id", jobID, "user_id", user.ID, "error", disconnectErr)
+			}
+			errorCount++
+			continue
+		}
+
+		w.logger.Info("Plaid disconnect repaired", "job_id", jobID, "user_id", user.ID)
+		repairedCount++
+	}
+
+	w.logger.Info("Plaid-disconnect repair processed",
 		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount)
 	return nil
 }

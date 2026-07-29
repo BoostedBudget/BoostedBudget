@@ -192,6 +192,12 @@ func (m *MockProfileRepositoryForDeletion) RepairRetentionClock(ctx context.Cont
 	return false, nil
 }
 
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-6 repair path) is not exercised by
+// these deletion-service tests; stubbed to satisfy the widened ProfileRepository interface.
+func (m *MockProfileRepositoryForDeletion) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
 func (m *MockProfileRepositoryForDeletion) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
