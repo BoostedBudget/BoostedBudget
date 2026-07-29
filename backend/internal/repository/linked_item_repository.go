@@ -20,6 +20,23 @@ var (
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
 )
 
+// normalizeLinkedItemStatus treats a NULL linked_items.status value as
+// domain.LinkedItemStatusActive — Issue #1413 round-8 Blocker 1: the column is nullable
+// (migration 000013 added an 'active' default but no NOT NULL constraint), so a row inserted
+// before that default existed can have a genuinely NULL status while still being a fully live
+// connection (the same rule GetUsersNeedingPlaidDisconnectRepair's SQL and this repository's own
+// GetActiveItemsByUserID/MarkItemsDisconnected WHERE clauses already apply). domain.LinkedItem.Status
+// is a bare LinkedItemStatus (string) field, not a pointer, so scanning a SQL NULL directly into it
+// fails outright ("cannot scan NULL into *string") rather than merely misclassifying it — callers
+// must scan the raw column into a *string and pass it through this helper instead of scanning
+// directly into &item.Status.
+func normalizeLinkedItemStatus(raw *string) domain.LinkedItemStatus {
+	if raw == nil {
+		return domain.LinkedItemStatusActive
+	}
+	return domain.LinkedItemStatus(*raw)
+}
+
 // LinkedItemRepository defines the interface for linked item data access
 type LinkedItemRepository interface {
 	// Create creates a new linked item in the database
@@ -292,6 +309,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1`
 
 	var item domain.LinkedItem
+	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
@@ -302,7 +320,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
-		&item.Status,
+		&statusRaw,
 		&item.ErrorCode,
 		&item.ErrorMessage,
 		&item.LastErrorAt,
@@ -323,6 +341,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	if err != nil {
 		return nil, err
 	}
+	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 		return nil, err
@@ -952,6 +971,11 @@ func (r *linkedItemRepository) ClearCleanupSchedule(ctx context.Context, itemID 
 // MarkAllUserItemsDisconnected marks all linked items for a user as 'disconnected'.
 // This preserves transaction history while indicating the Plaid connection is no longer active.
 // Issue #679, #680: Trial expiration
+//
+// Issue #1413 round-8 Blocker 1: WHERE guard treats a NULL status as live too, matching
+// GetActiveItemsByUserID/MarkItemsDisconnected below and GetUsersNeedingPlaidDisconnectRepair
+// (profile_repository.go) — a bare `status NOT IN (...)` evaluates to SQL's UNKNOWN (not TRUE) for
+// a NULL status, silently leaving such a row untouched.
 func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context, userID string) error {
 	now := time.Now()
 
@@ -961,7 +985,7 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 		    updated_at = $1,
 		    status_changed_at = $1
 		WHERE user_id = $2
-		  AND status NOT IN ('disconnected', 'replaced')
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
 	`
 
 	_, err := r.db.Exec(ctx, query, now, userID)
@@ -970,6 +994,10 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 
 // MarkItemsDisconnected marks only the given linked items as 'disconnected' — see the interface
 // doc comment for why this differs from MarkAllUserItemsDisconnected (Issue #1413 H2).
+//
+// Issue #1413 round-8 Blocker 1: WHERE guard treats a NULL status as live too — see
+// MarkAllUserItemsDisconnected's doc comment above for why a bare `status NOT IN (...)` silently
+// excludes a NULL-status row under SQL three-valued logic.
 func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -982,7 +1010,7 @@ func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []
 		    updated_at = $1,
 		    status_changed_at = $1
 		WHERE id = ANY($2)
-		  AND status NOT IN ('disconnected', 'replaced')
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
 	`
 
 	_, err := r.db.Exec(ctx, query, now, ids)
@@ -990,8 +1018,17 @@ func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []
 }
 
 // GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
+//
+// Issue #1413 round-8 Blocker 1: the WHERE guard now treats a NULL status as live too, matching
+// GetUsersNeedingPlaidDisconnectRepair's (profile_repository.go) NULL-aware predicate. Before this
+// fix, a bare `status NOT IN (...)` silently excluded a NULL-status row (SQL three-valued logic:
+// NULL NOT IN (...) is UNKNOWN, not TRUE) — the repair query would select the user, but this fetch
+// would return zero items, so PlaidItemCleanupService.cleanupItems reported success and the item
+// leaked forever, re-selected by the repair query every day with no effect. See
+// TestPlaidCleanupService_Integration_NullStatusItem_ActuallyDisconnectedAndMarked
+// (internal/services) for the end-to-end proof.
 func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userID string) ([]domain.LinkedItem, error) {
-	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND status NOT IN ('disconnected', 'replaced') ORDER BY created_at DESC`
+	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced')) ORDER BY created_at DESC`
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -1002,6 +1039,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
+		var statusRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
@@ -1012,7 +1050,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
-			&item.Status,
+			&statusRaw,
 			&item.ErrorCode,
 			&item.ErrorMessage,
 			&item.LastErrorAt,
@@ -1029,6 +1067,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		if err != nil {
 			return nil, err
 		}
+		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
 		}
