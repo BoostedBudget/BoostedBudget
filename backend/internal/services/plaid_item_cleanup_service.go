@@ -161,6 +161,28 @@ type PlaidItemCleanupService interface {
 	// Plaid API errors are logged but processing continues.
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 
+	// DisconnectAllUserItemsIfEligible behaves exactly like DisconnectAllUserItems, except recheck
+	// is invoked immediately before EACH item's removal, not once for the whole per-user call —
+	// Issue #1413 round-7. DisconnectAllUserItems can make one Plaid call per linked item; a
+	// caller that only re-verifies eligibility once, before the whole call, leaves every item
+	// after the first exposed to becoming stale mid-loop (e.g. the user resubscribes between item
+	// 1 and item 2). The retention-cleanup Plaid-disconnect repair pass
+	// (RetentionCleanupCheckWorker.repairPlaidDisconnects) is this method's motivating caller: its
+	// grace window makes a mid-loop resubscribe unlikely, but the recheck is cheap and bounds the
+	// residual exposure to at most one item rather than all of them.
+	//
+	// recheck may be nil, in which case this behaves exactly like DisconnectAllUserItems (no
+	// per-item check) — every other caller (deletion, past-due dunning, the
+	// subscription-cancellation webhook, RemoveAllUserItems) is unaffected by this method's
+	// existence.
+	//
+	// The first time recheck reports ineligible (false, nil), the loop stops immediately: no
+	// further items are attempted, and this is NOT reported as an error — a legitimate partial
+	// completion. If recheck itself fails (a non-nil error — eligibility could not be determined
+	// at all), the loop also stops immediately, fail-closed, and the error IS surfaced. Either way,
+	// items already removed before the abort stay removed and durably marked.
+	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
+
 	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
 	// DisconnectAllUserItems require for EXCLUSIVITY on repository.ActionPlaidDisconnectUser
 	// before any Plaid /item/remove call (Issue #1413 Codex round-3 finding H1). Mirrors
@@ -232,7 +254,7 @@ func (s *plaidItemCleanupService) SetWorkClaimsRepo(repo repository.WorkClaimsRe
 // closure — see that function's doc comment for why reading it here, before the claim, would
 // reopen the race a concurrent LinkAccounts call could exploit.
 func (s *plaidItemCleanupService) RemoveAllUserItems(ctx context.Context, userID string) error {
-	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID)
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetByUserID, nil)
 }
 
 // RemoveItem implements PlaidItemCleanupService.RemoveItem
@@ -284,15 +306,22 @@ func IsItemNotFoundError(err error) bool {
 // Issue #1413 round-4 Critical finding C2: the item list is read INSIDE cleanupItems's claimed
 // closure — see that function's doc comment.
 func (s *plaidItemCleanupService) DisconnectAllUserItems(ctx context.Context, userID string) error {
-	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID)
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID, nil)
+}
+
+// DisconnectAllUserItemsIfEligible implements PlaidItemCleanupService.DisconnectAllUserItemsIfEligible
+// — see the interface doc comment for the full contract (Issue #1413 round-7).
+func (s *plaidItemCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	return s.cleanupItems(ctx, userID, s.linkedItemRepo.GetActiveItemsByUserID, recheck)
 }
 
 // fetchLinkedItemsFn matches linkedItemRepoForCleanup.GetByUserID / GetActiveItemsByUserID —
 // the two ways cleanupItems's callers select which items are in scope.
 type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.LinkedItem, error)
 
-// cleanupItems is the shared per-item Plaid-removal loop used by both RemoveAllUserItems and
-// DisconnectAllUserItems (Issue #1413 H1/H2/round-4 C2):
+// cleanupItems is the shared per-item Plaid-removal loop used by RemoveAllUserItems,
+// DisconnectAllUserItems, and DisconnectAllUserItemsIfEligible (Issue #1413 H1/H2/round-4 C2/
+// round-7):
 //
 //   - Claims repository.ActionPlaidDisconnectUser (the OPERATION-keyed side-effect claim)
 //     BEFORE any external call, so at most one flow is ever mid-disconnect for this user at a
@@ -308,15 +337,22 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 //   - Skips items already marked 'disconnected' by a PRIOR attempt (durable per-item state, H2)
 //     without calling Plaid again for them — a retry after a partial failure only attempts the
 //     items still outstanding.
+//   - Issue #1413 round-7: if recheck is non-nil, it is invoked immediately before EVERY
+//     remaining item (including the first) — not just once for the whole call. The first time it
+//     reports ineligible (false, nil), the loop stops without attempting any further items; this
+//     is a legitimate partial completion, not a failure. If recheck itself errors, the loop also
+//     stops (fail-closed), and that error IS surfaced to the caller. recheck is nil for
+//     RemoveAllUserItems/DisconnectAllUserItems, preserving their exact pre-round-7 behavior.
 //   - Treats Plaid's ITEM_NOT_FOUND response (the item was already removed, at Plaid or by an
 //     earlier attempt of this very operation) as success, not a failure — H2's idempotency fix,
 //     the single highest-value change in this task.
 //   - Persists per-item success (including "already gone") via MarkItemsDisconnected BEFORE
 //     returning, so the durable state survives even when other items in the same batch failed.
-//   - Aggregates genuine per-item failures into a non-nil returned error — every item is still
-//     attempted (a single bad item must not strand the rest still-linked and still-billing), but
-//     the caller (DeletionService.ExecuteDeletion in particular) needs to know when to abort.
-func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, fetch fetchLinkedItemsFn) error {
+//   - Aggregates genuine per-item failures into a non-nil returned error — every item attempted
+//     before an abort is still attempted regardless of an earlier failure (a single bad item must
+//     not strand the rest still-linked and still-billing), but the caller (DeletionService.
+//     ExecuteDeletion in particular) needs to know when to abort.
+func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID string, fetch fetchLinkedItemsFn, recheck func(ctx context.Context) (bool, error)) error {
 	if s.claimsRepo == nil {
 		return fmt.Errorf("plaidItemCleanupService: work claims repository not configured")
 	}
@@ -341,12 +377,27 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 		var itemErrs []error
 		var successCount, failCount, skippedCount int
 
+	itemLoop:
 		for _, item := range items {
 			if item.Status == domain.LinkedItemStatusDisconnected {
 				// Already handled by a prior attempt (H2 per-item durable state) — do not call
 				// Plaid again for it.
 				skippedCount++
 				continue
+			}
+			if recheck != nil {
+				eligible, recheckErr := recheck(ctx)
+				if recheckErr != nil {
+					s.logger.Warn("aborting Plaid item cleanup — eligibility recheck failed",
+						"user_id", userID, "item_id", item.ID, "error", recheckErr)
+					itemErrs = append(itemErrs, fmt.Errorf("eligibility recheck failed before item %s: %w", item.ID, recheckErr))
+					break itemLoop
+				}
+				if !eligible {
+					s.logger.Info("aborting remaining Plaid item cleanup — no longer eligible",
+						"user_id", userID, "item_id", item.ID)
+					break itemLoop
+				}
 			}
 			if err := s.removeItemInternal(ctx, &item); err != nil {
 				if isPlaidItemAlreadyGone(err) {
@@ -381,11 +432,13 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 			}
 		}
 
+		abortedCount := len(items) - successCount - failCount - skippedCount
 		s.logger.Info("Plaid item cleanup pass completed",
 			"user_id", userID,
 			"success_count", successCount,
 			"fail_count", failCount,
 			"skipped_already_clean", skippedCount,
+			"aborted_by_recheck", abortedCount,
 		)
 
 		if len(itemErrs) > 0 {

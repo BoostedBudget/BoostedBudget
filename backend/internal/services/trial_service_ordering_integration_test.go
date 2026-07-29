@@ -1,30 +1,32 @@
 package services
 
-// trial_service_ordering_integration_test.go — real-Postgres proof of the Issue #1413 round-6 fix
-// (reverting round-5's regression). Round-5's High finding was genuine — ExpireTrial used to flip
-// subscription_status to 'inactive' AFTER disconnecting Plaid, and swallowed a disconnect failure
-// with a log-and-continue, so a failure there could never be retried. But round-5's chosen FIX
-// (disconnect Plaid BEFORE the CAS flip) was itself a regression: it left 'trial' — a WRITABLE
-// status, unlike past_due — writable for the disconnect's entire duration, opening a window for a
-// concurrent checkout or account-linking request to race the disconnect.
+// trial_service_ordering_integration_test.go — real-Postgres proof of the Issue #1413 round-7 fix
+// (Codex review): TrialService.ExpireTrial no longer calls Plaid at all, and disconnecting a
+// read-only user's Plaid items is deferred entirely to RetentionCleanupCheckWorker's grace-window
+// repair pass (repairPlaidDisconnects, driven by GetUsersNeedingPlaidDisconnectRepair).
 //
-// Round-6 restores CAS-FIRST ordering (flip, then disconnect) and replaces round-5's retry
-// mechanism with a dedicated repair path: GetUsersNeedingPlaidDisconnectRepair
-// (profile_repository.go), consumed by RetentionCleanupCheckWorker's periodic pass. This is the
-// crux pgxmock cannot prove: the unit tests in trial_service_test.go assert ExpireTrialIfNoOverride
-// WAS called even when the subsequent disconnect fails, but only a real database proves (1) the
-// flip actually commits regardless of the disconnect outcome, and (2) the stuck read-only user
-// with a live linked item is actually SELECTABLE by the new repair query afterward — which is the
-// entire point of the fix (the repair pass's retry depends on reselection there, not on
-// GetUsersWithExpiredTrials, which can never see this user again once they leave 'trial').
+// History: this function was reordered twice before round-7, and both attempts were wrong for
+// opposite reasons — see trial_service.go's ExpireTrial doc comment for the full account. The
+// round-7 conclusion is that no ordering of a status flip and an irreversible Plaid call can be
+// safe, because /subscription/checkout is deliberately whitelisted for read-only users
+// (internal/huma/middleware/read_only.go) — becoming read-only never stops a user from becoming
+// active again. The fix defers instead of ordering: ExpireTrial only flips subscription_status and
+// starts the retention clock (retention_started_at), which the repair pass later uses as its grace
+// anchor.
+//
+// This is the crux pgxmock cannot prove: the unit tests in trial_service_test.go assert ExpireTrial
+// never calls a Plaid collaborator (there IS no Plaid collaborator on TrialService anymore — a
+// structural, compile-time guarantee), but only a real database proves (1) a live linked item is
+// left completely untouched by ExpireTrial, and (2) GetUsersNeedingPlaidDisconnectRepair correctly
+// withholds a freshly-read-only user from selection until the grace window elapses, and correctly
+// selects them once it has.
 //
 // Run:
 //
-//	DATABASE_URL="postgres://..." go test ./internal/services/ -run TestExpireTrial_Integration_DisconnectFailsAfterFlip -v
+//	DATABASE_URL="postgres://..." go test ./internal/services/ -run TestExpireTrial_Integration -v
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -32,31 +34,32 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// TestExpireTrial_Integration_DisconnectFailsAfterFlip_UserSelectableByPlaidRepairQuery_ThenSucceedsOnRepair
-// is the real-DB counterpart to TestTrialService_ExpireTrial_DisconnectFailsAfterFlip_
-// ClaimCompleted_ErrorPropagated (mocked collaborators) in trial_service_test.go. Two phases
+// TestExpireTrial_Integration_NeverTouchesPlaid_RepairQueryHonorsGraceWindow is the round-7
+// replacement for the round-6 ordering pin (formerly
+// ...DisconnectFailsAfterFlip_UserSelectableByPlaidRepairQuery_ThenSucceedsOnRepair, which
+// exercised a mocked Plaid failure and the CAS-first ordering that no longer exists). Three phases
 // against a REAL database:
 //
-//  1. ExpireTrial's Plaid disconnect fails. subscription_status MUST still flip to 'inactive' —
-//     the round-6 CAS-first ordering means the flip does not depend on the disconnect succeeding
-//     — the retention clock must start, and the user must drop OUT of GetUsersWithExpiredTrials
-//     (no longer raw 'trial'). The CRUX: with a live linked item still on file, the user must now
-//     be SELECTABLE by GetUsersNeedingPlaidDisconnectRepair — the repair path that replaces
-//     round-5's (regressive) retry mechanism.
-//  2. RetentionCleanupCheckWorker's repair pass calling DisconnectAllUserItems directly (simulated
-//     here, not via a second ExpireTrial call — see that worker's repairPlaidDisconnects) must
-//     then succeed, after which the user drops out of the repair query.
+//  1. ExpireTrial runs against an expired-trial user with a live linked item. The status must flip
+//     to 'inactive', the retention clock must start, and — the round-7 crux — the linked item's
+//     row must be COMPLETELY UNTOUCHED (still 'active'): ExpireTrial has no Plaid collaborator at
+//     all anymore, so there is nothing that could have modified it.
+//  2. Immediately afterward, GetUsersNeedingPlaidDisconnectRepair with the PRODUCTION-shaped grace
+//     period (72h) must NOT select this user — retention_started_at was just set to "now", nowhere
+//     near 72h in the past. This is the direct proof of the brief's RED case: a user who is (or
+//     becomes) read-only must never be disconnected before the grace window elapses.
+//  3. The SAME query, called with an effectively-zero grace period, DOES select this user right
+//     now — proving the query mechanism itself is what withholds them in phase 2 (not, say, a bug
+//     that always excludes everyone), and that the grace window is the only thing standing between
+//     this user and disconnection.
 //
-// Falsifiability: reverting trial_service.go to the round-5 ordering (disconnect before CAS, error
-// swallowed) makes phase 1 fail immediately — subscription_status would still be 'trial' (never
-// flipped), so the "flipped to inactive" and "selectable by the Plaid-disconnect repair query"
-// assertions below would both fail; the user would instead still show up in
-// GetUsersWithExpiredTrials, which is exactly the regression round-6 reverts.
-func TestExpireTrial_Integration_DisconnectFailsAfterFlip_UserSelectableByPlaidRepairQuery_ThenSucceedsOnRepair(t *testing.T) {
+// Falsifiability: reverting profile_repository.go's grace-period predicate (dropping the
+// `retention_started_at < cutoff` clause entirely) makes phase 2 fail — the user would be
+// immediately selected with NO grace window at all, exactly the round-7 regression this pins.
+func TestExpireTrial_Integration_NeverTouchesPlaid_RepairQueryHonorsGraceWindow(t *testing.T) {
 	pool := setupHouseholdServiceIntegrationDB(t)
 	enc := newTestFieldEncryptor(t)
 	ctx := context.Background()
@@ -82,19 +85,20 @@ func TestExpireTrial_Integration_DisconnectFailsAfterFlip_UserSelectableByPlaidR
 	require.NoError(t, profileRepo.CreateUser(ctx, user))
 	t.Cleanup(func() {
 		bg := context.Background()
-		pool.Exec(bg, "DELETE FROM linked_items WHERE user_id = $1", user.ID)  //nolint:errcheck
-		pool.Exec(bg, "DELETE FROM users WHERE id = $1", user.ID)              //nolint:errcheck
+		pool.Exec(bg, "DELETE FROM linked_items WHERE user_id = $1", user.ID) //nolint:errcheck
+		pool.Exec(bg, "DELETE FROM users WHERE id = $1", user.ID)             //nolint:errcheck
 		pool.Exec(bg, `DELETE FROM work_claims WHERE resource_type = $1 AND resource_id = $2 AND action = $3`,
 			repository.ResourceTypeUser, user.ID, repository.ActionTrialExpiration) //nolint:errcheck
 	})
 
 	// A live linked item on file — this is what makes the user genuinely a
-	// GetUsersNeedingPlaidDisconnectRepair candidate once they're flipped read-only below, rather
-	// than merely inactive with nothing left to disconnect.
+	// GetUsersNeedingPlaidDisconnectRepair candidate once they're flipped read-only AND past the
+	// grace window, rather than merely inactive with nothing left to disconnect.
+	itemID := "item-ordering-" + suffix
 	_, err := pool.Exec(ctx, `
 		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, status)
 		VALUES (gen_random_uuid(), $1, $2, 'enc-test-token', 'active')
-	`, user.ID, "item-ordering-"+suffix)
+	`, user.ID, itemID)
 	require.NoError(t, err)
 
 	// Sanity: the expired-trial job would select this user right now.
@@ -103,62 +107,49 @@ func TestExpireTrial_Integration_DisconnectFailsAfterFlip_UserSelectableByPlaidR
 	assert.True(t, userIDInSlice(expired, user.ID),
 		"test setup sanity: this user's trial_ends_at must already be in the past")
 
-	// --- Phase 1: ExpireTrial's Plaid disconnect fails ---
-	plaidCleanup := new(mockPlaidCleanupService)
-	disconnectErr := errors.New("plaid: transient 500")
-	plaidCleanup.On("DisconnectAllUserItems", mock.Anything, user.ID).Return(disconnectErr).Once()
-
-	trialSvc := NewTrialService(nil, profileRepo, plaidCleanup)
+	// --- Phase 1: ExpireTrial runs — no Plaid collaborator exists to call at all ---
+	trialSvc := NewTrialService(nil, profileRepo)
 	trialSvc.SetWorkClaimsRepo(claimsRepo)
 
 	err = trialSvc.ExpireTrial(ctx, user.ID)
-	require.Error(t, err, "a failed Plaid disconnect must still be propagated for visibility, even though the flip already committed")
+	require.NoError(t, err, "ExpireTrial's only work is the status flip and retention clock — nothing here can fail")
 
-	var rawStatus string
+	var rawStatus, itemStatus string
 	var retentionStarted, retentionExpires *time.Time
 	require.NoError(t, pool.QueryRow(ctx,
 		"SELECT subscription_status, retention_started_at, retention_expires_at FROM users WHERE id = $1", user.ID,
 	).Scan(&rawStatus, &retentionStarted, &retentionExpires))
-	assert.Equal(t, "inactive", rawStatus,
-		"THE PIN: subscription_status must flip to inactive REGARDLESS of the disconnect outcome — round-6's "+
-			"CAS-first ordering means the flip no longer depends on Plaid succeeding")
-	assert.NotNil(t, retentionStarted, "the retention clock must start — it is gated on the CAS, not the disconnect")
+	assert.Equal(t, "inactive", rawStatus, "ExpireTrial must still flip subscription_status to inactive")
+	require.NotNil(t, retentionStarted, "the retention clock must start — this timestamp is the round-7 grace anchor")
 	assert.NotNil(t, retentionExpires)
 
-	expiredAfterFailure, err := profileRepo.GetUsersWithExpiredTrials(ctx)
+	require.NoError(t, pool.QueryRow(ctx, "SELECT status FROM linked_items WHERE user_id = $1 AND item_id = $2", user.ID, itemID).Scan(&itemStatus))
+	assert.Equal(t, "active", itemStatus,
+		"THE CRUX: the linked item must be COMPLETELY UNTOUCHED — ExpireTrial has no Plaid "+
+			"collaborator at all anymore, so nothing could have disconnected it")
+
+	expiredAfterFlip, err := profileRepo.GetUsersWithExpiredTrials(ctx)
 	require.NoError(t, err)
-	assert.False(t, userIDInSlice(expiredAfterFailure, user.ID),
+	assert.False(t, userIDInSlice(expiredAfterFlip, user.ID),
 		"the user is no longer raw 'trial' — GetUsersWithExpiredTrials can never reselect them again")
 
-	repairCandidates, err := profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx)
+	// --- Phase 2: WITHIN the grace window (production-shaped 72h), the repair query must NOT
+	// select this user — retention_started_at was just set to "now".
+	withinGraceCandidates, err := profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx, 72*time.Hour)
 	require.NoError(t, err)
-	assert.True(t, userIDInSlice(repairCandidates, user.ID),
-		"THE CRUX: GetUsersNeedingPlaidDisconnectRepair must select this user — read-only-status with a "+
-			"live linked item and a failed disconnect — this is the repair path that replaces round-5's "+
-			"(regressive) retry mechanism")
+	assert.False(t, userIDInSlice(withinGraceCandidates, user.ID),
+		"THE RED CASE: a user within the grace window must NEVER be selected for Plaid disconnect — "+
+			"resubscribing in this window must be a non-event, not a narrowed race")
 
-	plaidCleanup.AssertExpectations(t)
-
-	// --- Phase 2: the repair pass (simulating RetentionCleanupCheckWorker.repairPlaidDisconnects)
-	// calls DisconnectAllUserItems directly for this candidate — NOT via a second ExpireTrial call,
-	// since GetUsersWithExpiredTrials can no longer reach this user.
-	plaidCleanup.On("DisconnectAllUserItems", mock.Anything, user.ID).Return(nil).Once()
-
-	err = plaidCleanup.DisconnectAllUserItems(ctx, user.ID)
-	require.NoError(t, err, "the repair pass must succeed once the disconnect succeeds")
-	plaidCleanup.AssertExpectations(t)
-
-	// The repair query itself only inspects subscription_status/live-items/overrides — it has no
-	// way to know the disconnect "succeeded" from a bare mock call, so mark the item disconnected
-	// the same way the real PlaidItemCleanupService would (MarkItemsDisconnected), to prove the
-	// user then drops out of the candidate list once no live item remains.
-	_, err = pool.Exec(ctx, `UPDATE linked_items SET status = 'disconnected' WHERE user_id = $1`, user.ID)
+	// --- Phase 3: PAST the grace window (an effectively-zero grace period — retention_started_at
+	// was set microseconds ago, so it is already older than "now minus ~0"), the SAME query DOES
+	// select this user — proving phase 2's exclusion is the grace window doing its job, not some
+	// other bug that always excludes everyone.
+	pastGraceCandidates, err := profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx, 1*time.Nanosecond)
 	require.NoError(t, err)
-
-	repairCandidatesAfter, err := profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx)
-	require.NoError(t, err)
-	assert.False(t, userIDInSlice(repairCandidatesAfter, user.ID),
-		"once the repaired disconnect is durably recorded, the user must drop out of the repair query")
+	assert.True(t, userIDInSlice(pastGraceCandidates, user.ID),
+		"once the grace window has elapsed, the SAME read-only user with the SAME live item must "+
+			"become a repair candidate")
 }
 
 // userIDInSlice reports whether users contains a user with the given ID.

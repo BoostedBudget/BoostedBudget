@@ -201,9 +201,10 @@ func (m *MockProfileRepository) RepairRetentionClock(ctx context.Context, userID
 	return false, nil
 }
 
-// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-6 repair path) is not exercised by
-// these profile-service tests; stubbed to satisfy the widened ProfileRepository interface.
-func (m *MockProfileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-7 grace-window repair path) is not
+// exercised by these profile-service tests; stubbed to satisfy the widened ProfileRepository
+// interface.
+func (m *MockProfileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
 

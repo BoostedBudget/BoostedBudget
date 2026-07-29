@@ -274,22 +274,47 @@ type ProfileRepository interface {
 	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
 
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
-	// (inactive/cancelled) but still have at least one LIVE linked item (status NOT IN
-	// ('disconnected', 'replaced') — see LinkedItemRepository.GetActiveItemsByUserID for how
-	// "live" is already expressed). Issue #1413 round-6 repair path: TrialService.ExpireTrial's
-	// round-5 reordering (disconnect Plaid BEFORE the CAS flip) was itself the regression this
-	// closes — it opened a writable window on 'trial' (a WRITABLE status, unlike past_due), so a
-	// concurrent checkout or account-linking request could race the disconnect. The fix restores
-	// CAS-FIRST ordering (flip, then disconnect), which eliminates that writable window instead of
-	// narrowing it — but it also means a disconnect that fails, or never runs at all (process
-	// killed between the flip and the disconnect call), now leaves the user stuck: already
-	// read-only, but with live Plaid items GetUsersWithExpiredTrials can never re-select them to
-	// retry, since their subscription_status is no longer 'trial'. This query is the backstop, and
-	// its predicate mirrors GetUsersNeedingRetentionClockRepair's shape exactly (subscription_status
+	// (inactive/cancelled) but still have at least one LIVE linked item — status NOT
+	// 'disconnected'/'replaced', where a NULL status counts as live too (linked_items.status is
+	// nullable; see migration 000013 — SQL's three-valued logic makes a bare `NOT IN (...)`
+	// silently exclude a NULL-status row, which would be exactly the leak this pass exists to
+	// prevent, so the predicate explicitly treats NULL as live) — AND whose retention_started_at is
+	// older than gracePeriod (Issue #1413 round-7: the grace anchor).
+	//
+	// Issue #1413 round-7 (Codex review): this is the ratified DEFER design, not an ordering fix.
+	// TrialService.ExpireTrial no longer calls Plaid at all — no ordering of a status flip and an
+	// irreversible Plaid call can be safe, because /subscription/checkout is deliberately
+	// whitelisted for read-only users, so becoming read-only never stops a user from becoming
+	// active again. Disconnecting Plaid is deferred entirely to this repair pass
+	// (RetentionCleanupCheckWorker.repairPlaidDisconnects), which only selects a user once
+	// gracePeriod has elapsed since they became read-only (retention_started_at, set at the SAME
+	// moment ExpireTrial/CancelIfPastDueWithRetention/subscription-cancellation flip the status) —
+	// giving a genuine resubscriber a window to become active again before Plaid is ever touched, at
+	// which point they simply drop out of this query (subscription_status is no longer
+	// 'inactive'/'cancelled'). A user who resubscribes WITHIN the grace window is therefore never
+	// disconnected at all, not merely disconnected after a narrower window.
+	//
+	// Because this predicate keys on subscription_status + retention_started_at (not on which flow
+	// set them), it also catches a failed/never-ran disconnect from the cancellation and past-due
+	// paths, not just trial expiry — those set retention_started_at at the same status-flip moment
+	// (CancelIfPastDueWithRetention, subscription_webhook.go's cancellation handling), so any
+	// read-only user with a live item past the grace window is covered uniformly.
+	//
+	// Ordering dependency: a read-only user whose retention_started_at is still NULL (the
+	// retention-clock write failed, or hasn't run yet) is NEVER selected here, since
+	// `retention_started_at < $cutoff` is UNKNOWN (not TRUE) for a NULL left side — this is
+	// deliberate and safe (they have no grace anchor to measure yet), but it means
+	// RetentionCleanupCheckWorker MUST run its retention-clock repair step (Step 0,
+	// GetUsersNeedingRetentionClockRepair/RepairRetentionClock) BEFORE this one (Step 0b) in the
+	// same pass, so a user repaired in Step 0 becomes eligible for Step 0b once the grace period
+	// elapses rather than being stuck indefinitely. See retention_cleanup_check.go's Work() for
+	// where that ordering is enforced.
+	//
+	// Predicate otherwise mirrors GetUsersNeedingRetentionClockRepair's shape (subscription_status
 	// IN ('inactive', 'cancelled'), not deleted, no outstanding GDPR deletion request, no
 	// manual_tier_override at all — live or lapsed) so a comped or already-deletion-pending user is
 	// never touched, plus the live-linked-item existence check.
-	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error)
+	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error)
 }
 
 // profileRepository implements ProfileRepository using PostgreSQL
@@ -1681,25 +1706,33 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 	return ct.RowsAffected() > 0, nil
 }
 
-// GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-6 repair path — see the
-// interface doc comment for the full rationale. Mirrors GetUsersNeedingRetentionClockRepair's
-// predicate shape, plus an EXISTS check for at least one linked item that is still "live" — not
-// 'disconnected' or 'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID
-// already uses to decide what DisconnectAllUserItems has left to do.
-func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+// GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-7 grace-window repair
+// path — see the interface doc comment for the full rationale. Mirrors
+// GetUsersNeedingRetentionClockRepair's predicate shape, plus:
+//   - a grace-window check (retention_started_at older than gracePeriod, the round-7 grace anchor)
+//   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
+//     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
+//     NULL status is explicitly treated as live too (round-7 fix): a bare `status NOT IN (...)`
+//     evaluates to SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding that row — since
+//     linked_items.status is nullable (migration 000013) and defaults to 'active' only for rows
+//     inserted after that default was added, a live item with a NULL status would otherwise never
+//     be repaired, precisely the leak this pass exists to prevent.
+func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
+	cutoff := time.Now().Add(-gracePeriod)
 	query := userSelectQuery + `
 		WHERE subscription_status IN ('inactive', 'cancelled')
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
+		  AND retention_started_at < $1
 		  AND EXISTS (
 		      SELECT 1 FROM linked_items
 		      WHERE linked_items.user_id = users.id
-		        AND linked_items.status NOT IN ('disconnected', 'replaced')
+		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
 		  )
 	` + noManualOverrideAtAllPredicate + `
 		ORDER BY updated_at ASC
 	`
-	users, err := r.queryUsers(ctx, query)
+	users, err := r.queryUsers(ctx, query, cutoff)
 	if err != nil {
 		return nil, err
 	}
