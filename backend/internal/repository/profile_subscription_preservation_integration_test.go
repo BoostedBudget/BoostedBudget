@@ -182,3 +182,54 @@ func TestUpdateSubscriptionFromPaddle_Integration_OverwritesIDWhenNonNil(t *test
 	require.NotNil(t, blindIdxSecond)
 	assert.NotEqual(t, *blindIdxFirst, *blindIdxSecond, "blind_idx should change when a new subscriptionID is provided")
 }
+
+// TestUpdateSubscriptionFromPaddle_Integration_PlaidCleanupPendingAt_SetOnCancelledClearedOnActive
+// proves Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with the SAME UPDATE
+// that writes subscription_status='cancelled' (COALESCE-guarded — a second cancelled write must
+// not push the anchor forward), and clears atomically when a later call writes an active status
+// (the "resubscribe" case) — all via this single low-level primitive, so every webhook handler
+// that calls it (created/activated/updated/canceled) gets correct marker semantics automatically.
+func TestUpdateSubscriptionFromPaddle_Integration_PlaidCleanupPendingAt_SetOnCancelledClearedOnActive(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_sub_marker_" + suffix,
+		Email:              "sub-marker-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
+
+	queryMarker := func() *time.Time {
+		var m *time.Time
+		require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&m))
+		return m
+	}
+
+	// Transition into cancelled: marker must be set.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+	firstMarker := queryMarker()
+	require.NotNil(t, firstMarker, "plaid_cleanup_pending_at must be set when status transitions to cancelled")
+
+	// A second write reporting 'cancelled' again (e.g. a redelivered webhook) must NOT push the
+	// marker forward — COALESCE preserves the original timestamp.
+	time.Sleep(10 * time.Millisecond)
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
+	secondMarker := queryMarker()
+	require.NotNil(t, secondMarker)
+	assert.True(t, firstMarker.Equal(*secondMarker), "a repeated cancelled write must not reset plaid_cleanup_pending_at")
+
+	// Resubscribe (status becomes active): marker must be cleared.
+	require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "active", nil, nil, nil))
+	assert.Nil(t, queryMarker(), "plaid_cleanup_pending_at must be cleared once the user becomes active again")
+}

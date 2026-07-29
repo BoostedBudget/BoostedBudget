@@ -374,7 +374,8 @@ const userSelectQuery = `
 	       manual_tier_override, manual_tier_ends_at,
 	       retention_started_at, retention_expires_at, retention_notice_30d_sent_at, retention_notice_7d_sent_at,
 	       timezone, timezone_source,
-	       past_due_started_at
+	       past_due_started_at,
+	       plaid_cleanup_pending_at
 	FROM users`
 
 // queryUser is a helper that scans a user from a query row
@@ -392,6 +393,7 @@ func (r *profileRepository) queryUser(ctx context.Context, query string, args ..
 		&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 		&user.Timezone, &user.TimezoneSource,
 		&user.PastDueStartedAt,
+		&user.PlaidCleanupPendingAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
@@ -450,6 +452,7 @@ func (r *profileRepository) queryUsers(ctx context.Context, query string, args .
 			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 			&user.Timezone, &user.TimezoneSource,
 			&user.PastDueStartedAt,
+			&user.PlaidCleanupPendingAt,
 		); err != nil {
 			return nil, err
 		}
@@ -850,6 +853,20 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 
 	now := time.Now()
 
+	// Issue #1413 round-10: maintain plaid_cleanup_pending_at atomically with THIS SAME
+	// subscription_status write, rather than in a later, separate call that could independently
+	// fail or drift out of sync with the status it's supposed to describe — see
+	// GetUsersNeedingPlaidDisconnectRepair's doc comment for why this column, not
+	// retention_started_at, is now the repair pass's sole grace-window anchor. A transition INTO
+	// the repair pass's target set (inactive/cancelled) starts the marker — but only if it isn't
+	// ALREADY running (COALESCE): a redelivered/duplicate webhook reporting the same terminal
+	// status again must not keep pushing the anchor forward, or a steady trickle of retries could
+	// indefinitely defer the grace window. A transition to any OTHER status (active, trialing —
+	// and, moot in practice since processSubscriptionPastDue only ever reaches past_due from
+	// active/trialing, past_due too) clears it: that status is not one this repair pass targets,
+	// so nothing can legitimately be "pending" against it.
+	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
+
 	var query string
 	var args []interface{}
 
@@ -860,11 +877,19 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 			return fmt.Errorf("failed to encrypt paddle_subscription_id: %w", err)
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
-		query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7 WHERE id = $8 AND is_deleted = FALSE`
+		if plaidMarkerEligible {
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $7) WHERE id = $8 AND is_deleted = FALSE`
+		} else {
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`
+		}
 		args = []interface{}{tier, status, startedAt, endsAt, enc, blind, now, userID}
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
-		query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5 WHERE id = $6 AND is_deleted = FALSE`
+		if plaidMarkerEligible {
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $5) WHERE id = $6 AND is_deleted = FALSE`
+		} else {
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`
+		}
 		args = []interface{}{tier, status, startedAt, endsAt, now, userID}
 	}
 
@@ -1347,7 +1372,13 @@ func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string
 	return nil
 }
 
-// ClearRetentionDates clears all retention tracking fields on resubscription (#930).
+// ClearRetentionDates clears all retention tracking fields on resubscription (#930). Issue #1413
+// round-10: also clears plaid_cleanup_pending_at — this is one of the call sites representing
+// "user becomes Plaid-eligible again", so nothing should be left pending against the retention
+// clock this call is tearing down. (UpdateSubscriptionFromPaddle's own status-driven clearing
+// already covers every existing caller of this method atomically with the same status write this
+// method usually follows — this is deliberate belt-and-braces, not the sole mechanism: clearing to
+// NULL is idempotent no matter how many paths do it.)
 func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID string) error {
 	now := time.Now()
 	ct, err := r.db.Exec(ctx, `
@@ -1356,8 +1387,39 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 		    retention_expires_at = NULL,
 		    retention_notice_30d_sent_at = NULL,
 		    retention_notice_7d_sent_at = NULL,
+		    plaid_cleanup_pending_at = NULL,
 		    updated_at = $1
 		WHERE id = $2 AND is_deleted = FALSE`,
+		now, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// ClearPlaidCleanupPending unconditionally clears the plaid_cleanup_pending_at marker for a user —
+// Issue #1413 round-10. Called once a Plaid-disconnect repair pass actually completes successfully
+// (repairPlaidDisconnects, retention_cleanup_check.go), so a user whose items are already fully
+// cleaned up stops being redundantly re-selected by GetUsersNeedingPlaidDisconnectRepair on every
+// future run. Mirrors ClearPastDueStartedAt's unconditional shape: the caller already holds
+// whatever exclusivity/re-verification the disconnect itself required (DisconnectAllUserItemsIfEligible
+// is self-claiming), so no additional CAS guard is needed here. Clearing to NULL is inherently
+// idempotent regardless of how this races a concurrent setter: a genuinely NEW ineligibility
+// transition landing around the same time can only ever set a FRESH timestamp (every setter uses
+// COALESCE, so it never overwrites a value this clear hasn't touched yet, and this clear simply
+// nulls whatever is present) — there is no ordering in which this call can silently erase a marker
+// a concurrent, still-in-flight transition is relying on, because that transition's own COALESCE
+// write and this UPDATE both target the same row under Postgres's normal row-level write
+// serialization.
+func (r *profileRepository) ClearPlaidCleanupPending(ctx context.Context, userID string) error {
+	now := time.Now()
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users SET plaid_cleanup_pending_at = NULL, updated_at = $1
+		WHERE id = $2`,
 		now, userID,
 	)
 	if err != nil {
@@ -1725,7 +1787,19 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 // GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-7 grace-window repair
 // path — see the interface doc comment for the full rationale. Mirrors
 // GetUsersNeedingRetentionClockRepair's predicate shape, plus:
-//   - a grace-window check (retention_started_at older than gracePeriod, the round-7 grace anchor)
+//   - a grace-window check on plaid_cleanup_pending_at (Issue #1413 round-10) — the ONLY anchor
+//     this query uses. Rounds 8 and 9 demonstrated retention_started_at cannot be made sound as
+//     this grace-window anchor: it is written by several independent paths, its clearing on
+//     resubscribe can fail and be swallowed by a logging-only caller, and it is never cleared once
+//     a disconnect actually completes (it has to keep counting toward the separate 6-month
+//     retention/deletion clock regardless of Plaid state) — so a value written by a PRIOR cycle
+//     can silently survive a resubscribe-then-recancel and be mistaken for the CURRENT cycle's
+//     age. plaid_cleanup_pending_at cannot suffer this: it means exactly "ineligible since this
+//     instant, cleanup outstanding" and is NULL whenever nothing is pending (see
+//     domain.User.PlaidCleanupPendingAt's doc comment and ExpireTrialIfNoOverride/
+//     CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle
+//     for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
+//     invent work from a derived signal.
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
 //     NULL status is explicitly treated as live too (round-7 fix): a bare `status NOT IN (...)`
@@ -1739,7 +1813,8 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 		WHERE ` + plaidDisconnectRepairEligibleStatusPredicate + `
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
-		  AND retention_started_at < $1
+		  AND plaid_cleanup_pending_at IS NOT NULL
+		  AND plaid_cleanup_pending_at < $1
 		  AND EXISTS (
 		      SELECT 1 FROM linked_items
 		      WHERE linked_items.user_id = users.id
@@ -1918,6 +1993,7 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 			&user.RetentionStartedAt, &user.RetentionExpiresAt, &user.RetentionNotice30dSentAt, &user.RetentionNotice7dSentAt,
 			&user.Timezone, &user.TimezoneSource,
 			&user.PastDueStartedAt,
+			&user.PlaidCleanupPendingAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1965,11 +2041,15 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 // noActiveManualOverridePredicate — a prior read-only HasActiveManualOverride() check in the
 // caller cannot, by itself, protect this write, since the two are not atomic.
 func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
+	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
+	// call re-pushing an already-running marker forward.
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET subscription_status = 'cancelled',
 		    retention_started_at = $2,
 		    retention_expires_at = $3,
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW()),
 		    updated_at = NOW()
 		WHERE id = $1 AND subscription_status = 'past_due'
 	`+noActiveManualOverridePredicate,
@@ -1996,11 +2076,15 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 // processGraceExpiry Releases (never Completes) its claim and lets a future run handle whatever
 // cycle is actually current.
 func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error) {
+	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
+	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
+	// call re-pushing an already-running marker forward.
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET subscription_status = 'cancelled',
 		    retention_started_at = $2,
 		    retention_expires_at = $3,
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW()),
 		    updated_at = NOW()
 		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
 	`+noActiveManualOverridePredicate,
@@ -2020,9 +2104,14 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 // evaluated against committed state at the moment of the write, not in an earlier, non-atomic
 // read-then-check.
 func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
+	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
+	// call re-pushing an already-running marker forward (defensive; the WHERE clause already
+	// makes this a one-shot transition per trial).
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
-		SET subscription_status = 'inactive', updated_at = NOW()
+		SET subscription_status = 'inactive', updated_at = NOW(),
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
 		WHERE id = $1 AND subscription_status = 'trial'
 	`+noActiveManualOverridePredicate,
 		userID)

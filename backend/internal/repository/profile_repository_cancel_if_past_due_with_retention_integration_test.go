@@ -28,7 +28,9 @@ import (
 )
 
 // TestCancelIfPastDueWithRetention_Integration_AtomicFlipAndClock proves the core H5 fix: a
-// single call flips subscription_status AND sets both retention timestamps together.
+// single call flips subscription_status AND sets both retention timestamps together. Issue #1413
+// round-10: also proves plaid_cleanup_pending_at (the Plaid-disconnect grace-window anchor) starts
+// in this SAME statement — not a separate, independently-failable call.
 func TestCancelIfPastDueWithRetention_Integration_AtomicFlipAndClock(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -58,20 +60,23 @@ func TestCancelIfPastDueWithRetention_Integration_AtomicFlipAndClock(t *testing.
 	assert.True(t, flipped, "an eligible past_due user must flip")
 
 	var (
-		status     string
-		retStarted *time.Time
-		retExpires *time.Time
+		status      string
+		retStarted  *time.Time
+		retExpires  *time.Time
+		plaidMarker *time.Time
 	)
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT subscription_status, retention_started_at, retention_expires_at FROM users WHERE id = $1`,
+		`SELECT subscription_status, retention_started_at, retention_expires_at, plaid_cleanup_pending_at FROM users WHERE id = $1`,
 		user.ID,
-	).Scan(&status, &retStarted, &retExpires))
+	).Scan(&status, &retStarted, &retExpires, &plaidMarker))
 
 	assert.Equal(t, "cancelled", status, "subscription_status must flip to cancelled")
 	require.NotNil(t, retStarted, "retention_started_at must be set in the SAME call")
 	require.NotNil(t, retExpires, "retention_expires_at must be set in the SAME call")
+	require.NotNil(t, plaidMarker, "plaid_cleanup_pending_at must be set in the SAME call")
 	assert.WithinDuration(t, started, *retStarted, time.Microsecond)
 	assert.WithinDuration(t, expires, *retExpires, time.Microsecond)
+	assert.False(t, plaidMarker.Before(started.Add(-time.Second)), "plaid_cleanup_pending_at must be set to approximately now")
 }
 
 // TestCancelIfPastDueWithRetention_Integration_SkipsNonPastDue proves the predicate still guards
@@ -336,8 +341,8 @@ func TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_Does
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
-	staleOccurrence := time.Now().Add(-60 * 24 * time.Hour).Truncate(time.Microsecond)   // cycle A — what the stale worker claimed
-	currentOccurrence := time.Now().Add(-1 * time.Hour).Truncate(time.Microsecond)       // cycle B — the row's CURRENT cycle
+	staleOccurrence := time.Now().Add(-60 * 24 * time.Hour).Truncate(time.Microsecond) // cycle A — what the stale worker claimed
+	currentOccurrence := time.Now().Add(-1 * time.Hour).Truncate(time.Microsecond)     // cycle B — the row's CURRENT cycle
 	_, err = pool.Exec(ctx, `UPDATE users SET past_due_started_at = $1, subscription_status = 'past_due' WHERE id = $2`, currentOccurrence, user.ID)
 	require.NoError(t, err)
 

@@ -79,6 +79,33 @@ func TestUpdateUserTier_Integration_SetsOverrideAndReturnsRawState(t *testing.T)
 	assert.WithinDuration(t, expiresAt, *snap.ManualTierEndsAt, time.Second)
 }
 
+// TestUpdateUserTier_Integration_ClearsPlaidCleanupPending proves Issue #1413 round-10: granting
+// a comp on a user who already has Plaid cleanup pending (a genuinely cancelled user the repair
+// pass would otherwise eventually disconnect) clears the marker — the comp makes them
+// Plaid-eligible again (HasActiveManualOverride() forces effective status to active), so nothing
+// can legitimately be "pending" while it is live.
+func TestUpdateUserTier_Integration_ClearsPlaidCleanupPending(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	_, err := pool.Exec(ctx, "UPDATE users SET plaid_cleanup_pending_at = $1 WHERE id = $2", pendingSince, target.ID)
+	require.NoError(t, err)
+
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	_, err = repo.UpdateUserTier(ctx, actor.ID, target.ID, "household_4", "comp for testing", &expiresAt)
+	require.NoError(t, err)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snap.PlaidCleanupPendingAt, "granting a comp must clear plaid_cleanup_pending_at")
+}
+
 // TestUpdateUserTier_Integration_ReturnsPriorOverride verifies the CTE reads the PRE-UPDATE
 // manual_tier_override, not the just-written value.
 func TestUpdateUserTier_Integration_ReturnsPriorOverride(t *testing.T) {

@@ -131,6 +131,43 @@ func TestExpireTrialIfNoOverride_Integration_ExpiredOverride_StillFlips(t *testi
 	assert.Equal(t, "inactive", status)
 }
 
+// TestExpireTrialIfNoOverride_Integration_SetsPlaidCleanupPendingAt proves Issue #1413 round-10:
+// the plaid_cleanup_pending_at marker starts atomically with the SAME CAS write that flips
+// subscription_status to inactive — not via a separate, independently-failable call. This is what
+// makes the marker sound "by construction": there is no window in which the status flip could
+// land without the marker (or vice versa).
+func TestExpireTrialIfNoOverride_Integration_SetsPlaidCleanupPendingAt(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_trial_marker_" + suffix,
+		Email:              "trial-marker-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) }) //nolint:errcheck
+
+	before := time.Now()
+	claimed, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	var pendingAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&pendingAt))
+	require.NotNil(t, pendingAt, "plaid_cleanup_pending_at must be set the instant trial expiry flips the status")
+	assert.False(t, pendingAt.Before(before.Add(-time.Second)), "plaid_cleanup_pending_at must be set to approximately now")
+}
+
 // TestExpireTrialIfNoOverride_Integration_NonTrialStatus_NoFlip proves the predicate also
 // requires subscription_status = 'trial' — a user who already converted (e.g. to active) must
 // not be touched.

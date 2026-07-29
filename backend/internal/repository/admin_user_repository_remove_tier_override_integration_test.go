@@ -81,12 +81,13 @@ func setRetentionState(t *testing.T, pool *pgxpool.Pool, userID string, startedA
 // retentionSnapshot is the full retention + override state of a user row, read directly via SQL
 // (bypassing the repository under test).
 type retentionSnapshot struct {
-	ManualTierOverride *string
-	ManualTierEndsAt   *time.Time
-	RetentionStartedAt *time.Time
-	RetentionExpiresAt *time.Time
-	RetentionNotice30d *time.Time
-	RetentionNotice7d  *time.Time
+	ManualTierOverride    *string
+	ManualTierEndsAt      *time.Time
+	RetentionStartedAt    *time.Time
+	RetentionExpiresAt    *time.Time
+	RetentionNotice30d    *time.Time
+	RetentionNotice7d     *time.Time
+	PlaidCleanupPendingAt *time.Time
 }
 
 func fetchRetentionSnapshot(t *testing.T, pool *pgxpool.Pool, userID string) retentionSnapshot {
@@ -95,12 +96,14 @@ func fetchRetentionSnapshot(t *testing.T, pool *pgxpool.Pool, userID string) ret
 	err := pool.QueryRow(context.Background(), `
 		SELECT manual_tier_override, manual_tier_ends_at,
 		       retention_started_at, retention_expires_at,
-		       retention_notice_30d_sent_at, retention_notice_7d_sent_at
+		       retention_notice_30d_sent_at, retention_notice_7d_sent_at,
+		       plaid_cleanup_pending_at
 		FROM users WHERE id = $1
 	`, userID).Scan(
 		&s.ManualTierOverride, &s.ManualTierEndsAt,
 		&s.RetentionStartedAt, &s.RetentionExpiresAt,
 		&s.RetentionNotice30d, &s.RetentionNotice7d,
+		&s.PlaidCleanupPendingAt,
 	)
 	require.NoError(t, err)
 	return s
@@ -237,6 +240,20 @@ func TestRemoveUserTierOverride_Integration_RearmsRetention_WhenReadOnly(t *test
 				"retention_expires_at must be ~now+retentionMonths, honoring the parameter (not hardcoded 6)")
 			assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled so the warning fires again")
 			assert.Nil(t, snap.RetentionNotice7d, "7d notice flag must be nulled so the warning fires again")
+
+			// Issue #1413 round-10: plaid_cleanup_pending_at must (re-)start on comp removal ONLY
+			// for the narrower set the Plaid-disconnect repair pass actually targets
+			// (inactive/cancelled) — NOT past_due, which has its own dunning timeline
+			// (past_due_service.go) and must never be immediately Plaid-disconnected by this pass.
+			if status == "past_due" {
+				assert.Nil(t, snap.PlaidCleanupPendingAt,
+					"plaid_cleanup_pending_at must NOT be set when the reverted status is past_due — that has its own dunning timeline")
+			} else {
+				require.NotNil(t, snap.PlaidCleanupPendingAt,
+					"plaid_cleanup_pending_at must be set when the reverted status is inactive/cancelled")
+				assert.WithinDuration(t, beforeCall, *snap.PlaidCleanupPendingAt, 10*time.Second,
+					"plaid_cleanup_pending_at must be set to ~now")
+			}
 		})
 	}
 }
@@ -276,6 +293,7 @@ func TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenActive(t *
 	assert.True(t, fixedExpires.Equal(*snap.RetentionExpiresAt), "retention_expires_at must be untouched for an active reverted status")
 	assert.True(t, fixedNotice30.Equal(*snap.RetentionNotice30d), "30d notice flag must be untouched for an active reverted status")
 	assert.True(t, fixedNotice7.Equal(*snap.RetentionNotice7d), "7d notice flag must be untouched for an active reverted status")
+	assert.Nil(t, snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must never be set when the reverted status is active — Issue #1413 round-10")
 }
 
 // TestRemoveUserTierOverride_Integration_InitialisesRetention_WhenClockNeverRan proves the H3
