@@ -587,6 +587,59 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser(t *testing.T) {
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp is the Issue #1413 round-12 Fix 2 RED
+// test at the worker's belt-and-braces layer: a candidate surfaced with a LAPSED (expired, never
+// cleared) manual_tier_override must still proceed to DisconnectAllUserItemsIfEligible — unlike
+// TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser's LIVE override, which must still skip. A
+// Plaid disconnect is recoverable (the user relinks), so this belt-and-braces guard must use
+// HasActiveManualOverride() (live-only), not HasAnyManualOverride() (live-or-lapsed) — the same
+// choice GetUsersNeedingPlaidDisconnectRepair's SQL predicate now makes.
+//
+// Falsifiability: reverting the guard to HasAnyManualOverride() makes this test fail —
+// DisconnectAllUserItemsIfEligible would never be called for this candidate.
+func TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	lapsedOverride := "household_2"
+	lapsedEndsAt := time.Now().Add(-24 * time.Hour) // lapsed, not cleared
+	user := &domain.User{
+		ID: "user-lapsed-comp-plaid-repair", Email: "lapsedcompplaidrepair@example.com",
+		SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &pendingSince,
+		ManualTierOverride: &lapsedOverride, ManualTierEndsAt: &lapsedEndsAt,
+	}
+	users := []*domain.User{user}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return(users, nil)
+	mockRepo.On("GetUserByID", ctx, "user-lapsed-comp-plaid-repair").Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-lapsed-comp-plaid-repair", mock.Anything).Return(nil)
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-lapsed-comp-plaid-repair", pendingSince).Return(true, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertCalled(t, "DisconnectAllUserItemsIfEligible", ctx, "user-lapsed-comp-plaid-repair", mock.Anything)
+}
+
 // TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery proves the re-read guard:
 // unlike RepairRetentionClock's conditional UPDATE (which gets this for free from its own WHERE
 // clause), DisconnectAllUserItemsIfEligible is an external Plaid call with no atomic DB guard — a

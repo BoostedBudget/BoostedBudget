@@ -1,0 +1,16 @@
+-- Down migration: intentional no-op (data preservation).
+--
+-- We do NOT restore the pre-migration plaid_cleanup_pending_at values because:
+-- 1. This migration never had a "correct" prior value to restore — its entire purpose was
+--    replacing 000119's unsound retention_started_at-derived timestamps (see the up migration's
+--    comment) with a fresh, safe one. There is nothing more correct to roll back to.
+-- 2. Reverting to the OLD (potentially understated, or even already-past-grace) values would
+--    reintroduce exactly the premature-disconnect risk this migration exists to close.
+--
+-- If a specific environment genuinely needs to force re-evaluation of the grace window (e.g. to
+-- test the repair pass), null the column instead so a subsequent real transition (or another run
+-- of this migration) re-stamps it — never hand-restore a stale value:
+--   UPDATE users SET plaid_cleanup_pending_at = NULL
+--   WHERE subscription_status IN ('inactive', 'cancelled');
+--
+-- No-op: intentionally no executable statement below this line.

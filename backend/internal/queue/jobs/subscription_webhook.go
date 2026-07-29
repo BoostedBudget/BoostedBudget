@@ -48,6 +48,14 @@ type SubscriptionProfileRepository interface {
 	// #898: Dunning — past_due timestamp tracking
 	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
 	ClearPastDueStartedAt(ctx context.Context, userID string) error
+	// ClearPlaidCleanupPendingIfMatches clears plaid_cleanup_pending_at ONLY if it still equals
+	// expected — Issue #1413 round-12 Fix 1. Called by processSubscriptionCanceled once a
+	// synchronous Plaid disconnect (and the retention-clock write) has actually SUCCEEDED, so the
+	// marker no longer overstates outstanding cleanup for this episode. The CAS guard (not the
+	// unconditional ClearPlaidCleanupPending) matters here for the same reason it matters for
+	// repairPlaidDisconnects: an admin comp grant-then-removal between this flow's own re-read and
+	// this call could otherwise start a NEW episode whose fresh marker this call must not erase.
+	ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 }
 
 // ClerkService defines the methods needed to update Clerk metadata.
@@ -985,6 +993,41 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
 		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
 		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
+	}
+
+	// Issue #1413 round-12 Fix 1 (Blocker): a SUCCESSFUL synchronous Plaid disconnect (above) means
+	// cleanup for THIS episode is already done — per the invariant
+	// (domain.User.PlaidCleanupPendingAt's doc comment), the marker must go back to NULL, or it
+	// permanently overstates "cleanup outstanding" for a user whose Plaid items are already
+	// disconnected. GetUsersNeedingPlaidDisconnectRepair's own live-linked-item EXISTS check means a
+	// stuck marker here can never cause a WRONG disconnect (there is nothing left to disconnect), but
+	// the invariant's value is being unconditionally checkable, not merely harmless in practice — see
+	// the task brief this fix closes.
+	//
+	// Gated on w.plaidCleanupSvc != nil: a nil collaborator means NO disconnect call was made at all
+	// (Issue #896's existing nil-guard, tested by TestWorker_SubscriptionCanceled_PlaidCleanupNil_
+	// Succeeds) — cleanup is genuinely still outstanding in that case, so the marker must stay set for
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects to pick up later. A failed disconnect already
+	// returned above (before reaching this line), so a stuck marker after a FAILED attempt is exactly
+	// the existing, correct "repair pass will retry" behavior — untouched by this fix.
+	//
+	// Uses freshUser.PlaidCleanupPendingAt (captured by the re-read right after THIS call's own
+	// UpdateSubscriptionFromPaddle write, before the comp/claim logic above) as the CAS "expected"
+	// value — ClearPlaidCleanupPendingIfMatches, not the unconditional ClearPlaidCleanupPending, so a
+	// brand-new episode's marker (e.g. an admin comp granted then removed between that re-read and
+	// this point) survives untouched rather than being erased. A clear failure or CAS mismatch is
+	// logged and swallowed, not escalated: unlike SetRetentionDates above, losing this write cannot
+	// cause "never warned, never deleted" — it can only leave an already-fully-disconnected user's
+	// marker harmlessly set, which the live-item check makes inert, and retrying the whole webhook
+	// would just redo an already-idempotent disconnect for no benefit.
+	if w.plaidCleanupSvc != nil && freshUser.PlaidCleanupPendingAt != nil {
+		if cleared, clearErr := w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, *freshUser.PlaidCleanupPendingAt); clearErr != nil {
+			w.logger.Warn("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at — repair pass would harmlessly re-consider this user, but has nothing left to disconnect",
+				"user_id", userID, "error", clearErr)
+		} else if !cleared {
+			w.logger.Info("Plaid disconnect succeeded, but plaid_cleanup_pending_at had already moved on to a new episode — leaving the new episode's marker untouched",
+				"user_id", userID)
+		}
 	}
 
 	// Mark the claim durably complete. A false ok (no error) means our lease was reclaimed by

@@ -71,6 +71,16 @@ type PastDueProfileRepository interface {
 	// user genuinely no longer exists — a DIFFERENT condition the caller must be able to tell
 	// apart from the "moved on" skip (round-4 review requirement).
 	ClearPastDueStartedAtIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
+
+	// ClearPlaidCleanupPendingIfMatches clears plaid_cleanup_pending_at ONLY if it still equals
+	// expected — Issue #1413 round-12 Fix 1. processGraceExpiry's ordering (Plaid disconnect FIRST,
+	// then the CAS flip that WRITES this marker) means that by the time the flip succeeds, a
+	// successful synchronous disconnect has ALREADY completed cleanup for this episode — the marker
+	// the flip just wrote would otherwise start life already stale. The CAS guard (not the
+	// unconditional ClearPlaidCleanupPending) matters for the same reason it matters everywhere else
+	// this pattern appears: a brand-new episode's marker must survive untouched if one somehow starts
+	// between the flip and this call.
+	ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 }
 
 // PastDuePlaidCleanup defines the Plaid cleanup operation needed by PastDueService.
@@ -425,6 +435,41 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 		s.logger.Info("past_due user recovered before cancel deadline, skipping cancellation",
 			slog.String("user_id", user.ID))
 		return nil
+	}
+
+	// Issue #1413 round-12 Fix 1 (Blocker): the marker CancelIfPastDueOccurrenceWithRetention just
+	// wrote (via its own COALESCE) describes cleanup as outstanding — but Step 1 above already
+	// disconnected Plaid FIRST, before this flip ever ran. If that disconnect actually happened and
+	// succeeded (s.plaidCleanup != nil; a failed disconnect already returned above, before reaching
+	// this point), cleanup for THIS episode is complete the instant the marker is born, and per the
+	// invariant (domain.User.PlaidCleanupPendingAt's doc comment) it must go back to NULL rather than
+	// starting life already stale. Unlike the cancellation-webhook path (Plaid disconnect AFTER the
+	// status/marker write), this flow's ordering means "clear immediately after the flip" is
+	// sufficient — there is no window where the marker is ever legitimately observable as "pending"
+	// for a disconnect that already finished; changing Step 1/3-4's relative order would be a larger,
+	// riskier change for no additional correctness benefit here.
+	//
+	// Re-reads the row via GetUserByID (not a return value from the CAS call, which reports only
+	// success/failure) to obtain the exact marker value THIS flip just wrote, then clears it via the
+	// CAS-guarded ClearPlaidCleanupPendingIfMatches — never the unconditional ClearPlaidCleanupPending
+	// — so a brand-new episode's marker (e.g. a comp granted then removed in the narrow window since
+	// the flip) survives untouched. A failed re-read/clear is logged and swallowed, not escalated:
+	// like Step 5 below, this is best-effort tidying, not correctness-critical for THIS cycle — a
+	// stuck marker on an already-fully-disconnected user is inert (GetUsersNeedingPlaidDisconnectRepair
+	// requires a LIVE linked item, and none remain).
+	if s.plaidCleanup != nil {
+		if freshUser, reErr := s.repo.GetUserByID(ctx, user.ID); reErr != nil {
+			s.logger.Warn("failed to re-read user before clearing plaid_cleanup_pending_at after grace-expiry disconnect",
+				"user_id", user.ID, "error", reErr)
+		} else if freshUser.PlaidCleanupPendingAt != nil {
+			if cleared, clearErr := s.repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, *freshUser.PlaidCleanupPendingAt); clearErr != nil {
+				s.logger.Warn("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at",
+					"user_id", user.ID, "error", clearErr)
+			} else if !cleared {
+				s.logger.Info("plaid_cleanup_pending_at had already moved on to a new episode when clearing after grace-expiry disconnect — leaving the new episode's marker untouched",
+					"user_id", user.ID)
+			}
+		}
 	}
 
 	// Step 5: Clear the past_due_started_at stamp — but ONLY if it still holds the SAME
