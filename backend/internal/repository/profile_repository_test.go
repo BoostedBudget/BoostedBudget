@@ -5,6 +5,7 @@ import (
 
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -654,8 +655,9 @@ func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
 
 			// Verify normalized status appears in SQL. wantStatus is always "cancelled" here
 			// (eligible for Plaid-disconnect repair), so plaid_cleanup_pending_at is started via
-			// COALESCE — Issue #1413 round-10.
-			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $5) WHERE id = $6 AND is_deleted = FALSE`)).
+			// COALESCE, gated on the row not carrying a live manual tier override — Issue #1413
+			// round-10 / round-11 Fix 4.
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN (manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())) THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $5) END WHERE id = $6 AND is_deleted = FALSE`)).
 				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
 				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
@@ -665,6 +667,36 @@ func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+// TestHasActiveManualOverrideSQLExpr_MatchesNoActiveManualOverridePredicate is Issue #1413
+// round-11 Fix 4's parity guard: hasActiveManualOverrideSQLExpr (spliced into
+// UpdateSubscriptionFromPaddle's CASE/WHEN) and noActiveManualOverridePredicate's inner "AND NOT
+// (...)" condition (spliced into WHERE clauses elsewhere) must express the EXACT same boolean —
+// only their surrounding wrapper differs. This mirrors this branch's existing precedent for this
+// exact failure class (noActiveManualOverridePredicate / domain.User.HasActiveManualOverride(),
+// guarded by TestNoActiveManualOverridePredicate_Integration_ParityWithGo): duplicating logic
+// across two constants is exactly how a "must stay in sync" comment silently stops being true.
+//
+// Falsifiability: changing either constant's boundary condition (e.g. `>=` to `>` on
+// manual_tier_ends_at) without changing the other makes this test fail.
+func TestHasActiveManualOverrideSQLExpr_MatchesNoActiveManualOverridePredicate(t *testing.T) {
+	// Strips ALL whitespace (not just collapsing runs) — safe here because both source strings are
+	// SQL keywords/identifiers/punctuation with no embedded string literals containing meaningful
+	// whitespace, so this can't accidentally merge two distinct tokens into one.
+	normalize := func(s string) string {
+		return strings.Join(strings.Fields(s), "")
+	}
+
+	// noActiveManualOverridePredicate is "AND NOT (<expr>)" — strip the wrapper down to just
+	// "(<expr>)" so it can be compared directly against hasActiveManualOverrideSQLExpr.
+	wrapped := normalize(noActiveManualOverridePredicate)
+	const prefix = "ANDNOT"
+	require.True(t, strings.HasPrefix(wrapped, prefix), "unexpected noActiveManualOverridePredicate shape: %q", wrapped)
+	innerFromPredicate := strings.TrimPrefix(wrapped, prefix)
+
+	assert.Equal(t, normalize(hasActiveManualOverrideSQLExpr), innerFromPredicate,
+		"hasActiveManualOverrideSQLExpr must express the identical boolean condition as noActiveManualOverridePredicate's inner clause")
 }
 
 // userSelectQueryForTest is the expected SELECT query used in tests for profile lookups

@@ -278,8 +278,16 @@ type ProfileRepository interface {
 	// 'disconnected'/'replaced', where a NULL status counts as live too (linked_items.status is
 	// nullable; see migration 000013 — SQL's three-valued logic makes a bare `NOT IN (...)`
 	// silently exclude a NULL-status row, which would be exactly the leak this pass exists to
-	// prevent, so the predicate explicitly treats NULL as live) — AND whose retention_started_at is
-	// older than gracePeriod (Issue #1413 round-7: the grace anchor).
+	// prevent, so the predicate explicitly treats NULL as live) — AND whose plaid_cleanup_pending_at
+	// marker is older than gracePeriod.
+	//
+	// Issue #1413 round-11 correction: this doc comment previously (incorrectly) described
+	// retention_started_at as the grace anchor. That was true only through round-9; round-10
+	// replaced it with the explicit plaid_cleanup_pending_at marker (see
+	// domain.User.PlaidCleanupPendingAt's doc comment for the invariant this column maintains, and
+	// this method's own implementation doc comment below for the full round-10 rationale for why
+	// retention_started_at could not be made sound as this anchor). retention_started_at plays NO
+	// role in this query at all now — do not reintroduce it here.
 	//
 	// Issue #1413 round-7 (Codex review): this is the ratified DEFER design, not an ordering fix.
 	// TrialService.ExpireTrial no longer calls Plaid at all — no ordering of a status flip and an
@@ -287,28 +295,19 @@ type ProfileRepository interface {
 	// whitelisted for read-only users, so becoming read-only never stops a user from becoming
 	// active again. Disconnecting Plaid is deferred entirely to this repair pass
 	// (RetentionCleanupCheckWorker.repairPlaidDisconnects), which only selects a user once
-	// gracePeriod has elapsed since they became read-only (retention_started_at, set at the SAME
-	// moment ExpireTrial/CancelIfPastDueWithRetention/subscription-cancellation flip the status) —
-	// giving a genuine resubscriber a window to become active again before Plaid is ever touched, at
-	// which point they simply drop out of this query (subscription_status is no longer
-	// 'inactive'/'cancelled'). A user who resubscribes WITHIN the grace window is therefore never
-	// disconnected at all, not merely disconnected after a narrower window.
+	// gracePeriod has elapsed since plaid_cleanup_pending_at was set (atomically alongside the SAME
+	// status flip that makes the user Plaid-ineligible per the invariant) — giving a genuine
+	// resubscriber a window to become active again before Plaid is ever touched, at which point
+	// they simply drop out of this query (their marker is cleared, per the invariant, the moment
+	// they become Plaid-eligible again). A user who resubscribes WITHIN the grace window is
+	// therefore never disconnected at all, not merely disconnected after a narrower window.
 	//
-	// Because this predicate keys on subscription_status + retention_started_at (not on which flow
-	// set them), it also catches a failed/never-ran disconnect from the cancellation and past-due
-	// paths, not just trial expiry — those set retention_started_at at the same status-flip moment
-	// (CancelIfPastDueWithRetention, subscription_webhook.go's cancellation handling), so any
-	// read-only user with a live item past the grace window is covered uniformly.
-	//
-	// Ordering dependency: a read-only user whose retention_started_at is still NULL (the
-	// retention-clock write failed, or hasn't run yet) is NEVER selected here, since
-	// `retention_started_at < $cutoff` is UNKNOWN (not TRUE) for a NULL left side — this is
-	// deliberate and safe (they have no grace anchor to measure yet), but it means
-	// RetentionCleanupCheckWorker MUST run its retention-clock repair step (Step 0,
-	// GetUsersNeedingRetentionClockRepair/RepairRetentionClock) BEFORE this one (Step 0b) in the
-	// same pass, so a user repaired in Step 0 becomes eligible for Step 0b once the grace period
-	// elapses rather than being stuck indefinitely. See retention_cleanup_check.go's Work() for
-	// where that ordering is enforced.
+	// Because this predicate keys on subscription_status + plaid_cleanup_pending_at (not on which
+	// flow set them), it also catches a failed/never-ran disconnect from the cancellation and
+	// past-due paths, not just trial expiry — every SET site listed in
+	// domain.User.PlaidCleanupPendingAt's doc comment stamps this marker at the same moment it
+	// makes the user Plaid-ineligible, so any read-only user with a live item past the grace window
+	// is covered uniformly regardless of which writer put them there.
 	//
 	// Predicate otherwise mirrors GetUsersNeedingRetentionClockRepair's shape (subscription_status
 	// IN ('inactive', 'cancelled'), not deleted, no outstanding GDPR deletion request, no
@@ -865,6 +864,27 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// and, moot in practice since processSubscriptionPastDue only ever reaches past_due from
 	// active/trialing, past_due too) clears it: that status is not one this repair pass targets,
 	// so nothing can legitimately be "pending" against it.
+	//
+	// Issue #1413 round-11 Fix 4 (High): the eligible branch's COALESCE is now additionally gated,
+	// LIVE IN SQL, on the row NOT currently carrying an active manual tier override
+	// (hasActiveManualOverrideSQLExpr) — per the invariant (domain.User.PlaidCleanupPendingAt's
+	// doc comment), a comped user is Plaid-ELIGIBLE regardless of the raw status this call is
+	// about to write (HasActiveManualOverride() forces EFFECTIVE status to active), so the marker
+	// must stay NULL. The bug this closes: subscription_webhook.go's processSubscriptionCanceled
+	// writes 'cancelled' as billing truth UNCONDITIONALLY — including for a comped user — and only
+	// checks HasActiveManualOverride() AFTER this write, to decide whether to skip the Plaid
+	// disconnect/retention-clock side effects. Before this fix, that ordering meant a comped
+	// user's cancellation still stamped the marker (the COALESCE only looked at the NEW status,
+	// never the override); when the comp later expired, removal's own COALESCE(existing, NOW())
+	// preserved that STALE marker instead of starting a fresh grace window, so a comp that outlived
+	// the marker's age by more than the grace period disconnected the user immediately at comp
+	// expiry, with no grace at all. Checking the override LIVE, inside this same atomic UPDATE,
+	// removes any dependency on caller ordering — this is correct no matter when in
+	// subscription_webhook.go (or any other caller) the override happens to be checked, because it
+	// reads the row's actual committed state at the instant of the write, not a Go-side snapshot
+	// taken earlier. This also uniformly protects every OTHER caller of this shared method (e.g.
+	// processSubscriptionUpdated, which can also drive status to 'cancelled' via a normalized
+	// paused/canceled value) without each needing its own override check.
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
 	var query string
@@ -878,7 +898,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $7) WHERE id = $8 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $7) END WHERE id = $8 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`
 		}
@@ -886,7 +906,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $5) WHERE id = $6 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN ` + hasActiveManualOverrideSQLExpr + ` THEN NULL ELSE COALESCE(plaid_cleanup_pending_at, $5) END WHERE id = $6 AND is_deleted = FALSE`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`
 		}
@@ -1196,19 +1216,53 @@ func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string)
 
 // UpdateTrialStatus updates trial-related fields for a user
 // Issue #679: Trial service and auto-grant logic
+//
+// Issue #1413 round-11 Fix 2 (High): also clears plaid_cleanup_pending_at when status makes the
+// user Plaid-eligible — this method's only production caller (TrialService.GrantTrial) always
+// passes SubscriptionStatusTrial, which is never repair-eligible, so this always clears in
+// practice. Deriving the CASE from the `status` parameter (mirroring
+// UpdateSubscriptionFromPaddle's own status-driven clearing), rather than hardcoding NULL, keeps
+// this method honest against the invariant (domain.User.PlaidCleanupPendingAt's doc comment) even
+// if a future caller ever passes a different status.
+//
+// The bug this closes: granting a trial to a cancelled user with an outstanding marker used to
+// leave the STALE marker in place — trial is Plaid-eligible, so the invariant requires NULL here.
+// The stale marker then survived until this NEW trial itself later expired, at which point
+// ExpireTrialIfNoOverride's COALESCE(plaid_cleanup_pending_at, NOW()) preserved the OLD timestamp
+// instead of starting a fresh grace window — the user could be disconnected immediately against
+// an anchor from before this trial ever existed, rather than getting the grace period a fresh
+// ineligibility episode is entitled to.
 func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	now := time.Now()
 
-	query := `
-		UPDATE users
-		SET subscription_status = $1,
-		    subscription_tier = 'premium',
-		    trial_started_at = $2,
-		    trial_ends_at = $3,
-		    had_trial = $4,
-		    updated_at = $5
-		WHERE id = $6 AND is_deleted = FALSE
-	`
+	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
+
+	var query string
+	if plaidMarkerEligible {
+		query = `
+			UPDATE users
+			SET subscription_status = $1,
+			    subscription_tier = 'premium',
+			    trial_started_at = $2,
+			    trial_ends_at = $3,
+			    had_trial = $4,
+			    updated_at = $5,
+			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $5)
+			WHERE id = $6 AND is_deleted = FALSE
+		`
+	} else {
+		query = `
+			UPDATE users
+			SET subscription_status = $1,
+			    subscription_tier = 'premium',
+			    trial_started_at = $2,
+			    trial_ends_at = $3,
+			    had_trial = $4,
+			    updated_at = $5,
+			    plaid_cleanup_pending_at = NULL
+			WHERE id = $6 AND is_deleted = FALSE
+		`
+	}
 
 	ct, err := r.db.Exec(ctx, query, status, trialStartedAt, trialEndsAt, hadTrial, now, userID)
 	if err != nil {
@@ -1379,6 +1433,38 @@ func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string
 // already covers every existing caller of this method atomically with the same status write this
 // method usually follows — this is deliberate belt-and-braces, not the sole mechanism: clearing to
 // NULL is idempotent no matter how many paths do it.)
+//
+// Issue #1413 round-11 Fix 1 (BLOCKER): the plaid_cleanup_pending_at clear is now CONDITIONAL on
+// the row's LIVE subscription_status at the moment of this write — reusing
+// plaidDisconnectRepairEligibleStatusPredicate, the exact same "is this status Plaid-repair-
+// eligible" check UpdateSubscriptionFromPaddle's own SET clause uses. Per the invariant
+// (domain.User.PlaidCleanupPendingAt's doc comment), the marker must be non-NULL whenever the
+// CURRENT status is inactive/cancelled — an unconditional clear here can no longer be trusted to
+// mean "the user is Plaid-eligible now", because this call can arrive LATE relative to a NEWER
+// transition that already re-established ineligibility with its own fresh marker.
+//
+// The blocker this closes: an "active" webhook updates the user, then pauses before reaching this
+// call; a NEWER cancellation webhook lands first, writing subscription_status='cancelled' plus a
+// FRESH marker (UpdateSubscriptionFromPaddle's own COALESCE); that cancellation's Plaid cleanup
+// fails and the webhook is retried/dead-lettered; the STALE "active" webhook then resumes and
+// reaches this call. Unconditionally nulling the marker here would erase the fresh cancellation's
+// marker — GetUsersNeedingPlaidDisconnectRepair requires a non-NULL marker, so the repair pass
+// would never see this user again, leaving them cancelled with a live, still-billing Plaid item
+// indefinitely. Checking the LIVE status (not the status this stale caller last observed) closes
+// this: by the time the stale call finally runs, the row's actual status is 'cancelled', so the
+// conditional clear leaves the marker untouched — "a write that no longer reflects reality must
+// not win".
+//
+// retention_started_at/retention_expires_at/the two notice-sent flags are deliberately left
+// UNCONDITIONAL — out of this fix's scope. The identical race can transiently clear a fresher
+// retention clock too, but that class of loss is self-healing via
+// GetUsersNeedingRetentionClockRepair/RepairRetentionClock (belt-and-braces repair pass, Issue
+// #1413 round-3 finding H5 residual), unlike the marker, which has NO equivalent backstop query —
+// GetUsersNeedingPlaidDisconnectRepair's own predicate REQUIRES the marker to already be
+// non-NULL, so a lost marker can never be repaired by re-selecting the user. That asymmetry — one
+// field's loss is permanent, the other's is a same-day repair-job blip — is why only the marker
+// gets a conditional guard here, not the whole statement. See the round-11 report/PR for this
+// scope decision.
 func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID string) error {
 	now := time.Now()
 	ct, err := r.db.Exec(ctx, `
@@ -1387,7 +1473,10 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 		    retention_expires_at = NULL,
 		    retention_notice_30d_sent_at = NULL,
 		    retention_notice_7d_sent_at = NULL,
-		    plaid_cleanup_pending_at = NULL,
+		    plaid_cleanup_pending_at = CASE
+		        WHEN `+plaidDisconnectRepairEligibleStatusPredicate+` THEN plaid_cleanup_pending_at
+		        ELSE NULL
+		    END,
 		    updated_at = $1
 		WHERE id = $2 AND is_deleted = FALSE`,
 		now, userID,
@@ -1402,19 +1491,22 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 }
 
 // ClearPlaidCleanupPending unconditionally clears the plaid_cleanup_pending_at marker for a user —
-// Issue #1413 round-10. Called once a Plaid-disconnect repair pass actually completes successfully
-// (repairPlaidDisconnects, retention_cleanup_check.go), so a user whose items are already fully
-// cleaned up stops being redundantly re-selected by GetUsersNeedingPlaidDisconnectRepair on every
-// future run. Mirrors ClearPastDueStartedAt's unconditional shape: the caller already holds
-// whatever exclusivity/re-verification the disconnect itself required (DisconnectAllUserItemsIfEligible
-// is self-claiming), so no additional CAS guard is needed here. Clearing to NULL is inherently
-// idempotent regardless of how this races a concurrent setter: a genuinely NEW ineligibility
-// transition landing around the same time can only ever set a FRESH timestamp (every setter uses
-// COALESCE, so it never overwrites a value this clear hasn't touched yet, and this clear simply
-// nulls whatever is present) — there is no ordering in which this call can silently erase a marker
-// a concurrent, still-in-flight transition is relying on, because that transition's own COALESCE
-// write and this UPDATE both target the same row under Postgres's normal row-level write
-// serialization.
+// Issue #1413 round-10.
+//
+// Issue #1413 round-11 correction: this method's own prior doc comment argued unconditional
+// clearing was safe because "there is no ordering in which this call can silently erase a marker a
+// concurrent, still-in-flight transition is relying on" — that reasoning was WRONG, and is exactly
+// the round-11 Fix 3 finding: an admin can grant a comp (clearing the marker) and then remove it
+// (setting a FRESH marker for a NEW ineligibility episode) SEQUENTIALLY, entirely between a
+// repairPlaidDisconnects worker's candidate-selection read and its later unconditional call to
+// this method — no concurrency required, just an intervening pair of writes this method cannot
+// see. Calling this unconditionally at that point erases the new episode's marker, discarding its
+// entire grace window. This method is kept for callers that genuinely have no discriminator to
+// compare against (there are none in this codebase as of round-11 — every production caller now
+// uses ClearPlaidCleanupPendingIfMatches below) and for direct repository-level testing; DO NOT
+// wire a new production caller to this method without first re-reading
+// ClearPlaidCleanupPendingIfMatches's doc comment to confirm an occurrence-scoped clear isn't what
+// you actually need.
 func (r *profileRepository) ClearPlaidCleanupPending(ctx context.Context, userID string) error {
 	now := time.Now()
 	ct, err := r.db.Exec(ctx, `
@@ -1429,6 +1521,48 @@ func (r *profileRepository) ClearPlaidCleanupPending(ctx context.Context, userID
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+// ClearPlaidCleanupPendingIfMatches is ClearPlaidCleanupPending's occurrence-scoped sibling —
+// Issue #1413 round-11 Fix 3, mirroring ClearPastDueStartedAtIfMatches's established CAS shape
+// (past_due_service.go's exact solution to the same occurrence-identity problem, applied here to
+// plaid_cleanup_pending_at rather than past_due_started_at).
+//
+// ONLY clears the marker when it still equals expected — the value the caller observed when it
+// selected this user as a repair candidate (GetUsersNeedingPlaidDisconnectRepair). Without this,
+// repairPlaidDisconnects's final "cleanup succeeded, clear the marker" step would call the
+// unconditional ClearPlaidCleanupPending above and could erase a DIFFERENT, newer ineligibility
+// episode's marker — one that started (via a comp grant-then-removal, or any other
+// clear-then-reset sequence) entirely within the window between this worker's candidate selection
+// and this call, with the worker never having re-verified the marker's IDENTITY, only its
+// presence. See domain.User.PlaidCleanupPendingAt's doc comment for the invariant this closes:
+// "its value is the instant the CURRENT ineligibility episode began — never an earlier episode's
+// [and never a later one's]".
+//
+// Returns (true, nil) when cleared, (false, nil) when the marker had already moved on to a new
+// episode since the caller's snapshot was taken (a legitimate, expected skip — the NEW episode's
+// marker is exactly what must survive untouched, so a future repair run can evaluate it on its own
+// schedule), and (false, ErrUserNotFound) if the user genuinely no longer exists — mirroring
+// ClearPastDueStartedAtIfMatches's three-way return contract exactly.
+func (r *profileRepository) ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error) {
+	var userExists, cleared bool
+	err := r.db.QueryRow(ctx, `
+		WITH existing AS (
+			SELECT 1 FROM users WHERE id = $1
+		), updated AS (
+			UPDATE users SET plaid_cleanup_pending_at = NULL, updated_at = NOW()
+			WHERE id = $1 AND plaid_cleanup_pending_at = $2
+			RETURNING 1
+		)
+		SELECT EXISTS(SELECT 1 FROM existing), EXISTS(SELECT 1 FROM updated)
+	`, userID, expected).Scan(&userExists, &cleared)
+	if err != nil {
+		return false, fmt.Errorf("ClearPlaidCleanupPendingIfMatches: %w", err)
+	}
+	if !userExists {
+		return false, ErrUserNotFound
+	}
+	return cleared, nil
 }
 
 // SetRetentionNotice30dSent marks the 30-day pre-deletion notice as sent (#930).
@@ -1617,6 +1751,22 @@ const noActiveManualOverridePredicate = `
 	      AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())
 	  )
 `
+
+// hasActiveManualOverrideSQLExpr is the raw boolean SQL expression for "this row currently carries
+// a live (non-expired) manual tier override" — Issue #1413 round-11 Fix 4. Logically IDENTICAL to
+// the condition inside noActiveManualOverridePredicate's "AND NOT (...)" above (same three
+// sub-conditions, same NOW() boundary semantics), but expressed as a bare boolean rather than a
+// pre-wrapped "AND NOT (...)" WHERE-clause fragment, so it can be spliced directly into a CASE/WHEN
+// inside a SET clause (UpdateSubscriptionFromPaddle below) instead of only a WHERE clause.
+// Deliberately single-line (unlike noActiveManualOverridePredicate's historical multi-line
+// formatting) so a caller that embeds it inside an otherwise single-line UPDATE query string
+// doesn't end up with an unreadable mix of embedded newlines.
+//
+// Both constants must stay logically identical — TestHasActiveManualOverrideSQLExpr_MatchesNoActiveManualOverridePredicate
+// (profile_repository_test.go) guards against them drifting apart, mirroring this branch's
+// existing precedent for this exact failure class (noActiveManualOverridePredicate /
+// domain.User.HasActiveManualOverride(), TestNoActiveManualOverridePredicate_Integration_ParityWithGo).
+const hasActiveManualOverrideSQLExpr = `(manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW()))`
 
 // noManualOverrideAtAllPredicate excludes a user with ANY non-empty manual_tier_override —
 // live OR already-lapsed — from the retention notice/hard-delete queries (Issue #1413 Critical
