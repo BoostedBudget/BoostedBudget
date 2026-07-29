@@ -809,9 +809,10 @@ func main() {
 		// Placement: after Paddle init (paddleService available), before Plaid init.
 
 		// Issue #679, #680: Create TrialService unconditionally.
-		// PlaidCleanup is nil initially — wired via SetPlaidCleanup() if Plaid is configured.
-		// ExpireTrial already nil-guards plaidCleanup before calling it.
-		trialService = services.NewTrialService(tierConfig, profileRepo, nil)
+		// Issue #1413 round-7: TrialService has no Plaid dependency at all — ExpireTrial never
+		// calls Plaid. The disconnect lives entirely in RetentionCleanupCheckWorker's grace-window
+		// repair pass (wired further below, once plaidCleanupService is available).
+		trialService = services.NewTrialService(tierConfig, profileRepo)
 		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
 		// #1367 — Phase 3: exempt actively covered household members from trial expiry.
 		trialService.SetHouseholdChecker(householdEntitlementService)
@@ -985,10 +986,6 @@ func main() {
 					subscriptionWebhookWorker.SetPlaidCleanupService(plaidCleanupService)
 					appLogger.Info("Plaid cleanup service wired to subscription webhook worker")
 				}
-
-				// Issue #1015: Wire Plaid cleanup to trial service (created before Plaid block with nil cleanup)
-				trialService.SetPlaidCleanup(plaidCleanupService)
-				appLogger.Info("Plaid cleanup service wired to trial service")
 
 				// Issue #898: Wire Plaid cleanup to past-due service (created before Plaid block with nil cleanup)
 				pastDueService.SetPlaidCleanup(plaidCleanupService)

@@ -38,6 +38,15 @@ func (m *MockPlaidCleanupService) DisconnectAllUserItems(ctx context.Context, us
 	return args.Error(0)
 }
 
+// DisconnectAllUserItemsIfEligible (Issue #1413 round-7) is never called through this mock —
+// item-cleanup job tests exercise Work() paths that only use RemoveAllUserItems/
+// DisconnectAllUserItems; the per-item recheck variant is used solely by the retention-cleanup
+// Plaid-disconnect repair pass. Bare no-op stubbed only to satisfy the widened
+// services.PlaidItemCleanupService interface.
+func (m *MockPlaidCleanupService) DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error {
+	return nil
+}
+
 // SetWorkClaimsRepo (Issue #1413 H1) is never called through this mock — item-cleanup job tests
 // exercise Work() on an already-constructed worker, not service wiring — so this is a bare no-op
 // (no m.Called) rather than a testify expectation, avoiding an unregistered-expectation panic.

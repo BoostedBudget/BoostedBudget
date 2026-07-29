@@ -14,24 +14,26 @@ package services
 // next ExpireTrial run for this user actually SUCCEEDS — an already-accepted window, but bounded
 // by successful job execution, not by a single run unconditionally (corrected per an independent
 // adversarial review: TrialExpirationCheckWorker logs and continues past a per-user ExpireTrial
-// failure, still reporting the job overall as successful, so a persistently failing Plaid
-// disconnect would extend this window across multiple runs, not just one). See
-// trial_service.go's "Accepted cost (already ratified): ... volume is a handful of rows" and the
-// function doc comment below for why this is a property ExpireTrial has for every expired trial,
-// comped-and-reverted or not.
+// failure, still reporting the job overall as successful, so a persistently failing ExpireTrial run
+// would extend this window across multiple runs, not just one). See trial_service.go's "Accepted
+// cost (already ratified): ... volume is a handful of rows" and the function doc comment below for
+// why this is a property ExpireTrial has for every expired trial, comped-and-reverted or not.
 //
 // An independent review proposed normalizing trial -> inactive inside RemoveUserTierOverride's
-// clear CTE to close this window. THAT WAS REJECTED — do not implement it. ExpireTrial does
-// THREE things in one call: flip subscription_status, disconnect Plaid, and start the retention
-// clock. GetUsersWithExpiredTrials (profile_repository.go) selects candidates on raw
-// subscription_status = 'trial'. If the clear silently set status to 'inactive', this user would
-// never be selected by that job again — so the Plaid disconnect trial expiry exists to perform
-// would NEVER run, leaving a live bank connection on a read-only account indefinitely. That is
-// worse than the bounded one-run gap this test pins, and it would turn an idempotent admin
-// bookkeeping endpoint (remove override) into a destructive one (silently skips a mandatory
-// external side effect). If this window is ever tightened, the fix belongs in making the CLEAR
-// itself trigger the disconnect+retention side effects, not in making the row invisible to the
-// job that already performs them.
+// clear CTE to close this window. THAT WAS REJECTED — do not implement it. ExpireTrial does TWO
+// things in one call (Issue #1413 round-7: it no longer disconnects Plaid at all — see
+// trial_service.go's ExpireTrial doc comment): flip subscription_status and start the retention
+// clock, the SAME timestamp RetentionCleanupCheckWorker's grace-window repair pass anchors on to
+// decide when a read-only user's Plaid items are eventually disconnected. GetUsersWithExpiredTrials
+// (profile_repository.go) selects candidates on raw subscription_status = 'trial'. If the clear
+// silently set status to 'inactive', this user would never be selected by that job again — so the
+// retention clock ExpireTrial exists to start would NEVER start, leaving this user permanently
+// invisible to the grace-window repair pass and so a live bank connection on a read-only account
+// indefinitely. That is worse than the bounded one-run gap this test pins, and it would turn an
+// idempotent admin bookkeeping endpoint (remove override) into a destructive one (silently skips a
+// mandatory side effect). If this window is ever tightened, the fix belongs in making the CLEAR
+// itself trigger the retention-clock side effect, not in making the row invisible to the job that
+// already performs it.
 //
 // Run:
 //
@@ -46,35 +48,31 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOneRun_ThenExpiresWithPlaidDisconnect
+// TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOneRun_ThenExpires
 // is the #1413 G8 pin. Two phases against a REAL database (not two isolated unit tests that
 // could each pass under an implementation that behaved differently end-to-end):
 //
 //  1. An admin removes a live comp from a user whose trial_ends_at is already in the past.
 //     The reverted raw status must still be 'trial' (not silently normalized to 'inactive'),
 //     and a user at raw 'trial' is provably NOT read-only — the bounded, accepted gap.
-//  2. The next daily ExpireTrial run (simulating tomorrow's cron) must then actually flip the
-//     status AND perform the full expiry side effects, including the Plaid disconnect — proving
-//     the gap closes once a run for this user SUCCEEDS.
 //
-//     UPDATED for Issue #1413 round-6 (the reordering fix in trial_service.go was itself reverted
-//     and replaced — see that file's ExpireTrial doc comment for the full history): the WRITABLE
-//     half of this bound is now tighter than the original comment here claimed. Round-6 restores
-//     CAS-FIRST ordering, so the status flip to 'inactive' no longer depends on the Plaid
-//     disconnect succeeding at all — it happens BEFORE the disconnect is even attempted, gated
-//     only on the override check. That means the writable-until-read-only window this test's
-//     Phase 1 proves closes on the very next run that reaches the CAS, full stop, regardless of
-//     whether the Plaid disconnect that follows succeeds or fails. This test's plaidCleanup mock
-//     still always returns nil, so Phase 2 continues to prove the disconnect ALSO succeeds on that
-//     run — but a failing disconnect would no longer extend the writable-status window the way it
-//     could under the round-5 ordering this replaces; it would only delay the Plaid-side cleanup,
-//     which GetUsersNeedingPlaidDisconnectRepair (profile_repository.go) now backstops
-//     independently of this comp-revert scenario.
-func TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOneRun_ThenExpiresWithPlaidDisconnect(t *testing.T) {
+//  2. The next daily ExpireTrial run (simulating tomorrow's cron) must then actually flip the
+//     status AND start the retention clock, proving the gap closes once a run for this user
+//     SUCCEEDS.
+//
+//     UPDATED for Issue #1413 round-7 (trial_service.go's ExpireTrial doc comment has the full
+//     history): ExpireTrial no longer calls Plaid at all — the status flip and retention-clock
+//     start are the ENTIRE flow now, gated only on the override check. That means the
+//     writable-until-read-only window this test's Phase 1 proves closes on the very next run that
+//     reaches the CAS, full stop — there is no disconnect outcome that could extend it either way.
+//     The Plaid-side cleanup for a user like this one (once genuinely read-only) is handled
+//     entirely by RetentionCleanupCheckWorker's grace-window repair pass
+//     (GetUsersNeedingPlaidDisconnectRepair, profile_repository.go), independently of this
+//     comp-revert scenario.
+func TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOneRun_ThenExpires(t *testing.T) {
 	pool := setupHouseholdServiceIntegrationDB(t)
 	enc := newTestFieldEncryptor(t)
 	ctx := context.Background()
@@ -143,18 +141,16 @@ func TestExpireTrial_Integration_CompRemovedAfterTrialExpiry_RawTrialSurvivesOne
 			"does leave this user writable until the next ExpireTrial run")
 
 	// --- Phase 2: the next daily ExpireTrial run finally catches up ---
-	plaidCleanup := new(mockPlaidCleanupService)
-	plaidCleanup.On("DisconnectAllUserItems", mock.Anything, user.ID).Return(nil).Once()
-
 	// tierConfig is nil: ExpireTrial never reads it (only GrantTrial does), and this test must
-	// not call config.LoadTierConfig()'s process-wide sync.Once.
-	trialSvc := NewTrialService(nil, profileRepo, plaidCleanup)
+	// not call config.LoadTierConfig()'s process-wide sync.Once. Issue #1413 round-7: ExpireTrial
+	// no longer calls Plaid at all (see trial_service.go's ExpireTrial doc comment) — the
+	// Plaid-disconnect coverage this test used to also pin now lives in
+	// retention_cleanup_check_test.go / profile_repository_plaid_disconnect_repair_integration_test.go.
+	trialSvc := NewTrialService(nil, profileRepo)
 	trialSvc.SetWorkClaimsRepo(claimsRepo)
 
 	err = trialSvc.ExpireTrial(ctx, user.ID)
 	require.NoError(t, err, "ExpireTrial must now succeed — the override is gone")
-
-	plaidCleanup.AssertExpectations(t) // the Plaid disconnect this pin exists to guarantee still runs
 
 	var finalStatus string
 	var retentionStarted, retentionExpires *time.Time

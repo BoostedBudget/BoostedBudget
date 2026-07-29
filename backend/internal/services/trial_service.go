@@ -5,7 +5,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -40,13 +39,6 @@ type TrialRepository interface {
 	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
 }
 
-// PlaidCleanupForTrial defines the Plaid cleanup methods needed by TrialService
-type PlaidCleanupForTrial interface {
-	// DisconnectAllUserItems calls Plaid /item/remove for all items
-	// then marks them as 'disconnected' (preserves transaction history)
-	DisconnectAllUserItems(ctx context.Context, userID string) error
-}
-
 // trialExpirationClaimLease is the lease duration requested for ActionTrialExpiration — matches
 // ExecuteDeletion's accountDeletionClaimLease and PastDueService's pastDueClaimLease (Issue
 // #1413 round-4 finding H2). Generous beats tight, and the fencing token
@@ -54,10 +46,10 @@ type PlaidCleanupForTrial interface {
 // re-granted to a second worker.
 const trialExpirationClaimLease = 15 * time.Minute
 
-// householdCoverageCheckerForTrial is the narrow capability TrialService needs to
-// detect an active household-sourced entitlement, so the daily trial-expiry job
-// doesn't flip a covered member to inactive and disconnect their Plaid items despite
-// being actively covered (#1367 — Phase 3). Satisfied structurally by
+// householdCoverageCheckerForTrial is the narrow capability TrialService needs to detect an
+// active household-sourced entitlement, so the daily trial-expiry job doesn't flip a covered
+// member to inactive (and, eventually, have their Plaid items disconnected by the grace-window
+// repair pass) despite being actively covered (#1367 — Phase 3). Satisfied structurally by
 // *HouseholdEntitlementService.
 type householdCoverageCheckerForTrial interface {
 	IsCoveredByHousehold(ctx context.Context, userID string) (bool, error)
@@ -68,7 +60,6 @@ type householdCoverageCheckerForTrial interface {
 type TrialService struct {
 	tierConfig       *config.TierConfig
 	repo             TrialRepository
-	plaidCleanup     PlaidCleanupForTrial
 	householdChecker householdCoverageCheckerForTrial // #1367 — Phase 3: nil skips the exemption
 	claimsRepo       repository.WorkClaimsRepository  // #1413 round-4 H2: required, see SetWorkClaimsRepo
 	retentionMonths  int                              // #930: Months before auto-deletion after trial expiry
@@ -76,15 +67,18 @@ type TrialService struct {
 }
 
 // NewTrialService creates a new TrialService
+//
+// Issue #1413 round-7: TrialService no longer has a Plaid dependency at all — ExpireTrial never
+// calls Plaid (see that method's doc comment for why no ordering of a status flip and an
+// irreversible Plaid call can be safe). The disconnect now lives entirely in
+// RetentionCleanupCheckWorker's grace-window repair pass.
 func NewTrialService(
 	tierConfig *config.TierConfig,
 	repo TrialRepository,
-	plaidCleanup PlaidCleanupForTrial,
 ) *TrialService {
 	return &TrialService{
 		tierConfig:      tierConfig,
 		repo:            repo,
-		plaidCleanup:    plaidCleanup,
 		retentionMonths: 6,
 		logger:          slog.Default(),
 	}
@@ -104,16 +98,8 @@ func (s *TrialService) SetRetentionMonths(months int) {
 	}
 }
 
-// SetPlaidCleanup injects the Plaid cleanup dependency after construction.
-// Issue #1015: Allows TrialService to be created before PlaidCleanupService is available,
-// enabling River initialization to run independently of Plaid configuration.
-// ExpireTrial already nil-guards plaidCleanup before calling it.
-func (s *TrialService) SetPlaidCleanup(svc PlaidCleanupForTrial) {
-	s.plaidCleanup = svc
-}
-
 // SetWorkClaimsRepo wires the durable work-claims mechanism ExpireTrial requires for
-// EXCLUSIVITY on ActionTrialExpiration before its Plaid disconnect. Issue #1413 round-4 finding
+// EXCLUSIVITY on ActionTrialExpiration before its status-flip CAS. Issue #1413 round-4 finding
 // H2: trial_service was the one destructive flow in this branch with no work_claims flow claim
 // at all — every sibling flow (DeletionService, PastDueService, SubscriptionWebhookWorker,
 // PlaidItemCleanupService) already requires one. Mirrors those services' SetWorkClaimsRepo: not
@@ -202,10 +188,32 @@ func (s *TrialService) GetTrialDaysRemaining(user *domain.User) int {
 	return int(remaining.Hours() / 24)
 }
 
-// ExpireTrial expires a user's trial
-// Sets subscription_status='inactive' and disconnects all Plaid items
+// ExpireTrial expires a user's trial.
 //
-// This preserves transaction history while stopping Plaid billing
+// Issue #1413 round-7 (Codex review): ExpireTrial flips subscription_status to 'inactive' and
+// starts the retention clock — that is ALL it does. It does NOT call Plaid. This function has
+// been reordered twice before this fix, and both attempts were wrong for opposite reasons:
+//
+//   - Round-5 (disconnect Plaid BEFORE the flip): 'trial' is a WRITABLE status, so a user could
+//     complete checkout or link a new account WHILE the disconnect ran, racing it.
+//   - Round-6 (disconnect Plaid AFTER the flip, i.e. CAS-first): the premise was that flipping the
+//     user to read-only makes them unable to act. That premise is FALSE — /subscription/checkout is
+//     deliberately whitelisted for read-only users (internal/huma/middleware/read_only.go), because a
+//     lapsed user must be able to pay to restore access. So even after the CAS commits, the user can
+//     start checkout, the Paddle webhook can flip them to 'active'
+//     (subscription_webhook.go), and only THEN does the disconnect call (which can take real
+//     wall-clock time — one Plaid API call per linked item) actually run — deleting a paying
+//     customer's banks after they already paid.
+//
+// CONCLUSION: no ordering of a status flip and an irreversible external call is safe here, because
+// becoming active again is precisely what the system always permits for a read-only user. The fix
+// is to stop trying to order it and DEFER instead: the disconnect moves entirely to
+// RetentionCleanupCheckWorker.repairPlaidDisconnects, which only runs after a grace window
+// (anchored on retention_started_at, which this function sets below) and re-verifies eligibility
+// immediately before removing each item. A user who resubscribes within the grace window is never
+// disconnected at all — the race becomes a non-event rather than a narrowed window. See
+// profile_repository.go's GetUsersNeedingPlaidDisconnectRepair and retention_cleanup_check.go's
+// repairPlaidDisconnects for the other half of this design.
 func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	// Get the user
 	user, err := s.repo.GetUserByID(ctx, userID)
@@ -254,12 +262,10 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 
 	// Issue #1413 round-4 finding H2: gain EXCLUSIVITY via a durable work claim BEFORE any
 	// destructive work — mirrors PastDueService.processGraceExpiry's shape (Claim, then
-	// re-verify via a CAS, then external work, then Complete/Release). ExpireTrialIfNoOverride's
-	// own conditional UPDATE already gives this write its correctness against a comp granted in
-	// the window since the plain read above; this claim adds the same EXCLUSIVITY guarantee
-	// every other destructive flow in this branch already has, and — the practical benefit here
-	// — turns the Plaid-disconnect collaborator call below into something a lost claim can
-	// legitimately skip, rather than one that always runs regardless.
+	// re-verify via a CAS, then Complete/Release). ExpireTrialIfNoOverride's own conditional
+	// UPDATE already gives this write its correctness against a comp granted in the window since
+	// the plain read above; this claim adds the same EXCLUSIVITY guarantee every other destructive
+	// flow in this branch already has.
 	if s.claimsRepo == nil {
 		return fmt.Errorf("ExpireTrial: work claims repository not configured")
 	}
@@ -275,54 +281,12 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		return nil
 	}
 
-	// Issue #1413 round-6 (independent adversarial review, twice over): round-5's reordering
-	// (disconnect Plaid BEFORE flipping subscription_status) was ITSELF the regression, not the
-	// fix. Its mid-run re-check below only ever verified HasActiveManualOverride() — it never
-	// re-checked SubscriptionStatus — and it ran BEFORE the CAS, so 'trial' (a WRITABLE status,
-	// unlike past_due) stayed writable for the entire duration of the disconnect call. Two
-	// independent harms followed from that one writable window: (1) a user who completes checkout
-	// mid-run (the webhook flips them to 'active') had every Plaid item removed AFTER already
-	// paying — an irreversible /item/remove call the CAS then correctly refused to acknowledge,
-	// silently logging success with a log line blaming a comp that was never granted; (2) a user
-	// who links a NEW account mid-run could have that item orphaned, since cleanupItems only
-	// operates on the item list it read when it began.
-	//
-	// The fix restores CAS-FIRST ordering (claim -> comp re-check -> CAS flip -> disconnect ->
-	// retention -> complete): flipping subscription_status BEFORE the disconnect makes the user
-	// read-only for the disconnect's entire duration, so neither harm above has a window to occur
-	// in AT ALL — this eliminates the race rather than adding more checks inside a window that
-	// should not exist. It is also why ExpireTrialIfNoOverride's own WHERE clause (subscription_
-	// status = 'trial') now doubles as the subscribe-race guard for free: if the checkout webhook
-	// already flipped status to 'active', the CAS simply reports flipped=false and the disconnect
-	// below is never reached.
-	//
-	// This is the SAME shape PastDueService.processGraceExpiry already uses (claim -> external work
-	// -> CAS -> complete) being applied correctly here for the first time: that flow's ordering
-	// (Plaid disconnect BEFORE its own CAS) is safe specifically BECAUSE past_due is a READ-ONLY
-	// status — a past_due user cannot link or write regardless of ordering, so there was never a
-	// writable window there to close. 'trial' has no such protection, which is exactly what made
-	// round-5's copy-the-pattern reorder the defect: it copied an ordering whose safety depended on
-	// a precondition trial does not satisfy.
-	//
-	// Restoring CAS-first reopens the ORIGINAL problem round-5 existed to solve: once the flip
-	// commits, GetUsersWithExpiredTrials (which selects on raw status = 'trial') can never
-	// re-select this user, so a disconnect that fails — or never runs at all, e.g. a process killed
-	// between the flip and the call below — would be unretryable via that path. The fix is a
-	// dedicated repair path instead of reopening the writable window: GetUsersNeedingPlaidDisconnectRepair
-	// (profile_repository.go) selects exactly this stuck state (read-only-status, live linked
-	// items), and RetentionCleanupCheckWorker's periodic pass retries it — mirroring
-	// GetUsersNeedingRetentionClockRepair's existing belt-and-braces shape for the retention clock.
-	// This is strictly better than round-5's reorder: it is durable, monitorable, and it ALSO
-	// catches a disconnect failure the reorder never could (a process killed between the flip and
-	// the disconnect call, with no error to release a claim on at all).
-	//
-	// Issue #1413 round-4 finding H2's mid-run comp re-check survives this reordering, but now runs
-	// immediately before the CAS (not the disconnect) — as late as the code can make it, narrowing
-	// (not eliminating; the CAS's own WHERE clause is what eliminates it) the window a comp granted
-	// after the top-of-function guard could slip through. Unlike the pre-round-6 code, a failure to
-	// re-read here now fails closed (releases the claim and propagates the error) rather than
-	// logging a Warn and proceeding with the destructive CAS anyway — matching
-	// PastDueService.processGraceExpiry's model for the same situation.
+	// Issue #1413 round-4 finding H2's mid-run comp re-check: the top-of-function
+	// HasActiveManualOverride() guard above is a plain read, not atomic with the CAS below — an
+	// admin can grant/extend a comp in the window between that check and here. Re-reading
+	// immediately before the CAS narrows (not eliminates; the CAS's own WHERE clause is what
+	// eliminates it) that window. A failure to re-read here fails closed (releases the claim and
+	// propagates the error) rather than proceeding with the destructive CAS anyway.
 	latest, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, userID, token, err.Error())
@@ -330,19 +294,16 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	}
 	if latest.HasActiveManualOverride() {
 		s.releaseClaimOnFailure(ctx, userID, token, "comp granted since claim")
-		s.logger.Info("skipping trial-expiry status flip and Plaid disconnect — comp granted since the claim",
+		s.logger.Info("skipping trial-expiry status flip — comp granted since the claim",
 			"user_id", userID)
 		return nil
 	}
 
-	// #1413 High finding H5 (Codex review round 3): the HasActiveManualOverride() guard above is
-	// a plain read and is NOT atomic with this write — an admin can grant/extend a comp in the
-	// window between that check and here, or the checkout webhook can flip status to 'active' in
-	// that same window. Replace the unconditional status write with a conditional transition that
-	// re-verifies "still trial, still no live override" against committed state at the moment of
-	// the write itself. A lost claim is a legitimate skip (the comp was granted, or the user is no
-	// longer on a trial at all), not a failure — and per round-6's reordering, NOTHING external has
-	// happened yet when this loses, so there is nothing to undo.
+	// #1413 High finding H5 (Codex review round 3): replace an unconditional status write with a
+	// conditional transition that re-verifies "still trial, still no live override" against
+	// committed state at the moment of the write itself. A lost CAS is a legitimate skip (the comp
+	// was granted, or the user is no longer on a trial at all — e.g. the checkout webhook already
+	// flipped them to 'active'), not a failure.
 	flipped, err := s.repo.ExpireTrialIfNoOverride(ctx, userID)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, userID, token, err.Error())
@@ -355,36 +316,13 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 		return nil
 	}
 
-	// Round-6: disconnect Plaid SECOND, now that the CAS above has already made this user
-	// read-only — the writable window round-5 opened cannot recur here. A failure no longer rolls
-	// back or blocks completion: the state transition this claim protects has already committed,
-	// and GetUsersNeedingPlaidDisconnectRepair (not this claim, not GetUsersWithExpiredTrials) is
-	// what makes a failure here retryable — see the reasoning above.
-	var disconnectErr error
-	if s.plaidCleanup != nil {
-		disconnectErr = s.plaidCleanup.DisconnectAllUserItems(ctx, userID)
-		if disconnectErr != nil {
-			// ErrSideEffectClaimBusy is benign, expected contention (another flow is already
-			// mid-disconnect for this user) — logged at Info, not Error, mirroring
-			// past_due_service.go's processGraceExpiry Step 1 precedent. Any other failure is
-			// logged at Error: unlike a retention-clock write failure (Warn), this means live
-			// third-party bank access continues on an account that is now read-only and
-			// non-paying — a real, if now-bounded-by-the-repair-pass, concern.
-			if errors.Is(disconnectErr, ErrSideEffectClaimBusy) {
-				s.logger.Info("trial-expiry Plaid disconnect deferred — side-effect claim held by another flow; will be retried by the Plaid-disconnect repair pass",
-					"user_id", userID)
-			} else {
-				s.logger.Error("failed to disconnect Plaid items after trial-expiry status flip — will be retried by the Plaid-disconnect repair pass",
-					"user_id", userID, "error", disconnectErr)
-			}
-		}
-	}
-
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion. Gated on
-	// `flipped` (never started for a user the CAS just refused to touch), NOT on the Plaid
-	// disconnect outcome above — the user is already read-only regardless of whether the disconnect
-	// itself succeeded, and retention's own belt-and-braces repair (GetUsersNeedingRetentionClockRepair)
-	// exists independently of this disconnect concern.
+	// `flipped` (never started for a user the CAS just refused to touch). This timestamp
+	// (retention_started_at) is ALSO the grace anchor RetentionCleanupCheckWorker.
+	// repairPlaidDisconnects reads to decide whether the grace window has elapsed yet (Issue #1413
+	// round-7) — see GetUsersNeedingPlaidDisconnectRepair's doc comment. retention's own
+	// belt-and-braces repair (GetUsersNeedingRetentionClockRepair) exists independently as a
+	// backstop if this write itself fails.
 	now := time.Now()
 	if retErr := s.repo.SetRetentionDates(ctx, userID, now, now.AddDate(0, s.retentionMonths, 0)); retErr != nil {
 		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
@@ -396,24 +334,17 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	)
 
 	// Complete unconditionally: the flow's defining state transition (the CAS flip above) already
-	// committed, regardless of the Plaid disconnect outcome. Releasing instead would suggest a
-	// retry of THIS claim/flow could still accomplish something — it cannot, since
-	// ExpireTrialIfNoOverride's WHERE clause requires subscription_status = 'trial', which this
-	// user has already left for good.
+	// committed. Releasing instead would suggest a retry of THIS claim/flow could still accomplish
+	// something — it cannot, since ExpireTrialIfNoOverride's WHERE clause requires
+	// subscription_status = 'trial', which this user has already left for good. There is no Plaid
+	// disconnect outcome to factor in here at all (round-7) — that entirely lives in the
+	// grace-window repair pass now.
 	completed, err := s.claimsRepo.Complete(ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, token)
 	if err != nil {
 		s.logger.Error("failed to mark trial expiration claim complete", "user_id", userID, "action", repository.ActionTrialExpiration, "error", err)
 	} else if !completed {
-		s.logger.Error("trial expiration claim lease lost mid-flight — Plaid disconnect may have run twice",
+		s.logger.Error("trial expiration claim lease lost mid-flight",
 			"user_id", userID, "action", repository.ActionTrialExpiration)
-	}
-
-	if disconnectErr != nil {
-		// Surfaced for the caller's error/retry accounting visibility (TrialExpirationCheckWorker
-		// logs and counts this), even though the state transition itself already succeeded and
-		// retrying THIS call would accomplish nothing further — the Plaid-disconnect repair pass is
-		// what actually retries the disconnect.
-		return fmt.Errorf("trial expired for user %s but failed to disconnect Plaid items: %w", userID, disconnectErr)
 	}
 
 	return nil

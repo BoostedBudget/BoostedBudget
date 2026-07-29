@@ -633,3 +633,130 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
+
+// ─── Issue #1413 round-7: per-item eligibility recheck (DisconnectAllUserItemsIfEligible) ─────
+//
+// The retention-cleanup Plaid-disconnect repair pass re-verifies a user is still read-only
+// immediately before removing their Plaid items. Before round-7, that re-verification happened
+// ONCE, before the whole per-user DisconnectAllUserItems call — but a disconnect fans out into one
+// Plaid API call per linked item, so a user who resubscribes mid-loop (between item 1 and item 2)
+// would still have every remaining item removed. DisconnectAllUserItemsIfEligible closes this by
+// re-invoking a caller-supplied recheck callback immediately before EACH item, aborting the
+// remainder the first time it reports ineligible.
+
+// TestPlaidCleanup_DisconnectIfEligible_NilRecheck_BehavesLikeDisconnectAllUserItems proves a nil
+// recheck reproduces DisconnectAllUserItems' existing behavior exactly — every other caller
+// (deletion, past-due dunning, the subscription-cancellation webhook) is unaffected by this
+// method's existence.
+func TestPlaidCleanup_DisconnectIfEligible_NilRecheck_BehavesLikeDisconnectAllUserItems(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-nil-recheck"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
+	}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(items, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-2").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, mock.MatchedBy(func(ids []string) bool {
+		return len(ids) == 2 && contains(ids, "item-1") && contains(ids, "item-2")
+	})).Return(nil)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, nil)
+
+	require.NoError(t, err)
+	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 2)
+}
+
+// TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared is the round-7
+// RED test: a user who becomes ineligible (e.g. resubscribed) between item 1 and item 2 must have
+// item 2 spared — proving the recheck runs PER ITEM, not once for the whole call.
+//
+// Falsifiability: on a version of cleanupItems that only rechecks once before the loop (or not at
+// all), this test fails — mockPlaid.AssertNumberOfCalls("RemoveItem", 1) would see 2 calls instead.
+func TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-becomes-ineligible"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1"},
+		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
+	}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(items, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	callCount := 0
+	recheck := func(context.Context) (bool, error) {
+		callCount++
+		// Eligible for item 1, ineligible by the time item 2 is reached.
+		return callCount == 1, nil
+	}
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
+
+	require.NoError(t, err, "an ineligibility abort is a legitimate partial completion, not a failure")
+	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 1)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-2")
+	assert.Equal(t, 2, callCount, "recheck must be invoked before EACH item, not once for the whole call")
+}
+
+// TestPlaidCleanup_DisconnectIfEligible_IneligibleBeforeFirstItem_NoPlaidCallAtAll proves the
+// recheck runs before the FIRST item too (not just between items 2..N) — a user already ineligible
+// by the time the loop starts must have zero Plaid calls.
+func TestPlaidCleanup_DisconnectIfEligible_IneligibleBeforeFirstItem_NoPlaidCallAtAll(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-ineligible-from-start"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(items, nil)
+
+	recheck := func(context.Context) (bool, error) { return false, nil }
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
+
+	require.NoError(t, err)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
+}
+
+// TestPlaidCleanup_DisconnectIfEligible_RecheckErrors_FailsClosedAbortsRemainder proves the recheck
+// erroring (eligibility could not be determined at all) fails closed: the remainder is aborted and
+// the error is surfaced, rather than proceeding as though eligible.
+func TestPlaidCleanup_DisconnectIfEligible_RecheckErrors_FailsClosedAbortsRemainder(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-recheck-errors"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(items, nil)
+
+	recheckErr := errors.New("db unavailable")
+	recheck := func(context.Context) (bool, error) { return false, recheckErr }
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, recheckErr)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
+}
