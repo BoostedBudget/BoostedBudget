@@ -180,7 +180,19 @@ func (s *adminUserService) enrichUsersWithAdminStatus(users []domain.AdminUserLi
 
 // enrichAdminUser checks if user is admin and updates their info accordingly, and populates
 // EffectiveStatus (Issue #1413) via the single shared domain predicate
-// (domain.User.ComputeEffectiveStatus) — never reimplemented here.
+// (domain.User.EffectiveStatusWithActiveOverride) — never reimplemented here.
+//
+// Issue #1413 (this task): manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint, so it can hold a value naming no configured tier. This site used to call the bare,
+// unvalidated ComputeEffectiveStatus() — the only representation path in this codebase that
+// never inherited the tier-name validation profile.go's enrichUserProfile and
+// GetEffectiveSubscriptionStatusByUserID already enforce — so the admin list (and detail, which
+// reuses this same enrichment) would report a malformed override as an active comp while the
+// user's own GET /profile correctly rejected it. Uses this service's own tierConfig field
+// directly as the validator (mechanism 2 — "a handler's own tierConfig" — matching
+// PaddleCheckoutHandler.isConfiguredOverrideTier) rather than adding a third seam; nil-safe: a
+// nil tierConfig skips validation, matching every other SetOverrideTierValidator call site's
+// documented nil semantics.
 func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 	// Build a scratch domain.User from this row's raw tier/status/override fields so
 	// EffectiveStatus is computed by the one canonical predicate everything else uses.
@@ -190,7 +202,15 @@ func (s *adminUserService) enrichAdminUser(user *domain.AdminUserListItem) {
 		ManualTierOverride: user.ManualTierOverride,
 		ManualTierEndsAt:   user.ManualTierEndsAt,
 	}
-	user.EffectiveStatus = scratch.ComputeEffectiveStatus()
+	status, overrideValue, hasOverride := scratch.EffectiveStatusWithActiveOverride()
+	if hasOverride && s.tierConfig != nil {
+		if _, err := s.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			slog.Warn("rejecting manual tier override in admin list: value does not name a configured tier",
+				"user_id", user.ID, "manual_tier_override", overrideValue)
+			status = scratch.SubscriptionStatus
+		}
+	}
+	user.EffectiveStatus = status
 
 	if s.adminService == nil {
 		return

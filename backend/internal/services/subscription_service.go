@@ -12,9 +12,10 @@ import (
 
 // SubscriptionService handles subscription tier management and limit enforcement
 type SubscriptionService struct {
-	tierConfig          *config.TierConfig
-	overrideRepo        repository.SubscriptionOverrideRepository
-	entitlementResolver HouseholdEntitlementResolver
+	tierConfig            *config.TierConfig
+	overrideRepo          repository.SubscriptionOverrideRepository
+	entitlementResolver   HouseholdEntitlementResolver
+	overrideTierValidator func(tierName string) bool
 }
 
 // NewSubscriptionService creates a new subscription service
@@ -34,6 +35,46 @@ func NewSubscriptionService(
 // lookup failure must never break tier/limit resolution for the whole user base.
 func (s *SubscriptionService) SetEntitlementResolver(resolver HouseholdEntitlementResolver) {
 	s.entitlementResolver = resolver
+}
+
+// SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
+// names a real, currently-configured tier. GetEffectiveSubscription uses it to stop a malformed
+// override from reaching tierConfig.GetTier() as an unrecognized name (Issue #1413 — the tier
+// axis of the malformed-override rule): manual_tier_override is an unconstrained VARCHAR(50)
+// with no CHECK constraint, so its value can be garbage (a legacy row, a direct SQL write, a
+// write made while the tier config was nil). A rejected override falls back to the raw
+// SubscriptionTier — this single fix point closes the admin subscription-detail 500 (this
+// service backs GET /admin/users/{id}/subscription), the Plaid first-sync misclassification
+// (GetHistoricalDepthLimit calls through here), and the household entitlement resolution's own
+// downstream tierConfig.GetTier call (a household member's coverage tier flows through eff.Tier
+// below).
+//
+// Same setter-injection convention, same func(string) bool signature, and the same nil-safe
+// "skip, don't deny" semantics as repository.profileRepository.SetOverrideTierValidator — see
+// that method's doc comment for the full rationale, which applies here unchanged: main.go loads
+// the tier config once at startup and os.Exit(1)s if that fails, so in production this validator
+// is either wired for the entire process lifetime or the server never boots. If never called,
+// validation is skipped and a malformed override reaches tierConfig.GetTier() exactly as before
+// this fix — the pre-fix behavior — rather than denying every comp, which would turn a future
+// wiring oversight into an instant outage for every currently-comped user.
+func (s *SubscriptionService) SetOverrideTierValidator(validator func(tierName string) bool) {
+	s.overrideTierValidator = validator
+}
+
+// effectiveTierName returns the user's effective tier name, validating an active manual override
+// against the injected overrideTierValidator (see SetOverrideTierValidator) and falling back to
+// the raw SubscriptionTier when it names no configured tier. Reuses
+// domain.User.EffectiveTierWithActiveOverride so this and every other tier-axis call site share
+// exactly one definition of "is the override active" with the tier/status computations
+// elsewhere.
+func (s *SubscriptionService) effectiveTierName(user *domain.User) string {
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+	if hasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(overrideValue) {
+		slog.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+			"user_id", user.ID, "manual_tier_override", overrideValue)
+		return user.SubscriptionTier
+	}
+	return tier
 }
 
 // GetTier returns the tier configuration for a given tier name
@@ -67,8 +108,9 @@ func (s *SubscriptionService) GetEffectiveSubscription(
 	ctx context.Context,
 	user *domain.User,
 ) (*domain.EffectiveSubscription, error) {
-	// Determine the effective tier: manual override takes precedence if set and not expired
-	tierName := domain.TierName(user.ComputeEffectiveTier())
+	// Determine the effective tier: manual override takes precedence if set, not expired, and
+	// (Issue #1413) names a real configured tier — see effectiveTierName's doc comment.
+	tierName := domain.TierName(s.effectiveTierName(user))
 
 	// If a household entitlement resolver is injected, let it override the tier — but
 	// fail open on any resolver error so an entitlements-table hiccup never breaks

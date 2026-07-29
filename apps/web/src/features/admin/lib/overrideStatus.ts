@@ -9,14 +9,27 @@
  */
 
 /**
- * Whether a manual tier override is currently active: set to a non-empty value AND
- * (it has no expiry, or its expiry has not yet passed).
+ * Whether a manual tier override is currently active: set to a non-empty value, (it has no
+ * expiry, or its expiry has not yet passed), AND — when `knownTierNames` is supplied — names a
+ * real, currently-configured tier.
  *
- * Mirrors the backend predicate character-for-character
- * (`domain.User.hasActiveManualOverrideAt` in backend/internal/domain/user.go):
- * `override != nil && *override != "" && (endsAt == nil || !endsAt.Before(now))`.
+ * Was documented as mirroring the backend predicate character-for-character
+ * (`domain.User.hasActiveManualOverrideAt` in backend/internal/domain/user.go) — true when this
+ * was written, but only half the backend rule since (Issue #1413, this task):
+ * manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so it can hold
+ * a value naming no configured tier (a legacy row, a direct SQL write, a write made while the
+ * tier config was nil). The backend's ComputeEffectiveTier()/ComputeEffectiveStatus() reject
+ * such a value and fall back to the raw tier/status; this predicate must do the same, or the
+ * admin UI renders the raw garbage string as the tier badge and shows the "Comped" chip for a
+ * user with zero write access.
  *
- * Note the boundary: an override ending exactly `now` is still active — the backend uses
+ * `knownTierNames` is optional and nil-safe by design (mirrors every backend
+ * SetOverrideTierValidator call site's "skip validation, not deny" convention): omit it (or
+ * pass undefined) to check liveness alone, exactly as before. UsersPage.tsx's one call site
+ * always passes the known tier set derived from its own TIER_DISPLAY map — the single source of
+ * truth for "what counts as a configured tier" on this page, not duplicated here.
+ *
+ * Note the expiry boundary: an override ending exactly `now` is still active — the backend uses
  * `>=` (via `!endsAt.Before(now)`), never `>`, so this must agree at the tie.
  *
  * `now` defaults to the current time; accept it as a parameter so callers (and tests) can
@@ -25,11 +38,14 @@
 export function isOverrideActive(
   override: string | null | undefined,
   endsAt: string | null | undefined,
+  knownTierNames?: ReadonlySet<string> | readonly string[],
   now: Date = new Date()
 ): boolean {
   if (!override) return false
-  if (!endsAt) return true
-  return new Date(endsAt).getTime() >= now.getTime()
+  if (endsAt && new Date(endsAt).getTime() < now.getTime()) return false
+  if (knownTierNames === undefined) return true
+  const known = knownTierNames instanceof Set ? knownTierNames : new Set(knownTierNames)
+  return known.has(override)
 }
 
 export interface OverrideStatus {

@@ -433,6 +433,115 @@ func TestResolveEffectiveEntitlement_CompedSoloUser_StatusIsActive(t *testing.T)
 	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
 }
 
+// ─── Issue #1413 (this task) — tier axis: malformed manual_tier_override must not 500 ────────
+
+// TestResolveEffectiveEntitlement_SoloUser_MalformedOverride_TierFallsBackToRaw is the RED test
+// for the SOLO-user case (no active entitlement row — the common case): the owner's raw status
+// is ALREADY "active" here (unlike the owner-mutation-bypass tests above, where the malformed
+// override's rejection short-circuits via the STATUS axis before the Tier line is ever reached),
+// so this specifically exercises the TIER axis leak that survives even when the status axis is
+// fine. Before this fix, the "own" branch called domain.User.ComputeEffectiveTier()
+// unconditionally, so eff.Tier carried the raw garbage string straight into
+// tierConfig.GetTier() at the GetEntitlementSummary/SubscriptionService call sites — the root
+// cause of the /households/me/entitlement 500 for the majority (non-household) case, and the
+// worst-affected user (per the issue) is exactly this one: actively paying, so the read-only
+// middleware waves every request through, and only then does tier resolution 500.
+func TestResolveEffectiveEntitlement_SoloUser_MalformedOverride_TierFallsBackToRaw(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" || tier == "premium" })
+
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID: "user-1", SubscriptionTier: "premium", SubscriptionStatus: "active", // raw status already active
+		ManualTierOverride: strPtr("not-a-real-tier"), ManualTierEndsAt: &futureEnd,
+	}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), user)
+	require.NoError(t, err)
+	assert.Equal(t, "premium", eff.Tier, "a malformed override must fall back to the raw tier, not the garbage override string")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
+}
+
+// TestResolveEffectiveEntitlement_SoloUser_ValidOverride_TierAppliesOverride is the POSITIVE
+// CONTROL for the fix above, with the exact same validator wired: a VALID override must still
+// resolve to the override tier. An over-tight fix that makes every comp fall back to the raw
+// tier would silently un-comp every legitimately comped user, which is worse than the bug.
+func TestResolveEffectiveEntitlement_SoloUser_ValidOverride_TierAppliesOverride(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_3" || tier == "premium" })
+
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID: "user-1", SubscriptionTier: "premium", SubscriptionStatus: "active",
+		ManualTierOverride: strPtr("household_3"), ManualTierEndsAt: &futureEnd,
+	}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), user)
+	require.NoError(t, err)
+	assert.Equal(t, "household_3", eff.Tier, "a valid override must still resolve to the override tier")
+	assert.Equal(t, domain.EntitlementSourceOwn, eff.Source)
+}
+
+// TestResolveEffectiveEntitlement_OwnerActiveRawStatus_MalformedOverride_TierFallsBackToRaw is
+// the household-owner sibling of the solo-user RED test above: the owner's RAW status is
+// "active" (never forced there by the override — it was already active), so the STATUS axis
+// gate (ownerHasOverride && validator rejects -> ownerStatus reverts to raw) is a no-op here:
+// "active" reverting to "active" changes nothing, and IsReadOnlySubscription("active") is false
+// either way. The member therefore stays covered by the household (correctly), but before this
+// fix the returned eff.Tier still carried owner.ComputeEffectiveTier()'s unvalidated garbage
+// value straight through to the caller's tierConfig.GetTier() call — this is what made a
+// malformed OWNER override 500 every member's own entitlement lookup even when the owner was
+// actively paying, not just lapsed.
+func TestResolveEffectiveEntitlement_OwnerActiveRawStatus_MalformedOverride_TierFallsBackToRaw(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "member-1").Return(&domain.SubscriptionEntitlement{
+		Source: domain.EntitlementSourceHousehold, Tier: "household_2", Status: "active",
+		PayerUserID: strPtr("owner-1"), HouseholdID: strPtr("household-1"),
+	}, nil)
+	userRepo := &mockUserLoader{}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	userRepo.On("GetUserByID", mock.Anything, "owner-1").Return(&domain.User{
+		ID: "owner-1", SubscriptionTier: "household_2", SubscriptionStatus: "active", // raw status already active
+		ManualTierOverride: strPtr("not-a-real-tier"), ManualTierEndsAt: &futureEnd,
+	}, nil)
+	svc := NewHouseholdEntitlementService(entRepo, userRepo, &mockHouseholdRepo{}, nil)
+	svc.SetOverrideTierValidator(func(tier string) bool { return tier == "household_2" || tier == "premium" })
+
+	member := &domain.User{ID: "member-1", SubscriptionTier: "premium", SubscriptionStatus: "trial"}
+	eff, err := svc.ResolveEffectiveEntitlement(context.Background(), member)
+	require.NoError(t, err)
+	assert.Equal(t, domain.EntitlementSourceHousehold, eff.Source, "owner's raw status is genuinely active, so the member stays covered")
+	assert.Equal(t, "household_2", eff.Tier, "a malformed owner override must fall back to the owner's raw tier, not the garbage string")
+}
+
+// TestGetEntitlementSummary_SoloUser_MalformedOverride_NotError is the GetEntitlementSummary-
+// level RED test: this is the exact method GET /api/v1/households/me/entitlement calls, and
+// before this fix a malformed override reached its tierConfig.GetTier(eff.Tier) call as an
+// unrecognized name and 500'd for every user hitting this dashboard-path GET — not just
+// household owners, but any solo user with a corrupt override row.
+func TestGetEntitlementSummary_SoloUser_MalformedOverride_NotError(t *testing.T) {
+	entRepo := &mockEntitlementRepo{}
+	entRepo.On("GetActiveEntitlement", mock.Anything, "user-1").Return(nil, repository.ErrEntitlementNotFound)
+	householdRepo := &mockHouseholdRepo{}
+	householdRepo.On("GetHouseholdForUser", mock.Anything, "user-1").Return(nil, false, false, nil)
+	svc := NewHouseholdEntitlementService(entRepo, &mockUserLoader{}, householdRepo, fakeTierConfig())
+	svc.SetOverrideTierValidator(func(tier string) bool {
+		_, err := fakeTierConfig().GetTier(domain.TierName(tier))
+		return err == nil
+	})
+
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID: "user-1", SubscriptionTier: "premium", SubscriptionStatus: "active",
+		ManualTierOverride: strPtr("not-a-real-tier"), ManualTierEndsAt: &futureEnd,
+	}
+	summary, err := svc.GetEntitlementSummary(context.Background(), user)
+	require.NoError(t, err, "a malformed override must not 500 GET /households/me/entitlement")
+	assert.Equal(t, "premium", summary.Tier, "must fall back to the raw tier")
+}
+
 // TestResolveEffectiveEntitlement_CompedOwnerRawInactive_MemberCoveredAtCompTier proves
 // the fix for the household-side asymmetry: the owner-lapse gate previously read
 // owner.SubscriptionStatus (raw) directly, so a comped household owner whose real

@@ -1537,6 +1537,61 @@ func TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered(t *testing
 	mockClerk.AssertExpectations(t)
 }
 
+// TestWorker_SubscriptionCanceled_MalformedOverride_ClerkMetadataFallsBackToRawTierAndStatus is
+// the RED test for Issue #1413 (this task — the tier axis, plus a status-axis leak specific to
+// this call site): manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint, so it can hold a value naming no configured tier. Before this fix,
+// syncClerkMetadata called fresh.ClerkPublicMetadata() directly — a domain-layer method that
+// cannot validate the override itself (domain must not import config) — so BOTH the garbage
+// tier string AND a forced "active" status (ClerkPublicMetadata treats any live override as a
+// comp, valid or not) leaked into Clerk's publicMetadata, the source of the JWT claims other
+// parts of the system may trust. Mirrors
+// TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered's valid-override positive
+// control exactly, with the override swapped for garbage.
+func TestWorker_SubscriptionCanceled_MalformedOverride_ClerkMetadataFallsBackToRawTierAndStatus(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still "live" by liveness alone
+	override := "not-a-real-tier"                    // garbage — no CHECK constraint stops this
+	malformedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled", // the fresh re-read reflects the just-written raw status
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(malformedUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.MatchedBy(func(m map[string]interface{}) bool {
+		// Must be the RAW values — the malformed override must not leak the garbage tier
+		// string, nor force status to "active".
+		return m["subscription_tier"] == "premium" && m["subscription_status"] == "cancelled"
+	})).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockClerk.AssertExpectations(t)
+}
+
 // ─── #1413 High finding H7 (Codex review round 3): processSubscriptionCanceled must base the
 // Plaid-disconnect/retention decisions on a FRESH re-read taken AFTER the "cancelled" status
 // write commits, not the `user` snapshot fetched before it. ──

@@ -575,7 +575,18 @@ func (h *PaddleCheckoutHandler) checkDowngradeSeatCapacity(ctx context.Context, 
 	// manual_tier_override logic on top of it (same pointer fields, no DB write).
 	simulatedUser := *user
 	simulatedUser.SubscriptionTier = newTier
-	effectiveTier := simulatedUser.ComputeEffectiveTier()
+	// Issue #1413 (this task — tier axis): manual_tier_override is an unconstrained VARCHAR(50)
+	// with no CHECK constraint, so it can hold a value naming no configured tier. Validate it via
+	// isConfiguredOverrideTier (this handler's existing seam, reused rather than adding a third
+	// mechanism) before trusting it, falling back to the simulated RAW tier (newTier) — this is
+	// the site's own doc comment's "clean, no half-applied billing" 500 turned into a clean 409
+	// instead.
+	effectiveTier, overrideValue, hasOverride := simulatedUser.EffectiveTierWithActiveOverride()
+	if hasOverride && !h.isConfiguredOverrideTier(overrideValue) {
+		h.logger.Warn("rejecting manual tier override in seat-capacity check: value does not name a configured tier",
+			"user_id", user.ID, "manual_tier_override", overrideValue)
+		effectiveTier = simulatedUser.SubscriptionTier
+	}
 
 	tier, err := h.tierConfig.GetTier(domain.TierName(effectiveTier))
 	if err != nil {
@@ -749,7 +760,12 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 		out := &GetCurrentSubscriptionOutput{}
 		out.Body.Status = "trial"
-		out.Body.Tier = user.ComputeEffectiveTier()
+		// Issue #1413 (this task — tier axis): this branch is only reached when !isComped (see
+		// the guard above), so isComped/overrideValue already reflect whether the override was
+		// live AND validly-configured — reusing them here (rather than an unvalidated
+		// ComputeEffectiveTier() call) means Tier can never disagree with IsComped about
+		// whether the override in effect is trustworthy.
+		out.Body.Tier = user.SubscriptionTier
 		out.Body.Amount = "0.00"
 		out.Body.Currency = "USD"
 		out.Body.TrialDaysRemaining = user.TrialDaysRemaining
@@ -788,7 +804,14 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out := &GetCurrentSubscriptionOutput{}
 	out.Body.SubscriptionID = subscription.ID
 	out.Body.Status = string(subscription.Status)
-	out.Body.Tier = user.ComputeEffectiveTier()
+	// Issue #1413 (this task — tier axis): reuse isComped/overrideValue (already validated
+	// above) instead of an unvalidated ComputeEffectiveTier() call — a malformed override must
+	// fall back to the raw subscription tier here too, never surface the garbage string.
+	if isComped {
+		out.Body.Tier = overrideValue
+	} else {
+		out.Body.Tier = user.SubscriptionTier
+	}
 	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
 	if subscription.CurrentBillingPeriod != nil {
 		out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt

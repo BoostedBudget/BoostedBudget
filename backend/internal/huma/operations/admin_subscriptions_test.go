@@ -482,6 +482,142 @@ func authorizedAdminCtx(clerkUserID, actorUserID string) context.Context {
 	return ctx
 }
 
+// literalAdminSubscriptionsTierConfig returns a *config.TierConfig literal covering all five
+// real tiers (config/subscription_tiers.yaml), for tests that need a real
+// *services.SubscriptionService wired to h.subService. Per this branch's standing rule, tests
+// must build a literal rather than call config.LoadTierConfig()/config.NewTierConfig("") (a
+// process-wide sync.Once singleton) — mirrors services.fakeTierConfig's identical rationale.
+func literalAdminSubscriptionsTierConfig() *config.TierConfig {
+	return &config.TierConfig{
+		Tiers: map[domain.TierName]domain.SubscriptionTier{
+			domain.TierPremium:    {Name: domain.TierPremium, Pricing: domain.SubscriptionPricing{UsersIncluded: 1}},
+			domain.TierHousehold2: {Name: domain.TierHousehold2, Pricing: domain.SubscriptionPricing{UsersIncluded: 2}},
+			domain.TierHousehold3: {Name: domain.TierHousehold3, Pricing: domain.SubscriptionPricing{UsersIncluded: 3}},
+			domain.TierHousehold4: {Name: domain.TierHousehold4, Pricing: domain.SubscriptionPricing{UsersIncluded: 4}},
+			domain.TierHousehold5: {Name: domain.TierHousehold5, Pricing: domain.SubscriptionPricing{UsersIncluded: 5}},
+		},
+	}
+}
+
+// setupAdminSubscriptionsAPIWithSubService mirrors setupAdminSubscriptionsAPI but wires a real
+// *services.SubscriptionService (never nil) so GetUserSubscription actually exercises
+// SubscriptionService.GetEffectiveSubscription — needed to reproduce (and then prove the fix
+// for) the tier-axis malformed-override bug (Issue #1413, this task). With subService nil (the
+// existing helper's behavior), GetUserSubscription takes its own hardcoded raw-tier fallback
+// branch and never reaches SubscriptionService at all.
+func setupAdminSubscriptionsAPIWithSubService(t *testing.T, subService *services.SubscriptionService) (humatest.TestAPI, *MockAdminUserService, *MockAdminService) {
+	_, api := humatest.New(t)
+	mockAdminUserService := new(MockAdminUserService)
+	mockAdminService := new(MockAdminService)
+
+	cfg := &config.Config{Environment: "qa"}
+	handler := NewAdminHandler(nil, nil, nil, mockAdminService, mockAdminUserService, nil, subService, cfg)
+	RegisterAdminSubscriptionsOperations(api, handler)
+	return api, mockAdminUserService, mockAdminService
+}
+
+// TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError is the RED test for
+// Issue #1413 (this task — the tier axis of the malformed-override rule). manual_tier_override is
+// an unconstrained VARCHAR(50) with no CHECK constraint, so it can hold a value naming no
+// configured tier. Before this fix, SubscriptionService.GetEffectiveSubscription called
+// domain.User.ComputeEffectiveTier() unconditionally, so a malformed override reached
+// tierConfig.GetTier() as an unrecognized name and propagated as a 500 — bricking the only UI
+// that can repair the row: the override modal renders from this exact response, so when it 500s,
+// "Remove Override" never appears and "Save Override" stays disabled.
+//
+// SubscriptionStatus is deliberately "active" (not lapsed) — the worst-affected user is an
+// ACTIVELY PAYING one: raw status active means the read-only middleware waves every request
+// through, and only then does tier resolution 500.
+func TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError(t *testing.T) {
+	tierConfig := literalAdminSubscriptionsTierConfig()
+	subService := services.NewSubscriptionService(tierConfig, nil)
+	// Mirrors main.go's production wiring: the validator is a closure over the same tierConfig
+	// this service already holds (see SubscriptionService.SetOverrideTierValidator's doc
+	// comment) — always wired for the process lifetime in production, never nil.
+	subService.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPIWithSubService(t, subService)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	override := "not_a_tier"
+	futureEnd := time.Now().Add(24 * time.Hour)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "active",
+			EffectiveStatus:    "active",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &futureEnd,
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, "a malformed manual_tier_override must not 500 the admin subscription-detail endpoint — that response is what the override modal needs to render the Remove Override button: "+resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "premium", body.EffectiveTier, "a malformed override must fall back to the raw tier, not surface the garbage string")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
+// TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier is the POSITIVE CONTROL for the
+// fix above: a VALID, currently-configured override must still resolve to the override tier via
+// the real SubscriptionService, not fall back to the raw tier. An over-tight fix that makes every
+// comp fall back to the raw tier would silently un-comp every legitimately comped user, which is
+// worse than the bug being fixed.
+func TestGetUserSubscription_ValidOverride_ResolvesToOverrideTier(t *testing.T) {
+	tierConfig := literalAdminSubscriptionsTierConfig()
+	subService := services.NewSubscriptionService(tierConfig, nil)
+	subService.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+	api, mockService, mockAdmin := setupAdminSubscriptionsAPIWithSubService(t, subService)
+
+	clerkUserID := "user_" + uuid.New().String()
+	actorUserID := uuid.New().String()
+	targetUserID := uuid.New().String()
+	override := "household_3"
+	futureEnd := time.Now().Add(24 * time.Hour)
+
+	mockAdmin.On("IsHardcodedAdmin", mock.Anything).Return(false)
+	mockAdmin.On("HasRole", mock.Anything, clerkUserID, domain.RoleAdmin).Return(true, nil)
+
+	mockService.On("GetUserDetail", mock.Anything, targetUserID).Return(&domain.AdminUserDetail{
+		AdminUserListItem: domain.AdminUserListItem{
+			ID:                 targetUserID,
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			EffectiveStatus:    "active",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &futureEnd,
+		},
+	}, nil)
+
+	ctx := authorizedAdminCtx(clerkUserID, actorUserID)
+	resp := api.GetCtx(ctx, "/api/v1/admin/users/"+targetUserID+"/subscription")
+
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var body getUserSubscriptionResponseBody
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	assert.Equal(t, "household_3", body.EffectiveTier, "a valid override must still resolve to the override tier — over-tightening would silently un-comp legitimately comped users")
+
+	mockService.AssertExpectations(t)
+	mockAdmin.AssertExpectations(t)
+}
+
 func TestRemoveUserTierOverride_Success(t *testing.T) {
 	api, mockService, mockAdmin := setupAdminSubscriptionsAPI(t)
 

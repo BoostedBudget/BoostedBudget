@@ -65,6 +65,12 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   return 'secondary'
 }
 
+// KNOWN_TIER_NAMES is the single source of truth for "what counts as a configured tier" on this
+// page, derived from TIER_DISPLAY above rather than duplicated — passed into isOverrideActive so
+// a manual_tier_override naming no configured tier is rejected the same way the backend's
+// ComputeEffectiveTier()/ComputeEffectiveStatus() reject it (Issue #1413, this task).
+const KNOWN_TIER_NAMES = new Set(Object.keys(TIER_DISPLAY))
+
 /**
  * Whether a manual tier override is currently live for this row. A single source of truth
  * shared by the Tier column and the Status column's "Comped" chip — the original bug was
@@ -78,11 +84,16 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
  * right now", so `effective_status` must never be consulted here: a user whose own subscription
  * is genuinely active, but whose override has *expired*, would otherwise still read as comped
  * (Issue #1413 M10 — the exact bug the admin fixes were meant to eliminate, reintroduced through
- * this fallback). Comp state is therefore derived purely from the expiry predicate,
- * `isOverrideActive`.
+ * this fallback). Comp state is therefore derived purely from the expiry + tier-name-validity
+ * predicate, `isOverrideActive`.
+ *
+ * manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint on the backend,
+ * so it can hold a value naming no configured tier (Issue #1413, this task) — KNOWN_TIER_NAMES
+ * is passed here so such a row is treated as "not comped", matching the backend's own rejection
+ * of the same malformed value.
  */
 function hasLiveOverride(user: AdminUserListItem): boolean {
-  return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at)
+  return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
 }
 
 const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {

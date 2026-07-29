@@ -659,7 +659,7 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		if err != nil {
 			return nil, err
 		}
-		ownerTier, err := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 		if err != nil {
 			return nil, err
 		}
@@ -805,7 +805,7 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 		return []QueuedRemovalEmail{}, nil
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1014,7 +1014,7 @@ func (s *householdService) CreateInvite(ctx context.Context, ownerUserID, invite
 		return nil, cerr
 	}
 
-	tier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	tier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1238,7 +1238,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		s.acceptInviteAfterOwnerCheckHook()
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1282,7 +1282,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		member = removedMember
 	case errors.Is(cerr, domain.ErrMemberNotFound):
 		// Fresh-insert path: unchanged from before Task 4.
-		priorTier := caller.ComputeEffectiveTier()
+		// Issue #1413 (this task): a malformed manual_tier_override must not propagate garbage
+		// into household_members.prior_subscription_tier, later read back to revert a member's
+		// tier when they leave the household — effectiveTierName falls back to the raw tier
+		// instead.
+		priorTier := s.effectiveTierName(caller)
 		priorStatus := caller.SubscriptionStatus
 		member = &domain.HouseholdMember{
 			HouseholdID:             inv.HouseholdID,
@@ -1381,6 +1385,27 @@ func (s *householdService) lockAndGetUser(ctx context.Context, tx pgx.Tx, userID
 		return nil, err
 	}
 	return s.userRepo.GetUserByID(ctx, userID)
+}
+
+// effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
+// when an active manual_tier_override names no tier configured in s.tierConfig (Issue #1413 —
+// the tier axis of the malformed-override rule, this task). manual_tier_override is an
+// unconstrained VARCHAR(50) with no CHECK constraint, so its value can be garbage (a legacy row,
+// a direct SQL write, a write made while the tier config was nil); every call site in this file
+// that previously passed owner.ComputeEffectiveTier() straight into s.tierConfig.GetTier() would
+// error on such a value — this is the single seam all of them now share, using this service's
+// own tierConfig field directly (mirroring PaddleCheckoutHandler.isConfiguredOverrideTier's
+// identical "handler's own tierConfig" convention) rather than a third validator-func mechanism.
+func (s *householdService) effectiveTierName(owner *domain.User) string {
+	tier, overrideValue, hasOverride := owner.EffectiveTierWithActiveOverride()
+	if hasOverride && s.tierConfig != nil {
+		if _, err := s.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			slog.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+				"user_id", owner.ID, "manual_tier_override", overrideValue)
+			return owner.SubscriptionTier
+		}
+	}
+	return tier
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────────
