@@ -1353,6 +1353,49 @@ func TestRetentionCleanupCheckUniqueOpts(t *testing.T) {
 	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
 	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
 	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+
+	// Issue #1413 Task W (Codex review): ByState previously omitted `Completed`, which River's
+	// own default (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) includes. Per
+	// UniqueOpts.ByState's doc comment (insert_opts.go): a completed job of the same kind, "not
+	// yet cleaned out by the system," still blocks a duplicate unique insert — WITHOUT Completed
+	// in this list, an already-successfully-completed run within the current 23h ByPeriod bucket
+	// does NOT block a duplicate, so every RunOnStart catch-up insert on every process
+	// restart/redeploy succeeds regardless of whether this job already ran this period. On a
+	// repo that deploys several times a day, that turned a once-daily job (30d/7d GDPR notices,
+	// deleteExpiredAccounts, retention-clock repair, Plaid-disconnect repair) into a
+	// run-every-boot job.
+	assert.Contains(t, opts.ByState, queue.JobStateCompleted,
+		"ByState must include Completed — its absence is what let RunOnStart's catch-up insert "+
+			"double-fire against an already-completed run within the same ByPeriod window "+
+			"(Issue #1413 Task W)")
+
+	// River requires these four states whenever ByState is customized (insert_opts.go: omitting
+	// them "would put River in a difficult position when moving jobs between common parts of the
+	// state machine and finding a unique conflict already there"). Asserted individually — not
+	// merely via non-empty — so a future edit cannot silently drop one.
+	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
+	assert.Contains(t, opts.ByState, queue.JobStatePending)
+	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
+
+	// Issue #1413 Task W: deliberately NOT Cancelled or Discarded. River's canonical default
+	// (rivertype.UniqueOptsByStateDefault(), which this list is now brought into exact agreement
+	// with) excludes both — its own doc comment states a new unique job "may be inserted even if
+	// another job already exists, as long as that other job is set `cancelled` or `discarded`."
+	// (This contradicts a looser prose aside in UniqueOpts.ByState's OWN doc comment in the same
+	// package version, which calls completed-or-discarded jobs both blocking; the canonical
+	// rivertype.UniqueOptsByStateDefault() implementation and ITS doc comment are what actually
+	// executes, and they agree Discarded does not block.) Independently of that default, adding
+	// Discarded here would be actively wrong for this specific job: Discarded means every retry
+	// was exhausted without the job ever completing its GDPR notice/deletion/repair work — the
+	// opposite of "already handled this period." Suppressing a RunOnStart catch-up insert because
+	// a prior attempt discarded would let that safety-critical work silently stall for up to
+	// river's DiscardedJobRetentionPeriodDefault (7 days) before another chance to run — precisely
+	// what RunOnStart exists to prevent. Cancelled is excluded for the same reasoning (a
+	// cancelled run also never completed the work) and is currently unreachable anyway: nothing
+	// in this codebase cancels a retention_cleanup_check job.
+	assert.NotContains(t, opts.ByState, queue.JobStateCancelled)
+	assert.NotContains(t, opts.ByState, queue.JobStateDiscarded)
 }
 
 // ─── Issue #1413 P0: RunOnStart must be true ───────────────────────────────────────────────

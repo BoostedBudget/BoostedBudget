@@ -12,6 +12,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/riverqueue/river"
@@ -225,8 +226,22 @@ func TestManualTierOverrideExpiryCheck_ClerkSyncAttempted_WithRevertedValues(t *
 			RevertedStatus: "cancelled",
 			ClerkUserID:    "clerk_user_1",
 		}, true, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.MatchedBy(func(metadata map[string]interface{}) bool {
-		return metadata["subscription_tier"] == "premium" && metadata["subscription_status"] == "cancelled"
+	// #1413 AC-15 (Task W, Codex review): assert the Clerk payload key-by-key, matching the
+	// standard the three admin-removal tests use (admin_user_service_test.go) — mock.Anything or
+	// a 2-field check would let a regression that re-emits a stale premium claim after an
+	// override lapses (or drops the "tier": nil poisoned-user cleanup, or ADDS an extra key) pass
+	// silently. This is the expiry path's twin of that same regression: the exact AC-15 failure
+	// mode this test family exists to catch. len(m) == 3 pins the payload to exactly
+	// {subscription_tier, subscription_status, tier} — domain.User.ClerkPublicMetadata's full key
+	// set, no more, no less.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "cancelled" &&
+			hasNilTierKey && nilTierVal == nil
 	})).Return(nil)
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, mockClerk)
@@ -256,7 +271,21 @@ func TestManualTierOverrideExpiryCheck_ClerkFailure_DoesNotFailJob(t *testing.T)
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-1", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled", ClerkUserID: "clerk_user_1"}, true, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.Anything).Return(errors.New("clerk unavailable"))
+	// #1413 AC-15 (Task W, Codex review): assert key-by-key even though this call errors — the
+	// payload actually sent must still be correct (a failed sync should not mask what would have
+	// gone out), same standard as the test above and the admin-removal family
+	// (admin_user_service_test.go). mock.Anything here was the last remaining instance of this
+	// branch's persistent test-honesty defect in this file: it would pass regardless of what
+	// payload the worker actually constructed.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_1", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "cancelled" &&
+			hasNilTierKey && nilTierVal == nil
+	})).Return(errors.New("clerk unavailable"))
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, mockClerk)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
@@ -497,6 +526,50 @@ func TestManualTierOverrideExpiryCheckUniqueOpts(t *testing.T) {
 
 	assert.False(t, opts.ByArgs)
 	assert.Equal(t, 23*time.Hour, opts.ByPeriod)
+
+	// Issue #1413 Task W (Codex review): ByState previously omitted `Completed`, which River's
+	// own default (rivertype.UniqueOptsByStateDefault(), river@v0.38.0) includes. Per
+	// UniqueOpts.ByState's doc comment (insert_opts.go): a completed job of the same kind, "not
+	// yet cleaned out by the system," still blocks a duplicate unique insert — WITHOUT Completed
+	// in this list, an already-successfully-completed run within the current 23h ByPeriod bucket
+	// does NOT block a duplicate, so every RunOnStart catch-up insert on every process
+	// restart/redeploy succeeds regardless of whether this job already ran this period. On a
+	// repo that deploys several times a day, that turned a once-daily job — the ONLY thing
+	// bounding how long noManualOverrideAtAllPredicate keeps a user out of the retention pipeline
+	// — into a run-every-boot job.
+	assert.Contains(t, opts.ByState, queue.JobStateCompleted,
+		"ByState must include Completed — its absence is what let RunOnStart's catch-up insert "+
+			"double-fire against an already-completed run within the same ByPeriod window "+
+			"(Issue #1413 Task W)")
+
+	// River requires these four states whenever ByState is customized (insert_opts.go: omitting
+	// them "would put River in a difficult position when moving jobs between common parts of the
+	// state machine and finding a unique conflict already there"). Asserted individually — not
+	// merely via non-empty — so a future edit cannot silently drop one.
+	assert.Contains(t, opts.ByState, queue.JobStateAvailable)
+	assert.Contains(t, opts.ByState, queue.JobStatePending)
+	assert.Contains(t, opts.ByState, queue.JobStateRunning)
+	assert.Contains(t, opts.ByState, queue.JobStateScheduled)
+
+	// Issue #1413 Task W: deliberately NOT Cancelled or Discarded. River's canonical default
+	// (rivertype.UniqueOptsByStateDefault(), which this list is now brought into exact agreement
+	// with) excludes both — its own doc comment states a new unique job "may be inserted even if
+	// another job already exists, as long as that other job is set `cancelled` or `discarded`."
+	// (This contradicts a looser prose aside in UniqueOpts.ByState's OWN doc comment in the same
+	// package version, which calls completed-or-discarded jobs both blocking; the canonical
+	// rivertype.UniqueOptsByStateDefault() implementation and ITS doc comment are what actually
+	// executes, and they agree Discarded does not block.) Independently of that default, adding
+	// Discarded here would be actively wrong for this specific job: Discarded means every retry
+	// was exhausted without the job ever completing its expiry/re-arm/audit work — the opposite
+	// of "already handled this period." Suppressing a RunOnStart catch-up insert because a prior
+	// attempt discarded would let lapsed manual tier overrides go silently uncleared (and users
+	// stay stuck out of the retention pipeline) for up to river's
+	// DiscardedJobRetentionPeriodDefault (7 days) before another chance to run — precisely what
+	// RunOnStart exists to prevent. Cancelled is excluded for the same reasoning (a cancelled run
+	// also never completed the work) and is currently unreachable anyway: nothing in this
+	// codebase cancels a manual_tier_override_expiry_check job.
+	assert.NotContains(t, opts.ByState, queue.JobStateCancelled)
+	assert.NotContains(t, opts.ByState, queue.JobStateDiscarded)
 }
 
 // ─── Issue #1413 G3: main.go must actually consume ManualTierOverrideExpiryCheckUniqueOpts ──
