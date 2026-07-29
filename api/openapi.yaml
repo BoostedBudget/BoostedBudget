@@ -6924,6 +6924,9 @@ components:
         past_due_started_at:
           format: date-time
           type: string
+        plaid_cleanup_pending_at:
+          format: date-time
+          type: string
         primary_region:
           type: string
         retention_expires_at:
