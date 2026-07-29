@@ -116,6 +116,15 @@ func (r *SystemHealthRepository) GetAverageSyncDuration(ctx context.Context) (in
 }
 
 // GetActiveSubscriptionCount returns count of users with active Paddle subscriptions
+//
+// #1413 PinnedRaw: subscription_status here deliberately means RAW status, never the
+// comp-forced effective status (domain.User.ComputeEffectiveStatus). This is a Paddle-linked,
+// revenue-adjacent metric — an admin comp is free access, not revenue, and a comped user whose
+// real Paddle subscription has lapsed (raw "inactive"/"cancelled") must not inflate this count
+// just because their effective status reads "active". See
+// TestGetActiveSubscriptionCount_Integration_CompedLapsedUser_NotCounted (real-DB integration
+// test — a comped user is only distinguishable from a real subscriber via a manual_tier_override
+// UPDATE that pgxmock cannot exercise) for the pin.
 func (r *SystemHealthRepository) GetActiveSubscriptionCount(ctx context.Context) (int64, error) {
 	query := `
         SELECT COUNT(*)
