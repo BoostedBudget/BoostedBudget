@@ -743,7 +743,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	}
 	w.logger.Info("found users needing Plaid-disconnect repair", "job_id", jobID, "user_count", len(users))
 
-	var repairedCount, skippedCount, errorCount int
+	var repairedCount, skippedCount, errorCount, abortedCount int
 	for _, user := range users {
 		// Belt-and-braces: a user with a LIVE comp must never have their Plaid items disconnected,
 		// even though the candidate query already excludes one via noActiveManualOverridePredicate.
@@ -865,6 +865,24 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		}
 
 		if disconnectErr := w.plaidCleanup.DisconnectAllUserItemsIfEligible(ctx, userID, isStillEligible); disconnectErr != nil {
+			// Issue #1413 round-14 H1 (Codex review): ErrCleanupAborted means the per-item recheck
+			// (isStillEligible, passed as DisconnectAllUserItemsIfEligible's recheck callback above)
+			// correctly stopped mid-run because this user became ineligible partway through — e.g.
+			// an admin granted a comp between items. This is neither success nor failure: some
+			// items may already be disconnected (durably marked), but others remain live. It MUST
+			// NOT fall through to the marker-clear below — this whole `if disconnectErr != nil`
+			// branch (including this one) already `continue`s past it, so the marker is correctly
+			// left set for a future run once the comp lapses. Logged at Info (not Warn) and
+			// deliberately excluded from PlaidDisconnectRepairUserFailuresTotal, mirroring the
+			// ErrSideEffectClaimBusy precedent immediately below — both are benign, expected
+			// outcomes, not Plaid failures. See ErrCleanupAborted's doc comment
+			// (plaid_item_cleanup_service.go) for the full contract this branch depends on.
+			if errors.Is(disconnectErr, services.ErrCleanupAborted) {
+				w.logger.Info("Plaid-disconnect repair aborted mid-run — user is no longer eligible (e.g. comped) partway through; some items may remain connected, plaid_cleanup_pending_at left set for a future run",
+					"job_id", jobID, "user_id", userID)
+				abortedCount++
+				continue
+			}
 			// ErrSideEffectClaimBusy is benign, expected contention (another flow is already
 			// mid-disconnect for this user) — logged at Info, not Warn, mirroring
 			// past_due_service.go's processGraceExpiry precedent for the same distinction.
@@ -914,7 +932,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	}
 
 	w.logger.Info("Plaid-disconnect repair processed",
-		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount)
+		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount, "aborted_mid_run", abortedCount)
 	return nil
 }
 

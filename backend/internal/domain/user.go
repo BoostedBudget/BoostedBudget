@@ -115,11 +115,22 @@ type User struct {
 	// round-13 the known SET sites are: UpdateSubscriptionFromPaddle,
 	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride (all
 	// profile_repository.go), and AdminUserRepository's removeUserTierOverrideUpdate
-	// (admin_user_repository.go, shared by RemoveUserTierOverride/RemoveUserTierOverrideIfMatches
-	// — kept purely as a defense-in-depth backstop for a user whose raw status was already
-	// ineligible before ever gaining a marker, e.g. imported/backfilled rows; it is a no-op
-	// COALESCE in the ordinary comp-over-already-churned-user case, since that marker is already
-	// set). The known CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
+	// (admin_user_repository.go, shared by RemoveUserTierOverride/RemoveUserTierOverrideIfMatches).
+	// Round-14 finding M1 (Codex review): this last site's should_mark_plaid_cleanup_pending CASE
+	// previously fired for ANY prior override on an inactive/cancelled user regardless of whether
+	// cleanup was actually still outstanding — reachable via the ordinary, non-imported path (cancel
+	// -> repair completes and clears the marker -> comp granted over the now-cleaned-up user ->
+	// comp removed while raw status is still ineligible), re-arming a phantom marker for an episode
+	// that had already ended. It is now additionally gated on liveLinkedItemExistsClause (the same
+	// live-item check GetUsersNeedingPlaidDisconnectRepair's own query uses for "cleanup genuinely
+	// outstanding") — see that CASE's own doc comment for the full reasoning. It still serves its
+	// original purpose too (a user whose raw status was already ineligible before ever gaining a
+	// marker, e.g. an imported/backfilled row), and is a no-op COALESCE in the ordinary
+	// comp-over-already-churned-BUT-still-uncleaned-up case, since that marker is already set. Not
+	// a SET/CLEAR site: UpdateSubscriptionStatus (Issue #1413 round-14 finding L1) — it writes
+	// subscription_status directly but never touches this column at all; see its own doc comment
+	// for why it must not be used for any transition into or out of a read-only status. The known
+	// CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
 	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus (all
 	// profile_repository.go). AdminUserRepository's updateUserTierQuery (comp grant/extend)
 	// deliberately does NOT touch this column at all as of round-13 — see its own doc comment.

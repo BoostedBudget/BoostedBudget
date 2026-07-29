@@ -213,6 +213,10 @@ func TestRemoveUserTierOverride_Integration_RearmsRetention_WhenReadOnly(t *test
 			suffix := fmt.Sprintf("%d_%s", time.Now().UnixNano(), status)
 			actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
 			target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", status)
+			// Issue #1413 round-14 M1: should_mark_plaid_cleanup_pending now also requires a live
+			// linked item to exist (cleanup genuinely outstanding) — seed one so this test's
+			// existing plaid_cleanup_pending_at assertions below stay meaningful post-fix.
+			seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
 
 			override := "household_2"
 			setManualOverride(t, pool, target.ID, &override, nil)
@@ -542,6 +546,12 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
 	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	// Issue #1413 round-14 M1: should_mark_plaid_cleanup_pending now also requires a live linked
+	// item (cleanup genuinely outstanding) — seed one so the plaid_cleanup_pending_at assertion
+	// below stays meaningful post-fix. See
+	// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_MarkerNotArmed below for
+	// the M1 negative control (no live item -> marker must NOT be armed).
+	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
 
 	override := "household_2"
 	endsAt := time.Now().Add(-1 * time.Hour) // expired — exactly what the worker would have selected
@@ -574,12 +584,133 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 		"retention_expires_at must be ~now+retentionMonths, honoring the parameter (not hardcoded 6)")
 	assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled on a CAS-matched clear")
 	assert.Nil(t, snap.RetentionNotice7d, "7d notice flag must be nulled on a CAS-matched clear")
-	require.NotNil(t, snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must be (re-)armed too — reverted status 'cancelled' is Plaid-repair-eligible")
+	require.NotNil(t, snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must be (re-)armed too — reverted status 'cancelled' is Plaid-repair-eligible AND (Issue #1413 round-14 M1) a live linked item genuinely remains to clean up")
 	assert.WithinDuration(t, beforeCall, *snap.PlaidCleanupPendingAt, 10*time.Second,
 		"plaid_cleanup_pending_at must be ~now")
 
 	audit := fetchLatestAuditRow(t, pool, target.ID, "remove_manual_tier")
 	assert.Equal(t, actor.ID, *audit.UserID, "the CAS variant must still write an audit row")
+}
+
+// ─── Issue #1413 round-14 M1 (Codex review): the marker must not be re-armed for an episode whose
+// cleanup already finished ──
+//
+// should_mark_plaid_cleanup_pending was true for ANY prior override on an inactive/cancelled user,
+// with no check on whether cleanup was actually still outstanding. Sequence: (1) cancellation sets
+// the marker; (2) the repair pass completes cleanup and clears it; (3) an admin grants a comp over
+// the now-cleaned-up user (round-13: the grant itself never touches the marker); (4) the admin
+// removes that comp while raw status is STILL inactive/cancelled. Before this fix, step (4)'s
+// COALESCE(NULL, NOW()) stamped a FRESH marker for an episode that had already fully ended — with
+// every item already 'disconnected', the repair query's live-item EXISTS clause would never select
+// that row again, so the phantom marker survived forever, making the invariant (non-NULL EXACTLY
+// WHEN an episode has begun AND cleanup has not completed) false.
+
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_MarkerNotArmed is the M1
+// negative control at the CAS-guarded call site: the SAME fixture shape as
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears above, EXCEPT no linked item is
+// ever seeded for the target — cleanup has nothing outstanding. The marker must stay NULL even
+// though the reverted status ('cancelled') and prior override are otherwise identical to the
+// positive-control test.
+//
+// Falsifiability: reverting should_mark_plaid_cleanup_pending to drop the liveLinkedItemExistsClause
+// AND clause makes this test fail — plaid_cleanup_pending_at would be stamped to ~now despite no
+// live item existing.
+func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_MarkerNotArmed(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	// Deliberately NO seedLinkedItem call — this target has never linked (or has already fully
+	// cleaned up) any Plaid item; there is nothing outstanding to repair.
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	setManualOverride(t, pool, target.ID, &override, &endsAt)
+
+	row, claimed, err := repo.RemoveUserTierOverrideIfMatches(
+		ctx, actor.ID, target.ID, "expiry worker: lapsed comp, no live items", testRetentionMonths, &override, &endsAt)
+	require.NoError(t, err)
+	assert.True(t, claimed, "the clear must still apply — should_mark_plaid_cleanup_pending gates the MARKER, not the clear itself")
+	assert.True(t, row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snap.ManualTierOverride, "manual_tier_override must still be cleared")
+	assert.Nil(t, snap.PlaidCleanupPendingAt,
+		"M1: plaid_cleanup_pending_at must NOT be armed when the user has no live linked item — there is nothing outstanding for the repair pass to do, so re-arming it would create a permanent phantom the repair query's live-item EXISTS clause can never select")
+}
+
+// TestRemoveUserTierOverride_Integration_M1_NoPhantomMarker_WhenCleanupAlreadyComplete is the full
+// regression test, built through PRODUCTION WRITERS ONLY (profileRepo.UpdateSubscriptionFromPaddle,
+// profileRepo.ClearPlaidCleanupPending, adminRepo.UpdateUserTier, adminRepo.RemoveUserTierOverride —
+// no raw `UPDATE users SET manual_tier_override ...` or `SET plaid_cleanup_pending_at ...`
+// anywhere in this test's setup), reproducing the EXACT sequence from the M1 finding:
+//
+//  1. A real Paddle cancellation (UpdateSubscriptionFromPaddle) sets plaid_cleanup_pending_at —
+//     the marker records that an ineligibility episode began.
+//  2. The repair pass completes: the user's one linked item is marked 'disconnected' (the durable
+//     per-item outcome MarkItemsDisconnected would persist in production), and the marker is
+//     cleared (ClearPlaidCleanupPending — the same production writer repairPlaidDisconnects calls
+//     via ClearPlaidCleanupPendingIfMatches once cleanup genuinely completes).
+//  3. An admin grants a comp over this already-cleaned-up, already-churned user
+//     (adminRepo.UpdateUserTier) — round-13: the grant itself must not touch the marker.
+//  4. The admin removes that comp (adminRepo.RemoveUserTierOverride) while raw subscription_status
+//     is STILL 'cancelled' (nothing in this flow ever changes it back to 'active').
+//
+// The marker must stay NULL throughout — there is nothing outstanding to repair, so removing the
+// comp must not conjure a phantom episode.
+//
+// Falsifiability: reverting should_mark_plaid_cleanup_pending to drop the liveLinkedItemExistsClause
+// AND clause makes this test fail at step 4 — plaid_cleanup_pending_at would be stamped to ~now
+// despite the user's only linked item already being fully disconnected.
+func TestRemoveUserTierOverride_Integration_M1_NoPhantomMarker_WhenCleanupAlreadyComplete(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	profileRepo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "active")
+
+	// Step 1: real churn via the real webhook-facing writer — this is what starts the episode.
+	require.NoError(t, profileRepo.UpdateSubscriptionFromPaddle(ctx, target.ID, "premium", "cancelled", nil, nil, nil))
+	snapAfterCancel := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snapAfterCancel.PlaidCleanupPendingAt, "precondition: cancellation must start the marker")
+
+	// The user's only linked item is already fully disconnected — cleanup for THIS episode has
+	// genuinely completed. Seeded directly as 'disconnected' rather than run through the full
+	// Plaid-cleanup service, matching seedLinkedItem's established convention in this package for
+	// modeling per-item OUTCOME state (see profile_repository_plaid_disconnect_repair_integration_test.go).
+	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "disconnected")
+
+	// Step 2: the repair pass completing — the same production writer
+	// repairPlaidDisconnects calls once DisconnectAllUserItemsIfEligible actually succeeds.
+	require.NoError(t, profileRepo.ClearPlaidCleanupPending(ctx, target.ID))
+	snapAfterClear := fetchRetentionSnapshot(t, pool, target.ID)
+	require.Nil(t, snapAfterClear.PlaidCleanupPendingAt, "precondition: the repair pass must have cleared the marker — cleanup is done")
+
+	// Step 3: an admin comps this already-cancelled, already-cleaned-up account.
+	future := time.Now().Add(24 * time.Hour)
+	_, err := adminRepo.UpdateUserTier(ctx, actor.ID, target.ID, "household_2", "comp an already-cleaned-up churned account", &future)
+	require.NoError(t, err)
+	snapAfterGrant := fetchRetentionSnapshot(t, pool, target.ID)
+	require.Nil(t, snapAfterGrant.PlaidCleanupPendingAt, "precondition: granting a comp must not touch the marker (round-13)")
+
+	// Step 4: the admin removes the comp — raw subscription_status is still 'cancelled'
+	// (UpdateUserTier never touches subscription_status).
+	row, err := adminRepo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "comp ended", testRetentionMonths)
+	require.NoError(t, err)
+	assert.True(t, row.Removed)
+	require.Equal(t, "cancelled", row.RevertedStatus, "precondition: reverted status must still be cancelled for should_mark_plaid_cleanup_pending's CASE to even be considered")
+
+	snapAfterRemove := fetchRetentionSnapshot(t, pool, target.ID)
+	assert.Nil(t, snapAfterRemove.PlaidCleanupPendingAt,
+		"M1: removing a comp must NOT re-arm a fresh marker for an episode whose cleanup already fully completed — the user's only linked item is already 'disconnected', so there is nothing outstanding to repair")
 }
 
 // TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears verifies the CAS

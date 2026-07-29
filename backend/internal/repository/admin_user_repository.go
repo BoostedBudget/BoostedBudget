@@ -502,17 +502,41 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // marker, so in the ordinary case — a comp granted over an already inactive/cancelled user whose
 // marker was already set by the transition that made them ineligible — this COALESCE is a no-op:
 // the marker already survived the comp's entire lifetime untouched, and COALESCE(existing, NOW())
-// just preserves that existing (earlier, correct) value. This CASE now exists purely as a
-// defense-in-depth backstop for a row that reached an ineligible raw status WITHOUT ever passing
-// through one of the SET-site writers (e.g. an imported/backfilled row created directly with
-// subscription_status = 'inactive'/'cancelled') — the one case where the marker could still be
-// legitimately NULL despite the status already being repair-eligible.
+// just preserves that existing (earlier, correct) value.
+//
+// Issue #1413 round-14 M1 (Codex review) — the "purely a defense-in-depth backstop for an
+// imported/backfilled row" claim this comment made through round-13 was WRONG, and the wrongness
+// was the bug: the ORDINARY post-cleanup path reaches this CASE too. Sequence: (1) cancellation
+// sets the marker; (2) the repair pass actually completes cleanup and clears it
+// (ClearPlaidCleanupPendingIfMatches); (3) an admin grants a comp over this already-cleaned-up
+// user — round-13 correctly leaves the (already-NULL) marker alone; (4) the admin later removes
+// that comp while raw subscription_status is STILL 'inactive'/'cancelled' (nothing in this flow
+// changes it). Before this fix, should_mark_plaid_cleanup_pending was true for ANY prior override
+// on an inactive/cancelled user regardless of whether cleanup was still outstanding, so step (4)'s
+// COALESCE(NULL, NOW()) stamped a FRESH marker for an episode whose cleanup had already finished —
+// a phantom the live-item-less repair query's EXISTS clause would then never select, leaving it
+// non-NULL forever and making the stated invariant (domain.User.PlaidCleanupPendingAt's doc
+// comment: non-NULL exactly when an episode has begun AND cleanup has not completed) false.
+//
+// The fix: gate should_mark_plaid_cleanup_pending on the SAME live-linked-item existence check the
+// repair query itself uses for "cleanup genuinely outstanding" — liveLinkedItemExistsClause
+// (profile_repository.go, shared by GetUsersNeedingPlaidDisconnectRepair) — rather than a second,
+// independently-worded copy of that condition that could drift from it. With that guard: a comp
+// removed over a user whose cleanup already fully completed (no live items left) now correctly
+// leaves the marker untouched (NULL stays NULL — nothing outstanding), while a comp removed over a
+// user who still has a live item (the genuine "cleanup interrupted by a comp" case, e.g. round-14
+// H1's abort scenario) still (re-)arms the marker exactly as before. This CASE therefore now fires
+// for TWO overlapping reasons, not one: a row that reached an ineligible raw status WITHOUT ever
+// passing through a SET-site writer (e.g. an imported/backfilled row), AND the ordinary
+// comp-removed-while-cleanup-still-outstanding case — both share the same "is there actually a live
+// item to clean up" test.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
 	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
-	        AND subscription_status IN ('inactive', 'cancelled')) AS should_mark_plaid_cleanup_pending
+	        AND subscription_status IN ('inactive', 'cancelled')
+	        AND ` + liveLinkedItemExistsClause + `) AS should_mark_plaid_cleanup_pending
 	FROM users
 	WHERE id = $1 AND is_deleted = FALSE
 `

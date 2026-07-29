@@ -60,7 +60,25 @@ type ProfileRepository interface {
 	// UpdateTrialStatus updates trial-related fields for a user
 	UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error
 
-	// UpdateSubscriptionStatus updates just the subscription status
+	// UpdateSubscriptionStatus updates just the subscription status.
+	//
+	// Issue #1413 round-14 finding L1 (Codex review) — DO NOT call this for any transition into or
+	// out of a read-only status ('inactive'/'cancelled'): unlike every other subscription_status
+	// writer in this interface (UpdateSubscriptionFromPaddle, UpdateTrialStatus,
+	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride), this method does NOT
+	// maintain plaid_cleanup_pending_at at all — an active-to-inactive/cancelled call through this
+	// method would leave the marker NULL while the user becomes a genuine repair candidate,
+	// making them permanently invisible to GetUsersNeedingPlaidDisconnectRepair (the ONLY code path
+	// that ever disconnects a read-only user's Plaid items — see that method's doc comment). As of
+	// round-14, `rg` found NO production caller of this method anywhere in the codebase (only its
+	// own implementation and test-mock mirrors of the interface) — it is very likely dead code, a
+	// pre-#1413 relic superseded by the transition-aware writers above (in particular
+	// ExpireTrialIfNoOverride, its likely historical trial-expiry successor — see
+	// profile_repository_trial_expiry_integration_test.go's header comment). If you are about to
+	// add a new caller, do not: use one of the transition-aware writers instead, or extend this
+	// method to maintain the marker the same way they do FIRST. Recommended: delete this method
+	// once confirmed permanently unused, rather than leaving a trap a future caller could silently
+	// fall into.
 	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
 
 	// GetEffectiveSubscriptionStatusByUserID retrieves the user's EFFECTIVE subscription
@@ -1302,8 +1320,13 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 	return nil
 }
 
-// UpdateSubscriptionStatus updates just the subscription status for a user
-// Issue #679, #680: Trial expiration
+// UpdateSubscriptionStatus updates just the subscription status for a user.
+// Issue #679, #680: Trial expiration.
+//
+// See the ProfileRepository interface doc comment for this method — Issue #1413 round-14 finding
+// L1 (Codex review): this does NOT touch plaid_cleanup_pending_at, unlike every other
+// subscription_status writer in this file, and `rg` found no production caller as of round-14. Do
+// not add one without first reading that warning.
 func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
 	now := time.Now()
 
@@ -1944,6 +1967,23 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 // definition of "which statuses are eligible" instead of a third divergent copy.
 const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('inactive', 'cancelled')`
 
+// liveLinkedItemExistsClause is the EXISTS predicate for "this user has at least one still-live
+// linked item" — not 'disconnected' or 'replaced', with a NULL status explicitly treated as live
+// too (round-7 fix; see GetUsersNeedingPlaidDisconnectRepair's doc comment below for the
+// NULL-status rationale this clause must preserve). Correlates against the unaliased `users` table
+// both of its call sites SELECT FROM — GetUsersNeedingPlaidDisconnectRepair just below, and
+// admin_user_repository.go's removeUserTierOverrideSelectPrior — so both must keep using this SAME
+// Go constant, not a second hand-copied SQL literal, so "live" cannot silently drift apart between
+// them. A second, independently-worded copy is exactly how Issue #1413 round-14 finding M1 slipped
+// in: removeUserTierOverrideSelectPrior's should_mark_plaid_cleanup_pending stamped the marker for
+// ANY prior override on an inactive/cancelled user, with no check on whether a live item actually
+// remained — re-arming a phantom marker for an episode whose cleanup had already fully completed.
+const liveLinkedItemExistsClause = `EXISTS (
+	SELECT 1 FROM linked_items
+	WHERE linked_items.user_id = users.id
+	  AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
+)`
+
 // GetUsersNeedingPlaidDisconnectRepair implements the Issue #1413 round-7 grace-window repair
 // path — see the interface doc comment for the full rationale. Mirrors
 // GetUsersNeedingRetentionClockRepair's predicate shape, plus:
@@ -1980,17 +2020,30 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 // repair pass, or a stalled/dead-lettered expiry job would leave their bank connection live and
 // billable indefinitely.
 //
-// Issue #1413 round-13: this predicate is now the ONLY place override state enters this query's
-// reasoning at all — per the restated invariant (domain.User.PlaidCleanupPendingAt's doc comment),
-// none of the SET/CLEAR sites for plaid_cleanup_pending_at reference manual_tier_override in any
-// form any more (the marker is a pure function of raw subscription_status transitions). CURRENT
-// eligibility — "should this user actually be disconnected right now" — is entirely this query's
-// job: plaidDisconnectRepairEligibleStatusPredicate plus this noActiveManualOverridePredicate,
-// evaluated fresh on every run against live, current row state. That split (a durable write-time
-// fact plus a live read-time predicate) is precisely what closes the round-13 P0: a comp granted
-// over an already-marked user survives the grant (the marker is untouched), and once that comp
-// lapses — with or without the daily expiry job ever running — this predicate simply stops
-// excluding the row on the very next scheduled run. Do NOT "unify" this with
+// Issue #1413 round-13/14: this predicate is the ONLY place CURRENT override state (live vs.
+// lapsed vs. absent, a WALL-CLOCK fact) enters this query's reasoning — per the restated invariant
+// (domain.User.PlaidCleanupPendingAt's doc comment), no SET/CLEAR site conditions the marker's
+// VALUE on whether an override is presently active, which is what round-13 actually fixed (round-11
+// through round-12 had tied the marker to "is there a live override right now", requiring a LATER
+// writer to catch the instant it lapsed — see that doc comment for the full round-13 root cause).
+//
+// Round-14 correction (Issue #1413 L4, Codex review): this comment previously claimed NO SET/CLEAR
+// site references manual_tier_override "in any form any more" — false. AdminUserRepository's
+// removeUserTierOverrideUpdate (admin_user_repository.go, shared by RemoveUserTierOverride/
+// RemoveUserTierOverrideIfMatches) still reads manual_tier_override, as a write-time "was a comp
+// present at all, and is it being removed right now" gate for its should_mark_plaid_cleanup_pending
+// backstop CASE (further narrowed, as of round-14 finding M1, by liveLinkedItemExistsClause — see
+// that CASE's own doc comment). That is a different thing from what round-13 closed: it is not a
+// live-vs-lapsed distinction, and it does not require any later writer to keep it correct — the CASE
+// only fires exactly once, synchronously, in the same statement that clears the override column.
+//
+// CURRENT eligibility — "should this user actually be disconnected right now" — is entirely this
+// query's job: plaidDisconnectRepairEligibleStatusPredicate plus this
+// noActiveManualOverridePredicate, evaluated fresh on every run against live, current row state.
+// That split (a durable write-time fact plus a live read-time predicate) is precisely what closes
+// the round-13 P0: a comp granted over an already-marked user survives the grant (the marker is
+// untouched), and once that comp lapses — with or without the daily expiry job ever running — this
+// predicate simply stops excluding the row on the very next scheduled run. Do NOT "unify" this with
 // noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
 // and this predicate's own doc comment for why the retention/deletion queries must stay as they are.
 func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
@@ -2001,11 +2054,7 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 		  AND deletion_requested_at IS NULL
 		  AND plaid_cleanup_pending_at IS NOT NULL
 		  AND plaid_cleanup_pending_at < $1
-		  AND EXISTS (
-		      SELECT 1 FROM linked_items
-		      WHERE linked_items.user_id = users.id
-		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
-		  )
+		  AND ` + liveLinkedItemExistsClause + `
 	` + noActiveManualOverridePredicate + `
 		ORDER BY updated_at ASC
 	`
