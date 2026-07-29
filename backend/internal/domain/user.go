@@ -68,13 +68,38 @@ type User struct {
 	// Dunning: tracks when a user entered past_due state (Issue #898)
 	PastDueStartedAt *time.Time `json:"past_due_started_at,omitempty" db:"past_due_started_at"`
 
-	// PlaidCleanupPendingAt is the Issue #1413 round-10 explicit marker: set the instant a user
-	// transitions into a Plaid-disconnect-repair-eligible status (inactive/cancelled) with cleanup
-	// not yet complete, cleared on resubscribe/comp-grant or once a repair pass successfully
-	// disconnects the user's Plaid items. NULL means nothing pending. This REPLACES
-	// RetentionStartedAt as RetentionCleanupCheckWorker.repairPlaidDisconnects's grace-window
-	// anchor — see GetUsersNeedingPlaidDisconnectRepair's doc comment (profile_repository.go) for
-	// why the derived anchor could not be made sound.
+	// PlaidCleanupPendingAt is the Issue #1413 round-10 explicit marker for
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects's grace-window anchor — see
+	// GetUsersNeedingPlaidDisconnectRepair's doc comment (profile_repository.go) for why this
+	// REPLACES RetentionStartedAt (the derived anchor rounds 8/9 showed could not be made sound).
+	//
+	// THE INVARIANT (Issue #1413 round-11 — read this before touching ANY writer or clearer of
+	// this column):
+	//
+	//   plaid_cleanup_pending_at is non-NULL EXACTLY WHEN the user is currently Plaid-ineligible —
+	//   i.e. domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair()
+	//   is true (raw status is 'inactive' or 'cancelled') AND the user carries no currently-active
+	//   manual tier override (HasActiveManualOverride() is false — a live comp forces EFFECTIVE
+	//   status back to 'active' regardless of the raw column, restoring Plaid eligibility) — AND
+	//   outstanding Plaid cleanup for that episode has not yet completed. Its value is the instant
+	//   the CURRENT ineligibility episode began — never an earlier episode's (a stale write must
+	//   not resurrect a value a newer episode already superseded) and never a later one's (a fresh
+	//   episode must get its OWN fresh value, not the survivor of a stale COALESCE).
+	//
+	// Every writer must leave the column in a state satisfying this invariant when it returns —
+	// not merely "correct for the one transition this writer handles in isolation". That
+	// isolated-reasoning failure mode is exactly how six prior remediation rounds on this branch
+	// each closed the previous reviewer's finding while introducing a new one. As of round-11 the
+	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
+	// ExpireTrialIfNoOverride (all profile_repository.go), and
+	// AdminUserRepository's removeUserTierOverrideUpdate (admin_user_repository.go, shared by
+	// RemoveUserTierOverride/RemoveUserTierOverrideIfMatches). The known CLEAR sites are:
+	// UpdateSubscriptionFromPaddle, ClearRetentionDates, ClearPlaidCleanupPending/
+	// ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus (all profile_repository.go), and
+	// AdminUserRepository's updateUserTierQuery (admin_user_repository.go, comp grant/extend). See
+	// each site's own doc comment for its justification against this invariant, and
+	// GetUsersNeedingPlaidDisconnectRepair's doc comment for the query whose correctness depends
+	// entirely on it holding.
 	PlaidCleanupPendingAt *time.Time `json:"plaid_cleanup_pending_at,omitempty" db:"plaid_cleanup_pending_at"`
 
 	// Timezone settings (Issue #972)

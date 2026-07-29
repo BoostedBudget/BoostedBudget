@@ -26,12 +26,15 @@ import (
 const retentionNoticeClaimLease = 5 * time.Minute
 
 // plaidDisconnectRepairGracePeriod is the round-7 grace window (Issue #1413 Codex review): a
-// read-only user (retention_started_at, set by ExpireTrial/CancelIfPastDueWithRetention/
-// subscription-cancellation at the same moment they became read-only) is not selected for Plaid
-// disconnect by repairPlaidDisconnects until this much time has passed. This is what makes
-// "resubscribe within the window" a non-event rather than a narrowed race: a user who becomes
-// active again before the window elapses simply falls out of
-// GetUsersNeedingPlaidDisconnectRepair's subscription_status filter and is never touched.
+// read-only user — plaid_cleanup_pending_at (Issue #1413 round-11 correction: NOT
+// retention_started_at, which this comment incorrectly named through round-9; see
+// domain.User.PlaidCleanupPendingAt's doc comment for the invariant and
+// GetUsersNeedingPlaidDisconnectRepair's doc comment for the round-10 rationale), set at the same
+// moment they became Plaid-ineligible — is not selected for Plaid disconnect by
+// repairPlaidDisconnects until this much time has passed. This is what makes "resubscribe within
+// the window" a non-event rather than a narrowed race: a user who becomes active again before the
+// window elapses has their marker cleared (per the invariant) and simply falls out of
+// GetUsersNeedingPlaidDisconnectRepair's predicate, never touched.
 //
 // 72 hours (3 days), chosen as a deliberate middle ground:
 //   - Longer is safer for a genuine resubscriber: more time to notice their trial/subscription
@@ -116,14 +119,17 @@ type RetentionProfileRepository interface {
 	// marker — see domain.User.PlaidCleanupPendingAt's doc comment.
 	GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error)
 
-	// ClearPlaidCleanupPending unconditionally clears a user's plaid_cleanup_pending_at marker —
-	// Issue #1413 round-10. Called by repairPlaidDisconnects once DisconnectAllUserItemsIfEligible
-	// actually succeeds, so a fully-cleaned-up user stops being redundantly re-selected by
-	// GetUsersNeedingPlaidDisconnectRepair on every future run. A failure here is logged and
-	// swallowed (non-fatal): the marker staying set just means this user is harmlessly
-	// re-considered (and immediately excluded by the live-item EXISTS clause) on the next run —
-	// never a correctness problem, only a minor inefficiency.
-	ClearPlaidCleanupPending(ctx context.Context, userID string) error
+	// ClearPlaidCleanupPendingIfMatches clears a user's plaid_cleanup_pending_at marker ONLY IF it
+	// still equals expected — Issue #1413 round-11 Fix 3 (replaces the unconditional
+	// ClearPlaidCleanupPending this interface used through round-10). Called by
+	// repairPlaidDisconnects once DisconnectAllUserItemsIfEligible actually succeeds, passing the
+	// SAME marker value the candidate query selected on: an unconditional clear at this point could
+	// erase a DIFFERENT, newer ineligibility episode's marker (e.g. a comp granted then removed
+	// entirely within the window between candidate selection and this call) — discarding that
+	// episode's grace window entirely. A (false, nil) result is a normal, expected skip (the
+	// marker already moved on to a new episode — leave it for that episode's own future run), not
+	// an error; it is logged, not escalated, mirroring ClearPastDueStartedAtIfMatches's contract.
+	ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 
 	// GetUserByID retrieves a user by their internal UUID — used by repairPlaidDisconnects to
 	// re-verify a candidate is STILL read-only-status and uncomped. Unlike RepairRetentionClock,
@@ -208,9 +214,12 @@ type RetentionCleanupCheckWorker struct {
 	deletionService RetentionDeletionService
 	emailService    RetentionEmailService
 	// plaidCleanup backs repairPlaidDisconnects (Issue #1413 round-7 grace-window repair path).
-	// Nil-safe: wired via SetPlaidCleanup() after Plaid is configured, mirroring PastDueService's
-	// own SetPlaidCleanup convention — nil simply skips the repair pass (logged) rather than
-	// panicking.
+	// Wired via SetPlaidCleanup() after Plaid is configured. Issue #1413 round-11 correction: a nil
+	// value does NOT "simply skip the repair pass" — since round-10 Fix 1, repairPlaidDisconnects
+	// treats a nil plaidCleanup as errPlaidCleanupNotConfigured, a hard configuration error that
+	// fails the WHOLE job (see that sentinel's doc comment and Work()'s handling of it). This field
+	// itself cannot panic on a nil call (repairPlaidDisconnects checks before ever calling through
+	// it), but "nil-safe" no longer describes the OUTCOME — it is a loud failure, not a quiet skip.
 	plaidCleanup RetentionPlaidCleanup
 	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
 	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
@@ -262,9 +271,14 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 
 // SetPlaidCleanup wires the Plaid cleanup collaborator repairPlaidDisconnects requires — Issue
 // #1413 round-6 repair path. Called after Plaid is configured (main.go), mirroring
-// TrialService.SetPlaidCleanup/PastDueService.SetPlaidCleanup's late-binding convention. Nil-safe:
-// an unset (nil) plaidCleanup makes repairPlaidDisconnects log and skip rather than panic, so
-// existing deployments without Plaid configured are unaffected.
+// TrialService.SetPlaidCleanup/PastDueService.SetPlaidCleanup's late-binding convention.
+//
+// Issue #1413 round-11 correction: this comment previously (incorrectly) said an unset plaidCleanup
+// makes repairPlaidDisconnects "log and skip rather than panic" — true only through round-9. Since
+// round-10 Fix 1, an unset plaidCleanup is a hard configuration error (errPlaidCleanupNotConfigured)
+// that fails the WHOLE retention_cleanup_check job, not a quiet per-step skip — see that sentinel's
+// doc comment. Never calling this setter is therefore not a safe way to run without Plaid
+// configured; it is a misconfiguration that surfaces loudly on the next run.
 func (w *RetentionCleanupCheckWorker) SetPlaidCleanup(c RetentionPlaidCleanup) {
 	w.plaidCleanup = c
 }
@@ -743,8 +757,31 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 
 		userID := user.ID
 
+		// Belt-and-braces: GetUsersNeedingPlaidDisconnectRepair's own WHERE clause guarantees
+		// PlaidCleanupPendingAt IS NOT NULL on every real candidate — this should be impossible in
+		// production. Guarded explicitly (rather than dereferencing unconditionally below) so a
+		// candidate list that somehow violates its own contract degrades to a logged skip, not a
+		// panic.
+		if user.PlaidCleanupPendingAt == nil {
+			w.logger.Warn("Plaid-disconnect repair candidate missing plaid_cleanup_pending_at — skipping (violates GetUsersNeedingPlaidDisconnectRepair's own predicate)",
+				"job_id", jobID, "user_id", userID)
+			skippedCount++
+			continue
+		}
+
+		// Issue #1413 round-11 Fix 3: the marker VALUE this worker selected on, captured ONCE and
+		// threaded into both isStillEligible (every per-item recheck) and the final clear call
+		// below — the same occurrence-identity pattern already established for work_claims
+		// (repository.OccurrenceResourceID / FormatOccurrenceTimestamp) and for past_due_service.go's
+		// reReadStillPastDue (which requires past_due_started_at to still match, not merely be
+		// non-nil). GetUsersNeedingPlaidDisconnectRepair's WHERE clause guarantees
+		// PlaidCleanupPendingAt is non-nil on every candidate it returns.
+		expectedMarker := *user.PlaidCleanupPendingAt
+		expectedOccurrence := repository.FormatOccurrenceTimestamp(user.PlaidCleanupPendingAt)
+
 		// isStillEligible re-verifies, against the freshest possible read, that userID is still
-		// eligible-status, uncomped, AND still has cleanup pending. Unlike RepairRetentionClock's
+		// eligible-status, uncomped, AND still on the EXACT ineligibility episode this worker
+		// selected — not merely that SOME marker is present. Unlike RepairRetentionClock's
 		// conditional UPDATE (which gets this for free from its own WHERE clause), the repair
 		// action here — a Plaid /item/remove call — has no atomic DB guard, so a stale candidate
 		// who resubscribed (or was comped) since the query ran must be caught explicitly;
@@ -765,16 +802,17 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// domain.SubscriptionStatus.IsEligibleForPlaidDisconnectRepair's doc comment for the full
 		// rationale and the parity test that keeps this in agreement with the SQL predicate.
 		//
-		// Issue #1413 round-10: the PlaidCleanupPendingAt != nil check is belt-and-braces — the
-		// marker is the candidate query's own anchor, so if it has been cleared since the query
-		// ran (resubscribe, comp grant, or a concurrent flow's cleanup already completing), there
-		// is nothing pending for THIS re-read to act on even if status/override still look
-		// superficially eligible. This is a PRESENCE check, not a full grace-window re-validation —
-		// a marker reset by a resubscribe-then-recancel cycle occurring in the tiny window between
-		// the candidate query and this recheck is a documented, accepted residual (the same class
-		// of micro-window race this codebase already accepts elsewhere, e.g. the comp-grant window
-		// noted on processSubscriptionCanceled/processGraceExpiry), not something this recheck can
-		// close without re-running the full candidate query per item.
+		// Issue #1413 round-11 Fix 3 (replaces the round-10 "PlaidCleanupPendingAt != nil"
+		// PRESENCE-only check): the prior check confirmed only that SOME marker was set, not that
+		// it was still THIS episode's marker. That let a stale worker act on a completely different
+		// (fresher) episode: an old candidate is selected; an admin grants a comp (clearing the
+		// marker); the comp is later removed (setting a FRESH marker for the new episode via
+		// COALESCE(NULL, NOW())); the stale worker's presence-only recheck then saw a non-nil
+		// marker and disconnected immediately, then cleared the NEW episode's marker too — losing
+		// its entire grace window. Comparing FormatOccurrenceTimestamp(current.PlaidCleanupPendingAt)
+		// against expectedOccurrence closes this: a mismatch (including current being nil, which
+		// formats to "") is a normal skip, not an error — the next scheduled run evaluates whatever
+		// episode is actually current, on its own merits and its own grace window.
 		isStillEligible := func(rctx context.Context) (bool, error) {
 			current, err := w.profileRepo.GetUserByID(rctx, userID)
 			if err != nil {
@@ -786,7 +824,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			if current.HasAnyManualOverride() {
 				return false, nil
 			}
-			if current.PlaidCleanupPendingAt == nil {
+			if repository.FormatOccurrenceTimestamp(current.PlaidCleanupPendingAt) != expectedOccurrence {
 				return false, nil
 			}
 			return true, nil
@@ -800,7 +838,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			continue
 		}
 		if !eligible {
-			w.logger.Info("Plaid-disconnect repair skipped — user no longer read-only-status, comped, or nothing pending since the query ran",
+			w.logger.Info("Plaid-disconnect repair skipped — user no longer read-only-status, comped, or the marker has moved on to a different episode since the query ran",
 				"job_id", jobID, "user_id", userID)
 			skippedCount++
 			continue
@@ -821,13 +859,25 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			continue
 		}
 
-		// Issue #1413 round-10: clear the marker now that cleanup has actually completed — a
-		// failure here is logged and swallowed (non-fatal): the marker staying set just means this
-		// user is harmlessly re-considered (and immediately excluded by the live-item EXISTS
-		// clause) on the next run, never a correctness problem.
-		if clearErr := w.profileRepo.ClearPlaidCleanupPending(ctx, userID); clearErr != nil {
+		// Issue #1413 round-11 Fix 3: clear the marker now that cleanup has actually completed, but
+		// ONLY if it still equals expectedMarker — the exact episode isStillEligible's per-item
+		// rechecks just verified through the last successful item. This must NOT be the
+		// unconditional ClearPlaidCleanupPending: between the LAST successful per-item recheck
+		// above and this call, a comp could still be granted and removed, starting a brand-new
+		// episode with its own fresh marker — an unconditional clear here would erase that new
+		// episode's grace window entirely, the exact Fix 3 defect one call site later. A
+		// clearErr or a false (mismatch) result is logged and swallowed (non-fatal): the marker
+		// staying set (whether because of an error, or because it correctly moved on to a NEW
+		// episode) just means the user is harmlessly re-considered next run — repeat cleanup of an
+		// already-disconnected item is idempotent, and a mismatched marker means a genuinely
+		// different episode is what will be evaluated, on its own schedule.
+		cleared, clearErr := w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+		if clearErr != nil {
 			w.logger.Warn("Plaid disconnect repaired but failed to clear plaid_cleanup_pending_at — next run will harmlessly re-consider this user",
 				"job_id", jobID, "user_id", userID, "error", clearErr)
+		} else if !cleared {
+			w.logger.Info("Plaid disconnect repaired, but plaid_cleanup_pending_at had already moved on to a new episode since this worker started — leaving the new episode's marker untouched for its own future run",
+				"job_id", jobID, "user_id", userID)
 		}
 
 		w.logger.Info("Plaid disconnect repaired", "job_id", jobID, "user_id", userID)
