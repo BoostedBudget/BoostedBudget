@@ -1914,6 +1914,12 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx 
 func (m *mockProfileRepoForCursorTests) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
 	return false, nil
 }
+
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-6 repair path) is not exercised by
+// these cursor tests; stubbed to satisfy the widened ProfileRepository interface.
+func (m *mockProfileRepoForCursorTests) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
 func (m *mockProfileRepoForCursorTests) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }

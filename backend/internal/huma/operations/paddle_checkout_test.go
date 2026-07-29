@@ -213,6 +213,12 @@ func (m *mockProfileRepo) RepairRetentionClock(ctx context.Context, userID strin
 	return false, nil
 }
 
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-6 repair path) is not exercised by
+// these Paddle checkout tests; stubbed to satisfy the widened ProfileRepository interface.
+func (m *mockProfileRepo) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
 func (m *mockProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
