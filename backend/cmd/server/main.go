@@ -2252,14 +2252,15 @@ func createClerkCheck() func() error {
 }
 
 // startJobHealthMetricsCollector runs a goroutine that periodically refreshes
-// observability.ManualTierOverrideOldestUnclearedExpiredSeconds from the database (Issue #1413
-// Task P4). Lives here — not in the observability package alongside
-// observability.StartDBMetricsCollector, which it otherwise mirrors — because it needs
-// repository.JobHealthRepository, and internal/repository already imports internal/observability;
-// putting this collector there would create an import cycle. A failed query is logged and
-// skipped (not fatal): a transient DB hiccup here must not crash the whole process, and the gauge
-// simply keeps its last-known value until the next tick succeeds. The goroutine stops when ctx is
-// cancelled.
+// observability.ManualTierOverrideOldestUnclearedExpiredSeconds and, since Issue #1413's
+// Plaid-cleanup-backlog follow-up, observability.PlaidCleanupOutstandingUsers/
+// PlaidCleanupOldestOutstandingSeconds from the database. Lives here — not in the observability
+// package alongside observability.StartDBMetricsCollector, which it otherwise mirrors — because it
+// needs repository.JobHealthRepository, and internal/repository already imports
+// internal/observability; putting this collector there would create an import cycle. A failed
+// query is logged and skipped for THAT metric only (not fatal, and not allowed to block the
+// other): a transient DB hiccup here must not crash the whole process, and each gauge simply keeps
+// its last-known value until its next tick succeeds. The goroutine stops when ctx is cancelled.
 func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
@@ -2272,9 +2273,17 @@ func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHeal
 				age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
 				if err != nil {
 					logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
-					continue
+				} else {
+					observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
 				}
-				observability.ManualTierOverrideOldestUnclearedExpiredSeconds.Set(age.Seconds())
+
+				plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+				if err != nil {
+					logger.Warn("failed to refresh Plaid-cleanup job-health gauges", "error", err)
+				} else {
+					observability.PlaidCleanupOutstandingUsers.Set(float64(plaidCount))
+					observability.PlaidCleanupOldestOutstandingSeconds.Set(plaidOldestAge.Seconds())
+				}
 			}
 		}
 	}()

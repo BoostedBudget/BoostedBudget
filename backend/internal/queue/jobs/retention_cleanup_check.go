@@ -848,6 +848,13 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			w.logger.Warn("failed to re-read user before Plaid-disconnect repair",
 				"job_id", jobID, "user_id", userID, "error", err)
 			errorCount++
+			// Issue #1413: failure-visibility counter — see its doc comment
+			// (observability/metrics.go) for why this, together with
+			// PlaidCleanupOldestOutstandingSeconds and this log line's user_id field, is what makes
+			// a user stuck in the retry loop observable at all. repairPlaidDisconnects's per-user
+			// error isolation (this `continue`, not a `return`) is deliberate and unchanged by this
+			// metric — one user's failure must never block the other steps this job run performs.
+			observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
 			continue
 		}
 		if !eligible {
@@ -864,9 +871,18 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			if errors.Is(disconnectErr, services.ErrSideEffectClaimBusy) {
 				w.logger.Info("Plaid-disconnect repair deferred — side-effect claim held by another flow",
 					"job_id", jobID, "user_id", userID)
+				// Deliberately NOT counted against PlaidDisconnectRepairUserFailuresTotal (unlike
+				// errorCount just below, which still counts it for the existing log-summary
+				// contract): this is benign, expected contention from another flow already
+				// mid-disconnect for this same user, not a Plaid failure — it resolves on its own
+				// once that flow completes and does not indicate a user stuck in the retry loop.
 			} else {
 				w.logger.Warn("failed to repair Plaid disconnect",
 					"job_id", jobID, "user_id", userID, "error", disconnectErr)
+				// Issue #1413: failure-visibility counter — see its doc comment
+				// (observability/metrics.go). Per-user error isolation (this `continue`) is
+				// deliberate and unchanged by this metric.
+				observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
 			}
 			errorCount++
 			continue

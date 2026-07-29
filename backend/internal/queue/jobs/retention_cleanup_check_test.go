@@ -728,6 +728,139 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAnd
 	mockDeletion.AssertCalled(t, "ExecuteDeletion", ctx, "user-still-deleted-2")
 }
 
+// ─── Issue #1413: per-user Plaid-disconnect-repair failure visibility ──
+//
+// repairPlaidDisconnects's per-user error isolation (errorCount++; continue, proven non-fatal by
+// the test above) is deliberate — one user's Plaid failure must never block the GDPR notice/
+// deletion steps the same run performs for everyone else. But before this metric, that isolation
+// was also completely SILENT: nothing outside a log line distinguished "one user failed once" from
+// "the same user has failed every run for weeks". observability.PlaidDisconnectRepairUserFailuresTotal
+// is the counter that closes that gap — these tests prove it increments on exactly the failure
+// paths inside the per-user loop (excluding the benign ErrSideEffectClaimBusy contention case,
+// which is expected concurrent-worker contention, not a failure) and stays flat on success.
+
+// TestRetentionCleanupCheck_PlaidRepairFailure_IncrementsUserFailureCounter proves
+// DisconnectAllUserItemsIfEligible failing for one user increments the failure-visibility counter.
+//
+// Falsifiability: removing the Inc() call at the disconnect-failure site in repairPlaidDisconnects
+// makes this test fail (counter stays flat despite a real per-user failure).
+func TestRetentionCleanupCheck_PlaidRepairFailure_IncrementsUserFailureCounter(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	repairUser := &domain.User{ID: "user-plaid-repair-fail-counter", Email: "plaidrepairfailcounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{repairUser}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-plaid-repair-fail-counter").Return(repairUser, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-plaid-repair-fail-counter", mock.Anything).Return(errors.New("plaid: transient 500"))
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "the deliberate per-user error isolation must still hold — the job succeeds even though the counter recorded a failure")
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before+1, after, "a per-user Plaid disconnect failure must increment the failure-visibility counter")
+}
+
+// TestRetentionCleanupCheck_PlaidRepairPreCheckFailure_IncrementsUserFailureCounter proves the
+// OTHER per-user failure site — the pre-disconnect isStillEligible re-read (GetUserByID) erroring
+// before DisconnectAllUserItemsIfEligible is ever called — also increments the same counter.
+func TestRetentionCleanupCheck_PlaidRepairPreCheckFailure_IncrementsUserFailureCounter(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	repairUser := &domain.User{ID: "user-plaid-precheck-fail", Email: "plaidprecheckfail@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{repairUser}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-plaid-precheck-fail").Return(nil, errors.New("db: connection reset"))
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before+1, after, "a pre-disconnect re-eligibility read failure must also increment the failure-visibility counter")
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCounter is the negative
+// control: a successful per-user repair must leave the counter untouched.
+func TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCounter(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	user := &domain.User{ID: "user-plaid-repair-success-counter", Email: "plaidrepairsuccesscounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-plaid-repair-success-counter").Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-plaid-repair-success-counter", mock.Anything).Return(nil)
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user-plaid-repair-success-counter", pendingSince).Return(true, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before, after, "a successful per-user Plaid disconnect repair must NOT increment the failure-visibility counter")
+}
+
 // TestRetentionCleanupCheck_PlaidRepairNilCleanup_FailsJob_HeartbeatNotAdvanced is the round-10
 // (Fix 1 / round-9 review Blocker) replacement for the old
 // TestRetentionCleanupCheck_PlaidRepairNilCleanup_LogsAndSkips, which asserted the BROKEN contract:
