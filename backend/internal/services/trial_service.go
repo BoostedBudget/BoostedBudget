@@ -207,13 +207,18 @@ func (s *TrialService) GetTrialDaysRemaining(user *domain.User) int {
 //
 // CONCLUSION: no ordering of a status flip and an irreversible external call is safe here, because
 // becoming active again is precisely what the system always permits for a read-only user. The fix
-// is to stop trying to order it and DEFER instead: the disconnect moves entirely to
-// RetentionCleanupCheckWorker.repairPlaidDisconnects, which only runs after a grace window
-// (anchored on retention_started_at, which this function sets below) and re-verifies eligibility
-// immediately before removing each item. A user who resubscribes within the grace window is never
-// disconnected at all — the race becomes a non-event rather than a narrowed window. See
-// profile_repository.go's GetUsersNeedingPlaidDisconnectRepair and retention_cleanup_check.go's
-// repairPlaidDisconnects for the other half of this design.
+// is to stop trying to order it and DEFER instead: the disconnect moves entirely to the repair
+// pass (RetentionCleanupCheckWorker.repairPlaidDisconnects), which only runs once a grace window
+// has elapsed since the plaid_cleanup_pending_at marker was set — stamped atomically, below, by
+// this function's own trial->inactive CAS (ExpireTrialIfNoOverride), NOT by the retention_started_at
+// write that follows it. (retention_started_at was the grace anchor only through round-9; round-10
+// replaced it with this marker, and round-11 explicitly forbids reintroducing retention_started_at
+// as the anchor — see profile_repository.go's GetUsersNeedingPlaidDisconnectRepair doc comment.)
+// The repair pass re-verifies eligibility immediately before removing each item, so a user who
+// resubscribes within the grace window is never disconnected at all — the race becomes a
+// non-event rather than a narrowed window. See profile_repository.go's
+// GetUsersNeedingPlaidDisconnectRepair and retention_cleanup_check.go's repairPlaidDisconnects for
+// the other half of this design.
 func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	// Get the user
 	user, err := s.repo.GetUserByID(ctx, userID)
@@ -318,11 +323,13 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 
 	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion. Gated on
 	// `flipped` (never started for a user the CAS just refused to touch). This timestamp
-	// (retention_started_at) is ALSO the grace anchor RetentionCleanupCheckWorker.
-	// repairPlaidDisconnects reads to decide whether the grace window has elapsed yet (Issue #1413
-	// round-7) — see GetUsersNeedingPlaidDisconnectRepair's doc comment. retention's own
-	// belt-and-braces repair (GetUsersNeedingRetentionClockRepair) exists independently as a
-	// backstop if this write itself fails.
+	// (retention_started_at) governs ONLY the deletion clock — it plays NO role in the Plaid
+	// disconnect grace window (round-10/round-11; do not reintroduce it as that anchor). The
+	// disconnect's own anchor, plaid_cleanup_pending_at, was already stamped atomically by the CAS
+	// flip above (ExpireTrialIfNoOverride) — see GetUsersNeedingPlaidDisconnectRepair's doc comment
+	// in profile_repository.go for why the two grace windows are governed by separate columns.
+	// retention's own belt-and-braces repair (GetUsersNeedingRetentionClockRepair) exists
+	// independently as a backstop if this write itself fails.
 	now := time.Now()
 	if retErr := s.repo.SetRetentionDates(ctx, userID, now, now.AddDate(0, s.retentionMonths, 0)); retErr != nil {
 		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)

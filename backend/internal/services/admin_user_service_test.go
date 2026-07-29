@@ -1085,7 +1085,18 @@ func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 		RevertedStatus:          "active",
 		ClerkUserID:             "clerk_target_123",
 	}, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_123", mock.Anything).Return(nil)
+	// #1413 AC-15: assert the Clerk payload key-by-key (mirroring the grant path's matcher
+	// above and manual_tier_override_expiry_check_test.go's expiry-path matcher) — mock.Anything
+	// here would let a regression that re-emits a stale premium claim, or drops the "tier": nil
+	// poisoned-user cleanup, pass silently.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_123", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "active" &&
+			hasNilTierKey && nilTierVal == nil
+	})).Return(nil)
 
 	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
 	require.NoError(t, err)
@@ -1127,7 +1138,17 @@ func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_StillCallsRe
 		RevertedStatus:          "active",
 		ClerkUserID:             "clerk_target_456",
 	}, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_456", mock.Anything).Return(nil)
+	// #1413 AC-15: assert key-by-key, same as the grant path and TestAdminUserService_
+	// RemoveUserTierOverride_Success above — mock.Anything would hide a stale-premium-claim or
+	// dropped "tier": nil regression on this no-op repair path too.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_456", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "active" &&
+			hasNilTierKey && nilTierVal == nil
+	})).Return(nil)
 
 	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
 	require.NoError(t, err)
@@ -1190,7 +1211,17 @@ func TestAdminUserService_RemoveUserTierOverride_ClerkFailure_StillSucceeds(t *t
 		RevertedStatus:          "cancelled",
 		ClerkUserID:             "clerk_target_789",
 	}, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_789", mock.Anything).Return(errors.New("clerk is down"))
+	// #1413 AC-15: assert key-by-key even though this call errors — the payload sent must still
+	// be correct (a failed sync should not mask what would have gone out), same key set as the
+	// grant path and the two tests above.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_target_789", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "cancelled" &&
+			hasNilTierKey && nilTierVal == nil
+	})).Return(errors.New("clerk is down"))
 
 	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
 	require.NoError(t, err, "Clerk sync failure must not fail the overall call — DB update already succeeded")
