@@ -55,6 +55,7 @@ export interface User {
   paddle_customer_id?: string;
   paddle_subscription_id?: string;
   past_due_started_at?: string;
+  plaid_cleanup_pending_at?: string;
   primary_region: string;
   retention_expires_at?: string;
   retention_notice_30d_sent_at?: string;
