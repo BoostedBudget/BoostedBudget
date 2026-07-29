@@ -329,13 +329,20 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerStaysN
 	// the brief: "the comp-expiry/removal path already sets it, and its COALESCE(existing, NOW())
 	// will then correctly produce NOW() because there is no earlier value to preserve").
 	adminRepo := NewAdminUserRepository(pool, enc)
-	before := time.Now()
+	// Fence from the DATABASE clock, not the Go process clock. The marker is written by Postgres
+	// NOW(); in CI Postgres runs in a separate container whose clock can lag the runner's by
+	// milliseconds, so comparing a Go-side time.Now() against a Postgres-side timestamp fails
+	// regardless of correctness — it did exactly that on run 30478315198 while passing locally,
+	// where both share one host clock. Mirrors the SELECT NOW() fencing this package's boundary
+	// tests already use (profile_repository_manual_override_retention_integration_test.go:439).
+	var before time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW()").Scan(&before))
 	_, err = adminRepo.RemoveUserTierOverride(ctx, "", user.ID, "test: comp removed", 6)
 	require.NoError(t, err)
 
 	afterRemoval := readPlaidMarkerRow(t, pool, user.ID)
 	require.NotNil(t, afterRemoval.marker, "removing the comp from a cancelled user must set a fresh plaid_cleanup_pending_at")
-	assert.True(t, !afterRemoval.marker.Before(before), "the marker set on comp removal must be fresh (now), not an earlier value")
+	assert.False(t, afterRemoval.marker.Before(before), "the marker set on comp removal must be fresh (now), not an earlier value")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after comp removal")
 }
 
