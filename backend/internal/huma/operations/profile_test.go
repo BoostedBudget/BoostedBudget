@@ -376,6 +376,89 @@ func TestGetProfile_ExpiredOverride_NotComped(t *testing.T) {
 	assert.Equal(t, "inactive", output.Body.EffectiveStatus)
 }
 
+// fakeOverrideTierValidator returns a validator func accepting only the given tier names,
+// standing in for a real *config.TierConfig-backed check without this package needing to import
+// config or call config.LoadTierConfig() (a process-wide sync.Once singleton that must never be
+// invoked from a test — see CLAUDE.md). Mirrors repository/profile_repository_test.go's helper
+// of the same name, added for the identical reason.
+func fakeOverrideTierValidator(validTiers ...string) func(string) bool {
+	allowed := make(map[string]bool, len(validTiers))
+	for _, t := range validTiers {
+		allowed[t] = true
+	}
+	return func(tier string) bool { return allowed[tier] }
+}
+
+// TestGetProfile_MalformedOverride_WithValidator_NotComped is the RED test for Issue #1413
+// round-5 (adversarial review finding): a manual_tier_override naming NO configured tier
+// ('not_a_tier' — garbage, not a real tier name) must not make the profile response report
+// is_comped=true / effective_status="active", even though the raw override is non-expired
+// (future-dated). Before this fix, enrichUserProfile called
+// ComputeEffectiveStatus()/HasActiveManualOverride() directly with no tier-name validation at
+// all — the exact gap GetEffectiveSubscriptionStatusByUserID closed on the access-granting path,
+// but this REPRESENTATION path never inherited it, so the frontend could render working write
+// controls for a comp the backend would then 403.
+func TestGetProfile_MalformedOverride_WithValidator_NotComped(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "inactive"
+	override := "not_a_tier"
+	endsAt := time.Now().Add(30 * 24 * time.Hour) // future-dated: not expired
+	user.ManualTierOverride = &override
+	user.ManualTierEndsAt = &endsAt
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+	handler.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.IsComped, "a manual_tier_override naming no configured tier must never report is_comped=true")
+	assert.NotEqual(t, "active", output.Body.EffectiveStatus, "a malformed override must never force effective_status to active")
+	assert.Equal(t, "inactive", output.Body.EffectiveStatus, "a rejected override must fall back to the raw subscription_status")
+	assert.Empty(t, output.Body.CompTier)
+	assert.Nil(t, output.Body.CompEndsAt)
+}
+
+// TestGetProfile_ValidOverride_WithValidator_StillComped is the positive control demanded
+// alongside the RED test above: an over-tight validator that denies every comp — even a real,
+// correctly-configured one — must not sail through unnoticed. With a validator wired, a
+// genuinely valid override tier must still report is_comped=true / effective_status="active".
+func TestGetProfile_ValidOverride_WithValidator_StillComped(t *testing.T) {
+	user := createTestUser()
+	user.SubscriptionStatus = "inactive"
+	override := "household_3"
+	user.ManualTierOverride = &override
+	user.ManualTierEndsAt = nil // permanent comp
+
+	mockService := &mockProfileService{user: user}
+	handler := NewProfileHandler(mockService)
+	handler.SetOverrideTierValidator(fakeOverrideTierValidator("premium", "household_2", "household_3", "household_4", "household_5"))
+
+	input := &GetProfileInput{
+		AuthenticatedWithEmailInput: inputs.AuthenticatedWithEmailInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+			Email:              "test@example.com",
+		},
+	}
+
+	output, err := handler.GetProfile(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.True(t, output.Body.IsComped, "a validly-configured override tier must still report is_comped=true")
+	assert.Equal(t, "active", output.Body.EffectiveStatus)
+	assert.Equal(t, "household_3", output.Body.CompTier)
+}
+
 // TestUpdateProfile_DuplicateEmail_Returns409 tests that a duplicate email error returns HTTP 409.
 func TestUpdateProfile_DuplicateEmail_Returns409(t *testing.T) {
 	mockService := &mockProfileService{

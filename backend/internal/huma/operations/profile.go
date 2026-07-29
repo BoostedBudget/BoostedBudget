@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -15,12 +16,35 @@ import (
 
 // ProfileHandler handles user profile-related HTTP requests.
 type ProfileHandler struct {
-	service services.ProfileService
+	service               services.ProfileService
+	overrideTierValidator func(tierName string) bool
 }
 
 // NewProfileHandler creates a new ProfileHandler instance.
 func NewProfileHandler(service services.ProfileService) *ProfileHandler {
 	return &ProfileHandler{service: service}
+}
+
+// SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
+// names a real, currently-configured tier. enrichUserProfile uses it to keep the profile
+// response's derived comp fields (effective_status, is_comped, comp_tier) from reporting a
+// malformed override as an active comp (Issue #1413 round-5 finding): G2 closed the
+// access-granting hole on GetEffectiveSubscriptionStatusByUserID
+// (backend/internal/repository/profile_repository.go), but this REPRESENTATION path kept
+// calling ComputeEffectiveStatus()/HasActiveManualOverride() unconditionally, so a corrupt
+// override could still make the profile response — and therefore the frontend's derived
+// hasWriteAccess — claim a comp the read-only middleware would then 403 on write.
+//
+// Same setter-injection convention, same func(string) bool signature, and the same nil-safe
+// "skip, don't deny" semantics as repository.profileRepository.SetOverrideTierValidator — see
+// that method's doc comment (profile_repository.go) for the full rationale, which applies here
+// unchanged: main.go loads the tier config once at startup and os.Exit(1)s if that fails, so in
+// production this validator is either wired for the entire process lifetime or the server never
+// boots. If never called, validation is skipped and an active override is trusted — the pre-fix
+// behavior — rather than denying every comp, which would turn a future wiring oversight into an
+// instant outage for every currently-comped user.
+func (h *ProfileHandler) SetOverrideTierValidator(validator func(tierName string) bool) {
+	h.overrideTierValidator = validator
 }
 
 // --- Input/Output Types ---
@@ -56,7 +80,7 @@ func (h *ProfileHandler) GetProfile(ctx context.Context, input *GetProfileInput)
 		return nil, huma.Error500InternalServerError("Failed to retrieve profile")
 	}
 
-	return &GetProfileOutput{Body: h.enrichUserProfile(user)}, nil
+	return &GetProfileOutput{Body: h.enrichUserProfile(ctx, user)}, nil
 }
 
 // UpdateProfile handles PUT /api/v1/user/profile requests.
@@ -80,21 +104,36 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 		}
 	}
 
-	return &UpdateProfileOutput{Body: h.enrichUserProfile(user)}, nil
+	return &UpdateProfileOutput{Body: h.enrichUserProfile(ctx, user)}, nil
 }
 
 // enrichUserProfile computes derived fields for the user profile response.
-func (h *ProfileHandler) enrichUserProfile(user *domain.User) *domain.User {
+func (h *ProfileHandler) enrichUserProfile(ctx context.Context, user *domain.User) *domain.User {
 	user.ComputeTrialDaysRemaining()
 	user.EffectiveTier = user.ComputeEffectiveTier()
 
 	// Issue #1413: expose the effective status/comp state so the frontend stops rendering
 	// a comped user as "expired". subscription_status keeps its exact current meaning
 	// (admin UI and billing pages read it) — these are additive, derived fields.
-	user.EffectiveStatus = user.ComputeEffectiveStatus()
-	user.IsComped = user.HasActiveManualOverride()
+	//
+	// Round-5 finding: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+	// constraint. Use EffectiveStatusWithActiveOverride (not ComputeEffectiveStatus() and
+	// HasActiveManualOverride() called separately) for the same single-clock-read reason
+	// documented on that method, then reject a malformed override the same way
+	// GetEffectiveSubscriptionStatusByUserID does on the access-granting path — this
+	// REPRESENTATION path must never claim a comp the middleware would not actually grant.
+	status, overrideValue, hasOverride := user.EffectiveStatusWithActiveOverride()
+	if hasOverride && h.overrideTierValidator != nil && !h.overrideTierValidator(overrideValue) {
+		slog.WarnContext(ctx, "rejecting manual tier override in profile response: value does not name a configured tier",
+			"user_id", user.ID, "manual_tier_override", overrideValue)
+		status = user.SubscriptionStatus
+		hasOverride = false
+	}
+
+	user.EffectiveStatus = status
+	user.IsComped = hasOverride
 	if user.IsComped {
-		user.CompTier = *user.ManualTierOverride
+		user.CompTier = overrideValue
 		user.CompEndsAt = user.ManualTierEndsAt // nil = permanent comp
 	}
 	return user
