@@ -61,9 +61,16 @@ type AdminSubscriptionDetailOutput struct {
 		// EffectiveStatus is the server-computed effective subscription status (Issue #1413) —
 		// admins need both raw (SubscriptionStatus) and effective, since a live manual tier
 		// override forces access to "active" regardless of the stale raw status.
-		EffectiveStatus      string                            `json:"effective_status"`
-		ManualTierOverride   *string                           `json:"manual_tier_override,omitempty"`
-		ManualTierEndsAt     *time.Time                        `json:"manual_tier_ends_at,omitempty"`
+		EffectiveStatus    string     `json:"effective_status"`
+		ManualTierOverride *string    `json:"manual_tier_override,omitempty"`
+		ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty"`
+		// DeletionRequestedAt/DeletionScheduledAt surface a pending GDPR account deletion (Issue
+		// #1413 AC 10) so the admin override modal can warn that a comp will NOT cancel a
+		// deletion already in progress — the deletion path is deliberately left untouched by a
+		// comp. Absent (omitempty) means no pending deletion. Mirrors
+		// domain.AdminUserListItem's identically-named/tagged fields.
+		DeletionRequestedAt  *time.Time                        `json:"deletion_requested_at,omitempty"`
+		DeletionScheduledAt  *time.Time                        `json:"deletion_scheduled_at,omitempty"`
 		Limits               domain.SubscriptionLimits         `json:"limits"`
 		Features             domain.SubscriptionFeatures       `json:"features"`
 		ActiveOverridesCount int                               `json:"active_overrides_count"`
@@ -201,6 +208,9 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	resp.Body.EffectiveStatus = detail.EffectiveStatus
 	resp.Body.ManualTierOverride = detail.ManualTierOverride
 	resp.Body.ManualTierEndsAt = detail.ManualTierEndsAt
+	// Sourced from the same detail already loaded above — no second query (Issue #1413 AC 10).
+	resp.Body.DeletionRequestedAt = detail.DeletionRequestedAt
+	resp.Body.DeletionScheduledAt = detail.DeletionScheduledAt
 	resp.Body.Limits = effectiveSub.Limits
 	resp.Body.Features = effectiveSub.Features
 	resp.Body.ActiveOverridesCount = effectiveSub.ActiveOverridesCount

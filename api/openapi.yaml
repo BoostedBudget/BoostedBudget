@@ -488,6 +488,12 @@ components:
           type: integer
         base_tier:
           type: string
+        deletion_requested_at:
+          format: date-time
+          type: string
+        deletion_scheduled_at:
+          format: date-time
+          type: string
         effective_status:
           type: string
         effective_tier:
