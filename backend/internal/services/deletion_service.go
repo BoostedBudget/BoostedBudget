@@ -432,8 +432,27 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string) er
 	// return WITHOUT releasing the claim at all — the one path that leaked it every time this
 	// step failed, since there was no explicit Release call and no deferred one. releaseClaim
 	// (called via the defer above on any non-completing return) now covers this too.
-	if err := s.profileRepo.DeleteUserCascade(ctx, userID); err != nil {
+	//
+	// Issue #1413 round-4 Critical finding C1: DeleteUserCascade now re-verifies eligibility
+	// INSIDE its own transaction, immediately before its destructive statements, using
+	// user.DeletionRequestedAt — the value read at the very top of this function, BEFORE
+	// ClaimForDeletion — as the expected occurrence. A comp granted, or (the serious case) the
+	// user cancelling their own deletion request, during the external-cleanup window above (or
+	// even between GetUserByID and ClaimForDeletion) flips deletion_requested_at or
+	// manual_tier_override away from what was observed here, and the cascade's own guard catches
+	// it. deleted == false is a NORMAL, EXPECTED outcome — NOT an error — covering that
+	// precondition-lost case AND Critical finding C2 (an un-cleaned Plaid item still exists):
+	// release the claim (never Complete) and let the next scheduled run re-evaluate.
+	deleted, err := s.profileRepo.DeleteUserCascade(ctx, userID, user.DeletionRequestedAt)
+	if err != nil {
+		releaseClaim(err.Error())
 		return fmt.Errorf("failed to cascade delete user data: %w", err)
+	}
+	if !deleted {
+		releaseClaim("cascade aborted — eligibility lost, or un-cleaned Plaid items remain, since the claim was taken")
+		slog.Default().Info("skipping deletion cascade — re-verification inside the cascade transaction found the user no longer eligible",
+			"user_id", userID)
+		return nil
 	}
 
 	// Mark the claim durably complete. A false ok (with no error) means our lease was

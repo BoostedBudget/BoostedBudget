@@ -459,9 +459,9 @@ func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) (
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
+func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
+	return args.Bool(0), args.Error(1)
 }
 
 // Issue #679, #680: Trial expiration methods

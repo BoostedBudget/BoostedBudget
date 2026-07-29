@@ -576,6 +576,54 @@ func TestPlaidCleanup_RetryAfterPartialFailure_OnlyOutstandingItemsAttempted(t *
 	mockRepo.AssertExpectations(t)
 }
 
+// ─── Issue #1413 round-4 finding C2: item list re-read INSIDE the claim ────────
+
+// TestPlaidCleanup_C2_ItemListReadAfterClaimNotBefore proves the round-4 C2 fix directly: the
+// item list must be fetched AFTER the side-effect claim is won, not before. Before this fix,
+// RemoveAllUserItems called linkedItemRepo.GetByUserID BEFORE claiming
+// repository.ActionPlaidDisconnectUser, so an item created by a concurrent LinkAccounts call in
+// the window between that read and the claim would never be seen by this pass and so would
+// never be sent to Plaid for removal — orphaning it. Recording call order via .Run callbacks and
+// asserting Claim precedes GetByUserID is what makes this test fail on the pre-fix ordering
+// (proven separately by temporarily reordering the production code).
+func TestPlaidCleanup_C2_ItemListReadAfterClaimNotBefore(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-c2-reread"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+	mockClaims := new(MockWorkClaimsRepository)
+
+	var callOrder []string
+
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectUser, plaidDisconnectSideEffectLease).
+		Run(func(args mock.Arguments) { callOrder = append(callOrder, "Claim") }).
+		Return("c2-token", true, nil)
+
+	// This item stands in for one LinkAccounts creates AFTER some earlier reference point (e.g.
+	// a snapshot a caller took before claiming) — proving it's still picked up requires the read
+	// to happen fresh, INSIDE the claim, not from a stale pre-claim snapshot.
+	items := []domain.LinkedItem{{ID: "item-created-late", UserID: userID, AccessToken: "tok-late"}}
+	mockRepo.On("GetByUserID", ctx, userID).
+		Run(func(args mock.Arguments) { callOrder = append(callOrder, "GetByUserID") }).
+		Return(items, nil)
+
+	mockPlaid.On("RemoveItem", ctx, "tok-late").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-created-late"}).Return(nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPlaidDisconnectUser, "c2-token", mock.AnythingOfType("string")).
+		Return(true, nil)
+
+	service := NewPlaidItemCleanupService(mockRepo, mockPlaid)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"Claim", "GetByUserID"}, callOrder,
+		"the item list must be read AFTER the side-effect claim is won, not before — a stale pre-claim snapshot would miss an item LinkAccounts created in the gap")
+	mockPlaid.AssertCalled(t, "RemoveItem", ctx, "tok-late")
+}
+
 // contains is a tiny membership helper for mock.MatchedBy predicates in this file.
 func contains(ss []string, s string) bool {
 	for _, v := range ss {
