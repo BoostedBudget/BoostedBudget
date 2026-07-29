@@ -1386,6 +1386,59 @@ func TestHandleUpdateSubscription_ExpiredManualOverride_DoesNotBypassGuard(t *te
 	householdRepo.AssertExpectations(t)
 }
 
+// TestHandleUpdateSubscription_MalformedManualOverride_SeatCheckFallsBackToRawTier is the RED
+// test for Issue #1413 (this task — tier axis) at checkDowngradeSeatCapacity: manual_tier_override
+// is an unconstrained VARCHAR(50) with no CHECK constraint, so it can hold a value naming no
+// configured tier. Before this fix, the simulated post-change effective tier was computed via
+// simulatedUser.ComputeEffectiveTier() (unvalidated) and passed straight into
+// h.tierConfig.GetTier(), so a malformed override 500'd the downgrade request entirely — before
+// any Paddle call, per the issue's own characterization of this site ("clean, no half-applied
+// billing", which is exactly why it must be a clean 409, not a 500). It must instead fall back
+// to the simulated raw (requested) tier and correctly block the downgrade with 409.
+func TestHandleUpdateSubscription_MalformedManualOverride_SeatCheckFallsBackToRawTier(t *testing.T) {
+	handler, _, mockRepo, householdRepo := setupTestCheckoutHandlerWithHouseholdRepo(t)
+	ctx := contextWithUserID("owner_1")
+
+	subscriptionID := "sub_01h1234567890"
+	override := "not-a-real-tier"
+	futureEnd := time.Now().Add(24 * time.Hour)
+	user := &domain.User{
+		ID:                   "owner_1",
+		Email:                "owner@example.com",
+		SubscriptionTier:     "household_2",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &futureEnd,
+	}
+
+	input := &UpdateSubscriptionInput{}
+	input.UserID = "owner_1"
+	input.Body.NewTier = "premium" // simulated post-change raw tier: 1 seat
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "owner_1").Return(user, nil).Once()
+
+	household := &domain.Household{ID: "household_1", OwnerUserID: "owner_1"}
+	householdRepo.On("GetHouseholdForUser", ctx, "owner_1").Return(household, true, true, nil)
+	householdRepo.On("CountActiveMembers", ctx, "household_1").Return(4, nil)
+	householdRepo.On("CountPendingInvites", ctx, "household_1").Return(0, nil)
+
+	output, err := handler.HandleUpdateSubscription(ctx, input)
+
+	require.Error(t, err, "a malformed override must fall back to the raw simulated tier and still cleanly block the downgrade — not 500")
+	assert.Nil(t, output)
+	statusErr, ok := err.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError (409 Conflict), not a mapped 500")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+	// 4 active + 0 pending = 4 members, premium has 1 seat => shortfall of 3.
+	assert.Contains(t, err.Error(), "3")
+	assert.Contains(t, err.Error(), "before downgrading")
+
+	mockRepo.AssertExpectations(t)
+	householdRepo.AssertExpectations(t)
+}
+
 // TestHandleUpdateSubscription_PendingInviteCountsTowardShortfall tests that an owner at
 // exactly-active-capacity with 1 pending invite is still blocked when downgrading to a
 // tier that would fit the active members alone but not the pending invite too.
@@ -2827,6 +2880,94 @@ func TestHandleGetCurrentSubscription_MalformedOverride_NotComped(t *testing.T) 
 	assert.Equal(t, 404, humaErr.GetStatus())
 
 	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_MalformedOverride_TrialUser_TierFallsBackToRaw is the RED
+// test for Issue #1413 (this task — tier axis). This is the trial-user branch specifically: it
+// is only reached when `!isComped` (see the `if user.SubscriptionStatus == "trial" && !isComped`
+// guard just above it in HandleGetCurrentSubscription), so isComped is already correctly false
+// here — but before this fix, out.Body.Tier was set via user.ComputeEffectiveTier() (unvalidated)
+// instead of reusing that already-computed, already-correct !isComped fact, so the malformed
+// override's raw garbage string still leaked into the response's tier field even though
+// is_comped correctly read false.
+func TestHandleGetCurrentSubscription_MalformedOverride_TrialUser_TierFallsBackToRaw(t *testing.T) {
+	handler, _, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "not_a_tier"
+	endsAt := time.Now().Add(30 * 24 * time.Hour) // future-dated: not expired
+	trialEndsAt := time.Now().Add(45 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "trial",
+		TrialEndsAt:        &trialEndsAt,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "trial", output.Body.Status)
+	assert.False(t, output.Body.IsComped)
+	assert.Equal(t, "premium", output.Body.Tier, "a malformed override must fall back to the raw tier, not the garbage override string")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestHandleGetCurrentSubscription_MalformedOverride_ActiveWithPaddleSub_TierFallsBackToRaw is
+// the RED test for Issue #1413 (this task — tier axis) at the real-Paddle-lookup branch: a
+// malformed override on a user with a genuine, active Paddle subscription must not leak into
+// out.Body.Tier — before this fix, this line called user.ComputeEffectiveTier() (unvalidated)
+// even though isComped (computed just above, and correctly false here) already reflects the
+// rejection.
+func TestHandleGetCurrentSubscription_MalformedOverride_ActiveWithPaddleSub_TierFallsBackToRaw(t *testing.T) {
+	handler, mockService, mockRepo := setupTestCheckoutHandler(t)
+	ctx := contextWithUserID("user_123")
+
+	override := "not_a_tier"
+	endsAt := time.Now().Add(30 * 24 * time.Hour)
+	subscriptionID := "sub_01h1234567890"
+	user := &domain.User{
+		ID:                   "user_123",
+		Email:                "test@example.com",
+		SubscriptionTier:     "premium",
+		SubscriptionStatus:   "active",
+		PaddleSubscriptionID: &subscriptionID,
+		ManualTierOverride:   &override,
+		ManualTierEndsAt:     &endsAt,
+	}
+
+	input := &GetCurrentSubscriptionInput{}
+	input.UserID = "user_123"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
+	mockService.On("GetSubscription", ctx, subscriptionID).
+		Return(&paddle.Subscription{
+			ID:                   subscriptionID,
+			Status:               paddle.SubscriptionStatusActive,
+			CurrentBillingPeriod: &paddle.TimePeriod{EndsAt: "2026-03-01"},
+			CurrencyCode:         "USD",
+		}, nil)
+
+	output, err := handler.HandleGetCurrentSubscription(ctx, input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.False(t, output.Body.IsComped)
+	assert.Equal(t, "premium", output.Body.Tier, "a malformed override must fall back to the raw tier, not the garbage override string")
+
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
 }
 
 // TestHandleGetCurrentSubscription_ValidOverride_StillComped is the positive control demanded

@@ -532,6 +532,90 @@ func TestAdminUserService_EnrichAdminUser_EffectiveStatus_ExpiredOverride(t *tes
 	mockRepo.AssertExpectations(t)
 }
 
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_MalformedOverride_FallsBackToRawStatus is
+// the RED test for Issue #1413 (this task): manual_tier_override is an unconstrained VARCHAR(50)
+// with no CHECK constraint, so it can hold a value naming no configured tier. Before this fix,
+// enrichAdminUser called scratch.ComputeEffectiveStatus() unconditionally — with no tier-name
+// validation at all, unlike every other representation path this branch has already fixed
+// (profile.go's enrichUserProfile, GetEffectiveSubscriptionStatusByUserID) — so the admin LIST
+// (and detail, which reuses this same enrichment) would report a malformed override as an active
+// comp, while the user's own GET /profile correctly rejected it: the exact list-vs-profile
+// disagreement about the same user this task closes.
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_MalformedOverride_FallsBackToRawStatus(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	now := time.Now()
+	override := "not-a-real-tier"
+	futureEnd := now.Add(24 * time.Hour)
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "malformed-comp@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &futureEnd,
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "inactive", response.Users[0].SubscriptionStatus, "raw status must stay untouched")
+	assert.Equal(t, "inactive", response.Users[0].EffectiveStatus, "a malformed override must fall back to the raw status, not force active")
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_EnrichAdminUser_EffectiveStatus_ValidOverride_WithTierConfig_StillActive
+// is the POSITIVE CONTROL for the fix above: with a real tierConfig wired, a VALID,
+// currently-configured override must still force EffectiveStatus to active. An over-tight fix
+// that makes every comp fall back to the raw status would silently un-comp every legitimately
+// comped user in the admin list, which is worse than the bug being fixed.
+func TestAdminUserService_EnrichAdminUser_EffectiveStatus_ValidOverride_WithTierConfig_StillActive(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, fakeTierConfig())
+
+	ctx := context.Background()
+	now := time.Now()
+	override := "household_2"
+	futureEnd := now.Add(24 * time.Hour)
+
+	repoUsers := []domain.AdminUserListItem{
+		{
+			ID:                 uuid.New().String(),
+			Email:              "comped@example.com",
+			SubscriptionTier:   "premium",
+			SubscriptionStatus: "inactive",
+			ManualTierOverride: &override,
+			ManualTierEndsAt:   &futureEnd,
+			CreatedAt:          now,
+			IsActive:           true,
+		},
+	}
+
+	filters := domain.AdminUserFilters{}
+	mockRepo.On("ListUsers", ctx, filters, 20, 0).Return(repoUsers, 1, nil)
+
+	response, err := service.ListUsers(ctx, filters, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, response.Users, 1)
+
+	assert.Equal(t, "inactive", response.Users[0].SubscriptionStatus, "raw status must stay untouched")
+	assert.Equal(t, "active", response.Users[0].EffectiveStatus, "a valid override must still force EffectiveStatus to active")
+
+	mockRepo.AssertExpectations(t)
+}
+
 // TestAdminUserService_EnrichAdminUser_EffectiveStatus_HardcodedAdmin_ConsistentWithSubscriptionStatus
 // pins the deliberate resolution for the hardcoded-admin cosmetic override: hardcoded admins are
 // cosmetically forced to subscription_tier=premium/subscription_status=active for display, and

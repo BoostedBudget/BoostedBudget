@@ -426,6 +426,10 @@ func TestGetProfile_MalformedOverride_WithValidator_NotComped(t *testing.T) {
 	assert.Equal(t, "inactive", output.Body.EffectiveStatus, "a rejected override must fall back to the raw subscription_status")
 	assert.Empty(t, output.Body.CompTier)
 	assert.Nil(t, output.Body.CompEndsAt)
+	// Issue #1413 (this task) — the TIER axis of the same rule: a malformed override must not
+	// leak into effective_tier either. createTestUser's own fixture sets SubscriptionTier to
+	// "free" (see createTestUser above) — this is the exact assertion "Test #21" was missing.
+	assert.Equal(t, "free", output.Body.EffectiveTier, "a malformed override must fall back to the raw subscription_tier, never surface the garbage override string")
 }
 
 // TestGetProfile_ValidOverride_WithValidator_StillComped is the positive control demanded
@@ -457,6 +461,10 @@ func TestGetProfile_ValidOverride_WithValidator_StillComped(t *testing.T) {
 	assert.True(t, output.Body.IsComped, "a validly-configured override tier must still report is_comped=true")
 	assert.Equal(t, "active", output.Body.EffectiveStatus)
 	assert.Equal(t, "household_3", output.Body.CompTier)
+	// Positive control (Issue #1413, this task): a VALID override must still resolve to the
+	// override tier on effective_tier too — an over-tight fix that falls every comp back to the
+	// raw tier would silently un-comp every legitimately comped user.
+	assert.Equal(t, "household_3", output.Body.EffectiveTier)
 }
 
 // TestUpdateProfile_DuplicateEmail_Returns409 tests that a duplicate email error returns HTTP 409.

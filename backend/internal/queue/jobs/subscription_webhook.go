@@ -241,6 +241,22 @@ func (w *SubscriptionWebhookWorker) releaseClaimOnFailure(ctx context.Context, u
 // stringPtr returns a pointer to a string value.
 func stringPtr(s string) *string { return &s }
 
+// effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
+// when an active manual_tier_override names no tier configured in w.tierConfig (Issue #1413 —
+// the tier axis of the malformed-override rule, this task). Mirrors
+// HouseholdOverCapacityCheckWorker.effectiveTierName's identical rationale.
+func (w *SubscriptionWebhookWorker) effectiveTierName(owner *domain.User) string {
+	tier, overrideValue, hasOverride := owner.EffectiveTierWithActiveOverride()
+	if hasOverride && w.tierConfig != nil {
+		if _, err := w.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			w.logger.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+				"user_id", owner.ID, "manual_tier_override", overrideValue)
+			return owner.SubscriptionTier
+		}
+	}
+	return tier
+}
+
 // syncClerkMetadata updates a user's Clerk public metadata with their current EFFECTIVE tier and
 // status. Logs and swallows errors so Clerk failures don't abort webhook processing.
 //
@@ -267,7 +283,26 @@ func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userI
 		return
 	}
 
-	if err := w.clerkService.UpdateUserMetadata(ctx, fresh.ClerkUserID, fresh.ClerkPublicMetadata()); err != nil {
+	// Issue #1413 (this task — tier axis, plus a status-axis leak specific to this call site):
+	// manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so its
+	// value can be garbage. domain.User.ClerkPublicMetadata() cannot validate it itself (domain
+	// must not import config), so it would otherwise write the raw garbage tier string AND a
+	// forced "active" status (its computeEffectiveStatusAt treats ANY live override as a comp,
+	// valid or not) straight into Clerk's publicMetadata. Sanitize a scratch copy here — a
+	// rejected override is nulled out entirely so ClerkPublicMetadata()'s own computation falls
+	// back to the raw subscription_tier/status, exactly like every other representation path
+	// this task fixes.
+	scratch := *fresh
+	if _, overrideValue, hasOverride := fresh.EffectiveStatusWithActiveOverride(); hasOverride && w.tierConfig != nil {
+		if _, tierErr := w.tierConfig.GetTier(domain.TierName(overrideValue)); tierErr != nil {
+			w.logger.Warn("rejecting manual tier override in clerk metadata sync: value does not name a configured tier",
+				"user_id", userID, "manual_tier_override", overrideValue)
+			scratch.ManualTierOverride = nil
+			scratch.ManualTierEndsAt = nil
+		}
+	}
+
+	if err := w.clerkService.UpdateUserMetadata(ctx, fresh.ClerkUserID, scratch.ClerkPublicMetadata()); err != nil {
 		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
 	}
 }
@@ -312,7 +347,11 @@ func (w *SubscriptionWebhookWorker) reconcileOverCapacity(ctx context.Context, o
 	if err != nil {
 		return fmt.Errorf("failed to get owner user %s: %w", ownerUserID, err)
 	}
-	tier, err := w.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	// Issue #1413 (this task — tier axis): a malformed manual_tier_override is benign here by
+	// explicit design (this method's own doc comment above: callers only log, never propagate,
+	// its error) — made consistent with every other tierConfig.GetTier(...ComputeEffectiveTier())
+	// call site in this codebase anyway, since the fix was already at hand (w.effectiveTierName).
+	tier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(owner)))
 	if err != nil {
 		return fmt.Errorf("failed to resolve tier for owner %s: %w", ownerUserID, err)
 	}

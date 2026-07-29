@@ -110,7 +110,7 @@ func (s *HouseholdEntitlementService) SetOverrideTierValidator(validator func(ti
 // TestResolveEffectiveEntitlement_MemberManualOverride_AppliesWhenOwnerLapses.
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Context, user *domain.User) (domain.EffectiveEntitlement, error) {
 	own := domain.EffectiveEntitlement{
-		Tier:   user.ComputeEffectiveTier(),
+		Tier:   s.effectiveTierName(ctx, user),
 		Status: user.ComputeEffectiveStatus(),
 		Source: domain.EntitlementSourceOwn,
 	}
@@ -148,6 +148,10 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 		slog.WarnContext(ctx, "rejecting household owner's manual tier override: value does not name a configured tier",
 			"owner_id", owner.ID, "manual_tier_override", ownerOverrideValue)
 		ownerStatus = owner.SubscriptionStatus
+		// #1413 (this task): also clear ownerHasOverride so the Tier line below — which reuses
+		// this same rejection decision rather than re-deriving it — falls back to the owner's
+		// raw SubscriptionTier instead of the just-rejected garbage value.
+		ownerHasOverride = false
 	}
 
 	if domain.SubscriptionStatus(ownerStatus).IsReadOnlySubscription() {
@@ -157,23 +161,46 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 	}
 
 	// #1413: Status must be the owner's EFFECTIVE (validated) status, matching the Tier line
-	// above. Reporting an effective tier next to a raw status is precisely the asymmetry that
+	// below. Reporting an effective tier next to a raw status is precisely the asymmetry that
 	// caused this issue in the first place — a comped owner would surface here as "household
 	// coverage at tier household_4, status inactive", which is self-contradictory. No consumer
 	// reads this field today, which is exactly why it would rot unnoticed until one did.
 	//
-	// Tier deliberately still reads owner.ComputeEffectiveTier() unvalidated here — matching
-	// enrichUserProfile's identical, deliberate asymmetry (profile.go: EffectiveTier is set
-	// unconditionally before that function's own override validation) — tier-axis validation
-	// at this call site is out of scope for this fix; see household_entitlement_service.go's
-	// GetEntitlementSummary/GetTier call for the one remaining site tracked separately.
+	// Tier is now ALSO validated (Issue #1413, this task): a malformed owner override used to
+	// reach owner.ComputeEffectiveTier() unvalidated here — matching enrichUserProfile's
+	// identical asymmetry before its own fix (profile.go) — and flow straight into the
+	// caller's tierConfig.GetTier() as an unrecognized name (GetEntitlementSummary,
+	// SubscriptionService.GetEffectiveSubscription). effectiveTierName reuses the same
+	// ownerOverrideValue/ownerHasOverride computed above rather than re-deriving them (and
+	// re-reading time.Now()) via a second EffectiveTierWithActiveOverride call.
+	ownerTier := owner.SubscriptionTier
+	if ownerHasOverride {
+		ownerTier = ownerOverrideValue
+	}
 	return domain.EffectiveEntitlement{
-		Tier:        owner.ComputeEffectiveTier(),
+		Tier:        ownerTier,
 		Status:      ownerStatus,
 		Source:      domain.EntitlementSourceHousehold,
 		PayerUserID: ent.PayerUserID,
 		HouseholdID: ent.HouseholdID,
 	}, nil
+}
+
+// effectiveTierName returns user's effective tier name, validating an active manual override
+// against the injected overrideTierValidator (see SetOverrideTierValidator) and falling back to
+// the raw SubscriptionTier when it names no configured tier (Issue #1413 — the tier axis of the
+// malformed-override rule, this task). Used for the "own" (solo/no-household-row) branch of
+// ResolveEffectiveEntitlement; the household-owner branch inlines the identical check against
+// its own already-computed ownerOverrideValue/ownerHasOverride (see the status-axis check just
+// above it) rather than calling this a second time, to avoid a redundant time.Now() read.
+func (s *HouseholdEntitlementService) effectiveTierName(ctx context.Context, user *domain.User) string {
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+	if hasOverride && s.overrideTierValidator != nil && !s.overrideTierValidator(overrideValue) {
+		slog.WarnContext(ctx, "rejecting manual tier override on tier axis: value does not name a configured tier",
+			"user_id", user.ID, "manual_tier_override", overrideValue)
+		return user.SubscriptionTier
+	}
+	return tier
 }
 
 // IsCoveredByHousehold reports whether userID is currently covered by an active

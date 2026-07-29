@@ -462,6 +462,12 @@ func main() {
 		registrationService.SetAnalytics(phClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
+		// Issue #1413 (tier axis, this task): same validator as profileRepo/humaProfileHandler/
+		// householdEntitlementService above, so a malformed manual_tier_override falls back to
+		// the raw subscription tier here too — GetEffectiveSubscription backs the admin
+		// subscription-detail endpoint, Plaid sync depth limits, and feature/limit resolution
+		// for every user. See SubscriptionService.SetOverrideTierValidator's doc comment.
+		subscriptionService.SetOverrideTierValidator(overrideTierValidator)
 		entitlementRepo := repository.NewEntitlementRepository(db) // Issue #1366: household entitlement resolution
 		householdRepo := repository.NewHouseholdRepository(db)     // Issue #1366: minimal household reads
 		// Issue #1367 — Phase 3: declared here (not near route registration below) so the

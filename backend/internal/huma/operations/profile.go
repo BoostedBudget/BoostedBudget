@@ -110,7 +110,6 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 // enrichUserProfile computes derived fields for the user profile response.
 func (h *ProfileHandler) enrichUserProfile(ctx context.Context, user *domain.User) *domain.User {
 	user.ComputeTrialDaysRemaining()
-	user.EffectiveTier = user.ComputeEffectiveTier()
 
 	// Issue #1413: expose the effective status/comp state so the frontend stops rendering
 	// a comped user as "expired". subscription_status keeps its exact current meaning
@@ -128,6 +127,19 @@ func (h *ProfileHandler) enrichUserProfile(ctx context.Context, user *domain.Use
 			"user_id", user.ID, "manual_tier_override", overrideValue)
 		status = user.SubscriptionStatus
 		hasOverride = false
+	}
+
+	// Issue #1413 (this task) — the TIER axis of the identical rule. EffectiveTier used to be
+	// set unconditionally via ComputeEffectiveTier() BEFORE the status validation above ran, so
+	// a malformed override's raw string leaked through here even though EffectiveStatus/IsComped
+	// correctly rejected it. Reusing hasOverride/overrideValue (already validated above) rather
+	// than a second, independent EffectiveTierWithActiveOverride() call means EffectiveTier can
+	// never disagree with EffectiveStatus/IsComped about whether the override in effect is
+	// valid — overrideValue IS the override tier name.
+	if hasOverride {
+		user.EffectiveTier = overrideValue
+	} else {
+		user.EffectiveTier = user.SubscriptionTier
 	}
 
 	user.EffectiveStatus = status

@@ -629,3 +629,53 @@ func TestEffectiveStatusWithActiveOverride_ExpiredOverride_ReturnsRawStatusAndNo
 	assert.Equal(t, "", overrideValue)
 	assert.False(t, hasOverride)
 }
+
+// TestEffectiveTierWithActiveOverride_NoOverride_ReturnsRawTierAndNoOverride mirrors
+// TestEffectiveStatusWithActiveOverride_NoOverride_ReturnsRawStatusAndNoOverride for the tier axis
+// (Issue #1413 — this task).
+func TestEffectiveTierWithActiveOverride_NoOverride_ReturnsRawTierAndNoOverride(t *testing.T) {
+	user := &User{SubscriptionTier: "premium"}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+
+	assert.Equal(t, "premium", tier)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverride_ActiveOverride_ReturnsOverrideTierAndValue verifies that a
+// live (non-expired) override reports the override's raw string as BOTH the tier and the
+// overrideValue, so a caller can validate it before trusting it.
+func TestEffectiveTierWithActiveOverride_ActiveOverride_ReturnsOverrideTierAndValue(t *testing.T) {
+	override := "not_a_tier"
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   nil,
+	}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+
+	assert.Equal(t, "not_a_tier", tier)
+	assert.Equal(t, "not_a_tier", overrideValue)
+	assert.True(t, hasOverride)
+}
+
+// TestEffectiveTierWithActiveOverride_ExpiredOverride_ReturnsRawTierAndNoOverride verifies an
+// expired override falls back to the raw tier with hasOverride false, mirroring
+// ComputeEffectiveTier's own expiry behavior.
+func TestEffectiveTierWithActiveOverride_ExpiredOverride_ReturnsRawTierAndNoOverride(t *testing.T) {
+	override := "household_5"
+	expired := time.Now().Add(-24 * time.Hour)
+	user := &User{
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &expired,
+	}
+
+	tier, overrideValue, hasOverride := user.EffectiveTierWithActiveOverride()
+
+	assert.Equal(t, "premium", tier)
+	assert.Equal(t, "", overrideValue)
+	assert.False(t, hasOverride)
+}

@@ -198,6 +198,33 @@ func (u *User) EffectiveStatusWithActiveOverride() (status string, overrideValue
 	return u.SubscriptionStatus, "", false
 }
 
+// EffectiveTierWithActiveOverride returns the same value ComputeEffectiveTier() would, plus the
+// raw manual_tier_override string when (and only when) a currently-active override is what
+// produced that tier. This is the TIER-axis twin of EffectiveStatusWithActiveOverride, added for
+// Issue #1413 (this task): manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint, so its value can be garbage (a legacy row, a direct SQL write, a write made while
+// the tier config was nil). A caller that can look up configured tiers (e.g. via a
+// *config.TierConfig it already holds, or an injected validator func) must validate overrideValue
+// before trusting the returned tier, falling back to the raw SubscriptionTier on rejection —
+// exactly like every tier-config-aware caller already falls back to the raw SubscriptionStatus on
+// the status axis. domain cannot do this validation itself without importing config (forbidden;
+// see CLAUDE.md), so it only surfaces the raw pieces for the caller to check.
+//
+// Both status and tier ultimately derive from the identical hasActiveManualOverrideAt check, so
+// a caller that already computed EffectiveStatusWithActiveOverride() for the same user does not
+// need to call this too — its overrideValue/hasOverride are exactly what this method would also
+// return; reuse the status call's result to avoid a redundant time.Now() read.
+//
+// hasOverride is false whenever there is no CURRENTLY ACTIVE override (none set, or expired); in
+// that case tier is simply the raw SubscriptionTier and overrideValue is "".
+func (u *User) EffectiveTierWithActiveOverride() (tier string, overrideValue string, hasOverride bool) {
+	now := time.Now()
+	if u.hasActiveManualOverrideAt(now) {
+		return *u.ManualTierOverride, *u.ManualTierOverride, true
+	}
+	return u.SubscriptionTier, "", false
+}
+
 // ClerkPublicMetadata returns the canonical Clerk publicMetadata payload for this user.
 //
 // The "tier" key is deliberately included with an explicit nil value rather than being

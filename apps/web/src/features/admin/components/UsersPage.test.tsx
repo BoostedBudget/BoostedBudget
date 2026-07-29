@@ -400,6 +400,64 @@ describe('UsersPage', () => {
     })
   })
 
+  describe('Malformed override tier-name validation (Issue #1413, this task)', () => {
+    it('does not show a Comped chip or the garbage override string for an override naming no configured tier', () => {
+      // manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint on the
+      // backend, so it can hold a value naming no configured tier. isOverrideActive must reject
+      // it just like the backend's ComputeEffectiveTier()/ComputeEffectiveStatus() do — before
+      // this fix, isOverrideActive only checked liveness (non-empty + not expired), so this row
+      // would render "not_a_tier" as the Tier badge and show "Comped" for a user with zero
+      // actual write access.
+      const usersWithMalformedOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'inactive',
+          manual_tier_override: 'not_a_tier',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithMalformedOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+      expect(screen.queryByText('not_a_tier')).not.toBeInTheDocument()
+    })
+
+    it('still shows the Comped chip and override tier for a validly-configured override (positive control)', () => {
+      // A valid override must still resolve to the override tier — an over-tight fix that
+      // rejects every override (not just malformed ones) would silently un-comp every
+      // legitimately comped user in the admin UI, which is worse than the bug being fixed.
+      const usersWithValidOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'premium',
+          subscription_status: 'inactive',
+          manual_tier_override: 'household_3',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithValidOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Comped')).toBeInTheDocument()
+      expect(screen.getByText('Household 3')).toBeInTheDocument()
+    })
+  })
+
   describe('Status column regression', () => {
     it('still renders the raw subscription_status text', () => {
       mockUseListAdminUsers.mockReturnValue({
