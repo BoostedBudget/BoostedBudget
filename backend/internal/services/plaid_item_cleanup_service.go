@@ -32,6 +32,32 @@ import (
 // though the side effect were done.
 var ErrSideEffectClaimBusy = errors.New("side-effect claim held by another flow")
 
+// ErrCleanupAborted is returned by DisconnectAllUserItemsIfEligible (via cleanupItems) when the
+// per-item eligibility recheck reports the user is no longer eligible partway through the item
+// loop — e.g. an admin granted a comp mid-run. Issue #1413 round-14 H1 (Codex review): before
+// this sentinel existed, that outcome returned nil, indistinguishable from "every item was
+// attempted and none remained". repairPlaidDisconnects (retention_cleanup_check.go) treated any
+// nil return as full completion and called ClearPlaidCleanupPendingIfMatches — and round-13
+// (36455e78) had already stopped a comp grant from touching the marker, so the CAS guard on that
+// clear still matched and the clear SUCCEEDED, permanently hiding a user with live linked items
+// from the only code path that ever disconnects them.
+//
+// This is neither success nor failure — like ErrSideEffectClaimBusy, it is a correct, EXPECTED
+// outcome (do not disconnect a user Plaid recheck says is no longer eligible), not a Plaid error:
+// callers must not log it at Warn or count it against a failure metric. Some items may already
+// have been disconnected (and are durably marked so via MarkItemsDisconnected) before the abort;
+// others were deliberately never attempted. errors.Is-checkable so a caller can tell this apart
+// from both a clean completion (nil) and a genuine per-item failure (the errors.Join-wrapped
+// error cleanupItems returns when itemErrs is non-empty) — and, critically, so it knows NOT to
+// treat this as "cleanup finished": the marker must be LEFT SET so the user is re-considered on a
+// future run once the comp (or whatever made them ineligible) lapses.
+//
+// Never returned when the recheck itself errors (eligibility could not be determined at all) —
+// that branch is fail-closed and already surfaces as a genuine, non-nil error via the
+// errors.Join aggregation below, which callers must treat as a real failure (Warn-logged,
+// counted), not this benign sentinel.
+var ErrCleanupAborted = errors.New("plaid item cleanup aborted before completion: eligibility recheck reported the user no longer eligible; some items were not attempted")
+
 // plaidDisconnectSideEffectLease is the lease requested for repository.ActionPlaidDisconnectUser.
 // Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, pastDueClaimLease,
 // subscriptionCancelledCleanupClaimLease): this claim only needs to outlive the Plaid calls in
@@ -177,10 +203,15 @@ type PlaidItemCleanupService interface {
 	// existence.
 	//
 	// The first time recheck reports ineligible (false, nil), the loop stops immediately: no
-	// further items are attempted, and this is NOT reported as an error — a legitimate partial
-	// completion. If recheck itself fails (a non-nil error — eligibility could not be determined
-	// at all), the loop also stops immediately, fail-closed, and the error IS surfaced. Either way,
-	// items already removed before the abort stay removed and durably marked.
+	// further items are attempted, and this is a legitimate partial completion — but, as of Issue
+	// #1413 round-14 H1 (Codex review), it is NOT reported as nil either: it returns
+	// ErrCleanupAborted (errors.Is-checkable), so a caller cannot mistake "stopped early, work
+	// remains" for "finished all items" and treat outstanding cleanup as done (e.g. clearing a
+	// pending-cleanup marker while items are still live). If recheck itself fails (a non-nil
+	// error — eligibility could not be determined at all), the loop also stops immediately,
+	// fail-closed, and that error IS surfaced (distinct from, and always taking priority over,
+	// ErrCleanupAborted — see cleanupItems's doc comment). Either way, items already removed
+	// before the abort stay removed and durably marked.
 	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 
 	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
@@ -340,9 +371,22 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 //   - Issue #1413 round-7: if recheck is non-nil, it is invoked immediately before EVERY
 //     remaining item (including the first) — not just once for the whole call. The first time it
 //     reports ineligible (false, nil), the loop stops without attempting any further items; this
-//     is a legitimate partial completion, not a failure. If recheck itself errors, the loop also
-//     stops (fail-closed), and that error IS surfaced to the caller. recheck is nil for
-//     RemoveAllUserItems/DisconnectAllUserItems, preserving their exact pre-round-7 behavior.
+//     is a legitimate partial completion, not a failure — but (round-14 H1) it is also not silent
+//     success: the function returns ErrCleanupAborted (see that sentinel's doc comment) rather
+//     than nil, so a caller cannot mistake "stopped early, work remains" for "nothing left to do".
+//     If recheck itself errors, the loop also stops (fail-closed), and that error IS surfaced to
+//     the caller — via the same errors.Join aggregation as a genuine per-item failure, taking
+//     priority over ErrCleanupAborted (see the return logic at the bottom of this function).
+//     recheck is nil for RemoveAllUserItems/DisconnectAllUserItems, preserving their exact
+//     pre-round-7 behavior (and this function never returns ErrCleanupAborted for either, since
+//     there is no recheck to abort on).
+//   - Issue #1413 round-14 (Codex review): a residual, IRREDUCIBLE TOCTOU remains between a
+//     per-item recheck reporting eligible and the actual Plaid /item/remove call two lines later
+//     — a comp could be granted in that exact window and this item would still be disconnected.
+//     No DB mechanism can close a gap that spans an external API call, and this is accepted
+//     deliberately, not overlooked: unlike a hard-deletion TOCTOU (irreversible), a Plaid
+//     disconnect is RECOVERABLE — the user simply relinks the account. See the recheck block
+//     itself, below, for the exact line this window spans.
 //   - Treats Plaid's ITEM_NOT_FOUND response (the item was already removed, at Plaid or by an
 //     earlier attempt of this very operation) as success, not a failure — H2's idempotency fix,
 //     the single highest-value change in this task.
@@ -398,6 +442,15 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 						"user_id", userID, "item_id", item.ID)
 					break itemLoop
 				}
+				// Issue #1413 round-14 (Codex review): irreducible TOCTOU — recheck just reported
+				// eligible, but the actual Plaid call is still two lines away. A comp granted in
+				// this exact window is not caught: this item is disconnected anyway. Accepted
+				// deliberately (see cleanupItems's doc comment) because a Plaid disconnect is
+				// RECOVERABLE (the user relinks), unlike the irreversible operations (hard
+				// deletion) this branch's other TOCTOU-adjacent guards exist to protect. No
+				// tightening is attempted here — closing a gap that spans an external API call
+				// would require either blocking Plaid on a DB lock (not possible) or re-reading
+				// AFTER the call too (which only moves the gap, it does not close it).
 			}
 			if err := s.removeItemInternal(ctx, &item); err != nil {
 				if isPlaidItemAlreadyGone(err) {
@@ -442,8 +495,23 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 		)
 
 		if len(itemErrs) > 0 {
+			// A genuine per-item failure (or a recheck error, which is appended to itemErrs above)
+			// always takes priority over ErrCleanupAborted below — the caller needs to know a real
+			// failure occurred, not just that the pass stopped early.
 			return fmt.Errorf("failed to remove %d of %d Plaid item(s) for user %s: %w",
 				failCount, len(items), userID, errors.Join(itemErrs...))
+		}
+		if abortedCount > 0 {
+			// Issue #1413 round-14 H1 (Codex review): abortedCount > 0 with itemErrs empty can only
+			// mean the `!eligible` branch above hit `break itemLoop` — the recheck-error branch
+			// always appends to itemErrs, which would have already returned above. This is a
+			// legitimate partial completion (some items may have succeeded and are durably marked
+			// via MarkItemsDisconnected just above), NOT a failure — but it must not be reported as
+			// nil either, or a caller (repairPlaidDisconnects) would treat outstanding cleanup as
+			// fully done and clear a marker while items remain live. See ErrCleanupAborted's doc
+			// comment for the full contract.
+			return fmt.Errorf("%w for user %s (%d of %d item(s) not attempted)",
+				ErrCleanupAborted, userID, abortedCount, len(items))
 		}
 		return nil
 	})

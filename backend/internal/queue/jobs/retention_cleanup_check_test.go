@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -865,6 +867,127 @@ func TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCou
 
 	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
 	assert.Equal(t, before, after, "a successful per-user Plaid disconnect repair must NOT increment the failure-visibility counter")
+}
+
+// ─── Issue #1413 round-14 H1 (Codex review): a mid-loop abort must not be treated as completed
+// cleanup ──
+//
+// plaid_item_cleanup_service.go's cleanupItems now returns services.ErrCleanupAborted (not nil)
+// when the per-item eligibility recheck reports the user is no longer eligible partway through the
+// loop — e.g. an admin granted a comp mid-run. Before this fix, that outcome returned nil, which
+// this worker's `if disconnectErr != nil` branch never entered, so it fell straight through to
+// ClearPlaidCleanupPendingIfMatches. Round-13 (36455e78) is what made that bite: it deliberately
+// stopped a comp grant from touching the marker, so the CAS guard on that clear call still MATCHED
+// and the clear SUCCEEDED — permanently hiding a user with still-live linked items from the only
+// code path that ever disconnects them, resurrecting the exact leak round 13 had just closed.
+
+// TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCountedAsFailure is the
+// round-14 H1 RED test. A user with multiple live items whose eligibility flips to false partway
+// through (modeled here by the collaborator returning ErrCleanupAborted, exactly as the real
+// service now does — see plaid_item_cleanup_service_test.go's
+// TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared for the
+// service-level proof that this outcome is genuinely reachable) must end the run with:
+//   - plaid_cleanup_pending_at left SET — ClearPlaidCleanupPendingIfMatches is never called;
+//   - the job still succeeding (this is a legitimate, expected outcome, not a job failure);
+//   - the failure-visibility counter untouched — an abort is not a Plaid failure; and
+//   - nothing logged at WARN — only Info, mirroring the ErrSideEffectClaimBusy precedent.
+//
+// Falsifiability: on retention_cleanup_check.go as it stood before this fix (no
+// errors.Is(disconnectErr, services.ErrCleanupAborted) branch), this error falls into the generic
+// `else` branch — it is Warn-logged and DOES increment PlaidDisconnectRepairUserFailuresTotal. The
+// counter and log-level assertions below fail against that code; ClearPlaidCleanupPendingIfMatches
+// is left unstubbed specifically so an accidental call (which the OLD code's nil-return version of
+// this bug would have caused, had the service itself not been fixed first) panics the test instead
+// of silently passing.
+func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCountedAsFailure(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	user := &domain.User{ID: "user-aborted-mid-run", Email: "abortedmidrun@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-aborted-mid-run").Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-aborted-mid-run", mock.Anything).
+		Return(services.ErrCleanupAborted)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// ClearPlaidCleanupPendingIfMatches is deliberately left unstubbed: an unexpected call panics —
+	// proving the marker is NOT cleared on a mid-run abort.
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a mid-loop abort is a legitimate, expected outcome — it must not fail the job")
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before, after, "a mid-loop abort must NOT increment the failure-visibility counter — it is not a Plaid failure")
+
+	mockRepo.AssertNotCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, mock.Anything, mock.Anything)
+
+	logOutput := logBuf.String()
+	assert.NotContains(t, logOutput, "level=WARN", "a mid-loop abort must be logged at Info, not Warn — it is a correct, expected outcome, mirroring the ErrSideEffectClaimBusy precedent")
+	assert.Contains(t, logOutput, "aborted mid-run", "the abort must be visible in the logs, not silently swallowed")
+}
+
+// TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError proves the sentinel is still
+// detected via errors.Is when DisconnectAllUserItemsIfEligible wraps it (as the real service does,
+// via fmt.Errorf("%w: ...", ErrCleanupAborted)) rather than returning the bare sentinel.
+func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	user := &domain.User{ID: "user-aborted-wrapped", Email: "abortedwrapped@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, "user-aborted-wrapped").Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, "user-aborted-wrapped", mock.Anything).
+		Return(fmt.Errorf("cleanupItems: %w for user user-aborted-wrapped (1 of 2 item(s) not attempted)", services.ErrCleanupAborted))
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// ClearPlaidCleanupPendingIfMatches deliberately left unstubbed — an unexpected call panics.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before, after, "a wrapped ErrCleanupAborted must still be recognized via errors.Is and excluded from the failure counter")
 }
 
 // TestRetentionCleanupCheck_PlaidRepairNilCleanup_FailsJob_HeartbeatNotAdvanced is the round-10

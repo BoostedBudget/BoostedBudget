@@ -678,8 +678,18 @@ func TestPlaidCleanup_DisconnectIfEligible_NilRecheck_BehavesLikeDisconnectAllUs
 // RED test: a user who becomes ineligible (e.g. resubscribed) between item 1 and item 2 must have
 // item 2 spared — proving the recheck runs PER ITEM, not once for the whole call.
 //
+// Issue #1413 round-14 H1 (Codex review): this test previously asserted require.NoError(t, err) —
+// encoding the exact defect H1 fixes. A nil return here is indistinguishable, to a caller, from
+// "every item was attempted and none remained": repairPlaidDisconnects (retention_cleanup_check.go)
+// treated that nil as full completion and cleared plaid_cleanup_pending_at, permanently hiding a
+// user with item-2 still live from the only code path that ever disconnects them. The function must
+// now return ErrCleanupAborted instead — still not a failure (no Warn log, no failure counter), but
+// no longer indistinguishable from "nothing left to do".
+//
 // Falsifiability: on a version of cleanupItems that only rechecks once before the loop (or not at
-// all), this test fails — mockPlaid.AssertNumberOfCalls("RemoveItem", 1) would see 2 calls instead.
+// all), this test fails on the RemoveItem call-count assertions below — mockPlaid.
+// AssertNumberOfCalls("RemoveItem", 1) would see 2 calls instead. On today's (pre-H1-fix) code, this
+// test fails on the ErrorIs assertion — err is nil, not ErrCleanupAborted.
 func TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-becomes-ineligible"
@@ -706,15 +716,22 @@ func TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingIte
 
 	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
 
-	require.NoError(t, err, "an ineligibility abort is a legitimate partial completion, not a failure")
+	require.Error(t, err, "a mid-loop abort is a legitimate partial completion, but must be surfaced — not returned as nil, which a caller could mistake for full completion")
+	assert.ErrorIs(t, err, ErrCleanupAborted)
 	mockPlaid.AssertNumberOfCalls(t, "RemoveItem", 1)
 	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-2")
 	assert.Equal(t, 2, callCount, "recheck must be invoked before EACH item, not once for the whole call")
+	// item-1 succeeded before the abort and must still be durably marked disconnected.
+	mockRepo.AssertCalled(t, "MarkItemsDisconnected", ctx, []string{"item-1"})
 }
 
 // TestPlaidCleanup_DisconnectIfEligible_IneligibleBeforeFirstItem_NoPlaidCallAtAll proves the
 // recheck runs before the FIRST item too (not just between items 2..N) — a user already ineligible
 // by the time the loop starts must have zero Plaid calls.
+//
+// Issue #1413 round-14 H1: this must also return ErrCleanupAborted, not nil — see
+// TestPlaidCleanup_DisconnectIfEligible_BecomesIneligibleMidLoop_RemainingItemsSpared's doc comment
+// for why a nil return here would be indistinguishable from full completion to a caller.
 func TestPlaidCleanup_DisconnectIfEligible_IneligibleBeforeFirstItem_NoPlaidCallAtAll(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-ineligible-from-start"
@@ -731,7 +748,8 @@ func TestPlaidCleanup_DisconnectIfEligible_IneligibleBeforeFirstItem_NoPlaidCall
 
 	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
 
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrCleanupAborted)
 	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
 	mockRepo.AssertNotCalled(t, "MarkItemsDisconnected", mock.Anything, mock.Anything)
 }
