@@ -329,9 +329,11 @@ func TestManualTierOverrideExpiryCheck_OneUserFails_OthersStillProcessed(t *test
 
 // TestManualTierOverrideExpiryCheck_AggregateFailure_LoggedAtError is the observability proof
 // (Issue #1413 C1 follow-up, "unbounded exclusion"): this job clearing manual_tier_override is the
-// ONLY thing that bounds how long a lapsed comp can delay a retention notice/deletion. The job
-// itself runs with RunOnStart: false and a failed run's retries eventually land in the dead-letter
-// queue with no automatic replay, so if this job silently stops working, that "delay" becomes
+// ONLY thing that bounds how long a lapsed comp can delay a retention notice/deletion. Even now
+// that the job runs with RunOnStart: true (see ManualTierOverrideExpiryCheckPeriodicOpts — it was
+// `false`, which meant the job could be enqueued zero times ever under a sub-daily deploy cadence),
+// a failed run's retries still eventually land in the dead-letter queue with no automatic replay,
+// so if this job silently stops working, that "delay" becomes
 // indefinite. This test proves a run with per-user failures logs an explicit ERROR-level summary
 // (on top of the per-user Error logs and the jobs_completed_total{status="failed"} metric the
 // deferred func in Work() already increments — this repo's established River-job observability
