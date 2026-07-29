@@ -79,12 +79,23 @@ func TestUpdateUserTier_Integration_SetsOverrideAndReturnsRawState(t *testing.T)
 	assert.WithinDuration(t, expiresAt, *snap.ManualTierEndsAt, time.Second)
 }
 
-// TestUpdateUserTier_Integration_ClearsPlaidCleanupPending proves Issue #1413 round-10: granting
+// TestUpdateUserTier_Integration_PreservesPlaidCleanupPending proves Issue #1413 round-13: granting
 // a comp on a user who already has Plaid cleanup pending (a genuinely cancelled user the repair
-// pass would otherwise eventually disconnect) clears the marker — the comp makes them
-// Plaid-eligible again (HasActiveManualOverride() forces effective status to active), so nothing
-// can legitimately be "pending" while it is live.
-func TestUpdateUserTier_Integration_ClearsPlaidCleanupPending(t *testing.T) {
+// pass would otherwise eventually disconnect) PRESERVES the marker, rather than clearing it.
+//
+// This replaces TestUpdateUserTier_Integration_ClearsPlaidCleanupPending (round-10 through
+// round-12), which asserted the OPPOSITE and was itself the round-13 P0's root cause: comping an
+// already inactive/cancelled user (a plausible real action — comping a churned account) used to
+// null this marker unconditionally. If that comp later lapsed and the daily comp-expiry job
+// degraded or was never run, NOTHING would ever re-stamp the marker — the user's Plaid connections
+// stayed live and billable forever, invisible to GetUsersNeedingPlaidDisconnectRepair. Per the
+// restated invariant (domain.User.PlaidCleanupPendingAt's doc comment), the marker records a
+// durable, override-independent fact ("an ineligibility episode began, cleanup outstanding"), so
+// granting a comp — which never touches raw subscription_status — must leave it untouched.
+//
+// Falsifiability: reverting updateUserTierQuery to unconditionally NULL plaid_cleanup_pending_at
+// makes this test fail — the marker would be cleared instead of preserved.
+func TestUpdateUserTier_Integration_PreservesPlaidCleanupPending(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
 	repo := NewAdminUserRepository(pool, enc)
@@ -103,7 +114,8 @@ func TestUpdateUserTier_Integration_ClearsPlaidCleanupPending(t *testing.T) {
 	require.NoError(t, err)
 
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
-	assert.Nil(t, snap.PlaidCleanupPendingAt, "granting a comp must clear plaid_cleanup_pending_at")
+	require.NotNil(t, snap.PlaidCleanupPendingAt, "granting a comp must PRESERVE an outstanding plaid_cleanup_pending_at, not clear it")
+	assert.WithinDuration(t, pendingSince, *snap.PlaidCleanupPendingAt, time.Second, "the preserved marker must still be the ORIGINAL episode-start value, not reset")
 }
 
 // TestUpdateUserTier_Integration_ReturnsPriorOverride verifies the CTE reads the PRE-UPDATE

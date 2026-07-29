@@ -73,31 +73,57 @@ type User struct {
 	// GetUsersNeedingPlaidDisconnectRepair's doc comment (profile_repository.go) for why this
 	// REPLACES RetentionStartedAt (the derived anchor rounds 8/9 showed could not be made sound).
 	//
-	// THE INVARIANT (Issue #1413 round-11 — read this before touching ANY writer or clearer of
+	// THE INVARIANT (Issue #1413 round-13 — read this before touching ANY writer or clearer of
 	// this column):
 	//
-	//   plaid_cleanup_pending_at is non-NULL EXACTLY WHEN the user is currently Plaid-ineligible —
+	//   plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an ineligibility EPISODE has begun —
 	//   i.e. domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair()
-	//   is true (raw status is 'inactive' or 'cancelled') AND the user carries no currently-active
-	//   manual tier override (HasActiveManualOverride() is false — a live comp forces EFFECTIVE
-	//   status back to 'active' regardless of the raw column, restoring Plaid eligibility) — AND
-	//   outstanding Plaid cleanup for that episode has not yet completed. Its value is the instant
-	//   the CURRENT ineligibility episode began — never an earlier episode's (a stale write must
-	//   not resurrect a value a newer episode already superseded) and never a later one's (a fresh
-	//   episode must get its OWN fresh value, not the survivor of a stale COALESCE).
+	//   is true (raw status is 'inactive' or 'cancelled') — AND outstanding Plaid cleanup for that
+	//   episode has not yet completed. Its value is the instant the CURRENT episode began — never
+	//   an earlier episode's (a stale write must not resurrect a value a newer episode already
+	//   superseded) and never a later one's (a fresh episode must get its OWN fresh value, not the
+	//   survivor of a stale COALESCE).
+	//
+	//   Deliberately NOT part of this invariant: manual_tier_override. Whether the user carries a
+	//   currently-active admin comp is a function of WALL-CLOCK TIME (HasActiveManualOverride()
+	//   compares manual_tier_ends_at against time.Now() on every read), not of any write — an
+	//   override can transition from live to lapsed with NO writer ever running. Round-11 through
+	//   round-12 tied the marker's SET-time value to "is there a live override right now", which
+	//   silently required some LATER writer (the comp-expiry job, or an admin clicking Remove
+	//   Override) to re-stamp the marker the instant the override lapsed — and if that later
+	//   writer never runs (a degraded/dead-lettered expiry job, or an admin who never clicks),
+	//   the marker stays wrong FOREVER, with no writer at fault: the invariant's own truth value
+	//   changed on the clock, not on a write, so no write-time trigger could have kept it correct.
+	//   That is the round-13 root-cause finding: comping an already inactive/cancelled user (a
+	//   plausible real action — comping a churned account) nulled the marker on grant, the comp
+	//   later lapsed with no write, and the user's live Plaid connections became permanently
+	//   invisible to every query in the codebase.
+	//
+	//   The fix is to keep the time-varying term OUT of this column entirely: the marker records
+	//   only the durable fact "an ineligibility episode began, cleanup outstanding" — a pure
+	//   function of raw subscription_status transitions. A comp grant does not touch raw
+	//   subscription_status, so it must not touch this column either; a comp lapsing is a
+	//   read-time fact with nothing to write. CURRENT eligibility (raw status AND whether a
+	//   manual override is presently live) is evaluated separately, entirely at query time, by
+	//   GetUsersNeedingPlaidDisconnectRepair's own noActiveManualOverridePredicate — never baked
+	//   into this column's value.
 	//
 	// Every writer must leave the column in a state satisfying this invariant when it returns —
 	// not merely "correct for the one transition this writer handles in isolation". That
-	// isolated-reasoning failure mode is exactly how six prior remediation rounds on this branch
-	// each closed the previous reviewer's finding while introducing a new one. As of round-11 the
-	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
-	// ExpireTrialIfNoOverride (all profile_repository.go), and
-	// AdminUserRepository's removeUserTierOverrideUpdate (admin_user_repository.go, shared by
-	// RemoveUserTierOverride/RemoveUserTierOverrideIfMatches). The known CLEAR sites are:
-	// UpdateSubscriptionFromPaddle, ClearRetentionDates, ClearPlaidCleanupPending/
-	// ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus (all profile_repository.go), and
-	// AdminUserRepository's updateUserTierQuery (admin_user_repository.go, comp grant/extend). See
-	// each site's own doc comment for its justification against this invariant, and
+	// isolated-reasoning failure mode is exactly how several prior remediation rounds on this
+	// branch each closed the previous reviewer's finding while introducing a new one. As of
+	// round-13 the known SET sites are: UpdateSubscriptionFromPaddle,
+	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride (all
+	// profile_repository.go), and AdminUserRepository's removeUserTierOverrideUpdate
+	// (admin_user_repository.go, shared by RemoveUserTierOverride/RemoveUserTierOverrideIfMatches
+	// — kept purely as a defense-in-depth backstop for a user whose raw status was already
+	// ineligible before ever gaining a marker, e.g. imported/backfilled rows; it is a no-op
+	// COALESCE in the ordinary comp-over-already-churned-user case, since that marker is already
+	// set). The known CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
+	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus (all
+	// profile_repository.go). AdminUserRepository's updateUserTierQuery (comp grant/extend)
+	// deliberately does NOT touch this column at all as of round-13 — see its own doc comment.
+	// See each site's own doc comment for its justification against this invariant, and
 	// GetUsersNeedingPlaidDisconnectRepair's doc comment for the query whose correctness depends
 	// entirely on it holding.
 	PlaidCleanupPendingAt *time.Time `json:"plaid_cleanup_pending_at,omitempty" db:"plaid_cleanup_pending_at"`
