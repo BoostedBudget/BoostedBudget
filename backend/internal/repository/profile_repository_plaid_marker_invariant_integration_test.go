@@ -41,6 +41,13 @@ package repository
 //	eligibility (status AND live override) is evaluated separately, at query time, by
 //	GetUsersNeedingPlaidDisconnectRepair's own noActiveManualOverridePredicate.
 //
+//	One consequence of that split (Issue #1413 Finding 3, Codex review, PR #1443 follow-up): a
+//	NULL marker next to a LIVE linked item is ALSO legal whenever an active override currently
+//	exists — StampMissingPlaidCleanupMarkers deliberately excludes an actively-comped user from
+//	stamping, mirroring the candidate query's own exclusion, so nothing stamps that row while the
+//	comp stays live. See assertPlaidMarkerInvariant's own doc comment for the precise, single case
+//	this widens.
+//
 // assertPlaidMarkerInvariant below is a direct, reusable encoding of that statement — every test
 // in this file calls it after every state-changing step, rather than asserting only the single
 // column value the specific fix under test cares about. This is deliberate: several prior
@@ -167,6 +174,25 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 // TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResurrectClearedMarker for
 // both former call sites, now unified.
 //
+// Issue #1413 Finding 3 (Medium, Codex review, PR #1443 follow-up): the round-16 rule above — "a
+// real violation only if a LIVE item exists" — was ITSELF one case too strict. StampMissingPlaidCleanupMarkers
+// deliberately EXCLUDES an actively-comped user from stamping (noActiveManualOverridePredicate,
+// profile_repository.go), matching GetUsersNeedingPlaidDisconnectRepair's own exclusion of the same
+// population. So a NULL marker next to a live item is ALSO legal whenever an active override
+// currently exists — that is exactly the reachable, intentional sequence
+// TestPlaidMarkerInvariant_Integration_ActiveOverrideAndLiveItem_NullMarkerIsLegal below reproduces:
+// a never-cleaned-up user with no marker and no items is comped, then links a bank (permitted — the
+// comp makes their effective status active), and Stamp is never asked to touch that row while the
+// comp stays live. The fix widens EXACTLY this one case (see the `if row.hasActiveOverride(...)`
+// branch below) — every other check this function makes (the ineligible-false Nil check; the
+// NULL-marker-with-live-items-and-no-override violation; the non-NULL-marker checks for both the
+// #1453 zero-row exception and the "live item still outstanding" pass-through) is UNCHANGED. Round
+// 15's relaxation of this same helper (above — dropping the second conjunct entirely rather than
+// widening one specific, named case) was the far riskier shape of change, since it stopped this
+// helper from catching an actual writer regression rather than merely accepting one additional
+// legitimate state; this fix is deliberately scoped to widen nothing beyond the single case named
+// above.
+//
 // This helper cannot itself distinguish "healed by the backstop on this exact call" from "would have
 // been a genuine violation a moment ago" — both look identical once the backstop has run. That is
 // fine: this file's own tests never race the backstop (it is not called from any shared setup
@@ -187,14 +213,27 @@ func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string,
 	total, live := plaidMarkerLinkedItemCounts(t, pool, userID)
 
 	if row.marker == nil {
-		// Legal NULL on an ineligible user: either #1453 (zero linked_items rows at all) or a
-		// genuinely completed cleanup (at least one row, none of them live) — either way, no LIVE
-		// item means no outstanding cleanup, so no episode is actually open right now regardless of
-		// raw status. Illegal only if a live item exists: that is exactly the state
-		// StampMissingPlaidCleanupMarkers exists to heal, so a NULL marker there is a real defect,
-		// not a legal quiescent state.
+		// Issue #1413 Finding 3 (Medium, Codex review, PR #1443 follow-up): a NULL marker next to a
+		// LIVE item is ALSO legal — widening this ONE case, and only this one — whenever the user
+		// currently has an ACTIVE manual override. StampMissingPlaidCleanupMarkers
+		// (profile_repository.go) deliberately excludes an actively-comped user from stamping
+		// (noActiveManualOverridePredicate), mirroring GetUsersNeedingPlaidDisconnectRepair's own
+		// exclusion of the same population — comping protects at query time, not by pre-emptively
+		// stamping a marker the query would then have to explain away. So: a never-cleaned-up user
+		// with no marker and no items, comped, who THEN links a bank (permitted — the comp makes
+		// their effective status active) is a reachable, intentional state, not a defect — see
+		// TestPlaidMarkerInvariant_Integration_ActiveOverrideAndLiveItem_NullMarkerIsLegal below.
+		if row.hasActiveOverride(time.Now()) {
+			return
+		}
+		// Legal NULL on an ineligible user with no active override: either #1453 (zero linked_items
+		// rows at all) or a genuinely completed cleanup (at least one row, none of them live) —
+		// either way, no LIVE item means no outstanding cleanup, so no episode is actually open right
+		// now regardless of raw status. Illegal only if a live item exists AND no active override
+		// excuses the gap: that is exactly the state StampMissingPlaidCleanupMarkers exists to heal,
+		// so a NULL marker there is a real defect, not a legal quiescent state.
 		assert.Equal(t, 0, live,
-			"[%s] invariant violated: an ineligibility episode is open (status=%q, %d live linked item(s) outstanding) but plaid_cleanup_pending_at is NULL",
+			"[%s] invariant violated: an ineligibility episode is open (status=%q, %d live linked item(s) outstanding, no active override) but plaid_cleanup_pending_at is NULL",
 			context, row.status, live)
 		return
 	}
@@ -548,6 +587,65 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileOverrideLapsed_Mark
 	row := readPlaidMarkerRow(t, pool, user.ID)
 	require.NotNil(t, row.marker, "a LAPSED override must not suppress the marker — only a currently-active one does")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after cancellation with a lapsed override")
+}
+
+// ─── Issue #1413 Finding 3 (Medium, Codex review, PR #1443 follow-up): a NULL marker next to a
+// LIVE item is ALSO legal while an active override exists ──────────────────────────────────────────
+
+// TestPlaidMarkerInvariant_Integration_ActiveOverrideAndLiveItem_NullMarkerIsLegal reproduces the
+// exact reachable sequence assertPlaidMarkerInvariant's round-16 rule ("NULL is legal only when zero
+// LIVE items exist") wrongly rejected:
+//
+//  1. A cancelled user has no marker and no linked items at all (an ordinary Plaid-less churn, or a
+//     fully-healed prior episode).
+//  2. An admin grants an ACTIVE comp (adminRepo.UpdateUserTier).
+//  3. The user links a live bank — permitted, because the comp makes their EFFECTIVE status active
+//     (internal/huma/middleware/read_only.go).
+//  4. StampMissingPlaidCleanupMarkers deliberately EXCLUDES an actively-comped user
+//     (noActiveManualOverridePredicate) — matching GetUsersNeedingPlaidDisconnectRepair's own
+//     exclusion of the same population — so it does not stamp this row.
+//  5. The marker stays NULL while a live item genuinely exists.
+//
+// That is production's own intended shape, not a leak: GetUsersNeedingPlaidDisconnectRepair itself
+// never selects this user while the comp stays live (see
+// TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetButRepairExcludesLiveComp's
+// sibling proof, above in this file, for the query-layer half of the same guarantee), so nothing is
+// actually at risk of disconnect. Only the invariant HELPER was too strict.
+//
+// Falsifiability: reverting assertPlaidMarkerInvariant's `if row.hasActiveOverride(...)` branch makes
+// this test fail at its final call — a NULL marker with a live item present would be flagged as a
+// violation even though no writer is at fault and the state is fully intentional.
+func TestPlaidMarkerInvariant_Integration_ActiveOverrideAndLiveItem_NullMarkerIsLegal(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createPlaidMarkerTestUser(t, pool, repo, "activeoverridelive", "cancelled")
+	// Precondition: an ordinary Plaid-less cancellation — no marker, no linked items at all.
+	assertPlaidMarkerInvariant(t, pool, user.ID, "before comp grant: cancelled, no marker, no items")
+
+	compEnds := time.Now().Add(24 * time.Hour) // live
+	_, err := adminRepo.UpdateUserTier(ctx, "", user.ID, "household_2", "test: grant live comp over never-linked user", &compEnds)
+	require.NoError(t, err)
+
+	seedLinkedItem(t, pool, user.ID, "item-activeoverridelive-"+user.ID, "active")
+
+	// Run the self-healing backstop — it must NOT stamp this row while the comp stays live.
+	healedCount, err := repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, healedCount, "precondition: Stamp must not touch an actively-comped user")
+
+	preRow := readPlaidMarkerRow(t, pool, user.ID)
+	require.Nil(t, preRow.marker, "precondition: the marker must still be NULL — Stamp deliberately excludes an actively-comped user")
+	require.True(t, preRow.hasActiveOverride(time.Now()), "precondition: the comp must still be active")
+	total, live := plaidMarkerLinkedItemCounts(t, pool, user.ID)
+	require.Equal(t, 1, total)
+	require.Equal(t, 1, live, "precondition: a genuinely LIVE item now exists")
+
+	// The core assertion: this exact state must be recognised as LEGAL, not flagged as a violation.
+	assertPlaidMarkerInvariant(t, pool, user.ID, "active comp, live item, NULL marker: must be legal")
 }
 
 // ─── Round-12 Fix 4 (Medium): a later terminal webhook must not resurrect a completed marker ──
