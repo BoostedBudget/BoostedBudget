@@ -740,6 +740,23 @@ func TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMark
 // cancel→resubscribe, comp grant→remove, past-due→grace — asserting
 // assertPlaidMarkerInvariant after every single transition, on independent users so one
 // sequence's fixture never leaks into another's assertions.
+//
+// PR #1443 gap-analysis finding (requirements-gap-analysis follow-up): every user this test built
+// came from createPlaidMarkerTestUser, which never seeds a linked_items row — so four of these six
+// subtests (trial_to_expire, active_to_cancel, comp_grant_to_remove, past_due_to_grace) asserted
+// NOTHING about the marker. With zero linked_items rows, assertPlaidMarkerInvariant's non-NULL
+// branch always lands in the #1453 zero-rows exception (assert.Equal(t, 0, total) trivially true)
+// and its NULL branch always lands in assert.Equal(t, 0, live) (also trivially true, 0 == 0) —
+// BOTH branches pass no matter what the marker actually held. cancel_to_resubscribe was the one
+// exception (its post-resubscribe check lands in the item-independent `!ineligible` branch, a real
+// assert.Nil), and comp_grant_then_lapse_never_removed asserts its own repair-query membership
+// directly rather than going through the marker invariant a second time. The fix: each of the four
+// now seeds one live linked item (seedLinkedItem) before its first assertion, so every
+// assertPlaidMarkerInvariant call in this test actually exercises the invariant's real branches
+// instead of the zero-rows escape hatch. Seeded per-subtest, not inside createPlaidMarkerTestUser
+// itself: TestPlaidMarkerInvariant_Integration_ActiveOverrideAndLiveItem_NullMarkerIsLegal (above)
+// depends on that helper producing a user with NO linked_items rows at all for its own "no items"
+// precondition — changing the shared fixture would break that test's setup.
 func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -749,6 +766,16 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 	t.Run("trial_to_expire", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweeptrial", "trial")
+		// A live linked item is required for the invariant checks below to mean anything: with
+		// zero linked_items rows, assertPlaidMarkerInvariant's non-NULL branch always falls into
+		// the #1453 zero-rows exception (assert.Equal(t, 0, total) trivially holds) and its NULL
+		// branch always falls into assert.Equal(t, 0, live) trivially holding too — BOTH branches
+		// pass regardless of what the marker actually contains. Seeding here (not in
+		// createPlaidMarkerTestUser) is deliberate: TestPlaidMarkerInvariant_Integration_
+		// ActiveOverrideAndLiveItem_NullMarkerIsLegal (below) depends on that helper producing a
+		// user with NO linked_items rows at all for its own "no items" precondition check, so the
+		// seed has to live per-subtest instead of in the shared fixture.
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "trial: initial")
 
 		flipped, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
@@ -759,6 +786,9 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 	t.Run("active_to_cancel", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweepactive", "active")
+		// See trial_to_expire's comment above for why this seed is required (not optional) for the
+		// invariant check after cancellation to be anything other than a tautology.
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "active: initial")
 
 		require.NoError(t, repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", nil, nil, nil))
@@ -780,6 +810,14 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 	t.Run("comp_grant_to_remove", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweepcomp", "cancelled")
+		// See trial_to_expire's comment above: without a live linked item, every check below is a
+		// tautology — including, worst of all, the one after RemoveUserTierOverride, which
+		// exercises removeUserTierOverrideUpdate (admin_user_repository.go), the single
+		// most-revised writer on this branch. should_mark_plaid_cleanup_pending itself is gated on
+		// liveLinkedItemExistsClause, so without this seed the removal doesn't even reach the
+		// writer's marker-stamping branch — it silently falls through the ELSE (leave the marker
+		// untouched), which the zero-rows exception then hides either way.
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
 		assertPlaidMarkerInvariant(t, pool, user.ID, "comp: cancelled with marker, before grant")
 
@@ -828,6 +866,10 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 	t.Run("past_due_to_grace", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweeppastdue", "past_due")
+		// See trial_to_expire's comment above for why this seed is required (not optional) for the
+		// invariant check after the grace-expiry cancellation to be anything other than a
+		// tautology.
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due: initial")
 
 		retentionStart := time.Now()
