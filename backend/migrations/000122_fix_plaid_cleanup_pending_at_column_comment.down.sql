@@ -7,7 +7,8 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM information_schema.columns
-        WHERE table_name = 'users'
+        WHERE table_schema = current_schema()
+          AND table_name = 'users'
           AND column_name = 'plaid_cleanup_pending_at'
     ) THEN
         COMMENT ON COLUMN users.plaid_cleanup_pending_at IS

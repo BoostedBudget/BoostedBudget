@@ -2293,6 +2293,16 @@ func TestWorker_SubscriptionActivated_CompedUser_PastDuePayload_SkipsActivePathS
 	overrideEndsAt := time.Now().Add(24 * time.Hour) // live comp — ComputeEffectiveStatus() == "active"
 	user := &domain.User{
 		ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456",
+		// SubscriptionStatus is deliberately "active" — it is what stops this test being gate-masked.
+		// The gate under test must read the PAYLOAD's status ("past_due"). Leaving this field unset
+		// would let a regression that gates on the user row's RAW status pass too, because
+		// IsActiveSubscription("") is false and the side effects would be skipped for the wrong
+		// reason. With "active" here, all three readings are distinguished: payload-status (correct)
+		// skips; raw-user-status fires; effective-status (comped -> "active") fires. Both wrong
+		// readings hit the unstubbed notification mock and panic.
+		// (Issue #1413 round-5; Codex round-6 High finding — the original fixture caught only the
+		// effective-status regression.)
+		SubscriptionStatus: "active",
 		ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
 	}
 	expectedSubID := "sub_01h1234567890abcdef"
@@ -2300,8 +2310,10 @@ func TestWorker_SubscriptionActivated_CompedUser_PastDuePayload_SkipsActivePathS
 	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
 	// past_due persisted as-is — the payload's raw status is billing truth.
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
-	// syncClerkMetadata always runs, re-reading the (comped) user afterward.
-	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	// syncClerkMetadata always runs, re-reading the (comped) user afterward. .Once() is load-bearing:
+	// without it the expectation also tolerates an EXTRA read, which is exactly what a regression that
+	// re-reads the user to gate on its status would do.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil).Once()
 	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 	// "Welcome aboard!" notification and ClearRetentionDates are deliberately left unstubbed on
