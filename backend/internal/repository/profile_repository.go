@@ -893,22 +893,37 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// StampMissingPlaidCleanupMarkers's own doc comment describes in full: this is a single,
 	// user-id-scoped autocommit UPDATE, and a row a concurrent transaction already holds locked (e.g.
 	// an admin's RemoveUserTierOverride call, mid-transaction, on the SAME row) could in principle
-	// make this statement block and then still write a pre-wait NOW(). Left as NOW(), NOT
-	// clock_timestamp(), DELIBERATELY: StampMissingPlaidCleanupMarkers's own doc comment records an
-	// empirically-verified (not merely reasoned) finding that a bare NOW()->clock_timestamp()
-	// substitution in a plain UPDATE does NOT actually fix this — PostgreSQL evaluates the SET-list
-	// target expressions against the pre-lock-wait row version regardless of which clock function is
-	// named, so clock_timestamp() alone would be a no-op here too, not a real fix. The genuine fix
-	// (mirrored from removeUserTierOverrideUpdate, admin_user_repository.go) requires restructuring
-	// into a `WITH candidate AS (SELECT ... FOR UPDATE) UPDATE ... FROM candidate` shape so the lock
-	// acquisition happens as its own earlier step. That is a larger, separate change to this
-	// business-critical Paddle-webhook writer (and to its 5 CAS-guarded siblings —
-	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride, UpdateTrialStatus — all of
-	// which share this exact same theoretical exposure and the exact same reason a naive substitution
-	// would not have helped), scoped OUT of this round as a documented follow-up rather than rushed
-	// through five more CAS/webhook rewrites without their own dedicated review and testing.
-	// `updated_at` keeps NOW() regardless — plain ordering, never compared as an age, not at risk
-	// either way.
+	// make this statement block and then still write a pre-wait NOW(). At the time, this was left as
+	// NOW(), NOT clock_timestamp(), deliberately: a bare NOW()->clock_timestamp() substitution in a
+	// plain UPDATE does NOT actually fix this (StampMissingPlaidCleanupMarkers's doc comment records
+	// the empirical proof) — PostgreSQL evaluates the SET-list target expressions against the
+	// pre-lock-wait row version regardless of which clock function is named. The genuine fix requires
+	// restructuring into a `WITH candidate AS (SELECT ... FOR ... UPDATE) UPDATE ... FROM candidate`
+	// shape so the lock acquisition happens as its own earlier step, and was scoped out of that round
+	// as a documented follow-up.
+	//
+	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up:
+	// restructured into exactly that shape, for the SAME reason and against the SAME empirical proof
+	// as StampMissingPlaidCleanupMarkers's own fix (see that method's doc comment for the full
+	// mechanism). `FOR NO KEY UPDATE`, not `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's own
+	// Finding 1 correction for why `FOR UPDATE` here would risk the exact same cross-user deadlock
+	// against a concurrent admin_user_repository.go audit-log insert (this row can equally be an
+	// audit actor). The CTE selects only `id` — every SET-list expression that reads an "old" column
+	// value (`subscription_status` for the eligibility check below, `plaid_cleanup_pending_at` for the
+	// COALESCE) reads it via the plain, unaliased `users` table reference in the outer UPDATE, exactly
+	// as StampMissingPlaidCleanupMarkers's own restructure does for `updated_at`/`plaid_cleanup_pending_at`.
+	// This is deliberately NOT a theoretical claim: verified directly against a real database (not
+	// reasoned about) that this target-table column reference reflects the value AS OF the moment the
+	// CTE's `FOR NO KEY UPDATE` actually acquires the lock (i.e. post-wait, current committed state),
+	// the same way `clock_timestamp()` does — never a value frozen at this statement's own pre-wait
+	// scan. `updated_at` keeps NOW() regardless — plain ordering, never compared as an age, not at
+	// risk either way.
+	//
+	// This method's own CAS/existence-check semantics are unchanged by the restructure: the CTE's
+	// WHERE clause (`id = $N AND is_deleted = FALSE`) is EXACTLY the predicate the bare UPDATE used —
+	// no condition moved, none added — so RowsAffected() still reports 0 in precisely the same
+	// circumstance (missing or soft-deleted target user) this method's own ErrUserNotFound check
+	// below already depends on.
 	//
 	// Issue #1413 round-10: maintain plaid_cleanup_pending_at atomically with THIS SAME
 	// subscription_status write, rather than in a later, separate call that could independently
@@ -977,7 +992,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $7 AND is_deleted = FALSE`
+			query = `WITH candidate AS (SELECT id FROM users WHERE id = $7 AND is_deleted = FALSE FOR NO KEY UPDATE) UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, clock_timestamp()) ELSE plaid_cleanup_pending_at END FROM candidate WHERE users.id = candidate.id`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $7 AND is_deleted = FALSE`
 		}
@@ -985,7 +1000,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $5 AND is_deleted = FALSE`
+			query = `WITH candidate AS (SELECT id FROM users WHERE id = $5 AND is_deleted = FALSE FOR NO KEY UPDATE) UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, clock_timestamp()) ELSE plaid_cleanup_pending_at END FROM candidate WHERE users.id = candidate.id`
 		} else {
 			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $5 AND is_deleted = FALSE`
 		}
@@ -1321,17 +1336,32 @@ func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string)
 //
 // Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this method's own marker
 // COALESCE for the same transaction-start-vs-statement-execution risk as every sibling writer of
-// this column — see UpdateSubscriptionFromPaddle's own doc comment (this file) for the full
-// reasoning on why it is left as NOW(), not clock_timestamp(), here: a bare substitution does not
-// actually fix anything for a single, non-CTE UPDATE (verified empirically, see
-// StampMissingPlaidCleanupMarkers's doc comment), and the real fix is a larger, separate
-// restructuring scoped out as a documented follow-up rather than rushed through here.
+// this column; a bare substitution does not actually fix anything for a single, non-CTE UPDATE
+// (verified empirically, see StampMissingPlaidCleanupMarkers's doc comment), and the real fix
+// (restructuring into a locked CTE) was scoped out as a documented follow-up at the time.
+//
+// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
+// Fixed "for consistency," per that finding: this method is latent in production (its only caller,
+// TrialService.GrantTrial, always passes SubscriptionStatusTrial, which takes the ELSE/clearing
+// branch below, never this COALESCE branch — see this method's own round-11 note above), but a
+// future caller could reach it, and leaving one documented-but-unfixed sibling next to four other
+// now-fixed ones is exactly the kind of trap this branch has already had to clean up once. Same
+// shape, same FOR NO KEY UPDATE lock mode (never FOR UPDATE — see StampMissingPlaidCleanupMarkers's
+// Finding 1 correction for the cross-user deadlock that mode would risk), same verified-fresh
+// target-table column read for the COALESCE, as UpdateSubscriptionFromPaddle's own ROUND 23 fix —
+// see that method's doc comment for the full mechanism. This method's WHERE clause (id = $5 AND
+// is_deleted = FALSE) moves into the CTE unchanged, so RowsAffected() still reports 0 in exactly
+// the same circumstance (missing/soft-deleted target) this method's own ErrUserNotFound check
+// depends on.
 func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
 	var query string
 	if plaidMarkerEligible {
 		query = `
+			WITH candidate AS (
+				SELECT id FROM users WHERE id = $5 AND is_deleted = FALSE FOR NO KEY UPDATE
+			)
 			UPDATE users
 			SET subscription_status = $1,
 			    subscription_tier = 'premium',
@@ -1339,8 +1369,9 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 			    trial_ends_at = $3,
 			    had_trial = $4,
 			    updated_at = NOW(),
-			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
-			WHERE id = $5 AND is_deleted = FALSE
+			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
+			FROM candidate
+			WHERE users.id = candidate.id
 		`
 	} else {
 		query = `
@@ -1847,6 +1878,19 @@ func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context
 	return eligible, nil
 }
 
+// manualTierOverrideNonEmptyClause is the bare "does this row carry ANY override value at all"
+// test — Issue #1413 Finding 3 (Medium, Codex review, PR #1443 follow-up): factored out as its own
+// minimal constant so GetUsersNeedingPlaidDisconnectRepair's GREATEST guard (below) can reuse it
+// instead of hand-copying a third rewording of a check noActiveManualOverridePredicate and
+// admin_user_repository.go's should_rearm_retention/should_mark_plaid_cleanup_pending already embed
+// inline. Deliberately NOT spliced into noActiveManualOverridePredicate's own definition, and
+// neither of those two existing call sites is refactored to use it — both stay byte-for-byte as
+// they were; this is a NEW, single-purpose extraction for NEW code, not a retrofit of old code.
+// Says nothing about expiry — an empty-string override and a NULL override are the SAME "no real
+// comp" fact this predicate exists to test; manual_tier_ends_at is meaningless without a genuine,
+// non-empty manual_tier_override to pair it with (see the GREATEST guard's own doc comment below).
+const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND manual_tier_override <> ''`
+
 // noActiveManualOverridePredicate excludes users with a currently-active admin manual tier
 // override ("comp") from set-based retention queries (Issue #1413). A comped user must never
 // be warned about, or auto-deleted for, retention expiry.
@@ -2146,42 +2190,73 @@ const liveLinkedItemExistsClause = `EXISTS (
 // gracePeriod. The user is disconnected almost the instant they actually lose access, having been
 // granted almost none of their entitled grace window.
 //
-// The fix: anchor the grace comparison on GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at),
-// not plaid_cleanup_pending_at alone — the SAME rule removeUserTierOverrideUpdate's own lapse-anchor
-// CASE already expresses on the writer side (ROUND 19 there: anchor on manual_tier_ends_at when it is
-// the more recent loss-of-access instant, never NOW()/"today" for a comp that lapsed long ago). Both
-// sites now say "grace runs from when access was actually lost," from two different angles — a query
-// predicate here, a write-time anchor there — and are cross-referenced so they cannot drift apart; if
-// this GREATEST expression ever changes, re-check removeUserTierOverrideUpdate's CASE (and vice
-// versa) for whether the underlying rule they're both expressing has actually changed too.
+// The fix: anchor the grace comparison on
+// GREATEST(plaid_cleanup_pending_at, CASE WHEN manualTierOverrideNonEmptyClause THEN
+// manual_tier_ends_at ELSE NULL END), not plaid_cleanup_pending_at alone — the SAME rule
+// removeUserTierOverrideUpdate's own lapse-anchor CASE already expresses on the writer side (ROUND
+// 19 there: anchor on manual_tier_ends_at when it is the more recent loss-of-access instant, never
+// NOW()/"today" for a comp that lapsed long ago). Both sites now say "grace runs from when access
+// was actually lost," from two different angles — a query predicate here, a write-time anchor
+// there — and are cross-referenced so they cannot drift apart; if this GREATEST expression ever
+// changes, re-check removeUserTierOverrideUpdate's CASE (and vice versa) for whether the underlying
+// rule they're both expressing has actually changed too.
 //
-// Four cases were reasoned through against noActiveManualOverridePredicate, immediately below this
-// GREATEST clause in the query, and confirmed against a real database (not just reasoned about,
-// since PostgreSQL's GREATEST/NULL interaction is exactly the kind of thing an error here would be
-// silent about):
-//  1. manual_tier_ends_at in the FUTURE (a live comp): noActiveManualOverridePredicate already
-//     excludes this row outright (manual_tier_override non-empty AND ends_at >= NOW()) — the row
-//     never reaches the GREATEST comparison at all, so GREATEST cannot wrongly defer anything here.
-//  2. manual_tier_ends_at NULL with a non-empty override (a permanent, non-expiring comp):
+// NULL semantics, stated once, precisely, for every GREATEST-related case below: PostgreSQL's
+// GREATEST() ignores NULL arguments and returns the greatest of the remaining non-NULL ones,
+// returning NULL only when EVERY argument is NULL (this is NOT the same rule as `+` or plain
+// comparison operators, which propagate a single NULL to the whole expression) — verified directly
+// against Postgres (not merely reasoned about; see TestPlaidDisconnectRepair_Integration_* below).
+// Every case that follows reduces to an instance of this one rule.
+//
+// Issue #1413 Finding 3 (Medium, Codex review, PR #1443 follow-up) added the CASE guard above
+// (manualTierOverrideNonEmptyClause) after finding a FIFTH, malformed row shape none of the original
+// four cases covered: manual_tier_override set to the empty string, so noActiveManualOverridePredicate's
+// own non-empty check does NOT exclude this row (an empty string never satisfies that inequality
+// test), paired with a
+// non-NULL manual_tier_ends_at (e.g. a stale value left over from a prior, unrelated override that
+// was cleared incompletely, or any other reachable combination — this package's own tests
+// deliberately exercise independent combinations of these two columns, and there is no DB
+// constraint tying them together). Without the guard, GREATEST would still pick up that ends_at
+// value even though it does not represent any real, current comp, and a value set far in the future
+// would defer this user's eligibility for repair indefinitely. The guard makes manual_tier_ends_at
+// participate in GREATEST ONLY when manualTierOverrideNonEmptyClause holds — i.e. only when the
+// override is a real, non-empty value, mirroring noActiveManualOverridePredicate's own non-empty
+// test rather than re-deriving a third copy of it (see manualTierOverrideNonEmptyClause's own doc
+// comment for why that constant, not noActiveManualOverridePredicate itself, is what's reused here).
+// See TestPlaidDisconnectRepair_Integration_MalformedEmptyOverrideWithFutureEndsAt_GreatestGuardIgnoresEndsAt.
+//
+// Five cases were reasoned through against noActiveManualOverridePredicate and the CASE guard above,
+// immediately below this GREATEST clause in the query, and confirmed against a real database (not
+// just reasoned about, since PostgreSQL's GREATEST/NULL interaction is exactly the kind of thing an
+// error here would be silent about):
+//  1. manual_tier_ends_at in the FUTURE, override non-empty (a live comp): noActiveManualOverridePredicate
+//     already excludes this row outright (manual_tier_override non-empty AND ends_at >= NOW()) — the
+//     row never reaches the GREATEST comparison at all, so GREATEST cannot wrongly defer anything here.
+//  2. manual_tier_ends_at NULL, override non-empty (a permanent, non-expiring comp):
 //     noActiveManualOverridePredicate's "ends_at IS NULL OR ends_at >= NOW()" branch treats a NULL
 //     end as still-active, so this row is ALSO excluded before the GREATEST comparison runs.
-//  3. manual_tier_ends_at NULL with NO override (the ordinary case — the overwhelming majority of
-//     rows): not excluded by noActiveManualOverridePredicate, so THIS is the case where a silent
-//     GREATEST/NULL regression would be catastrophic — if GREATEST ever returned NULL for one NULL
-//     argument (SQL's usual three-valued-logic behavior for arithmetic), every ordinary user's
-//     comparison would evaluate to UNKNOWN and nobody would ever be selected again. Verified directly
-//     against Postgres (not merely reasoned about): `GREATEST(x, NULL) = x` — GREATEST (unlike `+`
-//     or plain comparison operators) explicitly ignores NULL arguments unless EVERY argument is NULL,
-//     in which case the whole marker being NULL would already have failed the earlier
-//     `plaid_cleanup_pending_at IS NOT NULL` clause. Every pre-existing test in this file that has no
-//     override at all (the large majority) is a live regression check for this case on every run.
-//  4. A lapsed comp OLDER than the marker (manual_tier_ends_at predates plaid_cleanup_pending_at —
-//     e.g. an old, never-cleared comp from a PRIOR, unrelated episode): GREATEST picks the marker
-//     (the later of the two), so this must, and does, behave identically to the pre-fix, marker-only
-//     comparison — see TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedByGreatest
+//  3. manual_tier_ends_at NULL, NO override (the ordinary case — the overwhelming majority of rows):
+//     not excluded by noActiveManualOverridePredicate, so THIS is the case where a silent GREATEST/NULL
+//     regression would be catastrophic — see the NULL-semantics paragraph above: `GREATEST(x, NULL) = x`,
+//     so every ordinary user's comparison correctly reduces to plaid_cleanup_pending_at alone (the whole
+//     marker being NULL would already have failed the earlier `plaid_cleanup_pending_at IS NOT NULL`
+//     clause). Every pre-existing test in this file that has no override at all (the large majority)
+//     is a live regression check for this case on every run.
+//  4. A lapsed comp OLDER than the marker, override non-empty (manual_tier_ends_at predates
+//     plaid_cleanup_pending_at — e.g. an old, never-cleared comp from a PRIOR, unrelated episode):
+//     the CASE guard passes ends_at through (override is non-empty), and GREATEST picks the marker
+//     (the later of the two), so this must, and does, behave identically to the pre-Finding-3,
+//     marker-only comparison — see TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedByGreatest
 //     (profile_repository_plaid_disconnect_repair_integration_test.go).
-// The actual bug this closes is a fifth, implicit case none of the above: manual_tier_ends_at in the
-// past AND more recent than the marker — see
+//  5. manual_tier_override set to the empty string, manual_tier_ends_at set to ANY value (the
+//     Finding 3 malformed shape): the CASE guard's manualTierOverrideNonEmptyClause test is false
+//     (an empty string never satisfies the non-empty inequality test), so manual_tier_ends_at is
+//     passed to GREATEST as NULL regardless of what it actually
+//     contains — GREATEST reduces to plaid_cleanup_pending_at alone, per the SAME NULL-semantics rule
+//     as case 3 above. See TestPlaidDisconnectRepair_Integration_MalformedEmptyOverrideWithFutureEndsAt_GreatestGuardIgnoresEndsAt.
+//
+// The bug ROUND 22 closed is a sixth, implicit case none of the above: manual_tier_ends_at in the
+// past AND more recent than the marker, override non-empty — see
 // TestPlaidDisconnectRepair_Integration_LapsedCompRestartsGraceFromLapseNotFromMarker for that
 // scenario reproduced end to end through production writers.
 //
@@ -2236,7 +2311,10 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND plaid_cleanup_pending_at IS NOT NULL
-		  AND GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at) < clock_timestamp() - make_interval(secs => $1)
+		  AND GREATEST(
+		        plaid_cleanup_pending_at,
+		        CASE WHEN ` + manualTierOverrideNonEmptyClause + ` THEN manual_tier_ends_at ELSE NULL END
+		      ) < clock_timestamp() - make_interval(secs => $1)
 		  AND ` + liveLinkedItemExistsClause + `
 	` + noActiveManualOverridePredicate + `
 		ORDER BY updated_at ASC
@@ -2370,12 +2448,89 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 	//
 	// The fix that actually works, mirroring removeUserTierOverrideUpdate's own already-correct shape
 	// (admin_user_repository.go): acquire the row locks EXPLICITLY, as their own separate step, via a
-	// `SELECT ... FOR UPDATE` CTE — THAT step is what genuinely blocks and waits. Only once it
+	// `SELECT ... FOR NO KEY UPDATE` CTE — THAT step is what genuinely blocks and waits. Only once it
 	// resolves (lock already held by this transaction) does the outer UPDATE run, evaluating
 	// clock_timestamp() fresh, with nothing left to wait for — so it correctly reflects the
 	// post-wait, statement-execution instant. This is still ONE round trip (one r.db.Exec call, one
 	// implicit autocommit transaction) — the CTE only changes the ORDER PostgreSQL performs the lock
 	// acquisition and the target-list evaluation in, not the transaction shape.
+	//
+	// ROUND 23 correction (Issue #1413 Finding 1, High, Codex review, PR #1443 follow-up): ROUND 21
+	// used `FOR UPDATE` for the candidate lock. The lock MODE, not just the restructuring, was wrong,
+	// and produces a real, reproducible cross-user deadlock against admin_user_repository.go's comp
+	// removal path. Concrete cycle:
+	//
+	//  1. User B is ineligible-status with a live linked item and a NULL marker — an ordinary Stamp
+	//     candidate — so this CTE's (old) `FOR UPDATE` locks B.
+	//  2. This statement's candidate scan (with multiple qualifying rows and, pre-fix, no defined lock
+	//     order — see the ORDER BY correction below) reaches user A, whose row is already locked by a
+	//     concurrent admin_user_repository.go RemoveUserTierOverride/RemoveUserTierOverrideIfMatches
+	//     call (its own "prior" CTE's `FOR UPDATE`). This statement blocks, waiting for A.
+	//  3. That removal transaction, still holding A, proceeds to insert its audit_logs row — and the
+	//     acting admin recorded as that row's actor happens to BE user B (audit_logs.user_id has no
+	//     "must have an active subscription" constraint — an admin's own account can independently be
+	//     inactive/cancelled with a live linked item, which is exactly how B qualified as a Stamp
+	//     candidate at all; see the note at the end of this comment for why that is a separate,
+	//     intentional contract, not something to "fix" here).
+	//  4. audit_logs.user_id has a foreign key to users.id. Inserting a row that references B triggers
+	//     Postgres's referential-integrity check, which requests a `FOR KEY SHARE` lock on B — the
+	//     weakest lock mode, meant to coexist with everything except a lock that could change B's key.
+	//  5. `FOR UPDATE` (this statement's OLD lock mode on B, step 1) conflicts with `FOR KEY SHARE`
+	//     (step 4's request) — PostgreSQL's conflict table has NO row/column pair where these coexist.
+	//     Now: this statement holds B and waits on A (step 2); the removal holds A and waits on B (step
+	//     4). Classic deadlock cycle. PostgreSQL's deadlock detector eventually aborts one side with a
+	//     serialization failure — in a billing-adjacent path, an aborted transaction is not a
+	//     theoretical concern.
+	//
+	// The fix: `FOR NO KEY UPDATE` instead of `FOR UPDATE` for this statement's candidate lock. It is
+	// the semantically correct mode regardless of the deadlock — this statement changes NO key column
+	// (only plaid_cleanup_pending_at and updated_at), so `FOR UPDATE`'s key-change guarantee was never
+	// needed here. And per PostgreSQL's row-lock conflict table, `FOR NO KEY UPDATE` does NOT conflict
+	// with `FOR KEY SHARE` — so with this fix, step 5 above never blocks: the removal's audit insert on
+	// B proceeds immediately even while this statement still holds B, breaking the cycle at its root
+	// rather than papering over one specific interleaving of it. Every CTE added for Issue #1413
+	// Finding 2 (the five sibling COALESCE(plaid_cleanup_pending_at, ...) writers restructured in this
+	// same round — UpdateSubscriptionFromPaddle, UpdateTrialStatus,
+	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
+	// this identical reason: any of those five rows could equally be an audit actor, so `FOR UPDATE`
+	// there would reproduce this exact cycle five more times over.
+	//
+	// Verified via a real database (internal/repository/profile_repository_plaid_disconnect_repair_integration_test.go,
+	// TestStampMissingPlaidCleanupMarkers_Integration_DeadlockCycleWithConcurrentAuditActor and its
+	// sibling doc comment) that this statement's `FOR NO KEY UPDATE` does not conflict with a
+	// concurrent `FOR KEY SHARE` request on the same row, closing the cycle above at its root.
+	//
+	// Note on step 3 above: this repository does not, and must not, require an audit_logs actor to
+	// have an active subscription — that would make routine admin actions fail based on the ADMIN's
+	// OWN unrelated billing state, which is not a real precondition of being allowed to act as an
+	// admin. The reachability of "the acting admin's own account is itself a Stamp candidate" is a
+	// consequence of that (correct, unrelated) design choice, not a defect to close here.
+	//
+	// ROUND 23 (Issue #1413 Finding 1, High, Codex review, PR #1443 follow-up) also adds `ORDER BY id`
+	// to this CTE's candidate scan. Without it, when more than one row qualifies, PostgreSQL's lock
+	// acquisition order for a multi-row `FOR ... UPDATE`/`FOR NO KEY UPDATE` scan is whatever order the
+	// underlying scan happens to produce (unspecified, and can differ run to run, e.g. under a
+	// different query plan or after a VACUUM). Two concurrent Stamp passes could then lock the SAME two
+	// qualifying rows in OPPOSITE orders — pass 1 locks row X then waits on row Y, while pass 2 locks Y
+	// then waits on X — an ordinary lock-ordering deadlock between two instances of the SAME statement,
+	// independent of the cross-repository cycle above. `ORDER BY id` gives every invocation of this
+	// statement the same total lock order (ascending id), so two concurrent passes can only ever
+	// contend for the SAME next row, never deadlock against each other waiting in opposite directions.
+	//
+	// Blocking (this statement's own design) vs. `SKIP LOCKED`: deliberately blocking, not skipping.
+	// A locked row this pass skips would still self-heal on the NEXT scheduled run (per this method's
+	// own "up to one additional grace window of delay" consequence, discussed below) — so skipping
+	// would not be UNSAFE. But the realistic contention this statement meets is another SHORT-LIVED
+	// transaction (an admin comp removal, a single-row CAS writer) that releases its lock in
+	// milliseconds to at most a few seconds, not a chronic, indefinitely-held lock. Blocking lets THIS
+	// pass finish healing that row once the brief contention clears, rather than unconditionally
+	// deferring it to tomorrow's run for no reason — maximizing how much this pass actually heals, at
+	// the cost of an occasional short wait, now that ROUND 23's `FOR NO KEY UPDATE` + `ORDER BY id`
+	// have closed the two ways that wait could turn into an unbounded deadlock instead of an ordinary,
+	// short block. `SKIP LOCKED` would only be preferable if a row could plausibly stay locked for the
+	// ENTIRE remainder of a run (e.g. some other pathological long-held transaction) — that would be a
+	// bug in whatever holds the lock that long, not something this statement should paper over by
+	// silently skipping the row it exists specifically to catch.
 	ct, err := r.db.Exec(ctx, `
 		WITH candidates AS (
 			SELECT id FROM users
@@ -2385,7 +2540,8 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 			  AND deletion_requested_at IS NULL
 			  AND `+liveLinkedItemExistsClause+`
 			`+noActiveManualOverridePredicate+`
-			FOR UPDATE
+			ORDER BY id
+			FOR NO KEY UPDATE
 		)
 		UPDATE users
 		SET plaid_cleanup_pending_at = clock_timestamp(), updated_at = NOW()
@@ -2756,20 +2912,47 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 	// call re-pushing an already-running marker forward.
 	//
 	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// for the same risk class every writer of this column shares — left as NOW(), not
-	// clock_timestamp(), because a bare substitution would not actually fix anything for a single,
-	// non-CTE UPDATE like this one (verified empirically; see UpdateSubscriptionFromPaddle's and
-	// StampMissingPlaidCleanupMarkers's own doc comments for the full reasoning and the follow-up
-	// this is scoped into instead).
+	// for the same risk class every writer of this column shares; a bare substitution would not
+	// actually fix anything for a single, non-CTE UPDATE like this one (verified empirically; see
+	// StampMissingPlaidCleanupMarkers's own doc comment for the full reasoning), and the real fix
+	// (restructuring into a locked CTE) was scoped out as a documented follow-up at the time.
+	//
+	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
+	// This is one of the THREE genuine CAS writers restructured this round (the other two being
+	// CancelIfPastDueOccurrenceWithRetention and ExpireTrialIfNoOverride, below) — its WHERE clause
+	// is this method's own correctness mechanism (past_due_service.go's processGraceExpiry relies on
+	// the returned bool to detect a lost race against a concurrent recovery/comp), so the CAS
+	// predicate moves into the locked CTE's SELECT UNCHANGED — same two conditions
+	// (`subscription_status = 'past_due'` and noActiveManualOverridePredicate), nothing added,
+	// nothing removed. `FOR NO KEY UPDATE`, never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's
+	// Finding 1 correction: this row can equally be a concurrent audit-log actor, and `FOR UPDATE`
+	// would risk the identical cross-user deadlock there. The CTE selects only `id`; the COALESCE
+	// reads plaid_cleanup_pending_at via the plain, unaliased `users` target-table reference in the
+	// outer UPDATE — verified directly against a real database that this reflects the value as of
+	// the moment the CTE's lock is actually acquired (post-wait), never a value frozen at this
+	// statement's own pre-wait scan, exactly like StampMissingPlaidCleanupMarkers's own
+	// clock_timestamp() does for the same reason.
+	//
+	// RowsAffected() semantics are unchanged: the join with the CTE produces zero rows in EXACTLY the
+	// circumstances the bare UPDATE's WHERE clause used to produce zero rows for (id not found,
+	// status no longer 'past_due', or a currently-active override) — never more, never fewer — so
+	// past_due_service.go's `flipped` check still means exactly what it meant before this restructure.
 	ct, err := r.db.Exec(ctx, `
+		WITH candidate AS (
+			SELECT id FROM users
+			WHERE id = $1 AND subscription_status = 'past_due'
+		`+noActiveManualOverridePredicate+`
+			FOR NO KEY UPDATE
+		)
 		UPDATE users
 		SET subscription_status = 'cancelled',
 		    retention_started_at = $2,
 		    retention_expires_at = $3,
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW()),
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
 		    updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due'
-	`+noActiveManualOverridePredicate,
+		FROM candidate
+		WHERE users.id = candidate.id
+	`,
 		userID, retentionStarted, retentionExpires)
 	if err != nil {
 		return false, fmt.Errorf("CancelIfPastDueWithRetention: %w", err)
@@ -2798,18 +2981,42 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 	// call re-pushing an already-running marker forward.
 	//
 	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// too — left as NOW() for the same reason as CancelIfPastDueWithRetention's own sibling note
-	// just above (this file): a bare substitution would not actually fix anything here, and the
-	// real fix is scoped into the same follow-up.
+	// too, for the same reason as CancelIfPastDueWithRetention's own sibling note just above (this
+	// file): a bare substitution would not actually fix anything here, and the real fix was scoped
+	// into the same follow-up at the time.
+	//
+	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
+	// This method's WHERE clause is its OWN correctness mechanism, more precisely than its
+	// non-occurrence-scoped sibling above: `past_due_started_at = $4` is exactly the extra guard this
+	// method exists to add (see this method's own H1 doc comment above) against a worker racing a
+	// NEWER past_due cycle for the same user, so it moves into the CTE's SELECT alongside the other
+	// two conditions, UNCHANGED and in full — `subscription_status = 'past_due'`,
+	// `past_due_started_at = $4`, and noActiveManualOverridePredicate, nothing added, nothing removed.
+	// Same `FOR NO KEY UPDATE` lock mode and same verified-fresh target-table COALESCE read as
+	// CancelIfPastDueWithRetention's own ROUND 23 fix just above — see that method's doc comment for
+	// the full mechanism.
+	//
+	// RowsAffected() semantics are unchanged: past_due_service.go's processGraceExpiry reads the
+	// returned bool to decide between Completing (flipped) and Releasing (not flipped) its claim —
+	// the join with the CTE still produces zero rows in EXACTLY the circumstances (id not found,
+	// status no longer 'past_due', a DIFFERENT past_due cycle now occupies the row, or a
+	// currently-active override) the bare UPDATE's WHERE clause used to.
 	ct, err := r.db.Exec(ctx, `
+		WITH candidate AS (
+			SELECT id FROM users
+			WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
+		`+noActiveManualOverridePredicate+`
+			FOR NO KEY UPDATE
+		)
 		UPDATE users
 		SET subscription_status = 'cancelled',
 		    retention_started_at = $2,
 		    retention_expires_at = $3,
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW()),
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
 		    updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
-	`+noActiveManualOverridePredicate,
+		FROM candidate
+		WHERE users.id = candidate.id
+	`,
 		userID, retentionStarted, retentionExpires, expectedPastDueStartedAt)
 	if err != nil {
 		return false, fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)
@@ -2832,15 +3039,39 @@ func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID 
 	// makes this a one-shot transition per trial).
 	//
 	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// too — left as NOW() for the same reason as UpdateSubscriptionFromPaddle's own doc comment
-	// (this file) explains in full: a bare substitution would not actually fix anything here, and
-	// the real fix is scoped into the same follow-up.
+	// too, for the same reason as UpdateSubscriptionFromPaddle's own doc comment (this file)
+	// explains in full: a bare substitution would not actually fix anything here, and the real fix
+	// was scoped into the same follow-up at the time.
+	//
+	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
+	// This method's WHERE clause (`subscription_status = 'trial'` plus noActiveManualOverridePredicate)
+	// is its own CAS/correctness mechanism — see this method's own H5 doc comment above: it authorises
+	// the transition against committed state at write time, closing the race a caller's earlier,
+	// non-atomic HasActiveManualOverride() read cannot. Both conditions move into the locked CTE's
+	// SELECT unchanged, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock mode (never
+	// `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the cross-user
+	// deadlock that mode would risk) and same verified-fresh target-table COALESCE read as
+	// CancelIfPastDueWithRetention's own ROUND 23 fix — see that method's doc comment for the full
+	// mechanism.
+	//
+	// RowsAffected() semantics are unchanged: this method's own callers use the returned bool exactly
+	// as CancelIfPastDueWithRetention's callers do — the join with the CTE still produces zero rows
+	// in EXACTLY the circumstances (id not found, status no longer 'trial', or a currently-active
+	// override — i.e. an admin granted/extended a comp between the caller's HasActiveManualOverride()
+	// read and this call) the bare UPDATE's WHERE clause used to.
 	ct, err := r.db.Exec(ctx, `
+		WITH candidate AS (
+			SELECT id FROM users
+			WHERE id = $1 AND subscription_status = 'trial'
+		`+noActiveManualOverridePredicate+`
+			FOR NO KEY UPDATE
+		)
 		UPDATE users
 		SET subscription_status = 'inactive', updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
-		WHERE id = $1 AND subscription_status = 'trial'
-	`+noActiveManualOverridePredicate,
+		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
+		FROM candidate
+		WHERE users.id = candidate.id
+	`,
 		userID)
 	if err != nil {
 		return false, fmt.Errorf("ExpireTrialIfNoOverride: %w", err)

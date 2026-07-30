@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1672,6 +1673,66 @@ func TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedB
 	assert.True(t, found, "when the lapsed comp is OLDER than the marker, GREATEST must pick the marker — behavior must be identical to the pre-fix, marker-only comparison")
 }
 
+// TestPlaidDisconnectRepair_Integration_MalformedEmptyOverrideWithFutureEndsAt_GreatestGuardIgnoresEndsAt
+// is Issue #1413 Finding 3's (Medium, Codex review, PR #1443 follow-up) own regression test — the
+// fifth, malformed row shape none of the original four GREATEST cases covered: manual_tier_override
+// is EMPTY (”), not NULL, so noActiveManualOverridePredicate's own non-empty check
+// (`manual_tier_override <> ”`) does NOT exclude this row, yet manual_tier_ends_at is set to a real,
+// far-future value — a shape with no DB constraint preventing it, and one this package's own tests
+// deliberately exercise independent combinations of (see this file's own header comment and
+// GetUsersNeedingPlaidDisconnectRepair's doc comment for the full reasoning).
+//
+// Without the Finding 3 guard, GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at) would pick up
+// the 100-years-out ends_at and defer this user's eligibility for repair indefinitely, even though the
+// marker itself is long past the grace window and there is no real, live comp in effect (an empty
+// override is not a comp at all). With the guard (manualTierOverrideNonEmptyClause), manual_tier_ends_at
+// participates in GREATEST only when the override is genuinely non-empty — here it is not, so
+// GREATEST reduces to plaid_cleanup_pending_at alone, and this user must be selected exactly like an
+// ordinary user with no override at all.
+func TestPlaidDisconnectRepair_Integration_MalformedEmptyOverrideWithFutureEndsAt_GreatestGuardIgnoresEndsAt(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_malformedgreatest_" + suffix,
+		Email:              "malformedgreatest-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	// Marker is 100 hours old — well past the 72h grace window on its own.
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-100*time.Hour))
+
+	// The malformed shape: override is EMPTY (not NULL), paired with a real, far-future ends_at.
+	farFuture := time.Now().AddDate(100, 0, 0)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = '', manual_tier_ends_at = $1 WHERE id = $2`, farFuture, user.ID)
+	require.NoError(t, err)
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	found := false
+	for _, c := range candidates {
+		if c.ID == user.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "an EMPTY override must never let an unrelated manual_tier_ends_at value defer repair eligibility — GREATEST must ignore ends_at here and reduce to the marker alone, exactly as it would for a user with no override at all")
+}
+
 // TestStampMissingPlaidCleanupMarkers_Integration_ClockTimestampReflectsWallTimeAcrossLockWait is
 // Issue #1413 Finding 2's (Medium, Codex review, PR #1443 follow-up) OWN regression test for
 // StampMissingPlaidCleanupMarkers specifically — a separate statement, and a separate CALLER
@@ -1781,4 +1842,157 @@ func TestStampMissingPlaidCleanupMarkers_Integration_ClockTimestampReflectsWallT
 		"plaid_cleanup_pending_at must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean StampMissingPlaidCleanupMarkers used transaction-start time instead and was backdated by the entire lock wait", releaseFence, *marker)
 	assert.True(t, marker.After(startFence.Add(postBlockHoldDuration/2)),
 		"plaid_cleanup_pending_at must NOT be anywhere near the backstop's own transaction start (%v) — got %v", startFence, *marker)
+}
+
+// TestStampMissingPlaidCleanupMarkers_Integration_DeadlockCycleWithConcurrentAuditActor reproduces
+// Issue #1413 Finding 1's (High, Codex review, PR #1443 follow-up) actual cross-user deadlock cycle
+// against a real database — see StampMissingPlaidCleanupMarkers's own ROUND 23 doc comment
+// (profile_repository.go) for the full mechanism this test proves closed:
+//
+//  1. User B (an ordinary Stamp candidate — ineligible status, live linked item, NULL marker, no
+//     override) gets locked by Stamp's own candidate CTE.
+//  2. Stamp's candidate scan (ORDER BY id) then reaches user A, whose row is ALREADY locked by a
+//     concurrent transaction shaped exactly like AdminUserRepository.RemoveUserTierOverride's own
+//     "prior" CTE (this test runs the REAL removeUserTierOverrideQuery constant, not a hand-copied
+//     restatement, so it cannot silently drift from production). Stamp blocks, waiting for that
+//     transaction to release A.
+//  3. That transaction, STILL holding A (uncommitted), inserts an audit_logs row whose actor
+//     (user_id) is B — exactly as admin_user_repository.go's removeTierOverride does immediately
+//     after its own CTE+UPDATE succeeds, and before it commits. B need not have an active
+//     subscription to be a valid audit actor (see StampMissingPlaidCleanupMarkers's own doc comment
+//     for why that is a separate, correct contract, not something to "fix").
+//  4. The audit insert's FK to users(id) requests a FOR KEY SHARE lock on B.
+//
+// With the Finding 1 fix (FOR NO KEY UPDATE, not FOR UPDATE, on Stamp's own candidate lock), step 4
+// does NOT conflict with Stamp's hold on B, so the audit insert completes immediately — proven below
+// by asserting it completes well under Postgres's default 1-second deadlock_timeout, not merely that
+// it eventually succeeds (a slow success could still mean one side lost a real deadlock and the OTHER
+// side happened to be the survivor, only proven by timing, never by the error return alone).
+//
+// Falsifiability (manually verified, not automated in this test): reverting
+// StampMissingPlaidCleanupMarkers's candidate CTE from FOR NO KEY UPDATE back to FOR UPDATE makes
+// this exact scenario deadlock — PostgreSQL's deadlock detector aborts one of the two transactions
+// (which side is arbitrary) after ~1 second, so EITHER the audit INSERT below returns a "deadlock
+// detected" error, OR StampMissingPlaidCleanupMarkers's own call does, and either way the fast-path
+// timing assertion fails. Verified by temporarily reverting the lock mode and re-running this test
+// several times — see this round's report for the exact count and outcome.
+//
+// Uses waitUntilBlockedBy (admin_user_repository_remove_tier_override_integration_test.go, same
+// package) as its synchronization barrier — Issue #1413 Finding 4 (Low, Codex review, PR #1443
+// follow-up): the barrier must identify the SPECIFIC backend under test (here, the goroutine running
+// StampMissingPlaidCleanupMarkers, confirmed blocked specifically on this test's own tx2 backend PID),
+// never merely "some backend is in a lock wait somewhere" — an unrelated concurrent test's lock wait
+// must not be able to satisfy this barrier.
+func TestStampMissingPlaidCleanupMarkers_Integration_DeadlockCycleWithConcurrentAuditActor(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// Two ordinary Stamp candidates: ineligible status, live linked item, NULL marker, no override.
+	// idA must sort AFTER idB so Stamp's own `ORDER BY id` locks B first, then reaches A (already
+	// held by the concurrent "removal" transaction below) — reproducing the brief's exact ordering.
+	idA := uuid.New().String()
+	idB := uuid.New().String()
+	if idA < idB {
+		idA, idB = idB, idA
+	}
+	require.True(t, idB < idA, "test setup invariant: idB must sort before idA")
+
+	userA := &domain.User{
+		ID:                 idA,
+		ClerkUserID:        "clerk_deadlock_a_" + suffix,
+		Email:              "deadlock-a-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	userB := &domain.User{
+		ID:                 idB,
+		ClerkUserID:        "clerk_deadlock_b_" + suffix,
+		Email:              "deadlock-b-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, userA))
+	require.NoError(t, repo.CreateUserTx(ctx, tx, userB))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM audit_logs WHERE resource_id = $1", userA.ID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM linked_items WHERE user_id = ANY($1)", []string{userA.ID, userB.ID})
+		_, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = ANY($1)", []string{userA.ID, userB.ID})
+	})
+
+	seedLinkedItem(t, pool, userA.ID, "item-a-"+suffix, "active")
+	seedLinkedItem(t, pool, userB.ID, "item-b-"+suffix, "active")
+
+	// tx2 simulates RemoveUserTierOverride's own transaction shape: run the REAL production query
+	// (removeUserTierOverrideQuery, admin_user_repository.go) against A — this acquires A's row lock
+	// via that query's own "prior" CTE FOR UPDATE, exactly as production does, whether or not A
+	// actually carries an override to clear (it does not here; the lock is acquired regardless, and
+	// RemoveUserTierOverride is a safe no-op for a user with none — see removeTierOverride's own doc
+	// comment). Deliberately NOT committed yet — the real removeTierOverride doesn't commit until
+	// AFTER its own audit insert, which is exactly the window this test needs to control.
+	tx2, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx2.Rollback(ctx) //nolint:errcheck // no-op after Commit below
+	var revertedTier, revertedStatus, clerkUserIDEnc string
+	var priorOverride *string
+	require.NoError(t, tx2.QueryRow(ctx, removeUserTierOverrideQuery, userA.ID, testRetentionMonths).Scan(
+		&revertedTier, &revertedStatus, &clerkUserIDEnc, &priorOverride,
+	))
+	assert.Nil(t, priorOverride, "test setup invariant: A must have no override to remove")
+
+	var tx2PID int32
+	require.NoError(t, tx2.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&tx2PID))
+
+	type stampResult struct {
+		healed int
+		err    error
+	}
+	done := make(chan stampResult, 1)
+	go func() {
+		healed, callErr := repo.StampMissingPlaidCleanupMarkers(ctx)
+		done <- stampResult{healed, callErr}
+	}()
+
+	// Real barrier (Finding 4): block until Stamp's own backend is CONFIRMED waiting on tx2's lock —
+	// i.e. Stamp has already locked B (via its own candidate CTE) and is now blocked reaching A.
+	waitUntilBlockedBy(t, pool, tx2PID, 5*time.Second)
+
+	// The moment of truth: tx2, STILL holding A, inserts an audit row whose actor is B — exactly
+	// like removeTierOverride's own audit insert, immediately after its CTE+UPDATE and before commit.
+	auditStart := time.Now()
+	_, err = tx2.Exec(ctx, `
+		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
+		VALUES ($1, 'remove_manual_tier', 'user', $2, NULL)
+	`, userB.ID, userA.ID)
+	auditElapsed := time.Since(auditStart)
+	require.NoError(t, err, "the audit insert referencing B as actor must not fail — with the Finding 1 fix, FOR NO KEY UPDATE on B does not conflict with the audit FK's FOR KEY SHARE request")
+	assert.Less(t, auditElapsed, 500*time.Millisecond,
+		"the audit insert must complete immediately, not after waiting anywhere near Postgres's 1s deadlock_timeout — a slow-but-successful insert would mean the OTHER side (Stamp) lost a real deadlock instead of this cycle being genuinely closed; got %v", auditElapsed)
+
+	require.NoError(t, tx2.Commit(ctx))
+
+	var res stampResult
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for StampMissingPlaidCleanupMarkers to complete after tx2 committed — the deadlock cycle may not be closed")
+	}
+	require.NoError(t, res.err, "StampMissingPlaidCleanupMarkers must not receive a deadlock-detected error")
+	assert.GreaterOrEqual(t, res.healed, 1, "at least B must be healed")
+
+	var markerA, markerB *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userA.ID).Scan(&markerA))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userB.ID).Scan(&markerB))
+	assert.NotNil(t, markerB, "B must be healed by Stamp")
+	assert.NotNil(t, markerA, "A must also be healed by Stamp once tx2 released it — A never stopped qualifying (no override was ever present to clear)")
 }

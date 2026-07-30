@@ -661,9 +661,17 @@ func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
 			// ALREADY repair-eligible (round-12 Fix 4: a genuine transition, not a redundant
 			// terminal event for a user already ineligible). Issue #1413 round-13: no longer gated
 			// on manual_tier_override at all — see UpdateSubscriptionFromPaddle's doc comment.
-			// updated_at and the COALESCE's fallback are both NOW() in the SQL itself (a CI
-			// clock-skew fix), not a shared Go-computed query parameter.
-			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (subscription_status IN ('inactive', 'cancelled')) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $5 AND is_deleted = FALSE`)).
+			// updated_at is NOW() in the SQL itself (a CI clock-skew fix), not a shared Go-computed
+			// query parameter. Issue #1413 Finding 2 (High, Codex review, PR #1443 follow-up) ROUND 23:
+			// the query is now a `WITH candidate AS (... FOR NO KEY UPDATE) UPDATE ... FROM candidate`
+			// shape (see UpdateSubscriptionFromPaddle's own doc comment) so the lock acquisition
+			// happens as its own earlier step, and the COALESCE fallback is clock_timestamp() (real
+			// statement-execution wall time), not NOW() — a bare NOW()/clock_timestamp() substitution
+			// without this restructuring does not actually fix the lock-wait backdating bug pgxmock
+			// cannot exercise at all (see StampMissingPlaidCleanupMarkers's doc comment for the full,
+			// empirically-verified mechanism; the real-database proof lives in
+			// profile_repository_finding2_lock_contention_integration_test.go, not here).
+			mock.ExpectExec(regexp.QuoteMeta(`WITH candidate AS (SELECT id FROM users WHERE id = $5 AND is_deleted = FALSE FOR NO KEY UPDATE) UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (subscription_status IN ('inactive', 'cancelled')) THEN COALESCE(plaid_cleanup_pending_at, clock_timestamp()) ELSE plaid_cleanup_pending_at END FROM candidate WHERE users.id = candidate.id`)).
 				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), userID).
 				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
