@@ -649,7 +649,12 @@ describe('SubscriptionOverrideModal', () => {
             })
             mockUseGetAdminUserSubscription.mockReturnValue({
                 isLoading: false,
-                data: { ...SUB_DETAIL_WITH_OVERRIDE, manual_tier_ends_at: '2026-09-01T00:00:00Z' },
+                // Must stay LIVE (non-expired) forever, unlike SUB_DETAIL_EXPIRED_OVERRIDE's
+                // deliberately fixed past date above — a hardcoded future literal here would
+                // silently flip this fixture onto the expired branch once the calendar caught up,
+                // changing what the test exercises without failing. Computed relative to now,
+                // matching the established pattern in overrideStatus.test.ts.
+                data: { ...SUB_DETAIL_WITH_OVERRIDE, manual_tier_ends_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString() },
             })
             mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mockMutate, isPending: false })
             render(

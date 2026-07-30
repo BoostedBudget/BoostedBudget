@@ -1960,11 +1960,18 @@ const noActiveManualOverridePredicate = `
 //
 // Excluding on ANY non-empty override, live or lapsed, never causes a wrongful deletion — but the
 // delay this buys is bounded ONLY by manual_tier_override_expiry_check actually running
-// successfully every day, not by anything in this predicate. That job is best-effort: it is
-// registered with PeriodicJobOpts{RunOnStart: false}, and a failed run's retries eventually land
-// in the dead-letter queue with NO automatic replay (Issue #1413 Critical finding C1's "unbounded
-// exclusion" follow-up). If that job silently stops working, this predicate keeps excluding the
-// user indefinitely — "never deleted", not "delayed by a day" or "one job cycle" — until someone
+// successfully every day, not by anything in this predicate. That job is registered with
+// PeriodicJobOpts{RunOnStart: true} (Issue #1413 P0 fix — see
+// ManualTierOverrideExpiryCheckPeriodicOpts's own doc comment, manual_tier_override_expiry_check.go,
+// for why RunOnStart:false left this job possibly UNENQUEUED for arbitrarily long on a repo that
+// deploys several times a day, and why RunOnStart:true is only safe paired with its InsertOpts'
+// dedup). So a process restart or leader election now triggers an immediate, deduplicated
+// catch-up run rather than silently deferring to the next daily schedule — the "runs zero times
+// ever" failure mode this comment used to warn about is closed. The residual bound this comment
+// still describes is narrower: a failed run's retries eventually land in the dead-letter queue
+// with NO automatic replay (Issue #1413 Critical finding C1's "unbounded exclusion" follow-up). If
+// the job's retries are exhausted and it dead-letters, this predicate keeps excluding the user
+// indefinitely — "never deleted", not "delayed by a day" or "one job cycle" — until someone
 // notices the dead-lettered job and replays it. See manual_tier_override_expiry_check.go's Work()
 // for the failure metric/log this honesty depends on staying observable. See
 // TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a delay

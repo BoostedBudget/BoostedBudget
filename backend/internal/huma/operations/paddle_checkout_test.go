@@ -248,9 +248,11 @@ func (m *mockProfileRepo) UpdateUserEmailTx(ctx context.Context, tx pgx.Tx, user
 	return args.Error(0)
 }
 
-// setupTestCheckoutHandlerBase creates a handler with mock dependencies and optional household repo.
-// Used by both setupTestCheckoutHandler and setupTestCheckoutHandlerWithHouseholdRepo.
-func setupTestCheckoutHandlerBase(t *testing.T, householdRepo checkoutHouseholdSeatReader) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
+// setupTestCheckoutHandlerBase creates a handler with mock dependencies and optional household
+// repo / entitlement checker. Used by setupTestCheckoutHandler,
+// setupTestCheckoutHandlerWithHouseholdRepo, and any test that needs both a comped user AND a
+// wired (mocked) EntitlementRepo — see TestHandleCreateCheckoutSession_CompedUser_HouseholdCoverageGateRuns.
+func setupTestCheckoutHandlerBase(t *testing.T, householdRepo checkoutHouseholdSeatReader, entitlementRepo checkoutEntitlementReader) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
 	t.Helper()
 
 	mockService := new(mockPaddleCheckoutService)
@@ -269,21 +271,23 @@ func setupTestCheckoutHandlerBase(t *testing.T, householdRepo checkoutHouseholdS
 	}))
 
 	handler := NewPaddleCheckoutHandler(PaddleCheckoutHandlerDeps{
-		PaddleService: mockService,
-		ProfileRepo:   mockRepo,
-		Config:        cfg,
-		TierConfig:    tierConfig,
-		Logger:        logger,
-		HouseholdRepo: householdRepo,
+		PaddleService:   mockService,
+		ProfileRepo:     mockRepo,
+		Config:          cfg,
+		TierConfig:      tierConfig,
+		Logger:          logger,
+		HouseholdRepo:   householdRepo,
+		EntitlementRepo: entitlementRepo,
 	})
 
 	return handler, mockService, mockRepo
 }
 
-// setupTestCheckoutHandler creates a handler with mock dependencies (no household repo)
+// setupTestCheckoutHandler creates a handler with mock dependencies (no household repo, no
+// entitlement checker)
 func setupTestCheckoutHandler(t *testing.T) (*PaddleCheckoutHandler, *mockPaddleCheckoutService, *mockProfileRepo) {
 	t.Helper()
-	return setupTestCheckoutHandlerBase(t, nil)
+	return setupTestCheckoutHandlerBase(t, nil, nil)
 }
 
 // Helper to create context with user_id using the correct typed context key
@@ -1084,7 +1088,7 @@ func setupTestCheckoutHandlerWithHouseholdRepo(t *testing.T) (*PaddleCheckoutHan
 	t.Helper()
 
 	householdRepo := &mockHouseholdSeatRepoForCheckout{}
-	handler, mockService, mockRepo := setupTestCheckoutHandlerBase(t, householdRepo)
+	handler, mockService, mockRepo := setupTestCheckoutHandlerBase(t, householdRepo, nil)
 	return handler, mockService, mockRepo, householdRepo
 }
 
@@ -2213,6 +2217,56 @@ func TestHandleCreateCheckoutSession_CompedUser_RawCancelled_AllowedToCheckout(t
 	require.NotNil(t, output)
 	assert.Contains(t, output.Body.CheckoutURL, "checkout.paddle.com")
 
+	mockRepo.AssertExpectations(t)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandleCreateCheckoutSession_CompedUser_HouseholdCoverageGateRuns is the requirements-gap
+// analysis (PR #1443) item 4 fix: both comped-checkout pin tests above
+// (...RawInactive_AllowedToCheckout and its RawCancelled sibling) use setupTestCheckoutHandler,
+// which wires EntitlementRepo as nil — so the household-coverage gate at paddle_checkout.go:262-270
+// is SKIPPED entirely (the `if h.entitlementRepo != nil` guard never even evaluates the check) on
+// both, never actually exercised for a comped user. Harmless in production today — an admin
+// override named e.g. "household_2" never creates a real household_members row, so
+// IsCoveredByHousehold always resolves false for a comped user regardless — but that was unproven
+// by any test. This variant wires a real (mocked) checker via setupTestCheckoutHandlerBase and
+// asserts the checker's expectation is actually satisfied (mock.AssertExpectations fails an
+// un-called On(...) expectation), so this test cannot pass by the gate silently being skipped
+// again — unlike its two RawInactive/RawCancelled siblings, which would pass identically whether
+// or not the gate ran at all.
+func TestHandleCreateCheckoutSession_CompedUser_HouseholdCoverageGateRuns(t *testing.T) {
+	checker := &mockCoverageCheckerForCheckout{}
+	handler, mockService, mockRepo := setupTestCheckoutHandlerBase(t, nil, checker)
+	ctx := contextWithUserID("user_123")
+
+	customerID := "ctm_01h1234567890"
+	override := "household_2"
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user_123",
+		Email:              "test@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "inactive", // real subscription lapsed
+		PaddleCustomerID:   &customerID,
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd, // admin comp, still active -> effective status is "active"
+	}
+
+	input := &CreateCheckoutInput{}
+	input.UserID = "user_123"
+	input.Body.Tier = "premium"
+	input.Body.BillingInterval = "month"
+
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	checker.On("IsCoveredByHousehold", ctx, "user_123").Return(false, nil)
+	mockService.On("CreateCheckoutSession", ctx, customerID, mock.Anything, user.Email, mock.Anything, user.ID).
+		Return("https://checkout.paddle.com/...", "txn_comp_gate", nil)
+
+	output, err := handler.HandleCreateCheckoutSession(ctx, input)
+
+	require.NoError(t, err, "a comped user not covered by a household must still reach checkout")
+	require.NotNil(t, output)
+	checker.AssertExpectations(t) // the pin: fails if IsCoveredByHousehold was never called
 	mockRepo.AssertExpectations(t)
 	mockService.AssertExpectations(t)
 }
