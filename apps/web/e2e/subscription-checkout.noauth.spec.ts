@@ -30,25 +30,39 @@ test.describe('Subscription Checkout - Paddle Integration', () => {
   test('should display all subscription tiers on pricing page', async ({ page }) => {
     await page.goto('/pricing')
 
-    // Verify all 5 tiers are displayed
-    await expect(page.getByText('Premium')).toBeVisible()
-    await expect(page.getByText('Household 2')).toBeVisible()
-    await expect(page.getByText('Household 3')).toBeVisible()
-    await expect(page.getByText('Household 4')).toBeVisible()
-    await expect(page.getByText('Household 5')).toBeVisible()
+    // Verify all 5 tiers are displayed. Display names come from
+    // config/subscription_tiers.yaml: "Household (N)" (household_5 is "Household (5+)"),
+    // parenthesized — a bare "Household 2" substring never matches that text.
+    await expect(page.getByRole('heading', { name: 'Premium' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Household (2)' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Household (3)' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Household (4)' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Household (5+)' })).toBeVisible()
   })
 
   test('should show monthly and yearly pricing options', async ({ page }) => {
     await page.goto('/pricing')
+    // Tier cards render only after the async tiers fetch resolves. page.textContent() (unlike
+    // expect(locator).toBeVisible()) does not auto-retry, so it was racing the fetch and
+    // reading the pre-render DOM — anchor on a real heading first.
+    await expect(page.getByRole('heading', { name: 'Choose Your Plan' })).toBeVisible()
 
-    // Look for pricing indicators (e.g., /month, /year)
-    const pageContent = await page.textContent('body')
-    expect(pageContent).toContain('month')
-    expect(pageContent).toContain('year')
+    // Assert on the actual toggle UI rather than a raw case-sensitive body-text substring.
+    // The original `toContain('month')` / `toContain('year')` pair only ever passed by
+    // accident: the default (monthly) view's price suffix literally renders lowercase
+    // "/month", but its "/year" counterpart only renders after switching to the yearly view
+    // — and the always-visible toggle button reads "Yearly" (capital Y), which a lowercase
+    // 'year' substring check can never match. Querying the two radio options directly tests
+    // the thing the test name actually promises: both billing periods are selectable.
+    await expect(page.getByRole('radio', { name: 'Monthly' })).toBeVisible()
+    await expect(page.getByRole('radio', { name: /yearly/i })).toBeVisible()
   })
 
   test('should have subscribe buttons for each tier', async ({ page }) => {
     await page.goto('/pricing')
+    // Same race as above: wait for the tier grid to render before counting buttons —
+    // Locator.count() does not retry the way expect(locator).toBeVisible() does.
+    await expect(page.getByRole('heading', { name: 'Choose Your Plan' })).toBeVisible()
 
     // Count subscribe buttons (one per tier)
     const subscribeButtons = page.getByRole('button', { name: /subscribe/i })
@@ -100,8 +114,10 @@ test.describe('Pricing Page Display', () => {
   test('should show tier names and descriptions', async ({ page }) => {
     await page.goto('/pricing')
 
-    // Verify tier names are displayed
-    await expect(page.locator('text=Premium')).toBeVisible()
+    // Verify tier names are displayed. Scoped to the heading role: a bare 'text=Premium'
+    // locator is a strict-mode violation here — "Premium" also appears in every other
+    // tier's description ("Premium features for N family members") and in FAQ copy.
+    await expect(page.getByRole('heading', { name: 'Premium' })).toBeVisible()
 
     // Verify page has pricing content
     const hasContent = await page.locator('body').textContent()
@@ -110,6 +126,8 @@ test.describe('Pricing Page Display', () => {
 
   test('should display pricing in USD currency', async ({ page }) => {
     await page.goto('/pricing')
+    // Same fetch-race as the other raw-textContent tests above — anchor on a real heading.
+    await expect(page.getByRole('heading', { name: 'Choose Your Plan' })).toBeVisible()
 
     const pageContent = await page.textContent('body')
     // Should contain dollar signs or USD
