@@ -1028,6 +1028,21 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			if !domain.SubscriptionStatus(current.SubscriptionStatus).IsEligibleForPlaidDisconnectRepair() {
 				return false, nil
 			}
+			// Issue #1413 Task JA (live production defect, PR #1443 round-7 gap analysis): a GDPR
+			// deletion request filed in the race window between GetUsersNeedingPlaidDisconnectRepair's
+			// candidate selection and this worker's per-item Plaid call must abort the repair, exactly
+			// like a comp granted or a resubscribe in that same window does below. Without this check,
+			// this candidate would have its bank connections disconnected here even though
+			// GetUsersNeedingPlaidDisconnectRepair's own `deletion_requested_at IS NULL` filter
+			// (profile_repository.go) would have excluded them outright had the deletion request been
+			// on the row before the candidate query ran at all — an inconsistency between what the
+			// candidate query would select and what this re-verify allows through. Mirrors
+			// CancelDeletion's own fix (profile_repository.go) for the same underlying invariant:
+			// deletion_requested_at gates this subsystem everywhere else, and this re-check closes the
+			// one place it did not.
+			if current.DeletionRequestedAt != nil {
+				return false, nil
+			}
 			// Issue #1413 round-12 Fix 2: HasActiveManualOverride() (live-only), not
 			// HasAnyManualOverride() — see the belt-and-braces guard above this loop for the full
 			// reasoning. A lapsed override must not abort an in-progress repair; only a comp granted
