@@ -434,6 +434,65 @@ func TestPlaidDisconnectRepair_Integration_ExcludesLiveComp(t *testing.T) {
 	}
 }
 
+// TestPlaidDisconnectRepair_Integration_ExcludesIndefiniteComp closes a gap in the Plaid-repair
+// suite (Issue #1413/#1443 gap analysis, PR #1443 AC9): every other "live comp" fixture in this
+// file (TestPlaidDisconnectRepair_Integration_ExcludesLiveComp and its siblings below) sets
+// manual_tier_ends_at to a finite FUTURE timestamp, which only exercises
+// noActiveManualOverridePredicate's `manual_tier_ends_at >= NOW()` disjunct. Both
+// domain.User.hasActiveManualOverrideAt and this predicate treat a NULL manual_tier_ends_at as a
+// PERMANENT comp (never expires) via a SEPARATE `manual_tier_ends_at IS NULL` disjunct — an admin
+// granting an override with no end date at all — and nothing in this suite had ever driven a row
+// through that specific disjunct. Falsifiability: replacing
+// `manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW()` with
+// `COALESCE(manual_tier_ends_at, '-infinity'::timestamptz) >= NOW()` in
+// noActiveManualOverridePredicate (profile_repository.go) — a realistic bug that treats a NULL end
+// date as already-expired — makes this test fail: GetUsersNeedingPlaidDisconnectRepair would then
+// wrongly select this indefinitely-comped user for a live Plaid disconnect. (Simply deleting the
+// `IS NULL OR` disjunct does NOT falsify this test: `manual_tier_ends_at >= NOW()` against a NULL
+// column evaluates to SQL NULL/UNKNOWN, which the enclosing `NOT (... AND ...)` — and then the
+// outer `WHERE ... AND` — both still treat as "exclude this row," so that particular mutation
+// coincidentally preserves the correct behavior. The COALESCE mutation above is the one that
+// actually changes the truth value and was used to verify this test red/green.)
+func TestPlaidDisconnectRepair_Integration_ExcludesIndefiniteComp(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_plaidindefcomp_" + suffix,
+		Email:              "plaidindefcomp-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour)) // past grace
+
+	// Indefinite (permanent) comp: an override with NO end date at all — manual_tier_ends_at
+	// stays NULL. noActiveManualOverridePredicate's `manual_tier_ends_at IS NULL` disjunct must
+	// still exclude this user, distinct from the finite-future-end-date case above.
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = NULL WHERE id = $1`, user.ID)
+	require.NoError(t, err)
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID, "a user with an INDEFINITE (NULL end date) manual_tier_override must never be a repair candidate")
+	}
+}
+
 // TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LapsedNeverRemoved_StillRepaired
 // is the Issue #1413 round-13 P0 regression test, built through PRODUCTION WRITERS ONLY — no raw
 // `UPDATE users SET manual_tier_override ...` or `SET plaid_cleanup_pending_at ...` anywhere in this

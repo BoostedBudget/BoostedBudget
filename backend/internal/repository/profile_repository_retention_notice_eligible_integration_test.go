@@ -598,3 +598,48 @@ func TestRetentionNoticeEligibleForOccurrence_Integration_StaleOccurrence_Return
 		})
 	}
 }
+
+// TestRetentionNoticeEligibleForOccurrence_Integration_ActiveOverride_ReturnsFalse closes a gap
+// left by the *ForOccurrence tests above (Issue #1413/#1443 gap analysis, PR #1443 AC9 pattern-2
+// finding): IsRetentionNotice30d/7dEligible's own ActiveOverride proof
+// (TestRetentionNoticeEligible_Integration_ActiveOverride_ReturnsFalse, above) exercises that
+// override predicate for the NON-occurrence-scoped methods, but the *ForOccurrence siblings
+// splice their OWN copy of noManualOverrideAtAllPredicate at profile_repository.go:1848/:1872 —
+// nothing before this test proved THAT copy actually excludes a comped user. Every
+// *ForOccurrence test up to this point only varies the occurrence (retention_expires_at) axis, on
+// an always-uncomped fixture. Uses a MATCHING occurrence (so the occurrence discriminator itself
+// passes) plus a live override, isolating the override predicate as the only thing that can
+// produce `false`.
+func TestRetentionNoticeEligibleForOccurrence_Integration_ActiveOverride_ReturnsFalse(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	tests := []struct {
+		name     string
+		eligible func(context.Context, string, time.Time) (bool, error)
+		offset   time.Duration
+	}{
+		{"30d", repo.IsRetentionNotice30dEligibleForOccurrence, windowOffset30d()},
+		{"7d", repo.IsRetentionNotice7dEligibleForOccurrence, windowOffset7d()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suffix := fmt.Sprintf("occcomp_%s_%d", tt.name, time.Now().UnixNano())
+			expiresAt := time.Now().Add(tt.offset).Truncate(time.Microsecond)
+			overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+			tier := "premium"
+			user := createRetentionNoticeFixtureUser(t, ctx, pool, repo, suffix, retentionNoticeFixtureOpts{
+				retentionExpiresAt: &expiresAt,
+				manualTierOverride: &tier,
+				manualTierEndsAt:   &overrideEndsAt,
+			})
+
+			eligible, err := tt.eligible(ctx, user.ID, expiresAt)
+			require.NoError(t, err)
+			assert.False(t, eligible, "a user with a live manual tier override, even with the exact matching occurrence, must not be %s-notice eligible", tt.name)
+		})
+	}
+}

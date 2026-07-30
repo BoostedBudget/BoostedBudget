@@ -355,6 +355,16 @@ func TestTrialService_ExpireTrial_HouseholdCheckFails_SkipsDefensivelyButPropaga
 
 // ─── #1413: comped users are exempt from trial-expiry destructive actions ──
 
+// TestTrialService_ExpireTrial_ActiveOverride_Skipped proves the TOP-OF-FUNCTION comp guard
+// (trial_service.go:237) alone stops ExpireTrial from proceeding. The GetUserByID stub carries
+// .Once() so it can only satisfy the :237 read — if that guard were deleted, execution would fall
+// through to the household check (skipped, no checker configured), win the permissive work claim,
+// and then re-read the user a SECOND time at trial_service.go:295 for the mid-run re-check
+// (:300). With no second stubbed response available, that second call panics on an unexpected
+// mock invocation, failing this test for the right reason. (An earlier version of this test
+// stubbed GetUserByID without .Once(), so deleting :237 silently re-read the SAME comped user,
+// tripped :300 instead, and left every assertion below — including both AssertNotCalled calls —
+// still passing: the test survived deleting the very gate it was named for.)
 func TestTrialService_ExpireTrial_ActiveOverride_Skipped(t *testing.T) {
 	service, repo := setupTestTrialService(t)
 	ctx := context.Background()
@@ -370,11 +380,12 @@ func TestTrialService_ExpireTrial_ActiveOverride_Skipped(t *testing.T) {
 		ManualTierOverride: &override,
 		ManualTierEndsAt:   &overrideEndsAt,
 	}
-	repo.On("GetUserByID", ctx, userID).Return(user, nil)
+	repo.On("GetUserByID", ctx, userID).Return(user, nil).Once()
 
 	err := service.ExpireTrial(ctx, userID)
 
 	require.NoError(t, err)
+	repo.AssertNumberOfCalls(t, "GetUserByID", 1)
 	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
 	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

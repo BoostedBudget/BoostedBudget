@@ -959,6 +959,67 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery(t *testi
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery is retention_cleanup_check.go:1022's
+// own regression proof — isStillEligible's per-re-read comp guard, distinct from the
+// belt-and-braces guard at line 945 just above the candidate loop. Every existing comp-guard test
+// in this file (TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser,
+// TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp) puts the override on the BATCH
+// candidate itself, tripping the belt-and-braces guard before GetUserByID is ever called — so
+// neither test can tell that guard apart from a regression that deleted isStillEligible's OWN
+// HasActiveManualOverride() check at :1022 (Issue #1413/#1443 gap analysis, PR #1443 AC9
+// pattern-2 finding). Here the BATCH snapshot carries no override at all (passes the
+// belt-and-braces guard, reaching the re-read), but the RE-READ shows an admin granted a comp in
+// the window since the candidate query ran — mirrors
+// TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery's shape (just above), but for
+// the override axis instead of the status axis.
+func TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery(t *testing.T) {
+	ctx := context.Background()
+
+	stalePendingSince := time.Now().Add(-100 * time.Hour)
+	staleUser := &domain.User{ID: "user-compedsincequery", Email: "compedsincequery@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &stalePendingSince}
+	users := []*domain.User{staleUser}
+	override := "household_3"
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	currentUser := &domain.User{
+		ID: "user-compedsincequery", Email: "compedsincequery@example.com", SubscriptionStatus: "cancelled",
+		PlaidCleanupPendingAt: &stalePendingSince,
+		ManualTierOverride:    &override,
+		ManualTierEndsAt:      &overrideEndsAt,
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return(users, nil)
+	mockRepo.On("GetUserByID", ctx, "user-compedsincequery").Return(currentUser, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// DisconnectAllUserItemsIfEligible and ClearPlaidCleanupPendingIfMatches are deliberately left
+	// unstubbed: an unexpected call panics, proving isStillEligible's OWN comp re-check (not the
+	// belt-and-braces guard, which this batch user does not trip) is what stops the repair.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAndDeletion proves the
 // Plaid-disconnect repair step is non-fatal, like the retention-clock repair and notice/deletion
 // steps: a repair failure must not prevent the notice and deletion steps from still running in the

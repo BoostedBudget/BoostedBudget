@@ -198,6 +198,51 @@ func TestRetentionClockRepair_Integration_ExcludesComped(t *testing.T) {
 	}
 }
 
+// TestRetentionClockRepair_Integration_RepairItselfRefusesComped closes a gap left by the test
+// above (Issue #1413/#1443 gap analysis, PR #1443 AC9 pattern-2 finding):
+// TestRetentionClockRepair_Integration_ExcludesComped only proves
+// GetUsersNeedingRetentionClockRepair's OWN copy of noManualOverrideAtAllPredicate excludes a
+// comped candidate from the SELECT — it never calls RepairRetentionClock itself, so that
+// method's OWN predicate splice (profile_repository.go:2089) has never been directly exercised
+// with a comped fixture. TestRetentionClockRepair_Integration_ExcludesUserWithExistingClock and
+// ..._ExcludesActiveUser both already call RepairRetentionClock directly as defense-in-depth
+// (mirroring a stale candidate list); this test does the same for the override axis: a comped,
+// NULL-clock, cancelled user must have the UPDATE itself refuse to write, not merely be absent
+// from the candidate list.
+func TestRetentionClockRepair_Integration_RepairItselfRefusesComped(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_repaircompdirect_" + suffix,
+		Email:              "repaircompdirect-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
+
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, overrideEndsAt, user.ID)
+	require.NoError(t, err)
+
+	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), time.Now().AddDate(0, 6, 0))
+	require.NoError(t, err)
+	assert.False(t, repaired, "RepairRetentionClock must refuse to start the retention clock for a user with a live manual tier override, even called directly against a NULL-clock candidate")
+
+	var retExpires *time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT retention_expires_at FROM users WHERE id = $1`, user.ID).Scan(&retExpires))
+	assert.Nil(t, retExpires, "no retention clock must be started for a comped user")
+}
+
 func TestRetentionClockRepair_Integration_ExcludesDeletionPending(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

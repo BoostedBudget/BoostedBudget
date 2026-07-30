@@ -1836,6 +1836,71 @@ func TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoRetentionClock(t
 	mockWebhookRepo.AssertExpectations(t)
 }
 
+// TestWorker_SubscriptionCanceled_CompGrantedAfterClaim_NoDestructiveWork proves the SECOND comp
+// guard — subscription_webhook.go:955's post-claim re-verify — actually stops the destructive
+// Plaid disconnect / retention-clock writes on its own. Both
+// TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoPlaidDisconnect/NoRetentionClock
+// above supply a comped user for the FIRST post-write re-read too (freshUser, :866), which trips
+// the EARLIER guard at :889 before the claim is ever won and before :955 is reached at all — so
+// neither of those tests can tell the two guards apart (deleting :955 leaves them green; this was
+// gate-masking case #1413/#1443 pattern-1 finding). Here the initial read, the post-write fresh
+// re-read (:889's input), and syncClerkMetadata's own re-read are all UNCOMPED so :889 passes and
+// the claim is won; only the FOURTH read — the :950 post-claim re-verify — returns a comped user,
+// so :955 is the only guard that can account for DisconnectAllUserItems/SetRetentionDates never
+// being called. Both are deliberately left unstubbed: a regression that lets execution reach them
+// panics on an unexpected mock call rather than silently passing.
+func TestWorker_SubscriptionCanceled_CompGrantedAfterClaim_NoDestructiveWork(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	notCompedUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
+	override := "household_7"
+	compedUser := &domain.User{
+		ID:                 "user_2abc123def456",
+		ClerkUserID:        "clerk_user_123",
+		SubscriptionTier:   "premium",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// Call 1 (initial read, :852), call 2 (post-write fresh re-read / the :889 input, :866), and
+	// call 3 (syncClerkMetadata's own re-read, :285) are all uncomped so :889 passes and the claim
+	// is won. Only call 4+ (the post-claim re-verify at :950) is comped.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(notCompedUser, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(notCompedUser, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(notCompedUser, nil).Once()
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(compedUser, nil)
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNumberOfCalls(t, "GetUserByID", 4)
+	mockWebhookRepo.AssertExpectations(t)
+}
+
 // TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestructive proves the
 // negative direction (an over-tight fix that always skips once ANY snapshot ever showed a comp
 // would fail this): the INITIAL read shows an active override, but the RE-READ (after the write)
@@ -2707,6 +2772,51 @@ func TestReconcileOverCapacity_HouseholdLookupError_ReturnsError(t *testing.T) {
 	err := worker.reconcileOverCapacity(ctx, "owner-1")
 
 	require.Error(t, err)
+}
+
+// TestReconcileOverCapacity_OwnerComped_UsesEffectiveTierSeatLimit proves effectiveTierName
+// (subscription_webhook.go:257, EffectiveTierWithActiveOverride) actually drives the seat limit
+// reconcileOverCapacity uses, not the owner's raw SubscriptionTier. Every OTHER
+// TestReconcileOverCapacity_* test above fixtures an owner with no ManualTierOverride at all, so
+// none of them can tell effectiveTierName's override branch apart from a regression that read
+// owner.SubscriptionTier directly (Issue #1413/#1443 gap analysis, PR #1443 AC9 pattern-2
+// finding). Here the owner's RAW tier is "premium" (1 seat) but carries a LIVE
+// "household_5" (5 seats) comp; with 3 active household members, honoring the comp keeps the
+// household within capacity (no ExpectExec beyond Begin/Commit is registered), whereas a
+// regression that fell back to the raw "premium" 1-seat limit would call SetOverCapacity — an
+// unstubbed query pgxmock would reject, failing this test.
+func TestReconcileOverCapacity_OwnerComped_UsesEffectiveTierSeatLimit(t *testing.T) {
+	worker, _, mockProfileRepo, _, mockHHRepo, pool := setupWorkerTestWithHousehold(t)
+	defer pool.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1"}
+	mockHHRepo.On("GetHouseholdForUser", ctx, "owner-1").Return(hh, true, true, nil)
+	overrideEndsAt := now.Add(24 * time.Hour) // still active
+	override := "household_5"                // comp grants 5 seats; raw tier grants only 1
+	owner := &domain.User{
+		ID:                 "owner-1",
+		SubscriptionTier:   "premium", // raw tier — would cap seats far lower if used
+		SubscriptionStatus: "active",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &overrideEndsAt,
+	}
+	mockProfileRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+
+	pool.ExpectBegin()
+	pool.ExpectQuery("owner_user_id, name, created_at, updated_at").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "owner_user_id", "name", "created_at", "updated_at", "over_capacity_since", "over_capacity_start_notice_sent_at", "over_capacity_warn3d_sent_at"}).
+			AddRow("hh-1", "owner-1", "The Smiths", now, now, nil, nil, nil))
+	pool.ExpectQuery("SELECT COUNT").WithArgs("hh-1").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3)) // 3 active members
+	// No ExpectExec: 3 <= household_5's 5-seat limit is within capacity when the comp is honored.
+	pool.ExpectCommit()
+
+	err := worker.reconcileOverCapacity(ctx, "owner-1")
+
+	require.NoError(t, err)
+	require.NoError(t, pool.ExpectationsWereMet(), "the owner's live comp must widen the seat limit used for over-capacity — a regression using the raw premium (1-seat) tier would see 3 active members exceed it and call SetOverCapacity, which isn't stubbed here")
 }
 
 // ─── Call-site wiring: processSubscriptionUpdated / Activated / Canceled / PastDue ──
