@@ -15,9 +15,12 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import type { BadgeProps } from '@/components/ui/badge'
 import { Loader2, User, Calendar, MapPin, CreditCard, Link2, Zap, Receipt, PiggyBank, Shield } from 'lucide-react'
 import type { AdminUserDetail } from '@boostedbudget/api-client/models'
 import { useRegions } from '../../../shared/hooks/useRegions'
+import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
+import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
 
 export interface UserDetailModalProps {
   /** User detail data */
@@ -53,12 +56,40 @@ const TIER_DISPLAY_MAP: Record<string, string> = {
   household_5: 'Household (5+)',
 }
 
+// Mirrors UsersPage.tsx's overrideStatusVariant so the "Override Status" label reads
+// identically on both surfaces (Issue #1413 M10 follow-up).
+const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
+  if (variant === 'permanent') return 'success'
+  if (variant === 'expiring') return 'info'
+  if (variant === 'expired') return 'warning'
+  return 'secondary'
+}
 
 /**
  * UserDetailModal - Modal for viewing user details
  */
 export function UserDetailModal({ user, loading, open, onClose }: UserDetailModalProps) {
   const { getRegionWithFlag } = useRegions()
+
+  // Whether a manual tier override is currently live for this user. Must NOT be derived from
+  // `effective_status` — that field answers "does this user currently have write access", which
+  // is also true when access comes from someone else's household plan, so it would badge users
+  // with no override of their own as comped (Issue #1413 M10 regression). `isOverrideActive`
+  // with `KNOWN_TIER_NAMES` is the only correct predicate for "is there a live admin override on
+  // this row right now" — same derivation as UsersPage.tsx's `hasLiveOverride` and
+  // SubscriptionOverrideModal.tsx's `isLiveOverride`, reused rather than reinvented so all three
+  // surfaces agree.
+  const hasLiveOverride = user
+    ? isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
+    : false
+
+  // An expired (or malformed-tier) override must NOT be shown as the effective tier — falls back
+  // to the raw subscription_tier, same as the backend's ComputeEffectiveTier (Issue #1413).
+  const effectiveTier = user ? (hasLiveOverride ? (user.manual_tier_override as string) : user.subscription_tier) : ''
+
+  // Presentational only (Permanent / Expires in Nd / Expired / null) — independent of tier-name
+  // validity, matching UsersPage.tsx's "Override Status" column exactly.
+  const overrideStatus = user ? getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at) : null
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -97,8 +128,23 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                     <CreditCard className="text-muted-foreground/60 mt-0.5 shrink-0" size={16} />
                     <div className="flex flex-col gap-0.5">
                       <span className="text-xs text-muted-foreground/60">Subscription</span>
-                      <span className="text-sm text-foreground">
-                        {TIER_DISPLAY_MAP[user.subscription_tier] ?? user.subscription_tier} ({user.subscription_status})
+                      <span className="text-sm text-foreground flex items-center gap-1.5 flex-wrap">
+                        {TIER_DISPLAY_MAP[effectiveTier] ?? effectiveTier} ({user.subscription_status})
+                        {hasLiveOverride && (
+                          <Badge
+                            variant="info"
+                            size="sm"
+                            title="Effective status: active (manual override)"
+                            aria-label="Effective status: active (manual override)"
+                          >
+                            Comped
+                          </Badge>
+                        )}
+                        {overrideStatus && (
+                          <Badge variant={overrideStatusVariant(overrideStatus.variant)} size="sm">
+                            {overrideStatus.label}
+                          </Badge>
+                        )}
                       </span>
                     </div>
                   </div>
