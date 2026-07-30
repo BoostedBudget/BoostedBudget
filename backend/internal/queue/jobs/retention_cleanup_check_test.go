@@ -948,6 +948,137 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCoun
 	assert.Contains(t, logOutput, "aborted mid-run", "the abort must be visible in the logs, not silently swallowed")
 }
 
+// ─── Issue #1413 Finding 4 (Codex review, PR #1443): a failed marker clear must not strand the
+// user permanently ──
+//
+// If DisconnectAllUserItemsIfEligible succeeds (every item is now disconnected) but the
+// subsequent ClearPlaidCleanupPendingIfMatches call fails, the OLD code logged a Warn and moved on
+// — the comment there claimed the user "will harmlessly be re-considered next run." That claim is
+// false: the successful disconnect just removed the only live linked item
+// GetUsersNeedingPlaidDisconnectRepair's own EXISTS clause requires, so that query will NEVER
+// select this user again — the marker is stuck non-NULL forever, invisible to every future run.
+//
+// The fix retries the clear (a simple conditional UPDATE, not a remote API call) up to
+// plaidCleanupMarkerClearMaxAttempts times before giving up, and — if every attempt still fails —
+// treats it as a genuine per-user failure (errorCount / PlaidDisconnectRepairUserFailuresTotal),
+// not a silently-swallowed "harmless" outcome, so a persistent failure is at least observable via
+// the same alerting this counter already backs.
+
+// TestRetentionCleanupCheck_PlaidRepair_ClearFailure_RetriesThenSucceeds is the positive-retry
+// case: the first two clear attempts fail (modeling a transient DB blip), the third succeeds.
+//
+// Falsifiability: against the pre-fix code (a single unretried clear call), this test fails —
+// ClearPlaidCleanupPendingIfMatches would be asserted called once, not three times, and the mock's
+// third expectation (a `.Once()` success) would never be consumed, leaving the marker's real-world
+// equivalent stuck set despite a transient, recoverable failure.
+func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_RetriesThenSucceeds(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	userID := "user-clear-retry-succeeds"
+	user := &domain.User{ID: userID, Email: "clearretrysucceeds@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, userID, mock.Anything).Return(nil)
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset")).Once()
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset")).Once()
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(true, nil).Once()
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockRepo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", 3)
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before, after, "a clear that eventually succeeds via retry must NOT be counted as a failure")
+}
+
+// TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilentlyHarmless is the RED
+// test for Finding 4 itself: every clear attempt fails. The job must still succeed (per-user
+// isolation is preserved — one user's stuck marker must not block the GDPR notice/deletion steps),
+// but this must now be visible: the failure-visibility counter increments, the log escalates past
+// Warn, and the log text must no longer claim the old "harmlessly re-considered next run" outcome
+// — replaced with language reflecting the real risk (the user may now be permanently unreachable by
+// this repair pass).
+//
+// Falsifiability: against the pre-fix code, this test fails on three independent axes at once: the
+// mock is called once, not plaidCleanupMarkerClearMaxAttempts times; the counter does not move; and
+// the log contains the old "harmlessly" claim instead of the corrected language.
+func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilentlyHarmless(t *testing.T) {
+	ctx := context.Background()
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	userID := "user-clear-retry-exhausted"
+	user := &domain.User{ID: userID, Email: "clearretryexhausted@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, userID, mock.Anything).Return(nil)
+	// No .Once() — matches every call, modeling a persistent (not merely transient) failure.
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset"))
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	before := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a permanently-stuck marker for one user must not fail the whole job")
+
+	mockRepo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", plaidCleanupMarkerClearMaxAttempts)
+
+	after := testutil.ToFloat64(observability.PlaidDisconnectRepairUserFailuresTotal)
+	assert.Equal(t, before+1, after,
+		"a marker clear that fails every retry must increment the failure-visibility counter — it is not a harmless outcome")
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "an exhausted-retry clear failure must be logged at Error, not just Warn")
+	assert.NotContains(t, logOutput, "harmlessly re-considered",
+		"the old claim that the user will be \"harmlessly re-considered next run\" is false — the successful "+
+			"disconnect already removed the live item GetUsersNeedingPlaidDisconnectRepair requires, so this "+
+			"user can never be reselected; the corrected log text must not repeat that claim")
+	assert.Contains(t, logOutput, "stuck non-NULL",
+		"the corrected log text must describe the real risk: the marker may now be stuck non-NULL permanently")
+}
+
 // TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError proves the sentinel is still
 // detected via errors.Is when DisconnectAllUserItemsIfEligible wraps it (as the real service does,
 // via fmt.Errorf("%w: ...", ErrCleanupAborted)) rather than returning the bare sentinel.
@@ -1396,6 +1527,65 @@ func TestRetentionCleanupCheckUniqueOpts(t *testing.T) {
 	// in this codebase cancels a retention_cleanup_check job.
 	assert.NotContains(t, opts.ByState, queue.JobStateCancelled)
 	assert.NotContains(t, opts.ByState, queue.JobStateDiscarded)
+}
+
+// ─── Issue #1413 Finding 2 (Codex review, PR #1443): main.go must actually consume
+// RetentionCleanupCheckUniqueOpts ──
+//
+// main.go's periodic-job registration hand-wrote its own &river.InsertOpts{...} literal whose
+// ByState still listed only Available, Scheduled, Running, Retryable, Pending — it never called
+// RetentionCleanupCheckUniqueOpts() (tested above) at all, so the round that added Completed to
+// that function was a no-op in production: a completed retention job still failed to block a
+// RunOnStart insertion after every restart/leader election, silently re-running the 30-day/7-day
+// GDPR pre-deletion notices and deleteExpiredAccounts on every deploy. This is the third "defined,
+// tested, never wired" instance on this branch — ManualTierOverrideExpiryCheckInsertOpts (Issue
+// #1413 G3) fixed the identical failure mode for the sibling job one registration below this one.
+//
+// RetentionCleanupCheckInsertOpts extracts the FULL *river.InsertOpts construction (not just the
+// UniqueOpts) into this package, mirroring ManualTierOverrideExpiryCheckInsertOpts exactly, so
+// main.go can call a single function instead of hand-writing a literal — main.go is not
+// unit-testable itself, so this extraction is what turns
+// TestRetentionCleanupCheckInsertOpts_CarriesUniqueOpts below from an assertion about an unconsumed
+// struct into a real guarantee about what main.go's periodic-job registration ships, once main.go
+// calls this function directly (no more separate hand-copied literal to drift from it).
+
+// TestRetentionCleanupCheckInsertOpts_Queue verifies the extracted InsertOpts helper sets
+// Queue: "low", matching every other periodic maintenance job registered in main.go.
+func TestRetentionCleanupCheckInsertOpts_Queue(t *testing.T) {
+	opts := RetentionCleanupCheckInsertOpts()
+
+	assert.Equal(t, "low", opts.Queue)
+}
+
+// TestRetentionCleanupCheckInsertOpts_CarriesUniqueOpts is the RED test for Finding 2: proves the
+// InsertOpts this function returns — the value main.go's periodic-job registration will call
+// directly once wired — carries river-native UniqueOpts matching RetentionCleanupCheckUniqueOpts()
+// field for field. Before this fix, main.go's hand-written literal had a ByState slice missing
+// Completed, so a job that had already completed within the current ByPeriod bucket did not block
+// a duplicate RunOnStart insert. This test would have failed against that literal (it asserts
+// against the actual constructed opts, not a copy-pasted expectation).
+func TestRetentionCleanupCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
+	opts := RetentionCleanupCheckInsertOpts()
+	want := RetentionCleanupCheckUniqueOpts()
+
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
+	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	assert.Equal(t, want.ByQueue, opts.UniqueOpts.ByQueue)
+
+	require.Len(t, opts.UniqueOpts.ByState, len(want.ByState),
+		"ByState must carry every state RetentionCleanupCheckUniqueOpts() documents — an extra or "+
+			"missing entry changes which job states are deduplicated against")
+	for i, s := range want.ByState {
+		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
+	}
+
+	// Belt-and-braces per Finding 2's own report: explicitly confirm Completed survives the
+	// conversion, not just an equal-length/ordered slice — this is the exact state whose absence
+	// made the previous round's fix a no-op in production.
+	assert.Contains(t, opts.UniqueOpts.ByState, rivertype.JobStateCompleted,
+		"the InsertOpts main.go actually ships must carry Completed in ByState — its absence here "+
+			"is exactly how Finding 2 (Codex review, PR #1443) slipped past a passing "+
+			"TestRetentionCleanupCheckUniqueOpts test while production stayed broken")
 }
 
 // ─── Issue #1413 P0: RunOnStart must be true ───────────────────────────────────────────────

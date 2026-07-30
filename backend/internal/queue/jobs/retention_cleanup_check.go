@@ -15,6 +15,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 // retentionNoticeClaimLease is the lease duration requested for both ActionRetentionNotice30d and
@@ -54,6 +55,20 @@ const retentionNoticeClaimLease = 5 * time.Minute
 // (no pending payment retry) and the primary goal here is closing a payment race, not running a
 // full second dunning cycle.
 const plaidDisconnectRepairGracePeriod = 72 * time.Hour
+
+// plaidCleanupMarkerClearMaxAttempts bounds how many times repairPlaidDisconnects retries
+// ClearPlaidCleanupPendingIfMatches after a successful Plaid disconnect, before giving up and
+// counting it as a genuine per-user failure — Issue #1413 Finding 4 (Codex review, PR #1443): a
+// single unretried failure here used to leave the marker set FOREVER, because the disconnect that
+// just succeeded removed the very live linked item GetUsersNeedingPlaidDisconnectRepair's own
+// EXISTS clause requires to ever reselect this user again. Retrying a handful of times, in the same
+// process, immediately after the failure, closes the common case (a transient DB blip) for a call
+// that is a simple conditional UPDATE, not a remote/rate-limited API call — no backoff schedule is
+// needed for that shape of retry.
+const plaidCleanupMarkerClearMaxAttempts = 3
+
+// plaidCleanupMarkerClearRetryDelay is the pause between the retry attempts above.
+const plaidCleanupMarkerClearRetryDelay = 50 * time.Millisecond
 
 // errPlaidCleanupNotConfigured is returned by repairPlaidDisconnects when w.plaidCleanup is nil —
 // Issue #1413 round-10 (round-9 review Blocker): a missing Plaid cleanup collaborator is a
@@ -912,16 +927,49 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// unconditional ClearPlaidCleanupPending: between the LAST successful per-item recheck
 		// above and this call, a comp could still be granted and removed, starting a brand-new
 		// episode with its own fresh marker — an unconditional clear here would erase that new
-		// episode's grace window entirely, the exact Fix 3 defect one call site later. A
-		// clearErr or a false (mismatch) result is logged and swallowed (non-fatal): the marker
-		// staying set (whether because of an error, or because it correctly moved on to a NEW
-		// episode) just means the user is harmlessly re-considered next run — repeat cleanup of an
-		// already-disconnected item is idempotent, and a mismatched marker means a genuinely
-		// different episode is what will be evaluated, on its own schedule.
-		cleared, clearErr := w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+		// episode's grace window entirely, the exact Fix 3 defect one call site later.
+		//
+		// Issue #1413 Finding 4 (Codex review, PR #1443): a clearErr here is retried up to
+		// plaidCleanupMarkerClearMaxAttempts times before being treated as a real failure — it is
+		// NOT harmless, and the comment that used to sit here (claiming the user "will harmlessly
+		// be re-considered next run") was false: DisconnectAllUserItemsIfEligible immediately above
+		// already succeeded, so every one of this user's items is now disconnected, meaning
+		// GetUsersNeedingPlaidDisconnectRepair's own live-item EXISTS clause will never match this
+		// user again on any future run. A marker left set by a failed clear here is therefore stuck
+		// non-NULL permanently, not "harmlessly re-considered." Retrying immediately (a same-process
+		// retry of a simple conditional UPDATE, not a remote/rate-limited API call) closes the
+		// common case — a transient DB blip — without needing a broader query change; if every
+		// attempt still fails, it is counted like any other genuine per-user failure in this loop
+		// (errorCount, PlaidDisconnectRepairUserFailuresTotal) so it is at least observable, rather
+		// than silently swallowed.
+		//
+		// A mismatched marker (cleared == false, clearErr == nil) is deliberately NOT retried and
+		// NOT counted as a failure — it means the marker legitimately moved on to a fresh episode
+		// since this worker started, a normal, stable outcome to be evaluated on its own schedule,
+		// not a transient error.
+		var cleared bool
+		var clearErr error
+		for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
+			cleared, clearErr = w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+			if clearErr == nil {
+				break
+			}
+			if attempt < plaidCleanupMarkerClearMaxAttempts {
+				w.logger.Warn("failed to clear plaid_cleanup_pending_at — retrying",
+					"job_id", jobID, "user_id", userID, "attempt", attempt, "error", clearErr)
+				time.Sleep(plaidCleanupMarkerClearRetryDelay)
+			}
+		}
 		if clearErr != nil {
-			w.logger.Warn("Plaid disconnect repaired but failed to clear plaid_cleanup_pending_at — next run will harmlessly re-consider this user",
-				"job_id", jobID, "user_id", userID, "error", clearErr)
+			w.logger.Error("Plaid disconnect repaired but failed to clear plaid_cleanup_pending_at after all retries — this user's Plaid items are already disconnected, so GetUsersNeedingPlaidDisconnectRepair's live-item requirement will never match them again; the marker may now be stuck non-NULL permanently unless cleared through another path",
+				"job_id", jobID, "user_id", userID, "attempts", plaidCleanupMarkerClearMaxAttempts, "error", clearErr)
+			errorCount++
+			// Issue #1413 Finding 4: same failure-visibility counter used by every other per-user
+			// failure in this loop — see its doc comment (observability/metrics.go), now updated to
+			// document this as a third increment site. A persistent clear failure is the highest-risk
+			// outcome this loop can produce (a permanently unreachable user, not just a retryable
+			// one), so it must not be less visible than a disconnect failure.
+			observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
 		} else if !cleared {
 			w.logger.Info("Plaid disconnect repaired, but plaid_cleanup_pending_at had already moved on to a new episode since this worker started — leaving the new episode's marker untouched for its own future run",
 				"job_id", jobID, "user_id", userID)
@@ -1034,6 +1082,44 @@ func RetentionCleanupCheckUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRetryable,
 			queue.JobStatePending,
 			queue.JobStateCompleted,
+		},
+	}
+}
+
+// RetentionCleanupCheckInsertOpts returns the *river.InsertOpts this job's periodic registration
+// in main.go must use — Queue: "low" plus the uniqueness options from
+// RetentionCleanupCheckUniqueOpts(), converted from this package's queue-runner-agnostic
+// queue.UniqueOpts to the river.UniqueOpts type river.InsertOpts.UniqueOpts actually requires (the
+// same conversion internal/queue/river/client.go's toRiverUniqueOpts performs for the
+// general-purpose enqueue path). Mirrors ManualTierOverrideExpiryCheckInsertOpts exactly.
+//
+// Issue #1413 Finding 2 (Codex review, PR #1443): main.go's periodic-job registration previously
+// hand-wrote its own &river.InsertOpts{...} literal — never calling RetentionCleanupCheckUniqueOpts()
+// at all — so the round that added Completed to that function's ByState was a no-op in production:
+// a completed retention job still failed to block a RunOnStart insertion after every process
+// restart or leader election, silently re-running the 30-day/7-day GDPR pre-deletion notices and
+// deleteExpiredAccounts on every deploy of a repo that ships several times a day. This is the third
+// "defined, tested, never wired" instance on this branch; ManualTierOverrideExpiryCheckInsertOpts
+// (Issue #1413 G3) fixed the identical failure mode for the sibling job's own periodic
+// registration one entry below this one in main.go. main.go now calls THIS function directly
+// instead of hand-writing the InsertOpts literal, so main.go is no longer a second,
+// independently-maintained expression of the same shape — a future change to
+// RetentionCleanupCheckUniqueOpts() automatically propagates to what actually ships.
+func RetentionCleanupCheckInsertOpts() *river.InsertOpts {
+	unique := RetentionCleanupCheckUniqueOpts()
+
+	states := make([]rivertype.JobState, len(unique.ByState))
+	for i, s := range unique.ByState {
+		states[i] = rivertype.JobState(s)
+	}
+
+	return &river.InsertOpts{
+		Queue: "low",
+		UniqueOpts: river.UniqueOpts{
+			ByArgs:   unique.ByArgs,
+			ByPeriod: unique.ByPeriod,
+			ByQueue:  unique.ByQueue,
+			ByState:  states,
 		},
 	}
 }
