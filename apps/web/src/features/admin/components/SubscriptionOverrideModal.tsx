@@ -38,7 +38,7 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from '../hooks/useAdminSubscription'
-import { isOverrideActive } from '../lib/overrideStatus'
+import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
 
 /** The fixed type-to-confirm literal for removing an override — never PII like the user's
@@ -106,9 +106,15 @@ function SubscriptionOverrideForm({
     // Reason is shared by both the Save Override and Remove Override actions — there is only
     // ever one destructive/mutating action in flight at a time, so a single field governs both.
     const [reason, setReason] = useState('')
-    const [expiresAt, setExpiresAt] = useState<Date | null>(
-        sub?.manual_tier_ends_at ? new Date(sub.manual_tier_ends_at) : null
-    )
+    // manual_tier_ends_at is an unconstrained field on the wire (see the tier-validity comments
+    // below) — an unparseable value must not crash the form. Without this guard, seeding the
+    // DatePicker's `selected` prop with an Invalid Date throws (date-fns' `format` rejects it),
+    // taking down the whole modal an admin would otherwise use to fix the very row that's broken.
+    const [expiresAt, setExpiresAt] = useState<Date | null>(() => {
+        if (!sub?.manual_tier_ends_at) return null
+        const parsedEndsAt = new Date(sub.manual_tier_ends_at)
+        return Number.isNaN(parsedEndsAt.getTime()) ? null : parsedEndsAt
+    })
     const [confirmRemove, setConfirmRemove] = useState(false)
 
     const isBusy = isSaving || isRemoving
@@ -187,8 +193,28 @@ function SubscriptionOverrideForm({
     // TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError — "that response
     // is what the override modal needs to render the Remove Override button").
     const hasOverride = !!sub?.manual_tier_override
-    const isExpired =
-        sub?.manual_tier_ends_at && new Date(sub.manual_tier_ends_at) < new Date()
+    // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
+    // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
+    // unparseable date, because `NaN < anything` is always `false`, so a malformed
+    // `manual_tier_ends_at` silently read as "not expired" and rendered the green, live-looking
+    // chip text ("Manual override active", no "(expired)" suffix, "Expires:" not "Expired:") for
+    // data that should never be presented as a live comp. This is display logic only — the
+    // effective-status axis (`isLiveOverride`/`isComped` below) already fails closed via
+    // `isOverrideActive`'s explicit `Number.isNaN` check, so only the CHIP's own copy was still
+    // capable of disagreeing with the badge immediately above it.
+    //
+    // `getOverrideStatus` (../lib/overrideStatus.ts) is the same helper UsersPage.tsx and
+    // UserDetailModal.tsx already use for their own override-status columns, and it already fails
+    // closed on an unparseable date (returning the non-live `expired` variant, documented there as
+    // "never styled as an active comp") — reused here rather than a second, independently-fragile
+    // date comparison. `getOverrideStatus` does not itself validate the tier name, but that's fine:
+    // this value is only ever rendered behind `showOverrideChip` below, which already gates on
+    // `isKnownTierOverride` — a malformed TIER stays "no override at all" on that axis (the chip is
+    // hidden entirely), never relabelled as "expired", which would just be a quieter version of the
+    // same lie (a reviewer's suggested `isExpired = !isLiveOverride` was rejected for exactly this
+    // reason: it conflates "expired" with "invalid tier").
+    const overrideStatus = getOverrideStatus(sub?.manual_tier_override, sub?.manual_tier_ends_at)
+    const isExpired = overrideStatus?.variant === 'expired'
 
     // Issue #1413 AC6: this used to be `hasOverride && !isExpired`, handed straight to `isComped`
     // below without ever checking whether the override actually names a real, currently-configured
