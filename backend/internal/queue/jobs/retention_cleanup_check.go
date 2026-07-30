@@ -605,6 +605,19 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 		// #1413: belt-and-braces — a comped user grants access and must not be warned about, or
 		// slated for, deletion. Cheap short-circuit against the candidate list snapshot; the claim
 		// + re-verify below is the real enforcement.
+		//
+		// Deliberately HasActiveManualOverride (live-only), NOT HasAnyManualOverride — even though
+		// both the candidate queries (GetUsersNeedingRetention30d/7dNotice) and the authoritative
+		// re-verify just below (spec.isEligible, i.e. IsRetentionNotice30d/7dEligibleForOccurrence)
+		// apply the all-overrides rule. Mirrors deletion_service.go's ExecuteDeletion guard: this
+		// cheap check only short-circuits the case it can be certain about (a currently-live comp).
+		// A LAPSED-but-uncleared override is deliberately left to fall through to the claim + the
+		// authoritative re-verify below, which excludes it on its own. Both routes reach the same
+		// outcome — no notice sent — but routing the lapsed case through the authoritative
+		// re-verify keeps the DB predicate the single source of truth and keeps it exercised.
+		// Widening this check to HasAnyManualOverride would short-circuit before the authoritative
+		// re-verify ever ran, masking any future divergence between the two. Pinned by
+		// TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify.
 		if user.HasActiveManualOverride() {
 			w.logger.Info("skipping "+spec.noticeName+" retention notice for actively comped user",
 				"job_id", jobID, "user_id", user.ID)

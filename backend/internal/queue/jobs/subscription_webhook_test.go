@@ -2255,6 +2255,69 @@ func TestWorker_SubscriptionActivated_PastDueStatus_SkipsActivePathSideEffects(t
 	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
 }
 
+// TestWorker_SubscriptionActivated_CompedUser_PastDuePayload_SkipsActivePathSideEffects pins
+// Issue #1413/#1414 Gap 1 (requirements-gap-analysis on PR #1443): processSubscriptionActivated's
+// "Welcome aboard!" notification and ClearRetentionDates gate MUST read the status carried in the
+// PADDLE WEBHOOK PAYLOAD, never the user's row (raw OR effective) — a live admin comp must not
+// make an unrelated past_due webhook look like a genuine activation. The handler never loads the
+// user for this gate at all; GetUserByID is only reached afterward, inside syncClerkMetadata's
+// post-write re-read.
+//
+// The nearby TestWorker_SubscriptionActivated_PastDueStatus_SkipsActivePathSideEffects fixtures a
+// non-comped user, so effective == raw there and the assertion passes whichever status the gate
+// reads — it cannot distinguish "gates on payload" from "gates on effective status". This test
+// closes that gap: the fixtured user carries a LIVE ManualTierOverride (future ManualTierEndsAt),
+// so ComputeEffectiveStatus() would report "active" even though the payload's own status is
+// "past_due". If the gate were ever repointed at the user's (raw or effective) status instead of
+// the payload, this comped user would flip the guard to true and both the notification and
+// ClearRetentionDates would incorrectly fire.
+//
+// Falsification proof (manual, not committed — see PR description): temporarily changing
+// processSubscriptionActivated's gate to re-read the user and branch on
+// user.ComputeEffectiveStatus() instead of the payload's own `status` variable makes this test
+// fail (the notification and ClearRetentionDates DO fire), confirming the test actually pins the
+// payload-only rule rather than passing vacuously.
+func TestWorker_SubscriptionActivated_CompedUser_PastDuePayload_SkipsActivePathSideEffects(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, mockNotifRepo, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	rawPayload := `{"event_id":"evt_activated_comped_past_due","event_type":"subscription.activated","occurred_at":"2026-02-20T11:00:00Z","data":{"id":"sub_01h1234567890abcdef","status":"past_due","customer_id":"ctm_01h1234567890abcdef","items":[{"price":{"id":"pri_01h1234567890premium"},"status":"active","quantity":1,"recurring":true}],"custom_data":{"user_id":"user_2abc123def456"}}}`
+	webhook := &domain.PaddleWebhookEvent{
+		ID: "test-webhook-id-123", EventID: "evt_activated_comped_past_due",
+		EventType: "subscription.activated", Payload: json.RawMessage(rawPayload), SignatureValid: true,
+	}
+	args := SubscriptionWebhookArgs{WebhookID: "test-webhook-id-123", EventID: "evt_activated_comped_past_due", EventType: "subscription.activated"}
+	job := createRiverJob(args)
+
+	override := "household_2"
+	overrideEndsAt := time.Now().Add(24 * time.Hour) // live comp — ComputeEffectiveStatus() == "active"
+	user := &domain.User{
+		ID: "user_2abc123def456", ClerkUserID: "user_2abc123def456",
+		ManualTierOverride: &override, ManualTierEndsAt: &overrideEndsAt,
+	}
+	expectedSubID := "sub_01h1234567890abcdef"
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	// past_due persisted as-is — the payload's raw status is billing truth.
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "past_due", mock.Anything, mock.Anything, &expectedSubID).Return(nil)
+	// syncClerkMetadata always runs, re-reading the (comped) user afterward.
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "user_2abc123def456", mock.Anything).Return(nil)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+	// "Welcome aboard!" notification and ClearRetentionDates are deliberately left unstubbed on
+	// mockNotifRepo/mockProfileRepo: an unexpected call panics rather than silently passing, a
+	// stronger proof than AssertNotCalled alone that the payload-past_due gate never fires them.
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockProfileRepo.AssertExpectations(t)
+	mockWebhookRepo.AssertExpectations(t)
+	mockClerk.AssertExpectations(t)
+	mockNotifRepo.AssertNotCalled(t, "Create")
+	mockProfileRepo.AssertNotCalled(t, "ClearRetentionDates")
+}
+
 // TestWorker_SubscriptionUpdated_PausedStatus_NormalizedToCancelled verifies that a
 // subscription.updated event carrying status:"paused" is normalized to "cancelled".
 // #933: repo-layer normalization via domain.NormalizeSubscriptionStatus.
