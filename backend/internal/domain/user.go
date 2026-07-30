@@ -255,10 +255,18 @@ type User struct {
 	// helper made at round 16 is unchanged; see the helper's own doc comment for the precise, single
 	// case widened.
 	//
-	// Not a SET/CLEAR site: UpdateSubscriptionStatus (Issue #1413 round-14 finding L1) — it writes
-	// subscription_status directly but never touches this column at all; see its own doc comment
-	// for why it must not be used for any transition into or out of a read-only status. The known
-	// CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
+	// UpdateSubscriptionStatus was REMOVED (Issue #1413 round-5 gap G6, PR #1443 gap analysis;
+	// formerly documented here as round-14 finding L1's "not a SET/CLEAR site"). It wrote
+	// subscription_status directly without ever touching this column, and `rg` confirmed zero
+	// production callers, so it was deleted rather than left as a live trap. The durable reason
+	// this matters is NOT the method's name, it's the invariant gap it exposed: both self-healing
+	// backstops (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers) are gated on
+	// an ineligible-status predicate, so this invariant's FIRST branch — status not ineligible ⇒
+	// marker must be NULL — has NO backstop at all. Any future status-only writer (one that sets
+	// subscription_status without also transitioning this column, the same shape
+	// UpdateSubscriptionStatus had) reintroduces the identical unguarded gap and MUST maintain
+	// plaid_cleanup_pending_at itself, the way every writer below already does — do not assume a
+	// backstop will catch it. The known CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
 	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus, and
 	// ClearCompletedPlaidCleanupMarkers (all profile_repository.go). AdminUserRepository's
 	// updateUserTierQuery (comp grant/extend)

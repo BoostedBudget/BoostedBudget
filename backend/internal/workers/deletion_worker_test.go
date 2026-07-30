@@ -134,9 +134,6 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiringTrials(ctx context.Contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	return m.Called(ctx, userID, status).Error(0)
-}
 func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0)
 }

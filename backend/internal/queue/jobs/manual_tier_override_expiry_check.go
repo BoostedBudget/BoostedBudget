@@ -132,6 +132,16 @@ func NewManualTierOverrideExpiryCheckWorker(deps ManualTierOverrideExpiryCheckWo
 // user is left untouched and, if still genuinely expired, is re-selected and retried next run.
 // A second pass over an already-cleared user is a no-op: the repository query no longer returns
 // them (manual_tier_override is NULL).
+//
+// Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — step 1's "boundary agreement with the read
+// path" is deliberately narrow: it means the exact-now-expiry edge is decided the same way by both
+// sides (see expiredManualTierOverridePredicate's own doc comment, profile_repository.go), NOT
+// that this guard and the repository predicate are strict complements in general. They are not: a
+// NULL manual_tier_ends_at (a permanent override) is "active" to HasActiveManualOverride() but is
+// excluded outright by expiredManualTierOverridePredicate, so it never reaches this candidate list
+// at all — step 1 simply never observes that case in practice. Do not add a naive SQL/Go parity
+// test for this pair on the strength of this comment; see expiredManualTierOverridePredicate's doc
+// comment for the full reasoning and why such a test would be wrong, not merely redundant.
 func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *river.Job[ManualTierOverrideExpiryCheckArgs]) (err error) {
 	args := job.Args
 
