@@ -558,6 +558,14 @@ func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQu
 // backstop is idempotent and re-attempted for free on the next scheduled pass, so there is nothing
 // to retry synchronously here, and the candidate query must still run against whatever markers
 // already exist.
+//
+// Issue #1413 Finding 4 (Low, Codex review, PR #1443 follow-up): before this fix, this test asserted
+// only that Work() succeeded and the candidate query still ran — it never asserted the Error log
+// level or the observability.PlaidCleanupBackstopFailuresTotal counter increment, even though
+// repairPlaidDisconnects's own doc comment (retention_cleanup_check.go) explicitly promises both as
+// the ONE signal distinguishing a transient backstop blip from a persistently broken one. Deleting
+// the .Inc() call or downgrading this log line from Error to Warn left this test green either way.
+// Now both are asserted directly.
 func TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal(t *testing.T) {
 	ctx := context.Background()
 
@@ -574,19 +582,27 @@ func TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal(t
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
 		DeletionService: mockDeletion,
 		EmailService:    mockEmail,
 		RetentionMonths: 6,
-		Logger:          slog.Default(),
+		Logger:          logger,
 	})
 	worker.SetPlaidCleanup(mockPlaid)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
 
+	before := testutil.ToFloat64(observability.PlaidCleanupBackstopFailuresTotal)
 	err := worker.Work(ctx, job)
 	require.NoError(t, err, "a backstop failure must not fail the job — it is naturally retried on the next scheduled pass")
+	after := testutil.ToFloat64(observability.PlaidCleanupBackstopFailuresTotal)
+
 	mockRepo.AssertCalled(t, "GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod)
+	assert.Equal(t, before+1, after, "a Stamp failure must increment the shared PlaidCleanupBackstopFailuresTotal counter — the one signal distinguishing a transient blip from a persistently broken backstop")
+	assert.Contains(t, logBuf.String(), "level=ERROR", "a Stamp failure must be logged at Error, not Warn — a persistently broken backstop is a silent data-retention failure, not a routine event")
 }
 
 // ─── Issue #1413 Finding 1 (Codex review, PR #1443 follow-up): ClearCompletedPlaidCleanupMarkers,
@@ -653,6 +669,11 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearsCompletedMarkersAfterStampBefor
 // half exactly: the clear backstop is idempotent and re-attempted for free on the next scheduled
 // pass, so there is nothing to retry synchronously here, and the candidate query must still run
 // against whatever markers already exist.
+//
+// Issue #1413 Finding 4 (Low, Codex review, PR #1443 follow-up): before this fix, this test's own
+// doc comment already PROMISED the Error level and the counter increment, but never actually
+// asserted either — the same gap as the Stamp-failure test's sibling fix above. Now both are
+// asserted directly, so deleting the .Inc() call or downgrading this log line to Warn fails here.
 func TestRetentionCleanupCheck_PlaidRepair_ClearCompletedMarkersFailure_NonFatal(t *testing.T) {
 	ctx := context.Background()
 
@@ -669,19 +690,27 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearCompletedMarkersFailure_NonFatal
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
 
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
 		ProfileRepo:     mockRepo,
 		DeletionService: mockDeletion,
 		EmailService:    mockEmail,
 		RetentionMonths: 6,
-		Logger:          slog.Default(),
+		Logger:          logger,
 	})
 	worker.SetPlaidCleanup(mockPlaid)
 	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
 
+	before := testutil.ToFloat64(observability.PlaidCleanupBackstopFailuresTotal)
 	err := worker.Work(ctx, job)
 	require.NoError(t, err, "a clear-backstop failure must not fail the job — it is naturally retried on the next scheduled pass")
+	after := testutil.ToFloat64(observability.PlaidCleanupBackstopFailuresTotal)
+
 	mockRepo.AssertCalled(t, "GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod)
+	assert.Equal(t, before+1, after, "a Clear failure must increment the shared PlaidCleanupBackstopFailuresTotal counter")
+	assert.Contains(t, logBuf.String(), "level=ERROR", "a Clear failure must be logged at Error, not Warn")
 }
 
 // TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod proves

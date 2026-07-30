@@ -77,44 +77,43 @@ type User struct {
 	// this column):
 	//
 	//   Define EPISODE precisely, because the rest of this invariant only makes sense against this
-	//   definition: an ineligibility episode BEGINS the instant subscription_status transitions into
-	//   a raw status domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair()
-	//   calls true ('inactive' or 'cancelled'), and ENDS the instant Plaid cleanup for THAT SPECIFIC
-	//   episode completes — i.e. the moment the marker is cleared for it (ClearPlaidCleanupPending/
-	//   ClearPlaidCleanupPendingIfMatches). Ending is NOT the same as the user later leaving the
-	//   ineligible status: a user can stay 'cancelled' indefinitely after their episode's cleanup has
-	//   already finished (no resubscribe required), with no episode open at all during that time.
+	//   definition: an ineligibility episode BEGINS the instant one of two things happens. The
+	//   ORDINARY way: subscription_status transitions into a raw status
+	//   domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() calls true
+	//   ('inactive' or 'cancelled') — every SET site below except one begins an episode this way. The
+	//   OTHER way: a user who is ALREADY in such a status, with no episode currently open (their
+	//   previous episode's cleanup already completed, so the marker is legitimately NULL), acquires a
+	//   live linked item — there is outstanding cleanup again, with no status transition anywhere;
+	//   profileRepository.StampMissingPlaidCleanupMarkers (profile_repository.go) is the writer for
+	//   this second case, and stamping it is correct, not a stray write. An episode ENDS the instant
+	//   Plaid cleanup for THAT SPECIFIC episode completes — i.e. the moment the marker is cleared for
+	//   it (ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches). Ending is NOT the same as the
+	//   user later leaving the ineligible status: a user can stay 'cancelled' indefinitely after their
+	//   episode's cleanup has already finished (no resubscribe required), with no episode open at all
+	//   during that time.
 	//
 	//   Given that definition: plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an episode (as
 	//   defined above) is currently OPEN — begun, and not yet ended. It is NULL whenever no episode
 	//   is open, which covers TWO distinct, both-legal cases: (a) the raw status is not ineligible at
 	//   all (no episode could be open), and (b) the raw status IS still ineligible, but the CURRENT
 	//   episode's cleanup has already completed (the episode ended while the status did not change).
-	//   Case (b) is exactly what assertPlaidMarkerInvariantCleanupComplete
-	//   (profile_repository_plaid_marker_invariant_integration_test.go) pins, and it is why a NULL
-	//   marker on a still-'cancelled' user is legal, NOT a contradiction of "non-NULL while an episode
-	//   is open" — there is no episode open there once cleanup for it has run.
+	//   Case (b) is exactly what assertPlaidMarkerInvariant
+	//   (profile_repository_plaid_marker_invariant_integration_test.go) itself checks directly — a
+	//   NULL marker on a still-'cancelled' user with no live linked item is legal, NOT a contradiction
+	//   of "non-NULL while an episode is open" — there is no episode open there once cleanup for it
+	//   has run.
 	//
-	//   Its value, whenever non-NULL, is the instant the CURRENT episode began — never an earlier
-	//   episode's (a stale write must not resurrect a value a newer episode already superseded) and
-	//   never a later one's (a fresh episode must get its OWN fresh value, not the survivor of a
-	//   stale COALESCE).
-	//
-	//   Round 17 (Codex review) — an episode does NOT only begin on a raw status transition, and
-	//   saying so made the two halves of this comment contradict each other. The other way in is
-	//   StampMissingPlaidCleanupMarkers: a user who is ALREADY in an ineligible status with no
-	//   episode open (their previous episode's cleanup completed, so the marker is legitimately NULL)
-	//   and who then acquires a live linked item has genuinely entered a new episode — there is
-	//   outstanding cleanup again — with no status transition anywhere. The backstop stamps them, and
-	//   that is correct, not a stray write.
-	//
-	//   So state the value's meaning precisely: it is the instant the current episode became OBSERVABLE
-	//   to whichever writer recorded it. For a status-transition writer that is the transition instant.
-	//   For a backstop heal it is the heal's own NOW(), which may be later than the moment the episode
-	//   truly began — the backstop cannot know when the racing INSERT landed, only that outstanding
-	//   cleanup exists now. The practical consequence is stated at StampMissingPlaidCleanupMarkers and
-	//   is deliberate: a healed user's grace window runs from the heal, so a disconnect can be delayed
-	//   by up to one extra grace period. Delayed is recoverable; never is not.
+	//   Its value, whenever non-NULL, records the instant the CURRENT episode became OBSERVABLE to
+	//   whichever writer recorded it — never an earlier episode's (a stale write must not resurrect a
+	//   value a newer episode already superseded) and never a later one's (a fresh episode must get
+	//   its OWN fresh value, not the survivor of a stale COALESCE). For an ordinary status-transition
+	//   writer, "observable" and "began" coincide exactly: the transition instant. For a
+	//   StampMissingPlaidCleanupMarkers heal they can diverge: the heal's own NOW() may be later than
+	//   the moment the racing INSERT actually landed — the backstop cannot know that, only that
+	//   outstanding cleanup exists now. The practical consequence, stated at
+	//   StampMissingPlaidCleanupMarkers's own doc comment, is deliberate: a healed user's grace window
+	//   runs from the heal, so a disconnect can be delayed by up to one extra grace period. Delayed is
+	//   recoverable; never is not.
 	//
 	//   EVENTUALLY consistent, not instantaneously consistent for every writer, every time — say so
 	//   plainly rather than leaving it implicit. Round 15 (Finding 3, High, a Codex review round on
@@ -139,7 +138,8 @@ type User struct {
 	//   A marker with zero live items but a non-empty linked_items history (every item already
 	//   disconnected/replaced) is a genuine violation, not a phantom to wave through — cleanup for
 	//   that episode has finished, and the marker should have been cleared (see
-	//   assertPlaidMarkerInvariantCleanupComplete). The ONE allowed exception is #1453: a user with
+	//   assertPlaidMarkerInvariant, profile_repository_plaid_marker_invariant_integration_test.go).
+	//   The ONE allowed exception is #1453: a user with
 	//   ZERO linked_items rows at all (never linked Plaid, or 000119/000120 migration residue) — an
 	//   ordinary Plaid-less cancellation and true migration residue are indistinguishable at the row
 	//   level, and both are legitimate, reachable states.
@@ -206,11 +206,14 @@ type User struct {
 	//     window cannot be closed from inside these writers, so the backstop closes it from outside,
 	//     within one repair-pass interval.
 	//
-	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. As of
-	// round-13 the known SET sites are: UpdateSubscriptionFromPaddle,
-	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride (all
-	// profile_repository.go), and AdminUserRepository's removeUserTierOverrideUpdate
-	// (admin_user_repository.go, shared by RemoveUserTierOverride/RemoveUserTierOverrideIfMatches).
+	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. The
+	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
+	// ExpireTrialIfNoOverride (all profile_repository.go), AdminUserRepository's
+	// removeUserTierOverrideUpdate (admin_user_repository.go, shared by RemoveUserTierOverride/
+	// RemoveUserTierOverrideIfMatches), and — the one exception to "begins on a status transition"
+	// in the episode definition above — profileRepository.StampMissingPlaidCleanupMarkers
+	// (profile_repository.go), which begins an episode via a live-item insertion instead of a status
+	// transition.
 	// Round 14 -> 15 -> 16 on this last site's should_mark_plaid_cleanup_pending CASE — read all
 	// three in order; the third is the one currently in force (see removeUserTierOverrideSelectPrior's
 	// own doc comment, admin_user_repository.go, for the full history this summarises): round 14
@@ -236,8 +239,9 @@ type User struct {
 	// subscription_status directly but never touches this column at all; see its own doc comment
 	// for why it must not be used for any transition into or out of a read-only status. The known
 	// CLEAR sites are: UpdateSubscriptionFromPaddle, ClearRetentionDates,
-	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus (all
-	// profile_repository.go). AdminUserRepository's updateUserTierQuery (comp grant/extend)
+	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus, and
+	// ClearCompletedPlaidCleanupMarkers (all profile_repository.go). AdminUserRepository's
+	// updateUserTierQuery (comp grant/extend)
 	// deliberately does NOT touch this column at all as of round-13 — see its own doc comment.
 	// See each site's own doc comment for its justification against this invariant, and
 	// GetUsersNeedingPlaidDisconnectRepair's doc comment for the query whose correctness depends

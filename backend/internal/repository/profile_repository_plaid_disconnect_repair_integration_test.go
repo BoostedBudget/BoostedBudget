@@ -966,28 +966,45 @@ func TestStampMissingPlaidCleanupMarkers_Integration_HealsNullMarkerWithLiveItem
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerBefore))
 	require.Nil(t, markerBefore, "precondition: the marker must genuinely be NULL before the backstop runs")
 
+	// Issue #1413 Finding 3 (Codex review, PR #1443 follow-up, Medium): fence the Stamp call itself
+	// with Postgres's OWN clock (dbNow, admin_user_repository_remove_tier_override_integration_test.go
+	// — same package) rather than asserting only `markerAfter != nil`. A non-nil check alone couples
+	// this test to nothing about the VALUE StampMissingPlaidCleanupMarkers actually writes — a broken
+	// implementation that stamped an arbitrary, long-past timestamp (e.g. hardcoding some fixed date
+	// instead of NOW()) would still satisfy "not nil" and this test would still go green. Bracketing
+	// the call with dbNow before and after, both from the SAME clock the SQL itself uses (`NOW()`),
+	// proves the stamped value is genuinely RECENT — produced by THIS call, not resurrected or
+	// hardcoded — with no tolerance window needed (NOW() only advances, so before <= stamped <= after
+	// holds exactly).
+	fenceBefore := dbNow(t, pool)
 	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
 	require.NoError(t, err)
+	fenceAfter := dbNow(t, pool)
 
 	var markerAfter *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerAfter))
 	require.NotNil(t, markerAfter, "the backstop must stamp a marker for an ineligible user with a live item and a NULL marker")
+	assertBetweenFence(t, fenceBefore, fenceAfter, *markerAfter,
+		"the stamped marker must be Stamp's OWN fresh value (bracketed by a DB-clock fence around the call), not merely non-NULL — a broken Stamp that wrote an arbitrary stale timestamp must fail this assertion even though it satisfies require.NotNil above")
 
 	// AFTER: past the grace period, the now-healed user must be selected.
 	//
 	// The two facts are asserted SEPARATELY and deliberately, because coupling them makes this test
-	// flaky in CI. `markerAfter != nil` above already proves the backstop stamped — that assertion is
-	// skew-free, since it only reads back what Postgres wrote. Selection is a different fact, and
-	// GetUsersNeedingPlaidDisconnectRepair computes its cutoff as a GO-side `time.Now().Add(-grace)`
-	// (profile_repository.go) which it compares against this Postgres-written marker. That mixes
-	// clocks. Production is unaffected — the real grace is 72h, so millisecond skew is irrelevant —
-	// but the original form here slept 5ms in Go against a 1ms grace, where a Postgres container
-	// clock a few ms ahead of the runner's flips `marker < cutoff` to false and fails the test. That
-	// is precisely the cross-clock class this same round fixed in the migration-000121 tests.
-	//
-	// So: back-date the (already-proven) marker by an hour using the package's established
-	// Postgres-side helper, then query with a grace far larger than any plausible skew. Now neither
-	// assertion depends on a millisecond race, and both still test what their names claim.
+	// flaky in CI IF the two sides of the comparison come from different clocks. They no longer do —
+	// GetUsersNeedingPlaidDisconnectRepair now computes its cutoff entirely in Postgres
+	// (`NOW() - make_interval(secs => $1)`, profile_repository.go), the SAME clock
+	// plaid_cleanup_pending_at is stamped from, closing the cross-clock class that used to make this
+	// split necessary (this method previously computed its cutoff as a GO-side
+	// `time.Now().Add(-grace)`, which is precisely what made a Go-side sleep against a near-zero
+	// grace period flaky here and in the migration-000121 tests). The split itself is kept anyway,
+	// and is still the right shape: the fence assertion above proves WHAT Stamp wrote (its own fresh
+	// value); this assertion proves a DIFFERENT fact — that the candidate query's selection logic
+	// honors a grace boundary at all — and coupling them would still require sleeping in Go past an
+	// arbitrary grace period to prove selection, which is both slower and needless now that a
+	// Postgres-side back-date can simulate "past grace" deterministically. So: back-date the
+	// (already fence-proven-fresh) marker by an hour using the package's established Postgres-side
+	// helper, then query with a grace comfortably smaller than that backdate. Neither assertion
+	// depends on any clock race, Go or Postgres, and both still test exactly what their names claim.
 	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
 	after, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Minute)
 	require.NoError(t, err)

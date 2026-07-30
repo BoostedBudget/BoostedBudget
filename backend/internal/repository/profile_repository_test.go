@@ -588,9 +588,11 @@ func TestUpdateSubscriptionFromPaddle_WithSubscriptionID(t *testing.T) {
 	now := time.Now()
 
 	// status is "active" (not eligible for Plaid-disconnect repair), so plaid_cleanup_pending_at is
-	// unconditionally cleared — Issue #1413 round-10.
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`)).
-		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), userID).
+	// unconditionally cleared — Issue #1413 round-10. updated_at is NOW() in the SQL itself (a CI
+	// clock-skew fix), not a Go-computed query parameter, so there is one fewer bound parameter than
+	// before that fix.
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $7 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), pgxmock.AnyArg(), userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
@@ -616,11 +618,12 @@ func TestUpdateSubscriptionFromPaddle_WithNullSubscriptionID(t *testing.T) {
 	now := time.Now()
 
 	// When subscriptionID is nil, the query OMITS the paddle_subscription_id columns entirely
-	// (6 params, not 8 — no paddle_subscription_id or paddle_subscription_id_blind_idx). status is
-	// "active" (not eligible for Plaid-disconnect repair), so plaid_cleanup_pending_at is
-	// unconditionally cleared — Issue #1413 round-10.
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`)).
-		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
+	// (4 bound params, not 6 — no paddle_subscription_id or paddle_subscription_id_blind_idx). status
+	// is "active" (not eligible for Plaid-disconnect repair), so plaid_cleanup_pending_at is
+	// unconditionally cleared — Issue #1413 round-10. updated_at is NOW() in the SQL itself (a CI
+	// clock-skew fix), not a Go-computed query parameter.
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $5 AND is_deleted = FALSE`)).
+		WithArgs(tier, status, pgxmock.AnyArg(), (*time.Time)(nil), userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	// Execute
@@ -658,8 +661,10 @@ func TestUpdateSubscriptionFromPaddle_NormalizesPausedStatus(t *testing.T) {
 			// ALREADY repair-eligible (round-12 Fix 4: a genuine transition, not a redundant
 			// terminal event for a user already ineligible). Issue #1413 round-13: no longer gated
 			// on manual_tier_override at all — see UpdateSubscriptionFromPaddle's doc comment.
-			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN NOT (subscription_status IN ('inactive', 'cancelled')) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`)).
-				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), pgxmock.AnyArg(), userID).
+			// updated_at and the COALESCE's fallback are both NOW() in the SQL itself (a CI
+			// clock-skew fix), not a shared Go-computed query parameter.
+			mock.ExpectExec(regexp.QuoteMeta(`UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (subscription_status IN ('inactive', 'cancelled')) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $5 AND is_deleted = FALSE`)).
+				WithArgs("premium", tc.wantStatus, pgxmock.AnyArg(), (*time.Time)(nil), userID).
 				WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 			err := repo.UpdateSubscriptionFromPaddle(ctx, userID, "premium", tc.inputStatus, nil, nil, nil)

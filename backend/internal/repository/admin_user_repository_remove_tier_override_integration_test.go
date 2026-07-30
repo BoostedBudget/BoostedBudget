@@ -778,6 +778,192 @@ func TestRemoveUserTierOverride_Integration_M1_NoPhantomMarker_WhenCleanupAlread
 		"M1: removing a comp must NOT re-arm a fresh marker for an episode whose cleanup already fully completed — the user's only linked item is already 'disconnected', so there is nothing outstanding to repair")
 }
 
+// ─── Issue #1413 Finding 1 (Codex review round on PR #1443, High): comp removal must not
+// resurrect a marker from an ALREADY-COMPLETED episode ──────────────────────────────────────────
+//
+// ClearCompletedPlaidCleanupMarkers (profile_repository.go) is only a PARTIAL mitigation for a
+// stale marker: it can heal one only if a repair pass happens to run while the user genuinely has
+// no live linked item. Two sequences skip that window entirely, and both end the same way — a
+// freshly-relinked bank disconnected immediately, with ZERO grace — because
+// removeUserTierOverrideUpdate's should_mark_plaid_cleanup_pending CASE wrote
+// COALESCE(u.plaid_cleanup_pending_at, NOW()): once the column is non-NULL for ANY reason, that
+// COALESCE preserves it, even when it belongs to a PREVIOUS, already-completed episode rather than
+// the one this removal is (re-)arming.
+//
+// The fix (see removeUserTierOverrideUpdate's own doc comment for the full reasoning) writes NOW()
+// unconditionally in that CASE, never COALESCE — should_mark_plaid_cleanup_pending is already gated
+// on liveLinkedItemExistsClause, so every time it fires a live item genuinely exists right now, and
+// the episode's start time is properly "now", not whatever a prior episode happened to leave
+// behind.
+//
+// Path A (below) and Path B (further down) are both NEW tests, not extensions of
+// TestPlaidDisconnectRepair_Integration_StaleMarkerHealedBeforeRelink_FreshGraceWindowEnforced
+// (profile_repository_plaid_disconnect_repair_integration_test.go) — that test explicitly calls
+// ClearCompletedPlaidCleanupMarkers BEFORE its relink step, then substitutes
+// StampMissingPlaidCleanupMarkers for what a comp-removal would otherwise have to do (its own
+// comment says so explicitly), so it never exercises removeUserTierOverrideUpdate's CASE at all
+// and cannot be extended into a regression test for this bug without changing what it proves. These
+// two tests below exercise the real writer instead, through real production calls
+// (profileRepo.UpdateSubscriptionFromPaddle, linkedItemRepo.MarkItemsDisconnected,
+// adminRepo.UpdateUserTier, adminRepo.RemoveUserTierOverride).
+
+// TestRemoveUserTierOverride_Integration_Finding1PathA_AllDisconnectedWithStaleMarker_FreshGraceOnRelink
+// reproduces Path A end to end:
+//
+//  1. A real cancellation starts the marker; the user's one linked item is actually transitioned to
+//     'disconnected' via the real production writer (linkedItemRepo.MarkItemsDisconnected). The
+//     marker is deliberately never cleared afterward — no ClearCompletedPlaidCleanupMarkers call
+//     anywhere in this test — modeling a repair pass that has not yet had a turn to heal this exact
+//     row in the window before step 3 below. The resulting marker is then backdated directly via
+//     setPlaidCleanupPendingAt purely to simulate the elapsed time a real gap would produce, mirroring
+//     TestRemoveUserTierOverride_Integration_RearmsRetention_WhenReadOnly's own established
+//     convention (setRetentionState, above in this same file) for simulating elapsed time rather
+//     than actually waiting hours in a test.
+//  2. An admin grants a comp over this already-churned user (adminRepo.UpdateUserTier) — the grant
+//     itself must not touch the marker (round-13), and this test confirms it does not.
+//  3. The user relinks a bank — permitted, because the comp makes their EFFECTIVE status active
+//     (internal/huma/middleware/read_only.go). Modeled via seedLinkedItem("active"), the
+//     established convention this package's entire test suite uses for a link event (driving a
+//     real Plaid Link flow would need a mocked Plaid client, out of scope at the repository layer).
+//  4. The admin removes the comp (adminRepo.RemoveUserTierOverride) while raw subscription_status
+//     is STILL 'cancelled'.
+//
+// The marker after step 4 must be FRESH — within a DB-clock fence taken immediately around the
+// call — never the stale value recorded in step 1. That is the whole point: the freshly-relinked
+// bank must get its own full grace window, not inherit an already-expired one from a completed
+// prior episode.
+//
+// Falsifiability: reverting removeUserTierOverrideUpdate's should_mark_plaid_cleanup_pending CASE
+// to COALESCE(u.plaid_cleanup_pending_at, NOW()) makes this test fail — the marker after step 4
+// would still be the step-1 stale value, comfortably outside the fence.
+func TestRemoveUserTierOverride_Integration_Finding1PathA_AllDisconnectedWithStaleMarker_FreshGraceOnRelink(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	profileRepo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	linkedItemRepo := NewLinkedItemRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "active")
+
+	// Step 1: real churn via the real webhook-facing writer, then a real disconnect of the user's
+	// one linked item — but the marker is deliberately never cleared, and is backdated to simulate a
+	// stale, already-completed prior episode.
+	require.NoError(t, profileRepo.UpdateSubscriptionFromPaddle(ctx, target.ID, "premium", "cancelled", nil, nil, nil))
+	var itemID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, status)
+		VALUES (gen_random_uuid(), $1, $2, 'enc-test-token', 'active')
+		RETURNING id
+	`, target.ID, "item-"+suffix).Scan(&itemID))
+	require.NoError(t, linkedItemRepo.MarkItemsDisconnected(ctx, []string{itemID}))
+	var itemStatus *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM linked_items WHERE id = $1`, itemID).Scan(&itemStatus))
+	require.NotNil(t, itemStatus)
+	require.Equal(t, "disconnected", *itemStatus, "precondition: the item must actually be disconnected via the real production writer")
+
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, target.ID, staleMarker)
+	total, live := plaidMarkerLinkedItemCounts(t, pool, target.ID)
+	require.Equal(t, 1, total, "precondition: the OLD linked item still exists as a row")
+	require.Equal(t, 0, live, "precondition: zero LIVE linked items — Path A's all-disconnected shape; ClearCompletedPlaidCleanupMarkers COULD heal this row if a repair pass ran right now, but none runs in this test, modeling the unlucky-timing case")
+
+	// Step 2: admin grants a comp — must not touch the marker (round-13).
+	future := time.Now().Add(24 * time.Hour)
+	_, err := adminRepo.UpdateUserTier(ctx, actor.ID, target.ID, "household_2", "comp an already-churned account", &future)
+	require.NoError(t, err)
+	var markerAfterGrant *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterGrant))
+	require.NotNil(t, markerAfterGrant)
+	require.True(t, staleMarker.Equal(*markerAfterGrant), "precondition: granting a comp must not touch the stale marker (round-13)")
+
+	// Step 3: the user relinks a bank — a genuinely NEW live item, permitted because the comp makes
+	// their effective status active.
+	seedLinkedItem(t, pool, target.ID, "item-new-"+suffix, "active")
+
+	// Step 4: the admin removes the comp while raw status is still 'cancelled'.
+	before := dbNow(t, pool)
+	row, err := adminRepo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "comp ended", testRetentionMonths)
+	require.NoError(t, err)
+	after := dbNow(t, pool)
+	require.Equal(t, "cancelled", row.RevertedStatus, "precondition: reverted status must still be cancelled for should_mark_plaid_cleanup_pending's CASE to even be considered")
+
+	var markerAfterRemoval *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterRemoval))
+	require.NotNil(t, markerAfterRemoval)
+	assertBetweenFence(t, before, after, *markerAfterRemoval,
+		"Finding 1 Path A: comp removal must start a FRESH grace window for the freshly-relinked bank, not resurrect the stale marker from the already-completed prior episode")
+	assert.True(t, markerAfterRemoval.After(staleMarker),
+		"the marker must not be the old stale value — a freshly-linked bank must not inherit an already-expired grace window and be disconnected with zero grace")
+}
+
+// TestRemoveUserTierOverride_Integration_Finding1PathB_ZeroLinkedItemsPopulation_FreshGraceOnRelink
+// reproduces Path B: the STRUCTURALLY-unreachable-for-Clear variant. The marker is set on a user
+// with ZERO linked_items rows at all (the #1453 population — never linked Plaid, or migration
+// residue) — anyLinkedItemExistsClause is false for this row from the moment the marker is set
+// until the relink, so ClearCompletedPlaidCleanupMarkers's WHERE clause can never match it no
+// matter how many repair passes run in between, unlike Path A's merely-unlucky timing. This test
+// proves that explicitly (calling Clear and confirming it is a structural no-op) before continuing
+// through the same comp-grant / relink / comp-removal sequence as Path A.
+//
+// Falsifiability: reverting removeUserTierOverrideUpdate's should_mark_plaid_cleanup_pending CASE
+// to COALESCE(u.plaid_cleanup_pending_at, NOW()) makes this test fail the same way Path A's does.
+func TestRemoveUserTierOverride_Integration_Finding1PathB_ZeroLinkedItemsPopulation_FreshGraceOnRelink(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	profileRepo := NewProfileRepository(pool, enc)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "active")
+
+	// Step 1: real churn via the real webhook-facing writer. Deliberately NO linked item is ever
+	// seeded — this user has never linked Plaid at all (the #1453 shape).
+	require.NoError(t, profileRepo.UpdateSubscriptionFromPaddle(ctx, target.ID, "premium", "cancelled", nil, nil, nil))
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, target.ID, staleMarker)
+	total, live := plaidMarkerLinkedItemCounts(t, pool, target.ID)
+	require.Equal(t, 0, total, "precondition: ZERO linked_items rows at all — Path B's #1453 shape")
+	require.Equal(t, 0, live, "precondition: zero live linked items")
+
+	// Structural proof (unlike Path A, this is not a matter of timing): Clear cannot touch this row
+	// even if a repair pass runs RIGHT NOW, because anyLinkedItemExistsClause is false.
+	_, err := profileRepo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	var markerAfterClearAttempt *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterClearAttempt))
+	require.NotNil(t, markerAfterClearAttempt)
+	require.True(t, staleMarker.Equal(*markerAfterClearAttempt),
+		"precondition: Clear must be a structural no-op here (#1453 — zero linked_items rows), unlike Path A where Clear COULD have healed the row given different timing")
+
+	// Step 2: admin grants a comp.
+	future := time.Now().Add(24 * time.Hour)
+	_, err = adminRepo.UpdateUserTier(ctx, actor.ID, target.ID, "household_2", "comp a never-linked-Plaid account", &future)
+	require.NoError(t, err)
+
+	// Step 3: the user relinks their FIRST-ever bank.
+	seedLinkedItem(t, pool, target.ID, "item-new-"+suffix, "active")
+
+	// Step 4: the admin removes the comp while raw status is still 'cancelled'.
+	before := dbNow(t, pool)
+	row, err := adminRepo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "comp ended", testRetentionMonths)
+	require.NoError(t, err)
+	after := dbNow(t, pool)
+	require.Equal(t, "cancelled", row.RevertedStatus)
+
+	var markerAfterRemoval *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterRemoval))
+	require.NotNil(t, markerAfterRemoval)
+	assertBetweenFence(t, before, after, *markerAfterRemoval,
+		"Finding 1 Path B: comp removal must start a FRESH grace window even though Clear structurally could never have healed this row first")
+	assert.True(t, markerAfterRemoval.After(staleMarker),
+		"the marker must not be the old stale value")
+}
+
 // ─── Issue #1413 Codex review round on PR #1443, Finding 3 (High), and its round-16 backstop ──
 //
 // This test proves TWO things in sequence, deliberately: (1) the race is real — restoring
