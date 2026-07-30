@@ -363,3 +363,57 @@ func TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_Does
 	require.NotNil(t, pastDueStartedAt)
 	assert.WithinDuration(t, currentOccurrence, *pastDueStartedAt, time.Microsecond, "cycle B's timestamp must be untouched")
 }
+
+// TestCancelIfPastDueOccurrenceWithRetention_Integration_SkipsActiveOverride closes a gap left by
+// the two tests above (Issue #1413/#1443 gap analysis, PR #1443 AC9 pattern-2 finding):
+// CancelIfPastDueWithRetention's own override proof
+// (TestCancelIfPastDueWithRetention_Integration_SkipsActiveOverride, above) exercises
+// noActiveManualOverridePredicate for the NON-occurrence-scoped method, but
+// CancelIfPastDueOccurrenceWithRetention splices its OWN copy of that predicate at
+// profile_repository.go:3024 — nothing before this test proved THAT copy actually blocks a
+// comped user. Both existing *OccurrenceWithRetention tests only vary the occurrence
+// (past_due_started_at) axis, on an always-uncomped fixture. Uses the MATCHING occurrence (so the
+// occurrence discriminator itself passes) plus a live override, isolating the override predicate
+// as the only thing that can prevent the flip.
+func TestCancelIfPastDueOccurrenceWithRetention_Integration_SkipsActiveOverride(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_occcomp_" + suffix,
+		Email:              "occcomp-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "past_due",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
+
+	pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
+
+	future := time.Now().Add(24 * time.Hour) // still active
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, future, user.ID)
+	require.NoError(t, err)
+
+	started := time.Now().Truncate(time.Microsecond)
+	expires := started.AddDate(0, 6, 0)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, expires)
+	require.NoError(t, err)
+	assert.False(t, flipped, "an actively comped past_due user must not flip, even with the exact matching occurrence")
+
+	var status string
+	var retExpires *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT subscription_status, retention_expires_at FROM users WHERE id = $1`, user.ID,
+	).Scan(&status, &retExpires))
+	assert.Equal(t, "past_due", status, "a comped user must stay past_due, not flip to cancelled")
+	assert.Nil(t, retExpires, "no retention clock must start for a comped user")
+}
