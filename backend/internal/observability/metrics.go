@@ -162,20 +162,32 @@ var (
 		Help: "Total number of per-user failures in RetentionCleanupCheckWorker's Plaid-disconnect repair pass.",
 	})
 
-	// PlaidCleanupBackstopFailuresTotal counts failures of
-	// profileRepository.StampMissingPlaidCleanupMarkers — the round-16 self-healing backstop that
-	// stamps plaid_cleanup_pending_at for any ineligible user who has a live linked item but a NULL
-	// marker (profile_repository.go).
+	// PlaidCleanupBackstopFailuresTotal counts failures of BOTH halves of the
+	// plaid_cleanup_pending_at self-healing backstop (profile_repository.go): the round-16 Stamp half
+	// (profileRepository.StampMissingPlaidCleanupMarkers, which stamps the marker for any ineligible
+	// user who has a live linked item but a NULL marker) and, as of Issue #1413 Finding 1 (Codex
+	// review, PR #1443 follow-up), its Clear half (profileRepository.ClearCompletedPlaidCleanupMarkers,
+	// which nulls the marker for any ineligible user whose episode's cleanup has already completed —
+	// at least one linked_items row, none of them live). Both directions share this one counter
+	// deliberately: they are the same operational hazard viewed from opposite sides — the invariant
+	// (domain.User.PlaidCleanupPendingAt's doc comment) drifting out of sync with reality — and a
+	// reader alerting on "is the backstop healthy" should not need to watch two counters to answer
+	// that question. repairPlaidDisconnects's own structured log lines (healed_count / cleared_count,
+	// each under its own field name) are what distinguish WHICH direction is active on any given pass;
+	// this counter answers only whether either direction is currently failing.
 	//
 	// This is deliberately a SEPARATE counter from the per-user one above, and the distinction is the
 	// point. A per-user failure is self-limiting: that user keeps a non-NULL marker, so the candidate
 	// query still selects them and the next pass retries them — the backstop covers for it. Nothing
-	// covers for the backstop. It is the only thing that returns a NULL-marker/live-item user to
+	// covers for the backstop. Stamp is the only thing that returns a NULL-marker/live-item user to
 	// visibility, and a user invisible to the candidate query is a user whose bank connections are
-	// never disconnected. So a persistently failing backstop is a silent data-retention failure, and
-	// it must not be inferable only from the absence of "healed" log lines.
+	// never disconnected; Clear is the only thing that returns a completed episode's marker to NULL
+	// before a later comp grant/removal can preserve it as a stale, grace-bypassing timestamp (Finding
+	// 1's own scenario). So a persistently failing backstop, in either direction, is a silent
+	// data-retention or grace-window failure, and it must not be inferable only from the absence of
+	// "healed"/"cleared" log lines.
 	//
-	// Deliberately does NOT fail the job (see repairPlaidDisconnects's call site): returning an error
+	// Deliberately does NOT fail the job (see repairPlaidDisconnects's call sites): returning an error
 	// there would skip the 30-day/7-day GDPR pre-deletion notices and deleteExpiredAccounts for EVERY
 	// user, which is a worse outcome than a delayed heal. The isolation is intentional; this counter
 	// plus an Error-level log is what keeps it from also being invisible.
@@ -184,7 +196,32 @@ var (
 	// pass heals for free; a rate that persists across passes means the backstop itself is broken.
 	PlaidCleanupBackstopFailuresTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "plaid_cleanup_backstop_failures_total",
-		Help: "Total failures of the plaid_cleanup_pending_at self-healing backstop (StampMissingPlaidCleanupMarkers). Sustained non-zero means NULL-marker users may be permanently invisible to the Plaid-disconnect repair pass.",
+		Help: "Total failures of the plaid_cleanup_pending_at self-healing backstop, both directions (StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers). Sustained non-zero means the marker may be drifting out of sync with the linked_items it is supposed to summarise, in either direction.",
+	})
+
+	// PlaidCleanupServiceNotConfiguredTotal counts passes of
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects that skipped the Plaid-disconnect candidate
+	// query and per-user disconnect loop entirely because no Plaid cleanup service was configured
+	// (w.plaidCleanup == nil) — a CI finding fixed alongside Issue #1413 Finding 1, not from the Codex
+	// review itself.
+	//
+	// Deliberately NOT the same counter as PlaidCleanupBackstopFailuresTotal above, even though both
+	// live in the same function: that counter means the backstop's own SQL (Stamp or Clear) failed —
+	// a narrower, different fact from "the collaborator this pass needs was never wired up at all".
+	// Conflating the two would make an operator unable to tell "the backstop is broken" from "Plaid
+	// isn't configured here", which call for entirely different responses.
+	//
+	// This is EXPECTED to be persistently non-zero in QA/E2E, which legitimately never configures
+	// Plaid — RetentionCleanupCheckPeriodicOpts's RunOnStart: true means this job runs at every
+	// process boot there, and through round-10 Fix 1 that used to hard-fail the WHOLE job (retention-
+	// clock repair and GDPR notices included) on every single boot; see repairPlaidDisconnects's own
+	// doc comment for why that changed. In PRODUCTION, where Plaid must always be configured, any
+	// non-zero rate here is exactly as significant as the old hard failure was — alert on it there,
+	// but do not alert on it globally, since a QA/E2E environment incrementing this counter on every
+	// boot is the expected, correct steady state, not a regression.
+	PlaidCleanupServiceNotConfiguredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "plaid_cleanup_service_not_configured_total",
+		Help: "Total repairPlaidDisconnects passes that skipped the Plaid-disconnect repair pass because no Plaid cleanup service was configured. Expected non-zero in QA/E2E; any non-zero rate in production is a configuration defect.",
 	})
 
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.

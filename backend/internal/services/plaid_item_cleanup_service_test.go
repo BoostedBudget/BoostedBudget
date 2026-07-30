@@ -1067,34 +1067,28 @@ func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsStillLive_StillAborted(t 
 	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-live")
 }
 
-// TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsButNotLive_NotAborted is the repair-pass-shaped
-// (DisconnectAllUserItemsIfEligible) sibling of the RemoveAllUserItems tests above.
-func TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsButNotLive_NotAborted(t *testing.T) {
-	ctx := context.Background()
-	userID := "user-repair-new-item-not-live"
-
-	mockRepo := new(MockLinkedItemRepoForCleanup)
-	mockPlaid := new(MockPlaidServiceForCleanup)
-
-	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
-	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(initialItems, nil).Once()
-	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
-	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
-
-	postLoopItems := []domain.LinkedItem{
-		{ID: "item-phantom", UserID: userID, AccessToken: "tok-phantom", Status: domain.LinkedItemStatusReplaced},
-	}
-	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(postLoopItems, nil).Once()
-
-	recheck := func(context.Context) (bool, error) { return true, nil }
-
-	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
-
-	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
-
-	require.NoError(t, err, "a NEW item ID that is not live must not block the repair pass from clearing its marker")
-	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
-}
+// TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsButNotLive_NotAborted was DELETED (Issue #1413
+// Finding 2, Codex review, PR #1443 follow-up, not renamed — see this task's report) rather than
+// fixed: it stubbed GetActiveItemsByUserID's post-loop re-fetch to return an item with status
+// domain.LinkedItemStatusReplaced, a state that repository method's own SQL can never actually
+// produce. GetActiveItemsByUserID's query (linked_item_repository.go) is
+// `WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))` — it
+// excludes 'disconnected'/'replaced' rows at the DATABASE level, so EVERY row a real call can ever
+// return already satisfies isLiveLinkedItemStatus (plaid_item_cleanup_service.go). That makes
+// verifyNoNewLinkedItemAppeared's "new ID, but not live, so not aborted" branch unreachable for this
+// specific caller (DisconnectAllUserItemsIfEligible, whose fetch IS GetActiveItemsByUserID) — the
+// mock was modeling a return value production code cannot produce, so the test did not prove what
+// its name claimed about the repair path.
+//
+// The intended coverage — "a new item ID that already carries a terminal status must not trip
+// ErrCleanupAborted" — is NOT missing: it is already reachably covered by
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyDisconnected_NotAborted and
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyReplaced_NotAborted above, whose fetch
+// (GetByUserID) genuinely has no status filter and CAN return a disconnected/replaced row post-loop.
+// The repair-pass path's OWN positive control for a genuinely live new item — the state
+// GetActiveItemsByUserID CAN produce — is
+// TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsAfterLoopCompletes_ReturnsAbortedNotNil above,
+// left untouched.
 
 // TestPlaidCleanup_NoItemsInitially_NewItemAppearsButNotLive_NotAborted closes the narrowest form:
 // the initial fetch finds nothing (the "no linked items" branch), and the item that appears before
