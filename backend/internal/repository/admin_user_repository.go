@@ -488,8 +488,10 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // the pin and full reasoning.
 // should_mark_plaid_cleanup_pending (Issue #1413 round-10) is should_rearm_retention's narrower
 // sibling for the Plaid-disconnect-repair marker: a removed/expired comp (re-)starts
-// plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets,
-// via COALESCE(u.plaid_cleanup_pending_at, NOW()) below. Deliberately narrower than
+// plaid_cleanup_pending_at when the reverted raw status is one the repair pass actually targets —
+// see removeUserTierOverrideUpdate's own doc comment, and ROUND 18/19/20 further below, for the
+// CURRENT write (anchored on the lapse instant or on clock_timestamp(), never COALESCE — COALESCE
+// was removed in ROUND 18 and must not be reintroduced). Deliberately narrower than
 // should_rearm_retention's ('inactive', 'cancelled', 'past_due') — 'past_due' is excluded here for
 // the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due has its own
 // dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays) and must never be
@@ -499,10 +501,10 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // fate instead.
 //
 // Issue #1413 round-13: as of round-13, updateUserTierQuery (comp grant) no longer nulls this
-// marker, so in the ordinary case — a comp granted over an already inactive/cancelled user whose
-// marker was already set by the transition that made them ineligible — this COALESCE is a no-op:
-// the marker already survived the comp's entire lifetime untouched, and COALESCE(existing, NOW())
-// just preserves that existing (earlier, correct) value.
+// marker at all, so a comp granted over an already inactive/cancelled user whose marker was already
+// set by the transition that made them ineligible carries that marker, untouched, through the
+// entire life of the comp — this CASE, on removal, always OVERWRITES it (per ROUND 18/19/20 below),
+// it never merely preserves whatever was already there.
 //
 // Round 14 -> 15 -> 16 — read all three in order; the third is the one currently in force. The
 // next reader should see deliberate movement toward a better fix, not unexplained churn.
@@ -678,8 +680,61 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // turn into unrecoverable harm (a comp cycle over it); it does not make the marker's own steady-state
 // correctness unconditionally self-maintaining without Clear's help. Do NOT remove Clear on the
 // strength of this fix alone — it closes a different hole and still has a live, unrelated job to do.
+//
+// ROUND 19 (Finding 1, Medium, Codex review, PR #1443 follow-up — a later review round on this same
+// CASE): ROUND 18's unconditional NOW() fixed the resurrected-stale-marker bug above, but its own
+// justification — "the window in which they can react to actually losing access should run from the
+// moment they actually lose it" — exposes a gap it did not close: should_mark_plaid_cleanup_pending
+// only checks that a PRIOR override was non-empty, never whether that override had already LAPSED by
+// removal time. Concretely: a comp expires at T; the user is read-only (HasActiveManualOverride()
+// false) from T onward; the expiry job runs late, or an admin clicks Remove Override, at T+24h;
+// ROUND 18's unconditional NOW() stamps T+24h — a FULL FRESH 72 hours measured from 24 hours AFTER
+// the user actually lost access, contradicting ROUND 18's own rationale for the user whose comp had
+// already lapsed rather than one still genuinely live at removal.
+//
+// The fix: anchor on manual_tier_ends_at (now selected below, alongside manual_tier_override) when
+// it is in the past AT removal time — that IS the instant access was actually lost. Only when the
+// override was STILL LIVE at removal (an admin revoking an active comp; access is lost AT that
+// removal, not earlier) does "now" remain the correct anchor.
+//
+// State the consequence plainly, because out of context it reads like a new bug: if the comp lapsed
+// LONGER ago than the 72-hour grace period, the resulting marker already sits outside the window, and
+// the very next repair pass can disconnect the user with no additional grace at the point of removal.
+// That is CORRECT, not a regression — the user already spent their full 72 hours as a read-only user
+// once access genuinely lapsed at manual_tier_ends_at; a comp-removal call arriving late must not
+// manufacture a SECOND grace window on top of the one that already elapsed. See
+// TestRemoveUserTierOverride_Integration_LapsedCompAnchorsMarkerAtLapseTime_NotRemovalTime and
+// TestRemoveUserTierOverride_Integration_LapsedCompLongerThanGrace_ImmediatelyEligible
+// (admin_user_repository_remove_tier_override_integration_test.go).
+//
+// ROUND 20 (Finding 2, Medium, same review round): PostgreSQL NOW() is transaction_timestamp() —
+// fixed at the enclosing transaction's BEGIN, not at the statement that actually executes.
+// removeTierOverride (below) opens an explicit transaction (r.db.Begin(ctx)) and only then runs this
+// CTE's FOR UPDATE inside it — if that lock acquisition waits a long time (a concurrent writer
+// already holding the row), NOW() still reflects the pre-wait BEGIN instant, not the moment the row
+// is actually written. Concretely: BEGIN at T0, block 73 hours on the row lock, then write
+// plaid_cleanup_pending_at = NOW() = T0 — the very next repair pass sees a marker already 73 hours
+// stale and disconnects a connection with no meaningful grace at all. Same harm class ROUND 18 set
+// out to fix, caused by a different clock. Fix: use clock_timestamp() — statement/wall time,
+// re-evaluated fresh at actual execution — for the grace ANCHOR only (both branches in ROUND 19
+// above). Left deliberately alone: updated_at and the retention_* columns in
+// removeUserTierOverrideUpdate keep NOW() — those are ordinary audit/business timestamps where
+// transaction-consistent time is the conventional and here harmless choice, not a grace-window anchor
+// a delayed lock wait can silently backdate. Also left alone: StampMissingPlaidCleanupMarkers and
+// ClearCompletedPlaidCleanupMarkers (profile_repository.go) — each is a single autocommit statement
+// with no earlier lock-acquiring statement in the same transaction, so their own transaction start
+// and their own statement execution coincide; there is no earlier BEGIN for a lock wait to
+// stale-date NOW() against.
+//
+// Lock contention is inherently hard to force deterministically without either a real multi-second
+// wait or a genuine race. TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait
+// (admin_user_repository_remove_tier_override_integration_test.go) holds a real FOR UPDATE lock on a
+// second connection, launches the real RemoveUserTierOverride call on a third, and proves the marker
+// lands AFTER the lock is released rather than at the moment the removal's own transaction began — a
+// bounded, deterministic (not statistical) proof of the clock_timestamp()-vs-transaction_timestamp()
+// distinction ROUND 19's fix depends on.
 const removeUserTierOverrideSelectPrior = `
-	SELECT manual_tier_override, subscription_status, retention_expires_at,
+	SELECT manual_tier_override, manual_tier_ends_at, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
 	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
@@ -702,10 +757,18 @@ const removeUserTierOverrideCASClause = `
 // columns, and conditionally re-arm/initialise retention per should_rearm_retention (see
 // removeUserTierOverrideSelectPrior's comment).
 //
-// plaid_cleanup_pending_at's CASE writes NOW() UNCONDITIONALLY when should_mark_plaid_cleanup_pending
-// is true — deliberately NOT COALESCE(u.plaid_cleanup_pending_at, NOW()) — see ROUND 18 in
-// removeUserTierOverrideSelectPrior's doc comment just above for the full Path A/Path B hazard this
-// closes and the reasoning for why writing NOW() unconditionally here is correct, not a regression.
+// plaid_cleanup_pending_at's CASE (Issue #1413 Findings 1 and 2, Codex review, PR #1443 follow-up —
+// see ROUND 19/ROUND 20 in removeUserTierOverrideSelectPrior's doc comment just above for the full
+// reasoning) fires only when should_mark_plaid_cleanup_pending is true, and then anchors on:
+//   - prior.manual_tier_ends_at, when the override had ALREADY lapsed by removal time — access was
+//     lost THEN, not now, so a late removal must not manufacture a fresh window on top of one that
+//     already elapsed (ROUND 19);
+//   - clock_timestamp() otherwise — real statement-execution wall time, not NOW()'s transaction-start
+//     time, which a long FOR UPDATE lock wait inside removeTierOverride's explicit transaction could
+//     otherwise silently backdate (ROUND 20).
+//
+// Never COALESCE(u.plaid_cleanup_pending_at, ...) — that resurrects a stale PRIOR episode's
+// timestamp instead of anchoring the CURRENT one; see ROUND 18 above for why that was itself a bug.
 const removeUserTierOverrideUpdate = `
 	UPDATE users u
 	SET manual_tier_override = NULL,
@@ -715,7 +778,15 @@ const removeUserTierOverrideUpdate = `
 	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN NOW() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
 	    retention_notice_30d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_30d_sent_at END,
 	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END,
-	    plaid_cleanup_pending_at = CASE WHEN prior.should_mark_plaid_cleanup_pending THEN NOW() ELSE u.plaid_cleanup_pending_at END
+	    plaid_cleanup_pending_at = CASE
+	        WHEN prior.should_mark_plaid_cleanup_pending
+	             AND prior.manual_tier_ends_at IS NOT NULL
+	             AND prior.manual_tier_ends_at < clock_timestamp()
+	        THEN prior.manual_tier_ends_at
+	        WHEN prior.should_mark_plaid_cleanup_pending
+	        THEN clock_timestamp()
+	        ELSE u.plaid_cleanup_pending_at
+	    END
 	FROM prior
 	WHERE u.id = $1
 	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override

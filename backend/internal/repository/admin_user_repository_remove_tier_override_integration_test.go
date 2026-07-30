@@ -612,7 +612,15 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled on a CAS-matched clear")
 	assert.Nil(t, snap.RetentionNotice7d, "7d notice flag must be nulled on a CAS-matched clear")
 	require.NotNil(t, snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must be (re-)armed too — reverted status 'cancelled' is Plaid-repair-eligible, a prior override existed, and a live linked item genuinely remains (should_mark_plaid_cleanup_pending's restored liveLinkedItemExistsClause guard)")
-	assertBetweenFence(t, before, after, *snap.PlaidCleanupPendingAt, "plaid_cleanup_pending_at must be ~now")
+	// Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, ROUND 19): this fixture's comp had
+	// ALREADY LAPSED by removal time (endsAt is 1 hour in the past — exactly what the expiry worker
+	// selects). The marker must anchor on THAT lapse instant, not on "now" at removal: access was
+	// genuinely lost 1 hour before this call landed, so a fresh 72-hour window starting at removal
+	// would hand the user 1 extra hour of grace they did not earn. Before this fix, the CASE wrote
+	// NOW() unconditionally and this assertion read assertBetweenFence(before, after, ...) — the
+	// exact behavior this test now proves is WRONG for a lapsed (as opposed to still-live) comp.
+	require.True(t, endsAt.Equal(*snap.PlaidCleanupPendingAt),
+		"plaid_cleanup_pending_at must be anchored at manual_tier_ends_at (the lapse instant), not at removal time — got %v, want %v", *snap.PlaidCleanupPendingAt, endsAt)
 
 	audit := fetchLatestAuditRow(t, pool, target.ID, "remove_manual_tier")
 	assert.Equal(t, actor.ID, *audit.UserID, "the CAS variant must still write an audit row")
@@ -964,6 +972,114 @@ func TestRemoveUserTierOverride_Integration_Finding1PathB_ZeroLinkedItemsPopulat
 		"the marker must not be the old stale value")
 }
 
+// ─── Issue #1413 Finding 1 (Medium, Codex review, PR #1443 follow-up, ROUND 19): a comp that had
+// ALREADY LAPSED before removal must anchor the grace window at the lapse instant, not at removal
+// time ────────────────────────────────────────────────────────────────────────────────────────────
+//
+// ROUND 18 (above) fixed comp removal writing NOW() unconditionally instead of COALESCE-preserving a
+// stale prior episode's timestamp — but its own justification ("the window ... should run from the
+// moment they actually lose it") only holds when the override was STILL LIVE at removal. If the
+// override had already LAPSED before this call — the expiry worker's entire reason for existing, and
+// also reachable via an admin clicking "Remove Override" on a comp that quietly expired days ago —
+// access was lost at manual_tier_ends_at, not at whatever later instant someone got around to
+// clearing it. ROUND 18's unconditional NOW() handed a FULL FRESH 72 hours measured from the (late)
+// clear instead of from the true loss-of-access instant.
+//
+// See removeUserTierOverrideSelectPrior's own doc comment (ROUND 19, admin_user_repository.go) for
+// the complete reasoning, including the accepted consequence the second test below proves: a comp
+// lapsed longer ago than the grace period makes the user IMMEDIATELY eligible for disconnect — this
+// is correct, not a bug, because they already spent their full grace window as a read-only user once
+// access genuinely lapsed.
+
+// TestRemoveUserTierOverride_Integration_LapsedCompAnchorsMarkerAtLapseTime_NotRemovalTime proves the
+// anchor via the unconditional ADMIN path (RemoveUserTierOverride, not just the CAS-guarded worker
+// path already covered by TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears above): an
+// admin who clicks "Remove Override" on a comp that lapsed 2 hours ago must not manufacture a fresh
+// window starting now.
+//
+// Falsifiability: reverting removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE to write
+// clock_timestamp()/NOW() unconditionally (ROUND 18's shape) makes this test fail — the marker would
+// land within the before/after fence around the REMOVAL call, not at endsAt.
+func TestRemoveUserTierOverride_Integration_LapsedCompAnchorsMarkerAtLapseTime_NotRemovalTime(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
+
+	override := "household_2"
+	lapsedAt := time.Now().Add(-2 * time.Hour) // lapsed well before this call, well within grace
+	setManualOverride(t, pool, target.ID, &override, &lapsedAt)
+
+	removalFenceBefore := dbNow(t, pool)
+	row, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "admin: removing a quietly-lapsed comp", testRetentionMonths)
+	require.NoError(t, err)
+	require.True(t, row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.PlaidCleanupPendingAt)
+	assert.True(t, lapsedAt.Equal(*snap.PlaidCleanupPendingAt),
+		"plaid_cleanup_pending_at must equal manual_tier_ends_at (the lapse instant), got %v want %v", *snap.PlaidCleanupPendingAt, lapsedAt)
+	assert.True(t, snap.PlaidCleanupPendingAt.Before(removalFenceBefore),
+		"the marker must predate the removal call itself — it must NOT fall inside the removal's own before/after fence")
+}
+
+// TestRemoveUserTierOverride_Integration_LapsedCompLongerThanGrace_ImmediatelyEligible proves the
+// accepted, INTENTIONAL consequence stated in removeUserTierOverrideSelectPrior's ROUND 19 comment:
+// a comp lapsed LONGER ago than the 72-hour Plaid-disconnect grace period must leave the user
+// IMMEDIATELY eligible for the next repair pass — not handed a second, unearned grace window just
+// because someone got around to clicking "Remove Override" late. This is correct: the user already
+// spent their full 72 hours as a read-only user starting the moment the comp genuinely lapsed.
+//
+// Falsifiability: reverting to ROUND 18's unconditional clock_timestamp()/NOW() makes this test fail
+// — the marker would land at removal time, comfortably INSIDE the 72-hour grace window, and
+// GetUsersNeedingPlaidDisconnectRepair would not select this user yet.
+func TestRemoveUserTierOverride_Integration_LapsedCompLongerThanGrace_ImmediatelyEligible(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	profileRepo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
+
+	override := "household_2"
+	// Lapsed well past the 72-hour grace period — models an admin (or a long-dead-lettered expiry
+	// job) finally clearing a comp that quietly expired days ago.
+	lapsedAt := time.Now().Add(-testGracePeriod - 24*time.Hour)
+	setManualOverride(t, pool, target.ID, &override, &lapsedAt)
+
+	row, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "admin: removing a long-lapsed comp", testRetentionMonths)
+	require.NoError(t, err)
+	require.True(t, row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.PlaidCleanupPendingAt)
+	assert.True(t, lapsedAt.Equal(*snap.PlaidCleanupPendingAt),
+		"plaid_cleanup_pending_at must be anchored at the lapse instant, already outside the grace period")
+
+	// The real-world consequence: the very next repair pass must select this user right now, with no
+	// additional grace — proving the "immediately eligible" outcome is not just a raw timestamp
+	// artifact but actually changes the candidate query's behavior.
+	candidates, err := profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	found := false
+	for _, c := range candidates {
+		if c.ID == target.ID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "a comp lapsed longer ago than the grace period must make the user IMMEDIATELY eligible for Plaid-disconnect repair — they already had their full grace window as a read-only user")
+}
+
 // ─── Issue #1413 Codex review round on PR #1443, Finding 3 (High), and its round-16 backstop ──
 //
 // This test proves TWO things in sequence, deliberately: (1) the race is real — restoring
@@ -1031,11 +1147,12 @@ func TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_Marker
 	defer tx1.Rollback(ctx) //nolint:errcheck // no-op after Commit below
 
 	var priorOverride *string
+	var priorEndsAt *time.Time
 	var subStatus string
 	var retentionExpiresAt *time.Time
 	var shouldRearm, shouldMarkSnapshot bool
 	err = tx1.QueryRow(ctx, removeUserTierOverrideSelectPrior+` FOR UPDATE`, target.ID).Scan(
-		&priorOverride, &subStatus, &retentionExpiresAt, &shouldRearm, &shouldMarkSnapshot,
+		&priorOverride, &priorEndsAt, &subStatus, &retentionExpiresAt, &shouldRearm, &shouldMarkSnapshot,
 	)
 	require.NoError(t, err)
 	// With round 14's liveLinkedItemExistsClause gate restored (round 16), shouldMarkSnapshot must
@@ -1099,6 +1216,98 @@ func TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_Marker
 	healedSnap := fetchRetentionSnapshot(t, pool, target.ID)
 	assert.NotNil(t, healedSnap.PlaidCleanupPendingAt,
 		"the marker must be healed by StampMissingPlaidCleanupMarkers on the next repair pass — this cancelled user's live bank connection must not be permanently invisible to GetUsersNeedingPlaidDisconnectRepair just because one pass's writer lost this race")
+}
+
+// ─── Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up, ROUND 20): the grace anchor
+// must use statement/wall time, not PostgreSQL's transaction-start NOW() ──────────────────────────
+//
+// removeTierOverride opens an explicit transaction (r.db.Begin(ctx)) and only then runs the CTE's
+// FOR UPDATE lock acquisition inside it. PostgreSQL's NOW() (transaction_timestamp()) is fixed at
+// that transaction's BEGIN, not at the statement that actually executes — so if the lock acquisition
+// blocks a long time on a row a concurrent transaction already holds, NOW() would still reflect the
+// pre-wait instant, silently backdating the marker by however long the wait lasted. See
+// removeUserTierOverrideSelectPrior's own doc comment (ROUND 20, admin_user_repository.go) for the
+// full reasoning; clock_timestamp() (real statement-execution wall time) is the fix.
+
+// TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait forces genuine,
+// deterministic lock contention across two real connections — not a synthetic pg_sleep-in-isolation
+// proof — because the actual failure mode is specifically about removeTierOverride's own transaction
+// boundary racing its own FOR UPDATE wait, not merely about which Postgres clock function returns
+// which value in the abstract. Connection 1 holds a real row lock; RemoveUserTierOverride (on its
+// own connection, via a goroutine) blocks trying to acquire the same lock; only after a multi-second
+// hold does connection 1 release it. The marker written must reflect the RELEASE instant, not the
+// removal transaction's own (much earlier) BEGIN instant.
+//
+// The override is deliberately STILL LIVE at removal — this isolates Finding 2 from Finding 1's
+// lapsed-anchor branch (which anchors on the stored manual_tier_ends_at and never reads any clock at
+// removal time at all): only the still-live branch calls clock_timestamp()/NOW() at removal, so this
+// is the one shape that can actually exercise the transaction-start-vs-statement-time distinction.
+//
+// Falsifiability: reverting removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE to write
+// NOW() (transaction_timestamp()) instead of clock_timestamp() makes this test fail — the marker
+// would land at (or a few milliseconds after) startFence, well BEFORE the lock was actually
+// released, instead of at or after releaseFence.
+func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
+
+	override := "household_2"
+	endsAt := time.Now().Add(24 * time.Hour) // still live at removal
+	setManualOverride(t, pool, target.ID, &override, &endsAt)
+
+	// Connection 1: hold a real FOR UPDATE lock on the target row, simulating a long-running
+	// concurrent transaction that removeTierOverride's own FOR UPDATE must wait behind.
+	tx1, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx1.Rollback(ctx) //nolint:errcheck // no-op after Commit below
+	var locked int
+	require.NoError(t, tx1.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, target.ID).Scan(&locked))
+
+	// startFence marks a point strictly BEFORE RemoveUserTierOverride's own transaction opens (the
+	// goroutine below launches after this). If the marker's grace anchor were transaction-start time
+	// (NOW()), it would land close to startFence — well before the lock is released seconds later.
+	startFence := dbNow(t, pool)
+
+	type result struct {
+		row RemoveTierOverrideRow
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		row, callErr := adminRepo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "lock contention test", testRetentionMonths)
+		done <- result{row, callErr}
+	}()
+
+	// Hold the lock long enough that the goroutine's Begin()+FOR UPDATE attempt is certainly already
+	// blocked on it before we release — Go schedules the goroutine's first statement within
+	// microseconds, so this margin is generous, not tight.
+	const lockHoldDuration = 3 * time.Second
+	time.Sleep(lockHoldDuration)
+	releaseFence := dbNow(t, pool)
+	require.NoError(t, tx1.Commit(ctx))
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for RemoveUserTierOverride to complete after the lock was released")
+	}
+	require.NoError(t, res.err)
+	require.True(t, res.row.Removed)
+
+	snap := fetchRetentionSnapshot(t, pool, target.ID)
+	require.NotNil(t, snap.PlaidCleanupPendingAt)
+	assert.False(t, snap.PlaidCleanupPendingAt.Before(releaseFence),
+		"plaid_cleanup_pending_at must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean the marker used transaction-start time instead and was backdated by the entire lock wait", releaseFence, *snap.PlaidCleanupPendingAt)
+	assert.True(t, snap.PlaidCleanupPendingAt.After(startFence.Add(lockHoldDuration/2)),
+		"plaid_cleanup_pending_at must NOT be anywhere near the removal transaction's own start (%v) — got %v", startFence, *snap.PlaidCleanupPendingAt)
 }
 
 // TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears verifies the CAS

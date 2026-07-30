@@ -149,10 +149,13 @@ type User struct {
 	//   marker left set after its episode's cleanup completed, and several comments across this branch
 	//   incorrectly described that state as harmless "inert" or "untidy" residue the candidate query's
 	//   own live-item EXISTS clause would filter out forever. It is not harmless: a stale marker left
-	//   set through a comp grant, a relink, and a comp removal survives
-	//   removeUserTierOverrideUpdate's COALESCE(existing, NOW()) unchanged (admin_user_repository.go),
-	//   so the NEXT repair pass sees a genuinely fresh live item paired with an already-expired
-	//   grace-window timestamp and disconnects it immediately — the exact protection this whole grace
+	//   set through a comp grant, a relink, and a comp removal USED TO survive
+	//   removeUserTierOverrideUpdate's COALESCE(existing, NOW()) unchanged (admin_user_repository.go)
+	//   — that COALESCE was removed by this same fix (ROUND 18 in removeUserTierOverrideSelectPrior's
+	//   doc comment, admin_user_repository.go; since further refined by ROUND 19/20 to anchor on the
+	//   lapse instant and on wall-clock time respectively — see that comment for the CURRENT write) —
+	//   so the NEXT repair pass would see a genuinely fresh live item paired with an already-expired
+	//   grace-window timestamp and disconnect it immediately — the exact protection this whole grace
 	//   window exists to provide, silently skipped. ClearCompletedPlaidCleanupMarkers
 	//   (profile_repository.go) is this violation's healer, symmetric with StampMissingPlaidCleanupMarkers
 	//   for the OTHER direction: both run on every repairPlaidDisconnects pass, so this invariant's
@@ -210,10 +213,14 @@ type User struct {
 	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
 	// ExpireTrialIfNoOverride (all profile_repository.go), AdminUserRepository's
 	// removeUserTierOverrideUpdate (admin_user_repository.go, shared by RemoveUserTierOverride/
-	// RemoveUserTierOverrideIfMatches), and — the one exception to "begins on a status transition"
-	// in the episode definition above — profileRepository.StampMissingPlaidCleanupMarkers
-	// (profile_repository.go), which begins an episode via a live-item insertion instead of a status
-	// transition.
+	// RemoveUserTierOverrideIfMatches), profileRepository.StampMissingPlaidCleanupMarkers
+	// (profile_repository.go) — the one exception to "begins on a status transition" in the episode
+	// definition above, since it begins an episode via a live-item insertion instead — and the three
+	// one-time migration backfills that predate any of the above ever having run over their target
+	// rows: 000119_add_plaid_cleanup_pending_at, 000120_fix_plaid_cleanup_pending_at_backfill, and
+	// 000121_backfill_plaid_cleanup_pending_at_excluded_overrides (migrations/). See each migration's
+	// own doc comment for why it exists and what population it targets; none of the three runs again
+	// after deploy, so each is a SET site only for the historical rows it backfilled at deploy time.
 	// Round 14 -> 15 -> 16 on this last site's should_mark_plaid_cleanup_pending CASE — read all
 	// three in order; the third is the one currently in force (see removeUserTierOverrideSelectPrior's
 	// own doc comment, admin_user_repository.go, for the full history this summarises): round 14
@@ -229,11 +236,21 @@ type User struct {
 	// self-heals round 15's exact race on the very next repair pass instead of leaking forever — see
 	// the "EVENTUALLY consistent" paragraph above. The stamp still serves its original purpose (a
 	// user whose raw status was already ineligible before ever gaining a marker, e.g. an
-	// imported/backfilled row) and is a no-op COALESCE whenever the marker is already set. The two
-	// round-14 M1 regression tests are back to their original names and Nil assertions
-	// (admin_user_repository_remove_tier_override_integration_test.go), and assertPlaidMarkerInvariant
-	// is back to its original strict form (profile_repository_plaid_marker_invariant_integration_test.go)
-	// — see each one's own comment.
+	// imported/backfilled row) and, at round 16, was a no-op whenever the marker was already set
+	// (its own WHERE clause requires plaid_cleanup_pending_at IS NULL, so it never overwrites an
+	// existing value — this was never a COALESCE in this statement, unlike removeUserTierOverrideUpdate's
+	// CASE discussed above). The two round-14 M1 regression tests are back to their original names
+	// and Nil assertions (admin_user_repository_remove_tier_override_integration_test.go).
+	// assertPlaidMarkerInvariant was restored to a strict form at round 16
+	// (profile_repository_plaid_marker_invariant_integration_test.go) — see each one's own comment —
+	// but is NOT strict in every respect today: Issue #1413 Finding 3 (Codex review, PR #1443
+	// follow-up) widened it once more, to also treat a NULL marker as legal while the user currently
+	// has an ACTIVE manual override — StampMissingPlaidCleanupMarkers deliberately excludes an
+	// actively-comped user from stamping (noActiveManualOverridePredicate, profile_repository.go), so
+	// a NULL marker next to a live linked item is a real, reachable, and intentional state whenever a
+	// live comp is the reason nothing has stamped it yet, not a defect. Every other strict check the
+	// helper made at round 16 is unchanged; see the helper's own doc comment for the precise, single
+	// case widened.
 	//
 	// Not a SET/CLEAR site: UpdateSubscriptionStatus (Issue #1413 round-14 finding L1) — it writes
 	// subscription_status directly but never touches this column at all; see its own doc comment
