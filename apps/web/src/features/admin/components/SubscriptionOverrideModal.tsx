@@ -38,6 +38,8 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from '../hooks/useAdminSubscription'
+import { isOverrideActive } from '../lib/overrideStatus'
+import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
 
 /** The fixed type-to-confirm literal for removing an override — never PII like the user's
  * email, same rationale as DisbandHouseholdDialog's `CONFIRM_TEXT = 'DISBAND'`. */
@@ -178,9 +180,39 @@ function SubscriptionOverrideForm({
         )
     }
 
+    // `hasOverride` is RAW presence — an override value exists on the record, valid or not. This
+    // gates the Remove Override button and the removal-confirmation labels below: an admin must
+    // still be able to see and clear a malformed/garbage override, exactly as the backend
+    // preserves it in the response instead of 500ing (admin_subscriptions_test.go
+    // TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError — "that response
+    // is what the override modal needs to render the Remove Override button").
     const hasOverride = !!sub?.manual_tier_override
     const isExpired =
         sub?.manual_tier_ends_at && new Date(sub.manual_tier_ends_at) < new Date()
+
+    // Issue #1413 AC6: this used to be `hasOverride && !isExpired`, handed straight to `isComped`
+    // below without ever checking whether the override actually names a real, currently-configured
+    // tier. manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so a
+    // legacy row / direct SQL write / write made while tier config was nil can hold a value naming
+    // no tier at all (e.g. 'not_a_tier'). `resolveKind` in subscriptionPresentation.ts gives
+    // `isComped` absolute precedence over the server-computed `effectiveStatus` passed one line
+    // below, so that unvalidated value was silently overriding the server's correct answer —
+    // rendering "Complimentary" and a green "Manual override active" chip for a user with zero
+    // actual write access. `isOverrideActive` (shared with UsersPage.tsx via the same
+    // `KNOWN_TIER_NAMES` set — not a second copy, which is exactly the drift that caused this) is
+    // the fix.
+    //
+    // `isKnownTierOverride` ignores expiry (endsAt omitted) — it answers "does this override name a
+    // real tier at all", independent of whether it has lapsed. `isLiveOverride` folds in expiry too
+    // — "is this override granting a comp right now". These are deliberately two different
+    // questions (the tier axis vs. the expiry axis): a malformed override must be treated as no
+    // override at all on the access-representation axis (`showOverrideChip` below, and `isComped`),
+    // while an expired-but-validly-named override still renders — just in its existing amber
+    // "(expired)" state, not hidden — because expiring is a normal lifecycle event, not garbage
+    // data.
+    const isKnownTierOverride = isOverrideActive(sub?.manual_tier_override, undefined, KNOWN_TIER_NAMES)
+    const isLiveOverride = isOverrideActive(sub?.manual_tier_override, sub?.manual_tier_ends_at, KNOWN_TIER_NAMES)
+    const showOverrideChip = hasOverride && isKnownTierOverride
 
     // G10 (AC 6): this is the surface where an admin actually decides to grant or revoke a
     // comp, so it must show both raw AND effective status — not raw alone. Reuses the shared
@@ -188,12 +220,12 @@ function SubscriptionOverrideForm({
     // UsersPage's "Comped" chip. `AdminSubscriptionDetailOutputBody` has no server-computed
     // `is_comped` — only `effective_status` (does this user have write access right now), which
     // answers a different question than "is this user comped by a LIVE override" — an expired
-    // override must not still read as comped, so isComped is derived from the same
-    // hasOverride/isExpired predicate as the rest of this modal, not from effective_status.
+    // (or malformed) override must not still read as comped, so isComped is derived from
+    // `isLiveOverride`, not from effective_status.
     const presentation = getSubscriptionPresentation({
         status: sub?.subscription_status ?? '',
         effectiveStatus: sub?.effective_status,
-        isComped: hasOverride && !isExpired,
+        isComped: isLiveOverride,
         compEndsAt: sub?.manual_tier_ends_at ?? undefined,
     })
 
@@ -267,7 +299,7 @@ function SubscriptionOverrideForm({
                                     </span>
                                 </div>
 
-                                {hasOverride && (
+                                {showOverrideChip && (
                                     <div
                                         className={cn(
                                             'inline-flex items-center gap-1.5 flex-wrap text-[0.8rem] font-medium px-2.5 py-1.5 rounded-md border',

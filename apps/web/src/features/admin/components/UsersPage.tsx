@@ -31,6 +31,7 @@ import { DataTable, TablePagination, useTablePreferences } from '@/shared/compon
 import type { ColumnDef } from '@/shared/components/DataTable'
 import { getSubscriptionPresentation } from '../../subscription/lib/subscriptionPresentation'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
+import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
 
 const TIER_OPTIONS = [
   { value: '', label: 'All Tiers' },
@@ -64,12 +65,6 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
   if (tier.startsWith('household_')) return 'success'
   return 'secondary'
 }
-
-// KNOWN_TIER_NAMES is the single source of truth for "what counts as a configured tier" on this
-// page, derived from TIER_DISPLAY above rather than duplicated — passed into isOverrideActive so
-// a manual_tier_override naming no configured tier is rejected the same way the backend's
-// ComputeEffectiveTier()/ComputeEffectiveStatus() reject it (Issue #1413, this task).
-const KNOWN_TIER_NAMES = new Set(Object.keys(TIER_DISPLAY))
 
 /**
  * Whether a manual tier override is currently live for this row. A single source of truth

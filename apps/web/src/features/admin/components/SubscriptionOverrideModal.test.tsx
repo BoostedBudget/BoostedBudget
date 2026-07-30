@@ -74,6 +74,38 @@ const SUB_DETAIL_EFFECTIVE_VIA_OVERRIDE = {
     manual_tier_ends_at: null,
 }
 
+// Issue #1413 AC6: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint,
+// so it can hold a value naming no configured tier. The server correctly falls back to the raw
+// base_tier/effective_status in this situation (pinned server-side by
+// TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError in
+// admin_subscriptions_test.go) — subscription_status/effective_status are deliberately "active"
+// (a real, actively-paying user), so a wrongly-comped "Complimentary" badge would be an especially
+// bad answer, not just a cosmetic slip.
+const SUB_DETAIL_MALFORMED_OVERRIDE = {
+    ...SUB_DETAIL,
+    base_tier: 'premium',
+    effective_tier: 'premium',
+    subscription_status: 'active',
+    effective_status: 'active',
+    manual_tier_override: 'not_a_tier',
+    manual_tier_ends_at: null,
+}
+
+// Issue #1413: the expired-override branch (' (expired)', the "Expired:" date label, and the
+// effective badge falling back off a lapsed override) had zero test coverage before this fix —
+// every other fixture in this file sets manual_tier_ends_at: null. household_4 is a validly
+// configured tier name, so this fixture isolates the expiry axis from the tier-name-validity axis
+// exercised by SUB_DETAIL_MALFORMED_OVERRIDE above.
+const SUB_DETAIL_EXPIRED_OVERRIDE = {
+    ...SUB_DETAIL,
+    base_tier: 'premium',
+    effective_tier: 'premium',
+    subscription_status: 'inactive',
+    effective_status: 'inactive',
+    manual_tier_override: 'household_4',
+    manual_tier_ends_at: '2020-01-01T00:00:00Z',
+}
+
 // deletion_requested_at/deletion_scheduled_at (Issue #1413 Fix 6/AC 10) are now real fields on
 // the generated AdminSubscriptionDetailOutputBody type (backend + codegen plumbed them through),
 // not an off-type field hand-fed onto the mock — these fixtures read exactly like SUB_DETAIL_WITH_OVERRIDE
@@ -160,6 +192,96 @@ describe('SubscriptionOverrideModal', () => {
         const effectiveBadge = screen.getByLabelText(/effective status: complimentary/i)
         expect(effectiveBadge).toBeInTheDocument()
         expect(effectiveBadge).toHaveTextContent('Complimentary')
+    })
+
+    // Issue #1413 AC6: SubscriptionOverrideModal re-implemented override liveness inline without
+    // validating manual_tier_override against known tier names, unlike UsersPage.tsx (which uses
+    // isOverrideActive + KNOWN_TIER_NAMES). Because getSubscriptionPresentation's resolveKind gives
+    // isComped absolute precedence over the server-computed effective_status passed one line above
+    // it, the unvalidated value silently overrode the server's correct answer.
+    describe('Malformed override tier-name validation (Issue #1413 AC6)', () => {
+        it('treats an override naming no configured tier as no override at all — no false Complimentary badge or green chip', async () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_MALFORMED_OVERRIDE,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // The server-computed effective_status ('active') must render — NOT "Complimentary".
+            // Before the fix, isComped was true whenever manual_tier_override was merely non-empty,
+            // regardless of whether it named a real tier, so this rendered "Complimentary" instead.
+            const effectiveBadge = await screen.findByLabelText(/effective status: active/i)
+            expect(effectiveBadge).toHaveTextContent('Active')
+            expect(screen.queryByLabelText(/effective status: complimentary/i)).not.toBeInTheDocument()
+
+            // The green "Manual override active" chip must not render at all for a malformed
+            // override — on the access-representation axis it is treated as no override, exactly
+            // like UsersPage's Tier/Comped columns already treat the same value.
+            expect(screen.queryByText(/manual override active/i)).not.toBeInTheDocument()
+
+            // The hero "Effective tier" cell is server-computed and was already correct — pinned
+            // here so the regression is visible as "two cells lying, one correct" if reintroduced.
+            const effectiveTierLabel = screen.getByText('Effective tier')
+            expect(effectiveTierLabel.nextElementSibling).toHaveTextContent('Premium')
+        })
+
+        it('still shows the green chip and Complimentary badge for a validly-configured, live override (positive control)', async () => {
+            // An over-tight fix that rejects every override (not just malformed ones) would
+            // silently un-comp every legitimately comped user — worse than the bug being fixed.
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_WITH_OVERRIDE,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            const effectiveBadge = await screen.findByLabelText(/effective status: complimentary/i)
+            expect(effectiveBadge).toHaveTextContent('Complimentary')
+
+            const chip = screen.getByText(/manual override active/i)
+            expect(chip).toBeInTheDocument()
+            expect(chip.textContent).not.toMatch(/expired/i)
+            expect(chip.closest('div')).toHaveClass('bg-success/10')
+        })
+    })
+
+    // Issue #1413: this branch had ZERO test coverage before this fix — every fixture in this file
+    // set manual_tier_ends_at: null, so ' (expired)', the "Expired:" date label, and the effective
+    // badge falling back off a lapsed override were all unexercised. household_4 is a validly
+    // configured tier name here, isolating the expiry axis from the tier-name-validity axis above.
+    describe('Expired override branch (Issue #1413 coverage gap)', () => {
+        it('shows the true base tier/status for an expired override, not a stale comp', async () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_EXPIRED_OVERRIDE,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // Raw status renders unchanged, and the effective badge must show the true (lapsed)
+            // status — not "Complimentary".
+            expect(await screen.findByText(/Status: inactive/i)).toBeInTheDocument()
+            const effectiveBadge = screen.getByLabelText(/effective status: inactive/i)
+            expect(effectiveBadge).toHaveTextContent('Inactive')
+            expect(screen.queryByLabelText(/effective status: complimentary/i)).not.toBeInTheDocument()
+
+            // The hero "Effective tier" cell shows the true base tier, not the stale override tier.
+            const effectiveTierLabel = screen.getByText('Effective tier')
+            expect(effectiveTierLabel.nextElementSibling).toHaveTextContent('Premium')
+
+            // The chip still renders for a lapsed-but-validly-named override — in its existing
+            // amber "(expired)" state, not hidden and not the live green state.
+            const chip = screen.getByText(/manual override active \(expired\)/i)
+            expect(chip.closest('div')).toHaveClass('bg-warning/10')
+            expect(screen.getByText(/expired:/i)).toBeInTheDocument()
+        })
     })
 
     it('masks the user email for PostHog session replay (Fix 5)', async () => {
