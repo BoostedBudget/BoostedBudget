@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'bun:test'
 import { isOverrideActive, getOverrideStatus } from './overrideStatus'
+import { KNOWN_TIER_NAMES } from './knownTiers'
 
 describe('isOverrideActive', () => {
   it('is false when there is no override', () => {
@@ -85,5 +86,36 @@ describe('getOverrideStatus', () => {
 
   it('labels a past expiry as "Expired"', () => {
     expect(getOverrideStatus('premium', '2020-01-01T00:00:00Z')).toEqual({ label: 'Expired', variant: 'expired' })
+  })
+
+  // Every comparison against NaN is false, so the naive `expiresAt < now` form fell through to the
+  // day-arithmetic branch and rendered the literal string "Expires in NaNd" — while styling the row
+  // as a live, expiring comp. Found by Codex adversarial review of the round-7 diff (Issue #1413).
+  it('reports an unparseable expiry instead of rendering "Expires in NaNd"', () => {
+    const result = getOverrideStatus('premium', 'not-a-date')
+    expect(result?.label).toBe('Invalid expiry')
+    expect(result?.variant).toBe('expired')
+    expect(result?.label).not.toMatch(/NaN/)
+  })
+})
+
+// The representation axis of the three-axis malformed-override rule: when the data does not let us
+// establish a live comp, we must not claim one. An unparseable expiry is exactly that case, and the
+// naive comparison form failed OPEN — reporting the override as live — because NaN comparisons are
+// always false. These two must also agree with each other: it would be incoherent for
+// isOverrideActive to call a row live while getOverrideStatus labels the same row invalid.
+describe('malformed expiry fails closed (Issue #1413, Codex round-7 finding)', () => {
+  it('isOverrideActive is false for an unparseable expiry, even with a valid known tier', () => {
+    expect(isOverrideActive('premium', 'not-a-date', KNOWN_TIER_NAMES)).toBe(false)
+  })
+
+  it('isOverrideActive is false for an unparseable expiry when tier validation is skipped', () => {
+    expect(isOverrideActive('premium', 'garbage')).toBe(false)
+  })
+
+  it('the two helpers agree that an unparseable expiry is not a live comp', () => {
+    const endsAt = 'definitely-not-a-timestamp'
+    expect(isOverrideActive('premium', endsAt, KNOWN_TIER_NAMES)).toBe(false)
+    expect(getOverrideStatus('premium', endsAt)?.variant).not.toBe('expiring')
   })
 })
