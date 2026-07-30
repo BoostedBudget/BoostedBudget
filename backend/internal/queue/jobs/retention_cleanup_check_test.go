@@ -2259,6 +2259,75 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	mockRepo.AssertNotCalled(t, "IsRetentionNotice7dEligibleForOccurrence", mock.Anything, "user-comped-7d", mock.Anything)
 }
 
+// TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify pins Issue
+// #1413/#1414 Gap 2 (requirements-gap-analysis on PR #1443): processRetentionNotices's
+// belt-and-braces short-circuit at the top of the loop is deliberately HasActiveManualOverride()
+// (live-only), NOT HasAnyManualOverride() — even though both the candidate queries
+// (GetUsersNeedingRetention30d/7dNotice) and the authoritative re-verify
+// (IsRetentionNotice30d/7dEligibleForOccurrence) apply the all-overrides rule. A LAPSED-but-
+// uncleared override must fall THROUGH the cheap guard and be caught by the authoritative claim +
+// re-verify instead — that re-verify is the real enforcement, and it must stay exercised.
+//
+// TestRetentionCleanupCheck_CompedUser_No30dNotice/_No7dNotice (above) both fixture an ACTIVE comp
+// (overrideEndsAt in the future), which satisfies BOTH the live-only guard and the all-overrides
+// re-verify — neither test can tell which one actually stopped the notice. This test closes that
+// gap with a LAPSED override (overrideEndsAt in the past): the cheap guard must NOT short-circuit
+// (the claim is taken and IsRetentionNotice30dEligibleForOccurrence is actually invoked), while the
+// authoritative re-verify still correctly refuses to send (no notice email fires either way).
+//
+// Falsification proof (manual, not committed — see PR description): widening the guard from
+// user.HasActiveManualOverride() to user.HasAnyManualOverride() makes this test fail (the claim is
+// never taken and IsRetentionNotice30dEligibleForOccurrence is never called), confirming the test
+// actually pins the live-only choice rather than passing vacuously.
+func TestRetentionCleanupCheck_LapsedComp_30dNotice_ReachesAuthoritativeReVerify(t *testing.T) {
+	ctx := context.Background()
+
+	retentionExpiresAt := time.Now().Add(25 * 24 * time.Hour)
+	lapsedOverride := "household_2"
+	lapsedEndsAt := time.Now().Add(-24 * time.Hour) // lapsed, not cleared
+	users := []*domain.User{
+		{
+			ID: "user-lapsed-comp-30d", Email: "lapsedcomp30@example.com",
+			RetentionExpiresAt: &retentionExpiresAt,
+			ManualTierOverride: &lapsedOverride, ManualTierEndsAt: &lapsedEndsAt,
+		},
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockClaims := new(mockWorkClaimsRepository)
+
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	resourceID := retentionOccurrenceResourceID(t, "user-lapsed-comp-30d", retentionExpiresAt)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease).
+		Return(testRetentionClaimToken, true, nil)
+	// The authoritative re-verify applies the all-overrides rule and correctly refuses to send —
+	// a lapsed override still exists, so IsRetentionNotice30dEligibleForOccurrence itself returns
+	// false. What this test cares about is that it gets CALLED at all.
+	mockRepo.On("IsRetentionNotice30dEligibleForOccurrence", ctx, "user-lapsed-comp-30d", retentionExpiresAt).Return(false, nil)
+	mockClaims.On("Release", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, testRetentionClaimToken, "precondition lost since claim").
+		Return(true, nil)
+
+	worker := newTestRetentionWorker(mockRepo, mockDeletion, mockEmail)
+	worker.SetWorkClaimsRepo(mockClaims)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	// The Go guard must NOT have short-circuited: the claim was actually taken and the
+	// authoritative re-verify was actually reached.
+	mockClaims.AssertCalled(t, "Claim", ctx, repository.ResourceTypeUser, resourceID, repository.ActionRetentionNotice30d, retentionNoticeClaimLease)
+	mockRepo.AssertCalled(t, "IsRetentionNotice30dEligibleForOccurrence", ctx, "user-lapsed-comp-30d", retentionExpiresAt)
+	mockEmail.AssertNotCalled(t, "SendRetentionNoticeEmail", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestRetentionCleanupCheck_ExpiredOverride_NotDeleted is the C1 regression proof (Issue #1413,
 // third round of remediation) at the worker-guard level.
 //
