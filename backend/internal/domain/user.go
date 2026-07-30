@@ -100,6 +100,22 @@ type User struct {
 	//   never a later one's (a fresh episode must get its OWN fresh value, not the survivor of a
 	//   stale COALESCE).
 	//
+	//   Round 17 (Codex review) — an episode does NOT only begin on a raw status transition, and
+	//   saying so made the two halves of this comment contradict each other. The other way in is
+	//   StampMissingPlaidCleanupMarkers: a user who is ALREADY in an ineligible status with no
+	//   episode open (their previous episode's cleanup completed, so the marker is legitimately NULL)
+	//   and who then acquires a live linked item has genuinely entered a new episode — there is
+	//   outstanding cleanup again — with no status transition anywhere. The backstop stamps them, and
+	//   that is correct, not a stray write.
+	//
+	//   So state the value's meaning precisely: it is the instant the current episode became OBSERVABLE
+	//   to whichever writer recorded it. For a status-transition writer that is the transition instant.
+	//   For a backstop heal it is the heal's own NOW(), which may be later than the moment the episode
+	//   truly began — the backstop cannot know when the racing INSERT landed, only that outstanding
+	//   cleanup exists now. The practical consequence is stated at StampMissingPlaidCleanupMarkers and
+	//   is deliberate: a healed user's grace window runs from the heal, so a disconnect can be delayed
+	//   by up to one extra grace period. Delayed is recoverable; never is not.
+	//
 	//   EVENTUALLY consistent, not instantaneously consistent for every writer, every time — say so
 	//   plainly rather than leaving it implicit. Round 15 (Finding 3, High, a Codex review round on
 	//   PR #1443) found a real race: the override-removal path's live-item check
@@ -144,8 +160,12 @@ type User struct {
 	//   invisible to every query in the codebase.
 	//
 	//   The fix is to keep the time-varying term OUT of this column entirely: the marker records
-	//   only the durable fact "an ineligibility episode began, cleanup outstanding" — a pure
-	//   function of raw subscription_status transitions. A comp grant does not touch raw
+	//   only the durable fact "an ineligibility episode began, cleanup outstanding" — a function of
+	//   raw subscription_status and of whether live linked items exist, and of nothing else. (Before
+	//   round 17 this said "a pure function of raw subscription_status transitions", which was the
+	//   same inaccuracy corrected above: the linked-item lifecycle can open an episode too. What
+	//   matters, and what has been true since round 13, is that the override is not a term.)
+	//   A comp grant does not touch raw
 	//   subscription_status, so it must not touch this column either; a comp lapsing is a
 	//   read-time fact with nothing to write. CURRENT eligibility (raw status AND whether a
 	//   manual override is presently live) is evaluated separately, entirely at query time, by
@@ -155,7 +175,22 @@ type User struct {
 	// Every writer must leave the column in a state satisfying this invariant when it returns —
 	// not merely "correct for the one transition this writer handles in isolation". That
 	// isolated-reasoning failure mode is exactly how several prior remediation rounds on this
-	// branch each closed the previous reviewer's finding while introducing a new one. As of
+	// branch each closed the previous reviewer's finding while introducing a new one.
+	//
+	// Round 17 (Codex review): reconcile that obligation with the "EVENTUALLY consistent" statement
+	// above, which read as a contradiction. Both hold, over different scopes, and the distinction is
+	// the whole design:
+	//
+	//   - Every writer is FULLY obliged for the state it can observe and serialize against. "The
+	//     backstop will catch it" is NOT a licence to write carelessly — the backstop bounds the leak,
+	//     it does not sanction one. A writer that leaves a NULL marker on a user it could see had live
+	//     items is a defect, and assertPlaidMarkerInvariant is there to fail on exactly that.
+	//   - The system as a whole is eventually consistent for the ONE gap no writer can close: a
+	//     concurrent linked_items INSERT that lands after a writer's snapshot. Five rounds proved that
+	//     window cannot be closed from inside these writers, so the backstop closes it from outside,
+	//     within one repair-pass interval.
+	//
+	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. As of
 	// round-13 the known SET sites are: UpdateSubscriptionFromPaddle,
 	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride (all
 	// profile_repository.go), and AdminUserRepository's removeUserTierOverrideUpdate

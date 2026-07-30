@@ -162,6 +162,31 @@ var (
 		Help: "Total number of per-user failures in RetentionCleanupCheckWorker's Plaid-disconnect repair pass.",
 	})
 
+	// PlaidCleanupBackstopFailuresTotal counts failures of
+	// profileRepository.StampMissingPlaidCleanupMarkers — the round-16 self-healing backstop that
+	// stamps plaid_cleanup_pending_at for any ineligible user who has a live linked item but a NULL
+	// marker (profile_repository.go).
+	//
+	// This is deliberately a SEPARATE counter from the per-user one above, and the distinction is the
+	// point. A per-user failure is self-limiting: that user keeps a non-NULL marker, so the candidate
+	// query still selects them and the next pass retries them — the backstop covers for it. Nothing
+	// covers for the backstop. It is the only thing that returns a NULL-marker/live-item user to
+	// visibility, and a user invisible to the candidate query is a user whose bank connections are
+	// never disconnected. So a persistently failing backstop is a silent data-retention failure, and
+	// it must not be inferable only from the absence of "healed" log lines.
+	//
+	// Deliberately does NOT fail the job (see repairPlaidDisconnects's call site): returning an error
+	// there would skip the 30-day/7-day GDPR pre-deletion notices and deleteExpiredAccounts for EVERY
+	// user, which is a worse outcome than a delayed heal. The isolation is intentional; this counter
+	// plus an Error-level log is what keeps it from also being invisible.
+	//
+	// Alert on any sustained non-zero rate. A single increment is a transient DB blip and the next
+	// pass heals for free; a rate that persists across passes means the backstop itself is broken.
+	PlaidCleanupBackstopFailuresTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "plaid_cleanup_backstop_failures_total",
+		Help: "Total failures of the plaid_cleanup_pending_at self-healing backstop (StampMissingPlaidCleanupMarkers). Sustained non-zero means NULL-marker users may be permanently invisible to the Plaid-disconnect repair pass.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
