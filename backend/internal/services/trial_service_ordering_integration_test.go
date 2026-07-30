@@ -10,9 +10,13 @@ package services
 // round-7 conclusion is that no ordering of a status flip and an irreversible Plaid call can be
 // safe, because /subscription/checkout is deliberately whitelisted for read-only users
 // (internal/huma/middleware/read_only.go) — becoming read-only never stops a user from becoming
-// active again. The fix defers instead of ordering: ExpireTrial only flips subscription_status and
-// starts the retention clock (retention_started_at), which the repair pass later uses as its grace
-// anchor.
+// active again. The fix defers instead of ordering: ExpireTrial's CAS (ExpireTrialIfNoOverride)
+// atomically flips subscription_status AND stamps plaid_cleanup_pending_at — the actual grace
+// anchor the repair pass (GetUsersNeedingPlaidDisconnectRepair) uses. ExpireTrial separately
+// starts the retention clock (retention_started_at) a few lines later, but that timestamp governs
+// ONLY the unrelated 6-month deletion clock — round-11 explicitly forbids reintroducing it as the
+// Plaid-disconnect grace anchor (see trial_service.go's ExpireTrial doc comment and
+// profile_repository.go's GetUsersNeedingPlaidDisconnectRepair doc comment).
 //
 // This is the crux pgxmock cannot prove: the unit tests in trial_service_test.go assert ExpireTrial
 // never calls a Plaid collaborator (there IS no Plaid collaborator on TrialService anymore — a
@@ -48,17 +52,22 @@ import (
 //     row must be COMPLETELY UNTOUCHED (still 'active'): ExpireTrial has no Plaid collaborator at
 //     all anymore, so there is nothing that could have modified it.
 //  2. Immediately afterward, GetUsersNeedingPlaidDisconnectRepair with the PRODUCTION-shaped grace
-//     period (72h) must NOT select this user — retention_started_at was just set to "now", nowhere
-//     near 72h in the past. This is the direct proof of the brief's RED case: a user who is (or
-//     becomes) read-only must never be disconnected before the grace window elapses.
+//     period (72h) must NOT select this user — plaid_cleanup_pending_at was just stamped to "now"
+//     by ExpireTrialIfNoOverride's CAS (NOT retention_started_at, which plays no role in this
+//     query at all), nowhere near 72h in the past. This is the direct proof of the brief's RED
+//     case: a user who is (or becomes) read-only must never be disconnected before the grace
+//     window elapses.
 //  3. The SAME query, called with an effectively-zero grace period, DOES select this user right
 //     now — proving the query mechanism itself is what withholds them in phase 2 (not, say, a bug
 //     that always excludes everyone), and that the grace window is the only thing standing between
 //     this user and disconnection.
 //
-// Falsifiability: reverting profile_repository.go's grace-period predicate (dropping the
-// `retention_started_at < cutoff` clause entirely) makes phase 2 fail — the user would be
-// immediately selected with NO grace window at all, exactly the round-7 regression this pins.
+// Falsifiability: reverting profile_repository.go's GetUsersNeedingPlaidDisconnectRepair to drop
+// its `GREATEST(plaid_cleanup_pending_at, ...) < clock_timestamp() - make_interval(secs => $1)`
+// grace-period comparison (e.g. replacing it with an unconditional TRUE) makes phase 2 fail — the
+// user would be immediately selected with NO grace window at all, exactly the round-7 regression
+// this pins. (A `retention_started_at < cutoff` clause, which this comment previously named, does
+// not exist anywhere in that query — retention_started_at is not read by it at all.)
 func TestExpireTrial_Integration_NeverTouchesPlaid_RepairQueryHonorsGraceWindow(t *testing.T) {
 	pool := setupHouseholdServiceIntegrationDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -120,7 +129,7 @@ func TestExpireTrial_Integration_NeverTouchesPlaid_RepairQueryHonorsGraceWindow(
 		"SELECT subscription_status, retention_started_at, retention_expires_at FROM users WHERE id = $1", user.ID,
 	).Scan(&rawStatus, &retentionStarted, &retentionExpires))
 	assert.Equal(t, "inactive", rawStatus, "ExpireTrial must still flip subscription_status to inactive")
-	require.NotNil(t, retentionStarted, "the retention clock must start — this timestamp is the round-7 grace anchor")
+	require.NotNil(t, retentionStarted, "the retention clock must start — this timestamp governs the unrelated 6-month deletion clock, NOT the Plaid-disconnect grace window (that anchor is plaid_cleanup_pending_at, proven by phases 2/3 below)")
 	assert.NotNil(t, retentionExpires)
 
 	require.NoError(t, pool.QueryRow(ctx, "SELECT status FROM linked_items WHERE user_id = $1 AND item_id = $2", user.ID, itemID).Scan(&itemStatus))

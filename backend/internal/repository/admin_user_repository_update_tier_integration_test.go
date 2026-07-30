@@ -95,6 +95,16 @@ func TestUpdateUserTier_Integration_SetsOverrideAndReturnsRawState(t *testing.T)
 //
 // Falsifiability: reverting updateUserTierQuery to unconditionally NULL plaid_cleanup_pending_at
 // makes this test fail — the marker would be cleared instead of preserved.
+//
+// Requirements-gap analysis (PR #1443) item 3: this test previously asserted ONLY
+// plaid_cleanup_pending_at was preserved. updateUserTierQuery's SET clause
+// (admin_user_repository.go) touches nothing but manual_tier_override/manual_tier_ends_at/
+// updated_at, so "a comp grant pauses the retention clock rather than clearing it" — the design
+// invariant documented on updateUserTierQuery itself — was unproven for retention_started_at,
+// retention_expires_at, and both notice-sent flags. This is the counterpart to the removal-path
+// re-arm tests in admin_user_repository_remove_tier_override_integration_test.go (e.g.
+// TestRemoveUserTierOverride_Integration_DoesNotTouchRetention_WhenActive), which pin the same four
+// columns on the OTHER side of a comp's lifecycle.
 func TestUpdateUserTier_Integration_PreservesPlaidCleanupPending(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -109,6 +119,12 @@ func TestUpdateUserTier_Integration_PreservesPlaidCleanupPending(t *testing.T) {
 	_, err := pool.Exec(ctx, "UPDATE users SET plaid_cleanup_pending_at = $1 WHERE id = $2", pendingSince, target.ID)
 	require.NoError(t, err)
 
+	fixedStart := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixedExpires := time.Date(2020, 7, 1, 0, 0, 0, 0, time.UTC)
+	fixedNotice30 := time.Date(2020, 6, 1, 0, 0, 0, 0, time.UTC)
+	fixedNotice7 := time.Date(2020, 6, 20, 0, 0, 0, 0, time.UTC)
+	setRetentionState(t, pool, target.ID, &fixedStart, &fixedExpires, &fixedNotice30, &fixedNotice7)
+
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	_, err = repo.UpdateUserTier(ctx, actor.ID, target.ID, "household_4", "comp for testing", &expiresAt)
 	require.NoError(t, err)
@@ -116,6 +132,15 @@ func TestUpdateUserTier_Integration_PreservesPlaidCleanupPending(t *testing.T) {
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
 	require.NotNil(t, snap.PlaidCleanupPendingAt, "granting a comp must PRESERVE an outstanding plaid_cleanup_pending_at, not clear it")
 	assert.WithinDuration(t, pendingSince, *snap.PlaidCleanupPendingAt, time.Second, "the preserved marker must still be the ORIGINAL episode-start value, not reset")
+
+	require.NotNil(t, snap.RetentionStartedAt)
+	require.NotNil(t, snap.RetentionExpiresAt)
+	require.NotNil(t, snap.RetentionNotice30d)
+	require.NotNil(t, snap.RetentionNotice7d)
+	assert.True(t, fixedStart.Equal(*snap.RetentionStartedAt), "retention_started_at must be byte-identical after a comp grant — the comp pauses the clock, it does not touch it")
+	assert.True(t, fixedExpires.Equal(*snap.RetentionExpiresAt), "retention_expires_at must be byte-identical after a comp grant")
+	assert.True(t, fixedNotice30.Equal(*snap.RetentionNotice30d), "the 30d notice-sent flag must be byte-identical after a comp grant")
+	assert.True(t, fixedNotice7.Equal(*snap.RetentionNotice7d), "the 7d notice-sent flag must be byte-identical after a comp grant")
 }
 
 // TestUpdateUserTier_Integration_ReturnsPriorOverride verifies the CTE reads the PRE-UPDATE
