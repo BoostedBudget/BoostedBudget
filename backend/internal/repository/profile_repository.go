@@ -2068,6 +2068,103 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 	return users, nil
 }
 
+// StampMissingPlaidCleanupMarkers is Issue #1413's self-healing backstop for
+// plaid_cleanup_pending_at — round 16, added after five prior review rounds each closed one way the
+// marker could end up NULL while a user still has a live linked item, and opened another, because
+// every attempt tried to make some WRITER maintain the marker correctly. Writers cannot: they race
+// with the linked_items lifecycle they are trying to summarise (see removeUserTierOverrideSelectPrior's
+// doc comment, admin_user_repository.go, and domain.User.PlaidCleanupPendingAt's doc comment, for the
+// two concrete races round 16 stops trying to close by writing more carefully — a re-fetch that just
+// moves its own window, and a CTE snapshot that cannot serialize against an independent, autocommit
+// INSERT).
+//
+// This stops fixing writers and instead heals: run once at the start of EVERY repairPlaidDisconnects
+// pass (retention_cleanup_check.go), before the candidate query, this is a single atomic UPDATE that
+// stamps NOW() for any user who is ineligible-status, has at least one live linked item, and has a
+// NULL marker. A writer that misses a stamp — for any reason, present or future, including a race no
+// one has found yet — self-heals on the very next repair pass instead of leaking the user's bank
+// connection forever.
+//
+// Why this shape, against the four properties that matter here:
+//
+//  1. GetUsersNeedingPlaidDisconnectRepair is left COMPLETELY UNCHANGED. This preserves
+//     TestPlaidDisconnectRepair_Integration_ExcludesUserWithNoLiveItems outright: the heal requires a
+//     live item — the SAME liveLinkedItemExistsClause the candidate query already requires — so a
+//     user with no live items is never stamped and never selected. No pinned test needs
+//     reinterpreting, and which users the candidate query ACTS on never changes.
+//  2. It is ONE atomic statement, so it cannot itself race: a concurrent linked_items INSERT either
+//     commits before this UPDATE's own snapshot (and that row is healed right now) or after it (and
+//     it is healed on the NEXT run instead) — there is no window in between where running this
+//     statement can itself observe or produce a torn, half-updated result.
+//  3. The existing grace-window logic is untouched: a healed user's plaidDisconnectRepairGracePeriod
+//     runs from the heal (this statement's own NOW()), exactly like every other SET site.
+//  4. Reuses the SAME shared Go constants plaidDisconnectRepairEligibleStatusPredicate and
+//     liveLinkedItemExistsClause the candidate query, the backlog gauge (GetOutstandingPlaidCleanupStats,
+//     job_health_repository.go), and migration 000121 all already use — copied verbatim there since a
+//     migration cannot import Go code — instead of a fourth hand-copied restatement of either, so the
+//     heal, the candidate query, the backlog gauge, and the migration cannot silently drift apart on
+//     "which statuses are eligible" or "what counts as a live item". noActiveManualOverridePredicate
+//     is also reused from the SAME Go constant the candidate query uses, but is NOT part of migration
+//     000121's WHERE clause — that migration deliberately omits any override filter at all (a
+//     one-time historical backfill has no "next run" to rely on, so it stamps every eligible row
+//     regardless of comp state); see the override paragraph below for why this backstop, which DOES
+//     have a next run, can safely defer a currently-comped user to it instead.
+//
+// The consequence, stated plainly rather than left implicit: a marker cleared too early (or never
+// stamped in the first place) does NOT get its ORIGINAL episode's grace window resumed — it gets a
+// FRESH plaidDisconnectRepairGracePeriod starting from whenever this backstop next runs and notices
+// the gap. In the worst case (the gap opens moments after this pass just ran), that is up to one
+// ADDITIONAL full grace window of delay before the user is actually disconnected. That is strictly
+// better than the alternative it replaces — never, permanently — and it is the accepted price of
+// healing by re-detection rather than trying to preserve a timestamp a writer never got the chance to
+// record correctly in the first place.
+//
+// Includes noActiveManualOverridePredicate deliberately: this mirrors GetUsersNeedingPlaidDisconnectRepair's
+// own predicate set exactly (modulo the marker/grace-window gates this backstop's whole job is to
+// populate), so it only ever creates a marker for a population the candidate query would ITSELF
+// eventually act on — never for a currently-comped user the candidate query would never touch
+// regardless of marker state. A currently-comped user's marker is instead re-armed the ordinary way
+// once the comp is actually removed (removeUserTierOverrideUpdate's COALESCE) or, if the comp lapses
+// and is never explicitly removed, by the NEXT run of this same backstop once
+// noActiveManualOverridePredicate stops excluding them.
+//
+// Called from exactly one place: RetentionCleanupCheckWorker.repairPlaidDisconnects
+// (retention_cleanup_check.go), at the very start of every pass — so a user healed in THIS pass can
+// also be selected for repair in the SAME pass if they happen to already be past the grace window.
+//
+// CAUTION — this is a global-scan WRITE, unlike every other method in this file: its WHERE clause
+// carries no user-id parameter at all. Unlike a global-scan READ (which can only produce a confusing
+// false test result), this can actually MUTATE another test's fixture row if that row happens to
+// satisfy this predicate at the moment this runs — see this package's own integration tests for this
+// method, which give every fixture a unique, immediately-`t.Cleanup`'d row for exactly this reason.
+// This blast radius is intentional and load-bearing for production correctness (the whole point is to
+// catch a row NO scoped query would ever be told to look at) — but it means this method must never be
+// invoked from a shared test-setup helper unrelated tests also use, only from a fixture the calling
+// test fully owns end-to-end.
+//
+// Deliberately NOT part of the exported ProfileRepository interface above: this is needed only by
+// RetentionCleanupCheckWorker's own narrow RetentionProfileRepository consumer interface
+// (retention_cleanup_check.go), not by the broad canonical interface every OTHER service's test
+// double also implements in full — adding it there would force a new stub method onto every one of
+// those unrelated mocks for a capability only one caller needs. Mirrors this file's existing
+// precedent for ClearPastDueStartedAtIfMatches, CancelIfPastDueOccurrenceWithRetention, and the two
+// occurrence-scoped retention-notice-eligibility methods (see NewProfileRepository's own doc comment).
+func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET plaid_cleanup_pending_at = NOW(), updated_at = NOW()
+		WHERE `+plaidDisconnectRepairEligibleStatusPredicate+`
+		  AND plaid_cleanup_pending_at IS NULL
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		  AND `+liveLinkedItemExistsClause+`
+	`+noActiveManualOverridePredicate)
+	if err != nil {
+		return 0, fmt.Errorf("StampMissingPlaidCleanupMarkers: %w", err)
+	}
+	return int(ct.RowsAffected()), nil
+}
+
 // expiredManualTierOverridePredicate selects users with a manual tier override that has
 // strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
 // performing the exact same clear-override/re-arm-retention/audit transition

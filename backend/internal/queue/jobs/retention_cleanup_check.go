@@ -63,12 +63,39 @@ const plaidDisconnectRepairGracePeriod = 72 * time.Hour
 // just succeeded removed the very live linked item GetUsersNeedingPlaidDisconnectRepair's own
 // EXISTS clause requires to ever reselect this user again. Retrying a handful of times, in the same
 // process, immediately after the failure, closes the common case (a transient DB blip) for a call
-// that is a simple conditional UPDATE, not a remote/rate-limited API call — no backoff schedule is
-// needed for that shape of retry.
+// that is a simple conditional UPDATE, not a remote/rate-limited API call.
 const plaidCleanupMarkerClearMaxAttempts = 3
 
-// plaidCleanupMarkerClearRetryDelay is the pause between the retry attempts above.
+// plaidCleanupMarkerClearRetryDelay is the BASE delay clearPlaidCleanupMarkerWithRetry (this file)
+// backs off from between attempts — Issue #1413 round 16 (a later Codex review round on PR #1443):
+// three attempts at a FIXED 50ms (the original Finding 4 fix) assumes the underlying failure clears
+// within ~100ms total, which is far shorter than a real database failover or a connection-pool
+// exhaustion event can take. Backing off (50ms, 100ms, ... — see plaidCleanupMarkerClearBackoff)
+// gives a slower-clearing transient failure a better chance to resolve before this loop gives up,
+// at the cost of a slightly longer worst-case per-user delay — an acceptable trade for a step that
+// already isolates one user's failure from every other (see repairPlaidDisconnects's per-user error
+// isolation, and the errorCount doc comment below for why a slower loop here does not block
+// anything time-sensitive).
+//
+// NOTE: this constant name and value are UNCHANGED — subscription_webhook.go (a sibling task's
+// owned file, not touched by this change) has its own, separate marker-clear retry loop
+// (processSubscriptionCanceled's Finding-4 fix) that also references this exact constant with a
+// plain, non-backed-off time.Sleep. Renaming or repurposing it here would have silently broken that
+// file's build; only this file's OWN retry loop (clearPlaidCleanupMarkerWithRetry) is changed to
+// back off and to respect context cancellation.
 const plaidCleanupMarkerClearRetryDelay = 50 * time.Millisecond
+
+// plaidCleanupMarkerClearBackoff returns the delay before retry attempt (attempt+1), given that
+// `attempt` (1-based) just failed — exponential backoff from plaidCleanupMarkerClearRetryDelay
+// (50ms, 100ms, ... — for plaidCleanupMarkerClearMaxAttempts=3 this is only ever called with
+// attempt=1, giving a single 50ms pause before the final attempt; written generally so raising
+// plaidCleanupMarkerClearMaxAttempts does not silently reintroduce a flat-delay retry). Used only by
+// this file's clearPlaidCleanupMarkerWithRetry — subscription_webhook.go's own retry loop (a
+// separate, sibling-owned copy of the same Finding-4 fix) still uses a flat
+// plaidCleanupMarkerClearRetryDelay sleep and is unchanged by this function's existence.
+func plaidCleanupMarkerClearBackoff(attempt int) time.Duration {
+	return plaidCleanupMarkerClearRetryDelay * time.Duration(1<<uint(attempt-1)) //nolint:gosec // attempt is always small and non-negative (loop-bounded)
+}
 
 // errPlaidCleanupNotConfigured is returned by repairPlaidDisconnects when w.plaidCleanup is nil —
 // Issue #1413 round-10 (round-9 review Blocker): a missing Plaid cleanup collaborator is a
@@ -119,6 +146,26 @@ type RetentionProfileRepository interface {
 	// additive and idempotent (once set, the WHERE clause itself prevents a concurrent repair from
 	// clobbering it), unlike the destructive external side effects work_claims exists to guard.
 	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
+
+	// StampMissingPlaidCleanupMarkers is Issue #1413 round 16's self-healing backstop for
+	// plaid_cleanup_pending_at — see its full doc comment on profileRepository
+	// (profile_repository.go) for the complete rationale (five prior review rounds each closed one
+	// way this marker could end up NULL while a user still has a live linked item, and opened
+	// another, because every attempt tried to make some WRITER maintain it correctly; writers race
+	// with the linked_items lifecycle they are trying to summarise, and cannot win that race by
+	// writing more carefully). Called by repairPlaidDisconnects (below) at the very start of every
+	// pass, before the candidate query: a single atomic UPDATE that stamps NOW() for any user who is
+	// ineligible-status, has a live linked item, and has a NULL marker. Returns the number of rows
+	// healed (for logging only — repairPlaidDisconnects does not otherwise branch on it) and a
+	// non-nil error only on a genuine database failure, which repairPlaidDisconnects treats as
+	// non-fatal (logged, not retried here) — the backstop's own idempotency means the NEXT pass
+	// retries it for free.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface
+	// (profile_repository.go) — see NewProfileRepository's own doc comment and
+	// StampMissingPlaidCleanupMarkers's for why this, like several other occurrence/repair-scoped
+	// methods, belongs only to this narrower consumer interface.
+	StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error)
 
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
 	// (inactive/cancelled), whose plaid_cleanup_pending_at marker (Issue #1413 round-10) is older
@@ -748,6 +795,20 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		return errPlaidCleanupNotConfigured
 	}
 
+	// Issue #1413 round 16: the self-healing backstop runs FIRST, before the candidate query, on
+	// every single pass — see StampMissingPlaidCleanupMarkers's own doc comment
+	// (profile_repository.go) for the full rationale and the four properties this ordering and
+	// shape are chosen to satisfy. A failure here is logged and does NOT fail this step (let alone
+	// the whole job): the backstop is itself idempotent and re-attempted on every future pass, so a
+	// transient failure to heal THIS run is not lost — it is simply retried, for free, next time.
+	if healedCount, healErr := w.profileRepo.StampMissingPlaidCleanupMarkers(ctx); healErr != nil {
+		w.logger.Warn("plaid_cleanup_pending_at self-healing backstop failed — continuing with the candidate query as-is; this is naturally retried on the next pass",
+			"job_id", jobID, "error", healErr)
+	} else if healedCount > 0 {
+		w.logger.Info("plaid_cleanup_pending_at self-healing backstop stamped missing markers",
+			"job_id", jobID, "healed_count", healedCount)
+	}
+
 	users, err := w.profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx, plaidDisconnectRepairGracePeriod)
 	if err != nil {
 		return fmt.Errorf("failed to fetch users needing Plaid-disconnect repair: %w", err)
@@ -947,19 +1008,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// NOT counted as a failure — it means the marker legitimately moved on to a fresh episode
 		// since this worker started, a normal, stable outcome to be evaluated on its own schedule,
 		// not a transient error.
-		var cleared bool
-		var clearErr error
-		for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
-			cleared, clearErr = w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
-			if clearErr == nil {
-				break
-			}
-			if attempt < plaidCleanupMarkerClearMaxAttempts {
-				w.logger.Warn("failed to clear plaid_cleanup_pending_at — retrying",
-					"job_id", jobID, "user_id", userID, "attempt", attempt, "error", clearErr)
-				time.Sleep(plaidCleanupMarkerClearRetryDelay)
-			}
-		}
+		cleared, clearErr := w.clearPlaidCleanupMarkerWithRetry(ctx, jobID, userID, expectedMarker)
 		if clearErr != nil {
 			w.logger.Error("Plaid disconnect repaired but failed to clear plaid_cleanup_pending_at after all retries — this user's Plaid items are already disconnected, so GetUsersNeedingPlaidDisconnectRepair's live-item requirement will never match them again; the marker may now be stuck non-NULL permanently unless cleared through another path",
 				"job_id", jobID, "user_id", userID, "attempts", plaidCleanupMarkerClearMaxAttempts, "error", clearErr)
@@ -981,7 +1030,73 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 
 	w.logger.Info("Plaid-disconnect repair processed",
 		"job_id", jobID, "repaired", repairedCount, "skipped", skippedCount, "errors", errorCount, "aborted_mid_run", abortedCount)
+
+	// Issue #1413 round 16: this ALWAYS returns nil here, deliberately, regardless of errorCount —
+	// a decision made explicitly, not by default. The alternative (returning an error when
+	// errorCount > 0) would make Work() propagate it, and River would retry the WHOLE job run —
+	// re-running Step 0 (retention-clock repair), Step 1/2 (30d/7d notices), and Step 3 (auto-
+	// deletion) alongside this step, every time even ONE user in this loop fails. That directly
+	// conflicts with this loop's own per-user error isolation (every `continue` above): the whole
+	// point of isolating one user's Plaid failure to a `continue` is that it must never block GDPR
+	// deletion notices or auto-deletion for every OTHER user in the same run — propagating an error
+	// from a per-user retry loop as a JOB-level failure would undo that isolation one level up,
+	// even though this function's own control flow never lets it undo it internally.
+	//
+	// Does the round 16 backstop (StampMissingPlaidCleanupMarkers, called at the top of this
+	// function) lower the stakes of this decision? Only PARTIALLY, and it is worth being precise
+	// about which failure mode it does and does not cover: the backstop heals a MISSING marker
+	// (NULL, while a live item exists) — it has no effect on a STUCK marker (the ClearPlaidCleanupPendingIfMatches
+	// exhaustion case just above), because its own WHERE clause only ever touches rows where
+	// plaid_cleanup_pending_at IS NULL. A marker stuck non-NULL after a real disconnect already
+	// completed is the OPPOSITE direction — but it was already the SAME shape of harm this
+	// invariant already tolerates elsewhere (see domain.User.PlaidCleanupPendingAt's doc comment
+	// and #1453): the item is genuinely disconnected, so GetUsersNeedingPlaidDisconnectRepair's own
+	// live-item EXISTS clause will never reselect this user again regardless of what happens to
+	// this job's return value — an untidy stuck timestamp, not a repeat billing/access risk. Making
+	// this step fail the whole job would not shrink that residual at all; it would only add
+	// unrelated retries (notices, deletion) that were never the problem. So: kept as a deliberate
+	// non-fatal step, per-user error isolation preserved, backstop lowers the stakes of the OTHER
+	// failure direction (a missed stamp) but does not change this decision either way.
 	return nil
+}
+
+// clearPlaidCleanupMarkerWithRetry retries ClearPlaidCleanupPendingIfMatches up to
+// plaidCleanupMarkerClearMaxAttempts times with exponential backoff (plaidCleanupMarkerClearBackoff)
+// between attempts — see plaidCleanupMarkerClearMaxAttempts/plaidCleanupMarkerClearRetryDelay's doc
+// comments for why a slower back-off (not the original Finding 4 fix's fixed 50ms) is warranted.
+//
+// Issue #1413 round 16 (Retry robustness, Codex review round on PR #1443): the wait between
+// attempts is now CONTEXT-AWARE — a plain time.Sleep cannot be interrupted, so a worker shutdown
+// (ctx canceled) during this loop used to block for the full remaining backoff regardless. Using
+// time.NewTimer + select on ctx.Done() means a shutdown aborts the retry loop immediately instead of
+// waiting it out; the LAST error observed is still returned (not ctx.Err()) so the caller's existing
+// "all retries exhausted" logging and PlaidDisconnectRepairUserFailuresTotal accounting is unchanged
+// regardless of whether the loop ran out of attempts or was interrupted by shutdown.
+func (w *RetentionCleanupCheckWorker) clearPlaidCleanupMarkerWithRetry(ctx context.Context, jobID int64, userID string, expectedMarker time.Time) (bool, error) {
+	var cleared bool
+	var clearErr error
+	for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
+		cleared, clearErr = w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+		if clearErr == nil {
+			return cleared, nil
+		}
+		if attempt == plaidCleanupMarkerClearMaxAttempts {
+			break
+		}
+		delay := plaidCleanupMarkerClearBackoff(attempt)
+		w.logger.Warn("failed to clear plaid_cleanup_pending_at — retrying",
+			"job_id", jobID, "user_id", userID, "attempt", attempt, "delay_ms", delay.Milliseconds(), "error", clearErr)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			w.logger.Warn("plaid_cleanup_pending_at clear retry loop aborted — context done (shutdown)",
+				"job_id", jobID, "user_id", userID, "attempt", attempt, "ctx_error", ctx.Err())
+			return false, clearErr
+		}
+	}
+	return cleared, clearErr
 }
 
 // deleteExpiredAccounts finds users with expired retention and executes deletion.

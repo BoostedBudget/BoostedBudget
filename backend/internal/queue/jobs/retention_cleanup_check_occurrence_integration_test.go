@@ -72,6 +72,7 @@ func TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain(t *te
 	user := &domain.User{ID: userID, Email: "rearm@example.com", RetentionExpiresAt: &secondCycleExpires}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -131,6 +132,7 @@ func TestRetentionCleanupCheck_Occurrence_SameCycle_SecondRunDoesNotResend(t *te
 	user := &domain.User{ID: userID, Email: "samecycle@example.com", RetentionExpiresAt: &retentionExpiresAt}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 

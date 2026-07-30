@@ -2,15 +2,31 @@
 
 package repository
 
-// Integration tests for Issue #1413 round-13: the plaid_cleanup_pending_at invariant.
+// Integration tests for Issue #1413 round 16: the plaid_cleanup_pending_at invariant.
 //
 // See domain.User.PlaidCleanupPendingAt's doc comment for the invariant every writer/clearer of
-// this column must maintain:
+// this column must maintain, and its precise definition of "episode":
 //
-//	plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an ineligibility EPISODE has begun
-//	(domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() is true)
-//	AND outstanding Plaid cleanup for that episode has not yet completed. Its value is the instant
-//	the CURRENT episode began — never an earlier episode's, never a later one's.
+//	An ineligibility episode BEGINS the instant subscription_status transitions into a raw status
+//	domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() calls true
+//	('inactive' or 'cancelled'), and ENDS the instant Plaid cleanup for THAT episode completes (the
+//	marker is cleared) — NOT the instant the user later leaves the ineligible status. A user can
+//	stay 'cancelled' indefinitely with no episode open, once that episode's cleanup has run.
+//
+//	plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an episode (per that definition) is
+//	currently open. NULL covers two legal cases: the status isn't ineligible at all, OR the status
+//	is still ineligible but the CURRENT episode's cleanup has already completed — the second is
+//	exactly what assertPlaidMarkerInvariantCleanupComplete below pins, and is why a NULL marker on
+//	a still-'cancelled' user is legal, not a contradiction.
+//
+//	EVENTUALLY consistent, not instantaneously true for every writer at every instant: round 15
+//	(Finding 3, Codex review round on PR #1443) found a real race (the override-removal path's
+//	live-item check cannot serialize against a concurrent LinkAccounts INSERT) that can transiently
+//	leave the marker NULL while a live item exists moments later. Round 16 does not try to close
+//	that window by writing more carefully — it heals it: profileRepository.StampMissingPlaidCleanupMarkers
+//	(profile_repository.go) runs at the start of every repairPlaidDisconnects pass and atomically
+//	stamps any ineligible, live-item, NULL-marker row it finds, so this invariant is guaranteed true
+//	again within at most one repair-pass interval, not necessarily true at every single instant.
 //
 //	Deliberately NOT part of this invariant: manual_tier_override. Whether a comp is currently
 //	live is a wall-clock fact (HasActiveManualOverride() vs. time.Now()), not a write — round-11/
@@ -94,34 +110,41 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 // both use (profile_repository.go / job_health_repository.go): at least one linked_items row that
 // isn't 'disconnected'/'replaced' (a NULL status counts as live).
 //
-// Round-15 REVISION — the marker is OPTIMISTIC, so the second conjunct is no longer asserted here.
-// Task X (above) tightened this helper to require outstanding cleanup whenever the marker is set.
-// Task Z then had to make the override-removal path stamp the marker UNCONDITIONALLY: its
-// liveness-guarded stamp lost a race with LinkAccounts (the CTE's EXISTS is a snapshot, and
-// FOR UPDATE locks the users row, not the linked_items lifecycle — so a held lock merely delays the
-// insert until after the admin's commit, which produces the leak rather than preventing it; closing
-// it properly needs LinkAccounts itself to participate, which is out of this path's reach). Faced
-// with "missed stamp = permanent, unrecoverable leak" versus "spurious stamp = phantom row already
-// filtered out by the repair query's own live-item check", Z correctly chose to stamp.
+// Round 14 -> 15 -> 16 on this second conjunct — read all three in order; the third is the one
+// currently in force. Task X (above) tightened this helper to require outstanding cleanup whenever
+// the marker is set. Round 15 then had to relax it again: Task Z's override-removal fix (Finding 3)
+// had to make the marker stamp UNCONDITIONALLY at the time, because its liveness-guarded stamp lost
+// a race with LinkAccounts (the CTE's EXISTS is a snapshot, and FOR UPDATE locks the users row, not
+// the linked_items lifecycle — so a held lock merely delays the insert until after the admin's
+// commit, which produces the leak rather than preventing it) — and asserting the strong second
+// conjunct against that unconditional stamp would have made this helper fail on the ordinary
+// remove-a-comp-after-cleanup-completed path, i.e. it would have asserted an invariant production
+// deliberately did not maintain at the time. So round 15 relaxed this helper to match.
 //
-// The consequence is that a marker now means "an episode began and cleanup MAY be outstanding" —
-// GetUsersNeedingPlaidDisconnectRepair's live-item EXISTS is the authority on whether work actually
-// remains. Asserting the strong second conjunct here would make this helper fail on the ordinary
-// remove-a-comp-after-cleanup-completed path, i.e. it would be asserting an invariant production
-// deliberately does not maintain. So it is relaxed DELIBERATELY, and narrowly:
+// Round 16 restores the strong second conjunct: profileRepository.StampMissingPlaidCleanupMarkers
+// (profile_repository.go) now self-heals round 15's exact race on the very next repair pass instead
+// of leaking forever (see domain.User.PlaidCleanupPendingAt's doc comment, "EVENTUALLY consistent"
+// paragraph), which let round 14's liveLinkedItemExistsClause gate go back into
+// removeUserTierOverrideSelectPrior (admin_user_repository.go) — so production no longer generates
+// an unconditional phantom on that path, and this helper can go back to checking what it is
+// actually FOR: auditing writers against the invariant they are supposed to hold, not an invariant
+// weakened to match a bug. Both conjuncts are strict again:
 //
-//   - Still strict, and these are the ones that catch LEAKS — the harmful direction:
-//     marker set while NO episode is open, and episode open while the marker is NULL (a NULL marker
-//     with live items is exactly how a user becomes permanently invisible to the repair pass).
-//   - No longer asserted: marker set with zero live items. That is a PHANTOM — untidy, harmless,
-//     and now deliberately generated. It costs nothing at runtime (the repair query filters it, and
-//     GetOutstandingPlaidCleanupStats joins on live items so the gauge does not count it) and it is
-//     tracked as #1453, which this change turns from a historical-only population into an ongoing
-//     one. assertPlaidMarkerInvariantCleanupComplete still pins the happy path where cleanup runs
-//     to completion and the marker IS cleared.
+//   - Non-NULL EXACTLY WHEN an episode is open (raw status ineligible) AND that episode's cleanup
+//     has not completed — "outstanding cleanup" uses the SAME liveness definition
+//     GetUsersNeedingPlaidDisconnectRepair / GetOutstandingPlaidCleanupStats both use
+//     (profile_repository.go / job_health_repository.go): at least one linked_items row that isn't
+//     'disconnected'/'replaced' (a NULL status counts as live).
+//   - The ONE allowed exception is #1453, unchanged since Task X: a marker set with ZERO
+//     linked_items rows at all (a user who never linked Plaid, or 000119/000120 migration residue —
+//     indistinguishable at the row level, and both legitimate, reachable states).
 //
-// Recorded here rather than silently dropped: this helper's whole purpose is auditing writers
-// against a written invariant, so the statement it checks must be one production actually holds.
+// This helper cannot itself distinguish "healed by the backstop on this exact call" from "would have
+// been a genuine violation a moment ago" — both look identical once the backstop has run. That is
+// fine: this file's own tests never race the backstop (it is not called from any shared setup
+// helper — see StampMissingPlaidCleanupMarkers's own doc comment on why it must only ever be
+// invoked from a fixture a test fully owns), so every assertion here observes production writers'
+// steady-state behavior, not a mid-heal snapshot.
 func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
 	t.Helper()
 	row := readPlaidMarkerRow(t, pool, userID)
@@ -138,17 +161,31 @@ func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string,
 		return
 	}
 
-	// Deliberately NOT asserting outstanding cleanup here — see the round-15 revision note above.
-	// The marker is optimistic; a marker with zero live items is an accepted phantom (#1453), not a
-	// violation. The two leak-catching assertions above remain strict.
+	total, live := plaidMarkerLinkedItemCounts(t, pool, userID)
+	if live > 0 {
+		return
+	}
+	assert.Equal(t, 0, total,
+		"[%s] invariant violated: status=%q is ineligible and plaid_cleanup_pending_at is set, but this user HAS %d linked_items row(s) and every one is already disconnected/replaced — cleanup for this episode already completed and the marker should have been cleared (see assertPlaidMarkerInvariantCleanupComplete); the ONLY allowed exception is a user with ZERO linked_items rows at all (#1453 migration-residue / never-linked-Plaid shape)",
+		context, row.status, total)
 }
 
-// plaidMarkerLinkedItemCounts was removed in round-15: it existed solely for
-// assertPlaidMarkerInvariant's second-conjunct ("cleanup still outstanding") check, which that
-// helper no longer performs now that the marker is deliberately optimistic. Kept out rather than
-// left dead — the liveness definition it duplicated lives in liveLinkedItemExistsClause
-// (profile_repository.go), which is the single definition the repair query, the backlog gauge, and
-// migration 000121 all share.
+// plaidMarkerLinkedItemCounts returns the total number of linked_items rows for userID, and how
+// many of those are "live" — the SAME liveness definition
+// GetUsersNeedingPlaidDisconnectRepair/GetOutstandingPlaidCleanupStats use (a NULL status counts
+// as live; only 'disconnected'/'replaced' don't). Used exclusively by assertPlaidMarkerInvariant's
+// second-conjunct check above. Removed in round 15 (when the second conjunct itself was dropped)
+// and reinstated in round 16 alongside it — see assertPlaidMarkerInvariant's own comment.
+func plaidMarkerLinkedItemCounts(t *testing.T, pool *pgxpool.Pool, userID string) (total, live int) {
+	t.Helper()
+	require.NoError(t, pool.QueryRow(context.Background(), `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+		FROM linked_items
+		WHERE user_id = $1
+	`, userID).Scan(&total, &live))
+	return total, live
+}
 
 // assertPlaidMarkerInvariantCleanupComplete is assertPlaidMarkerInvariant's sibling for the ONE
 // state the plain helper cannot verify from the users row's status column alone: an ineligible

@@ -68,6 +68,13 @@ func (m *MockRetentionProfileRepository) RepairRetentionClock(ctx context.Contex
 	return args.Bool(0), args.Error(1)
 }
 
+// StampMissingPlaidCleanupMarkers is Issue #1413 round 16's self-healing backstop, called at the
+// very start of every Step 0b repair pass — see RetentionProfileRepository's doc comment.
+func (m *MockRetentionProfileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error) {
+	args := m.Called(ctx)
+	return args.Int(0), args.Error(1)
+}
+
 // GetUsersNeedingPlaidDisconnectRepair, GetUserByID (Issue #1413 round-7 grace-window repair
 // path) back the Work() Step 0b repair pass added alongside the retention-clock repair (Step 0)
 // and notice/deletion steps.
@@ -195,6 +202,7 @@ func newTestRetentionCleanupJob(args RetentionCleanupCheckArgs) *river.Job[Reten
 // would now fail on that account alone, despite not caring about Plaid-repair mechanics at all.
 func newTestRetentionWorker(repo *MockRetentionProfileRepository, deletionSvc RetentionDeletionService, emailSvc RetentionEmailService) *RetentionCleanupCheckWorker {
 	repo.On("GetUsersNeedingRetentionClockRepair", mock.Anything).Return([]*domain.User{}, nil).Maybe()
+	repo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	repo.On("GetUsersNeedingPlaidDisconnectRepair", mock.Anything, mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	repo.On("ClearPlaidCleanupPendingIfMatches", mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -267,6 +275,7 @@ func TestRetentionCleanupCheck_RepairsRetentionClock(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -308,6 +317,7 @@ func TestRetentionCleanupCheck_RepairSkipsCompedUser(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -350,6 +360,7 @@ func TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDelet
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -389,6 +400,7 @@ func TestRetentionCleanupCheck_RepairSkip_PreconditionLostSinceQuery(t *testing.
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -426,6 +438,7 @@ func TestRetentionCleanupCheck_RepairsPlaidDisconnect(t *testing.T) {
 	users := []*domain.User{user}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -456,6 +469,84 @@ func TestRetentionCleanupCheck_RepairsPlaidDisconnect(t *testing.T) {
 	mockRepo.AssertCalled(t, "ClearPlaidCleanupPendingIfMatches", ctx, "user-needs-plaid-repair", pendingSince)
 }
 
+// ─── Issue #1413 round 16: StampMissingPlaidCleanupMarkers, the self-healing backstop ────
+
+// TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQuery proves
+// repairPlaidDisconnects calls the self-healing backstop (StampMissingPlaidCleanupMarkers) on every
+// single pass, unconditionally — this is what lets a user healed in THIS pass also be selected for
+// repair in the SAME pass. Uses a mocked, non-zero healedCount purely to prove the call happens and
+// the job still succeeds and logs it; the backstop's actual healing logic is proven against a real
+// database in profile_repository_plaid_disconnect_repair_integration_test.go.
+func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQuery(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(2, nil).Once()
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          logger,
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockRepo.AssertCalled(t, "StampMissingPlaidCleanupMarkers", ctx)
+	assert.Contains(t, logBuf.String(), "healed_count=2", "a non-zero heal count must be logged so the backstop's activity is observable")
+}
+
+// TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal proves a backstop
+// failure is logged but does NOT fail repairPlaidDisconnects (let alone the whole job) — the
+// backstop is idempotent and re-attempted for free on the next scheduled pass, so there is nothing
+// to retry synchronously here, and the candidate query must still run against whatever markers
+// already exist.
+func TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, errors.New("db: connection reset"))
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err, "a backstop failure must not fail the job — it is naturally retried on the next scheduled pass")
+	mockRepo.AssertCalled(t, "GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod)
+}
+
 // TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod proves
 // repairPlaidDisconnects passes the round-7 grace constant through to the query, not an
 // unconstrained/zero value — the grace window is the entire mechanism that turns "resubscribed
@@ -464,6 +555,7 @@ func TestRetentionCleanupCheck_PlaidRepair_QueriesWithConfiguredGracePeriod(t *t
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -506,6 +598,7 @@ func TestRetentionCleanupCheck_PlaidRepair_RecheckWiredToGetUserByID(t *testing.
 	users := []*domain.User{candidate}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	var capturedRecheck func(context.Context) (bool, error)
@@ -566,6 +659,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsCompedUser(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -619,6 +713,7 @@ func TestRetentionCleanupCheck_PlaidRepairProceedsForLapsedComp(t *testing.T) {
 	users := []*domain.User{user}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -664,6 +759,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfResubscribedSinceQuery(t *testi
 	currentUser := &domain.User{ID: "user-resubscribed", Email: "resubscribed@example.com", SubscriptionStatus: "active"}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -707,6 +803,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAnd
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -759,6 +856,7 @@ func TestRetentionCleanupCheck_PlaidRepairFailure_IncrementsUserFailureCounter(t
 	repairUser := &domain.User{ID: "user-plaid-repair-fail-counter", Email: "plaidrepairfailcounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -799,6 +897,7 @@ func TestRetentionCleanupCheck_PlaidRepairPreCheckFailure_IncrementsUserFailureC
 	repairUser := &domain.User{ID: "user-plaid-precheck-fail", Email: "plaidprecheckfail@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -838,6 +937,7 @@ func TestRetentionCleanupCheck_PlaidRepairSuccess_DoesNotIncrementUserFailureCou
 	user := &domain.User{ID: "user-plaid-repair-success-counter", Email: "plaidrepairsuccesscounter@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -906,6 +1006,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_MarkerLeftSetAndNotCoun
 	user := &domain.User{ID: "user-aborted-mid-run", Email: "abortedmidrun@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -979,6 +1080,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_RetriesThenSucceeds(t *t
 	user := &domain.User{ID: userID, Email: "clearretrysucceeds@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1032,6 +1134,7 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilen
 	user := &domain.User{ID: userID, Email: "clearretryexhausted@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1079,6 +1182,65 @@ func TestRetentionCleanupCheck_PlaidRepair_ClearFailure_ExhaustsRetries_NotSilen
 		"the corrected log text must describe the real risk: the marker may now be stuck non-NULL permanently")
 }
 
+// TestRetentionCleanupCheck_PlaidRepair_ClearRetry_ContextCanceled_AbortsWithoutFullBackoff is the
+// RED test for Issue #1413 round 16's "Retry robustness" finding: the retry wait between attempts
+// must be CONTEXT-AWARE (a plain time.Sleep cannot be interrupted, so a worker shutdown mid-retry
+// used to block for the remaining backoff regardless). Passing an ALREADY-canceled context proves
+// this deterministically without any timing dependence: ctx.Done() is already closed, so the
+// select inside clearPlaidCleanupMarkerWithRetry's wait must fire immediately rather than waiting
+// out plaidCleanupMarkerClearBackoff's timer, aborting the loop after exactly ONE attempt instead
+// of retrying up to plaidCleanupMarkerClearMaxAttempts times.
+//
+// Falsifiability: against a plain, non-context-aware time.Sleep, this test fails — the loop would
+// ignore the already-canceled context and still run all plaidCleanupMarkerClearMaxAttempts
+// attempts (mock.Anything-backed calls never themselves fail on a canceled context).
+func TestRetentionCleanupCheck_PlaidRepair_ClearRetry_ContextCanceled_AbortsWithoutFullBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done before Work() is ever called
+
+	pendingSince := time.Now().Add(-100 * time.Hour)
+	userID := "user-clear-retry-ctx-canceled"
+	user := &domain.User{ID: userID, Email: "clearretryctxcanceled@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &pendingSince}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(0, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{user}, nil)
+	mockRepo.On("GetUserByID", ctx, userID).Return(user, nil)
+	mockPlaid.On("DisconnectAllUserItemsIfEligible", ctx, userID, mock.Anything).Return(nil)
+	// No .Once() — matches every call; the assertion below is on CALL COUNT, not on exhausting a
+	// finite stub list, so a persistent failure is modeled the same way as the exhausted-retries test.
+	mockRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, userID, pendingSince).Return(false, errors.New("db: connection reset"))
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	start := time.Now()
+	err := worker.Work(ctx, job)
+	elapsed := time.Since(start)
+	require.NoError(t, err, "an aborted retry loop is still a per-user failure, not a job failure")
+
+	// An already-canceled context must abort the retry loop after the FIRST attempt, never waiting
+	// out the backoff to try plaidCleanupMarkerClearMaxAttempts times.
+	mockRepo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", 1)
+	assert.Less(t, elapsed, plaidCleanupMarkerClearRetryDelay,
+		"the retry loop must not block for the backoff duration when the context is already done — shutdown must not be delayed by this loop")
+}
+
 // TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError proves the sentinel is still
 // detected via errors.Is when DisconnectAllUserItemsIfEligible wraps it (as the real service does,
 // via fmt.Errorf("%w: ...", ErrCleanupAborted)) rather than returning the bare sentinel.
@@ -1089,6 +1251,7 @@ func TestRetentionCleanupCheck_PlaidRepair_AbortedMidRun_JoinedError(t *testing.
 	user := &domain.User{ID: "user-aborted-wrapped", Email: "abortedwrapped@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &pendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1134,6 +1297,7 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_FailsJob_HeartbeatNotAdvanc
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1194,6 +1358,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfTransitionedToPastDueSinceQuery
 	currentUser := &domain.User{ID: "user-now-pastdue", Email: "nowpastdue@example.com", SubscriptionStatus: "past_due"}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1249,6 +1414,7 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfMarkerReplacedByNewEpisodeSince
 	currentUser := &domain.User{ID: "user-marker-replaced", Email: "markerreplaced@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &freshMarker}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
@@ -1291,6 +1457,7 @@ func TestRetentionCleanupCheck_30dNotice_SentToUsers(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1329,6 +1496,7 @@ func TestRetentionCleanupCheck_7dNotice_SentToUsers(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1364,6 +1532,7 @@ func TestRetentionCleanupCheck_AutoDeletion_ExecutedForExpiredUsers(t *testing.T
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1396,6 +1565,7 @@ func TestRetentionCleanupCheck_DeletionError_ContinuesProcessing(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1421,6 +1591,7 @@ func TestRetentionCleanupCheck_NoUsers_NoOp(t *testing.T) {
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1450,6 +1621,7 @@ func TestRetentionCleanupCheck_EmailServiceNil_SkipsSending(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return(users, nil)
@@ -1634,6 +1806,7 @@ func TestRetentionCleanupCheckPeriodicOpts_PairedWithUniqueOpts(t *testing.T) {
 // TestNewRetentionCleanupCheckWorker_DefaultLogger tests that nil logger uses default.
 func TestNewRetentionCleanupCheckWorker_DefaultLogger(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -1674,6 +1847,7 @@ func TestRetentionCleanupCheck_NilDeletionService_SkipsAutoDeleteButRepairStepsS
 	plaidRepairUser := &domain.User{ID: "user-needs-plaid-repair-nodeletion", Email: "plaidrepairnodeletion@example.com", SubscriptionStatus: "inactive", PlaidCleanupPendingAt: &plaidPendingSince}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
 
@@ -1725,6 +1899,7 @@ func TestRetentionCleanupCheck_CompedUser_NotDeleted(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1760,6 +1935,7 @@ func TestRetentionCleanupCheck_CompedUser_No30dNotice(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1794,6 +1970,7 @@ func TestRetentionCleanupCheck_CompedUser_No7dNotice(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1839,6 +2016,7 @@ func TestRetentionCleanupCheck_ExpiredOverride_NotDeleted(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1870,6 +2048,7 @@ func TestRetentionCleanupCheck_NonComped_DeletedNormally(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -1911,6 +2090,7 @@ func TestRetentionCleanupCheck_30dClaimLost_NoEmailSent(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -1944,6 +2124,7 @@ func TestRetentionCleanupCheck_7dClaimLost_NoEmailSent(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -1979,6 +2160,7 @@ func TestRetentionCleanupCheck_30dClaimError_ContinuesProcessing(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2027,6 +2209,7 @@ func TestRetentionCleanupCheck_30dIneligibleAfterClaim_ReleasesClaim_SkipsSend(t
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2067,6 +2250,7 @@ func TestRetentionCleanupCheck_30dSendFails_ReleasesClaim_NextRunRetries(t *test
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2133,6 +2317,7 @@ func TestRetentionCleanupCheck_7dSendFails_ReleasesClaim_NextRunRetries(t *testi
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2191,6 +2376,7 @@ func TestRetentionCleanupCheck_30dSendSucceeds_OrderingProof(t *testing.T) {
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2243,6 +2429,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
@@ -2288,6 +2475,7 @@ func TestRetentionCleanupCheck_30dCompleteReturnsFalse_LoggedAtError(t *testing.
 // TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths tests that 0 months uses default (6).
 func TestNewRetentionCleanupCheckWorker_DefaultRetentionMonths(t *testing.T) {
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 
 	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
@@ -2310,6 +2498,7 @@ func TestRetentionCleanupCheck_Success_RecordsHeartbeat(t *testing.T) {
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -2343,6 +2532,7 @@ func TestRetentionCleanupCheck_DeletionFailure_HeartbeatNotAdvanced(t *testing.T
 	}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -2388,6 +2578,7 @@ func TestRetentionCleanupCheck_ProcessRetentionNotices_NilRetentionExpiresAt_Ret
 	ctx := context.Background()
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 	mockClaims := new(mockWorkClaimsRepository)
