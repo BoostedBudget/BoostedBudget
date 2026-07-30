@@ -873,8 +873,20 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// #933: Normalize status at repo layer as defense-in-depth backstop.
 	status = domain.NormalizeSubscriptionStatus(status)
 
-	now := time.Now()
-
+	// CI-observed clock-skew fix: through the fix below, `updated_at` AND the
+	// plaid_cleanup_pending_at COALESCE both used a single Go-computed `now := time.Now()` passed as
+	// a query parameter — the ONE writer of this column that did not use Postgres's own NOW(), unlike
+	// every sibling writer (CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride,
+	// UpdateTrialStatus below, removeUserTierOverrideUpdate). That inconsistency is exactly what
+	// failed TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker in CI: the
+	// test fences a "before" bound via `SELECT NOW()` (correctly, per this file's own established
+	// convention) and then asserts this method's freshly-stamped marker is not before that bound — but
+	// the marker's ACTUAL value came from the test RUNNER's clock (this method's Go `now`), not
+	// Postgres's, so a Postgres container clock lagging the runner's could make the fenced comparison
+	// fail even though nothing was actually wrong. Writing NOW() directly in the SQL below, like every
+	// other writer already does, removes the runner's clock from this column's value entirely — the
+	// stamped timestamp and every test fence built from `SELECT NOW()` now share one clock, always.
+	//
 	// Issue #1413 round-10: maintain plaid_cleanup_pending_at atomically with THIS SAME
 	// subscription_status write, rather than in a later, separate call that could independently
 	// fail or drift out of sync with the status it's supposed to describe — see
@@ -942,19 +954,19 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 		}
 		blind := r.enc.BlindIndex(*subscriptionID)
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $7) ELSE plaid_cleanup_pending_at END WHERE id = $8 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $7 AND is_deleted = FALSE`
 		} else {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = $7, plaid_cleanup_pending_at = NULL WHERE id = $8 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, paddle_subscription_id = $5, paddle_subscription_id_blind_idx = $6, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $7 AND is_deleted = FALSE`
 		}
-		args = []interface{}{tier, status, startedAt, endsAt, enc, blind, now, userID}
+		args = []interface{}{tier, status, startedAt, endsAt, enc, blind, userID}
 	} else {
 		// Preserve existing paddle_subscription_id values (omit from SET clause).
 		if plaidMarkerEligible {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, $5) ELSE plaid_cleanup_pending_at END WHERE id = $6 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = CASE WHEN NOT (` + plaidDisconnectRepairEligibleStatusPredicate + `) THEN COALESCE(plaid_cleanup_pending_at, NOW()) ELSE plaid_cleanup_pending_at END WHERE id = $5 AND is_deleted = FALSE`
 		} else {
-			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = $5, plaid_cleanup_pending_at = NULL WHERE id = $6 AND is_deleted = FALSE`
+			query = `UPDATE users SET subscription_tier = $1, subscription_status = $2, subscription_started_at = $3, subscription_ends_at = $4, updated_at = NOW(), plaid_cleanup_pending_at = NULL WHERE id = $5 AND is_deleted = FALSE`
 		}
-		args = []interface{}{tier, status, startedAt, endsAt, now, userID}
+		args = []interface{}{tier, status, startedAt, endsAt, userID}
 	}
 
 	ct, err := r.db.Exec(ctx, query, args...)
@@ -1276,9 +1288,14 @@ func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string)
 // instead of starting a fresh grace window — the user could be disconnected immediately against
 // an anchor from before this trial ever existed, rather than getting the grace period a fresh
 // ineligibility episode is entitled to.
+//
+// CI-observed clock-skew fix, same defect and same fix as UpdateSubscriptionFromPaddle's own doc
+// comment describes in full: `updated_at` and the plaid_cleanup_pending_at COALESCE both used to
+// share a single Go-computed `now := time.Now()` query parameter instead of Postgres's own NOW() —
+// this method's own sibling instance of the identical bug, caught by the same audit, fixed the same
+// way, for the same reason (every fence a test builds via `SELECT NOW()` must share Postgres's
+// clock with whatever this method actually stamps, never the Go runner's).
 func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	now := time.Now()
-
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
 	var query string
@@ -1290,9 +1307,9 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 			    trial_started_at = $2,
 			    trial_ends_at = $3,
 			    had_trial = $4,
-			    updated_at = $5,
-			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, $5)
-			WHERE id = $6 AND is_deleted = FALSE
+			    updated_at = NOW(),
+			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
+			WHERE id = $5 AND is_deleted = FALSE
 		`
 	} else {
 		query = `
@@ -1302,13 +1319,13 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 			    trial_started_at = $2,
 			    trial_ends_at = $3,
 			    had_trial = $4,
-			    updated_at = $5,
+			    updated_at = NOW(),
 			    plaid_cleanup_pending_at = NULL
-			WHERE id = $6 AND is_deleted = FALSE
+			WHERE id = $5 AND is_deleted = FALSE
 		`
 	}
 
-	ct, err := r.db.Exec(ctx, query, status, trialStartedAt, trialEndsAt, hadTrial, now, userID)
+	ct, err := r.db.Exec(ctx, query, status, trialStartedAt, trialEndsAt, hadTrial, userID)
 	if err != nil {
 		return err
 	}
@@ -2081,19 +2098,42 @@ const liveLinkedItemExistsClause = `EXISTS (
 // predicate simply stops excluding the row on the very next scheduled run. Do NOT "unify" this with
 // noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
 // and this predicate's own doc comment for why the retention/deletion queries must stay as they are.
+// CI-observed clock-skew fix (fourth failure of this exact class on this branch): through the fix
+// below, this method computed its grace-window cutoff in GO — `cutoff := time.Now().Add(-gracePeriod)`
+// — and compared it against plaid_cleanup_pending_at, a column every writer stamps from POSTGRES's
+// OWN clock (`NOW()`, or — after the sibling fix on UpdateSubscriptionFromPaddle/UpdateTrialStatus
+// below — now EVERY writer's own clock, full stop). CI runs Postgres in a separate container whose
+// clock can lag or lead the test runner's by single-digit milliseconds; mixing the two clocks in
+// one comparison meant every test exercising a near-zero grace boundary inherited that skew, no
+// matter how carefully the TEST fenced its own assertions — the mixing was in this production
+// query, not in any test. Two tests failed in CI on this exact defect:
+// TestMigration000121_LapsedOverrideRowNowRepaired (calls this method with gracePeriod=0
+// immediately after a migration stamps the column via Postgres's own NOW(); a lagging Go clock
+// could put `cutoff` before the stamped value, so `plaid_cleanup_pending_at < cutoff` was false)
+// and TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker (a DIFFERENT
+// manifestation of the same root cause — see UpdateSubscriptionFromPaddle's own doc comment).
+//
+// The fix moves the ENTIRE comparison into Postgres: `NOW() - make_interval(secs => $1)` computes
+// the cutoff using the SAME clock plaid_cleanup_pending_at was stamped from, so the two values are
+// never subject to inter-process/inter-container skew, no matter how tight the grace period. The
+// exported signature (gracePeriod time.Duration) is unchanged — callers are unaffected; only the
+// number that crosses the wire changes, from a pre-computed absolute timestamp to a plain float64
+// of seconds, which make_interval's `secs double precision` parameter accepts directly (mirrors
+// removeUserTierOverrideUpdate's own established make_interval(months => $N) precedent,
+// admin_user_repository.go). Sub-second grace periods (several tests here call this with exactly
+// zero) lose no precision — Duration.Seconds() is a float64, and 0 maps to 0 exactly.
 func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
-	cutoff := time.Now().Add(-gracePeriod)
 	query := userSelectQuery + `
 		WHERE ` + plaidDisconnectRepairEligibleStatusPredicate + `
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND plaid_cleanup_pending_at IS NOT NULL
-		  AND plaid_cleanup_pending_at < $1
+		  AND plaid_cleanup_pending_at < NOW() - make_interval(secs => $1)
 		  AND ` + liveLinkedItemExistsClause + `
 	` + noActiveManualOverridePredicate + `
 		ORDER BY updated_at ASC
 	`
-	users, err := r.queryUsers(ctx, query, cutoff)
+	users, err := r.queryUsers(ctx, query, gracePeriod.Seconds())
 	if err != nil {
 		return nil, err
 	}

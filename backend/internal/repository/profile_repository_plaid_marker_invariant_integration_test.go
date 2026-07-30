@@ -7,17 +7,21 @@ package repository
 // See domain.User.PlaidCleanupPendingAt's doc comment for the invariant every writer/clearer of
 // this column must maintain, and its precise definition of "episode":
 //
-//	An ineligibility episode BEGINS the instant subscription_status transitions into a raw status
+//	An ineligibility episode BEGINS the instant one of two things happens: the ORDINARY way,
+//	subscription_status transitions into a raw status
 //	domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair() calls true
-//	('inactive' or 'cancelled'), and ENDS the instant Plaid cleanup for THAT episode completes (the
-//	marker is cleared) — NOT the instant the user later leaves the ineligible status. A user can
-//	stay 'cancelled' indefinitely with no episode open, once that episode's cleanup has run.
+//	('inactive' or 'cancelled'); or the OTHER way, a user already in such a status with no episode
+//	open (their previous episode's cleanup already completed) acquires a live linked item —
+//	StampMissingPlaidCleanupMarkers is the writer for that second case. An episode ENDS the instant
+//	Plaid cleanup for THAT episode completes (the marker is cleared) — NOT the instant the user
+//	later leaves the ineligible status. A user can stay 'cancelled' indefinitely with no episode
+//	open, once that episode's cleanup has run.
 //
 //	plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an episode (per that definition) is
 //	currently open. NULL covers two legal cases: the status isn't ineligible at all, OR the status
 //	is still ineligible but the CURRENT episode's cleanup has already completed — the second is
-//	exactly what assertPlaidMarkerInvariantCleanupComplete below pins, and is why a NULL marker on
-//	a still-'cancelled' user is legal, not a contradiction.
+//	exactly what assertPlaidMarkerInvariant below checks directly (both conjuncts, not just the
+//	first), and is why a NULL marker on a still-'cancelled' user is legal, not a contradiction.
 //
 //	EVENTUALLY consistent, not instantaneously true for every writer at every instant: round 15
 //	(Finding 3, Codex review round on PR #1443) found a real race (the override-removal path's
@@ -94,13 +98,16 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 	return r.compEnd == nil || !r.compEnd.Before(now)
 }
 
-// assertPlaidMarkerInvariant is THE invariant check: it re-derives, from the row's own committed
-// state, whether an ineligibility episode is currently open (raw subscription_status alone — see
-// the file header comment for why manual_tier_override is deliberately NOT part of this check as
-// of round-13), and asserts plaid_cleanup_pending_at's nullness agrees with BOTH conjuncts of the
-// invariant — not just the first. This is the single reusable assertion every test in this file
-// drives every state-changing step through — see the file header comment for why that (not a
-// fix-specific spot-check) is the point of this file.
+// assertPlaidMarkerInvariant is THE invariant check — the ONLY one; there used to be a second,
+// narrower sibling (assertPlaidMarkerInvariantCleanupComplete), removed by the Issue #1413 Finding 2
+// fix below. It re-derives, from the row's own committed state, whether an ineligibility episode is
+// currently open (raw subscription_status alone — see the file header comment for why
+// manual_tier_override is deliberately NOT part of this check as of round-13), and asserts
+// plaid_cleanup_pending_at's nullness agrees with BOTH conjuncts of the invariant in BOTH
+// directions — not just "is it set when it should be", but "is it correctly NULL when it should
+// be" too. This is the single reusable assertion every test in this file drives every
+// state-changing step through — see the file header comment for why that (not a fix-specific
+// spot-check) is the point of this file.
 //
 // Task X (L2, Codex review round on PR #1443): the invariant has TWO conjuncts — non-NULL EXACTLY
 // WHEN an episode is open AND cleanup for it has not completed — and this helper previously only
@@ -139,6 +146,27 @@ func (r plaidMarkerRow) hasActiveOverride(now time.Time) bool {
 //     linked_items rows at all (a user who never linked Plaid, or 000119/000120 migration residue —
 //     indistinguishable at the row level, and both legitimate, reachable states).
 //
+// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up): before this fix, a NULL marker
+// on an ineligible user was ALWAYS flagged as a violation here (an unconditional assert.NotNil),
+// even though the invariant (domain.User.PlaidCleanupPendingAt's doc comment) explicitly permits a
+// NULL marker on a still-ineligible user once that episode's cleanup has genuinely completed. A
+// second helper, assertPlaidMarkerInvariantCleanupComplete, existed purely to cover that one legal
+// case — but its doc comment was the ONLY thing preventing a caller from reaching for this one
+// (documented as "THE invariant check") right after a legitimate clear and getting a false failure.
+// That is a usability trap by construction, not merely a documentation gap: nothing about calling
+// this function was wrong, so nothing here could have told a caller they picked the wrong helper.
+//
+// The fix makes this the ONLY helper by making it detect the completed-cleanup case itself, using
+// the exact same live-item count this function already computes for the non-NULL branch: a NULL
+// marker on an ineligible user is legal whenever the user has NO live linked item right now (either
+// #1453's zero-rows population, or a genuinely completed cleanup with every item
+// disconnected/replaced) — and is a real violation only if a LIVE item exists, which is exactly the
+// case StampMissingPlaidCleanupMarkers exists to heal. There is no longer a second name to
+// remember, so there is no longer a wrong one to pick. assertPlaidMarkerInvariantCleanupComplete is
+// deleted; every former call site now calls this function instead — see
+// TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResurrectClearedMarker for
+// both former call sites, now unified.
+//
 // This helper cannot itself distinguish "healed by the backstop on this exact call" from "would have
 // been a genuine violation a moment ago" — both look identical once the backstop has run. That is
 // fine: this file's own tests never race the backstop (it is not called from any shared setup
@@ -155,27 +183,37 @@ func assertPlaidMarkerInvariant(t *testing.T, pool *pgxpool.Pool, userID string,
 			context, row.status, row.marker)
 		return
 	}
-	if !assert.NotNil(t, row.marker,
-		"[%s] invariant violated: an ineligibility episode is open (status=%q) but plaid_cleanup_pending_at is NULL",
-		context, row.status) {
+
+	total, live := plaidMarkerLinkedItemCounts(t, pool, userID)
+
+	if row.marker == nil {
+		// Legal NULL on an ineligible user: either #1453 (zero linked_items rows at all) or a
+		// genuinely completed cleanup (at least one row, none of them live) — either way, no LIVE
+		// item means no outstanding cleanup, so no episode is actually open right now regardless of
+		// raw status. Illegal only if a live item exists: that is exactly the state
+		// StampMissingPlaidCleanupMarkers exists to heal, so a NULL marker there is a real defect,
+		// not a legal quiescent state.
+		assert.Equal(t, 0, live,
+			"[%s] invariant violated: an ineligibility episode is open (status=%q, %d live linked item(s) outstanding) but plaid_cleanup_pending_at is NULL",
+			context, row.status, live)
 		return
 	}
 
-	total, live := plaidMarkerLinkedItemCounts(t, pool, userID)
 	if live > 0 {
 		return
 	}
 	assert.Equal(t, 0, total,
-		"[%s] invariant violated: status=%q is ineligible and plaid_cleanup_pending_at is set, but this user HAS %d linked_items row(s) and every one is already disconnected/replaced — cleanup for this episode already completed and the marker should have been cleared (see assertPlaidMarkerInvariantCleanupComplete); the ONLY allowed exception is a user with ZERO linked_items rows at all (#1453 migration-residue / never-linked-Plaid shape)",
+		"[%s] invariant violated: status=%q is ineligible and plaid_cleanup_pending_at is set, but this user HAS %d linked_items row(s) and every one is already disconnected/replaced — cleanup for this episode already completed and the marker should have been cleared; the ONLY allowed exception is a user with ZERO linked_items rows at all (#1453 migration-residue / never-linked-Plaid shape)",
 		context, row.status, total)
 }
 
 // plaidMarkerLinkedItemCounts returns the total number of linked_items rows for userID, and how
 // many of those are "live" — the SAME liveness definition
 // GetUsersNeedingPlaidDisconnectRepair/GetOutstandingPlaidCleanupStats use (a NULL status counts
-// as live; only 'disconnected'/'replaced' don't). Used exclusively by assertPlaidMarkerInvariant's
-// second-conjunct check above. Removed in round 15 (when the second conjunct itself was dropped)
-// and reinstated in round 16 alongside it — see assertPlaidMarkerInvariant's own comment.
+// as live; only 'disconnected'/'replaced' don't). Used by assertPlaidMarkerInvariant's checks in
+// BOTH the NULL-marker and non-NULL-marker branches above. Removed in round 15 (when the second
+// conjunct itself was dropped) and reinstated in round 16 alongside it — see
+// assertPlaidMarkerInvariant's own comment.
 func plaidMarkerLinkedItemCounts(t *testing.T, pool *pgxpool.Pool, userID string) (total, live int) {
 	t.Helper()
 	require.NoError(t, pool.QueryRow(context.Background(), `
@@ -185,29 +223,6 @@ func plaidMarkerLinkedItemCounts(t *testing.T, pool *pgxpool.Pool, userID string
 		WHERE user_id = $1
 	`, userID).Scan(&total, &live))
 	return total, live
-}
-
-// assertPlaidMarkerInvariantCleanupComplete is assertPlaidMarkerInvariant's sibling for the ONE
-// state the plain helper cannot verify from the users row's status column alone: an ineligible
-// user whose Plaid cleanup for the CURRENT episode has already completed (either
-// repairPlaidDisconnects's ClearPlaidCleanupPendingIfMatches, or Issue #1413 round-12 Fix 1's
-// synchronous clear-on-success in the cancellation/past-due webhook paths). The full invariant
-// (domain.User.PlaidCleanupPendingAt's doc comment) requires TWO conjuncts for non-NULL —
-// ineligible (raw) status AND outstanding cleanup — and assertPlaidMarkerInvariant above only
-// checks the first, silently assuming the second is always true, which held for every writer
-// prior to round-12 Fix 1. Once a writer can legitimately clear the marker while the user remains
-// ineligible, that assumption no longer holds, and asserting the plain helper immediately after
-// such a clear would fail against a state the invariant explicitly permits.
-//
-// Callers must use this ONLY immediately after an explicit, deliberate "cleanup just completed"
-// clear call (ClearPlaidCleanupPendingIfMatches / ClearPlaidCleanupPending) — never as a
-// general-purpose substitute for assertPlaidMarkerInvariant.
-func assertPlaidMarkerInvariantCleanupComplete(t *testing.T, pool *pgxpool.Pool, userID string, context string) {
-	t.Helper()
-	row := readPlaidMarkerRow(t, pool, userID)
-	assert.Nil(t, row.marker,
-		"[%s] cleanup was just completed for this episode — plaid_cleanup_pending_at must be NULL even though the user remains ineligible (status=%q)",
-		context, row.status)
 }
 
 // createPlaidMarkerTestUser creates a minimal user with the given initial status for these tests.
@@ -482,17 +497,29 @@ func TestUpdateSubscriptionFromPaddle_Integration_CancelWhileComped_MarkerSetBut
 		assert.NotEqual(t, user.ID, c.ID, "a user with a CURRENTLY-LIVE comp must never be selected for repair, even though the marker is now set")
 	}
 
-	// Follow-through: once the comp is later removed, the marker must be PRESERVED at its ORIGINAL
-	// (cancellation-time) value — round-13 changed this from round-11's "removal stamps a FRESH
-	// NOW()" behavior, because the marker was never nulled by the comp in the first place, so
-	// removeUserTierOverrideUpdate's COALESCE(existing, NOW()) has an existing value to keep.
+	// Follow-through: once the comp is later removed, the marker must now be FRESH — Issue #1413
+	// Round 18 (Codex review, PR #1443 follow-up, High finding) superseded round-13's "PRESERVE the
+	// original cancellation-time value" behavior asserted here through that round: preserving the
+	// original value via COALESCE(existing, NOW()) is exactly the mechanism that resurrects a STALE
+	// marker from an already-completed episode when the sequence is comp-grant -> stale marker ->
+	// relink -> comp-removal (see removeUserTierOverrideSelectPrior's own doc comment,
+	// admin_user_repository.go, "ROUND 18", for the full Path A/Path B hazard and the reasoning for
+	// why restarting the grace window here is correct, not a regression, even for THIS test's shape
+	// where the episode was genuinely still open at removal time). should_mark_plaid_cleanup_pending
+	// now writes NOW() unconditionally whenever it fires — which it does here: a prior override
+	// existed, the reverted status ('cancelled') is repair-eligible, and a live linked item was
+	// seeded above.
+	before := dbNow(t, pool)
 	_, err = adminRepo.RemoveUserTierOverride(ctx, "", user.ID, "test: comp removed", 6)
 	require.NoError(t, err)
+	after := dbNow(t, pool)
 
 	afterRemoval := readPlaidMarkerRow(t, pool, user.ID)
 	require.NotNil(t, afterRemoval.marker)
-	assert.True(t, afterRemoval.marker.Equal(*beforeRemoval.marker),
-		"removing the comp must PRESERVE the marker's original cancellation-time value, not reset it to a fresh NOW() — the episode began at cancellation, not at comp removal")
+	assertBetweenFence(t, before, after, *afterRemoval.marker,
+		"removing the comp must now RESTART the grace window with a fresh NOW(), not preserve the original cancellation-time value — the user held a comp for the interim, so the window to react to actually losing access runs from losing it, not from whenever the underlying episode first began")
+	assert.False(t, afterRemoval.marker.Equal(*beforeRemoval.marker),
+		"the marker after removal must NOT be the original cancellation-time value anymore")
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after comp removal")
 }
 
@@ -556,7 +583,7 @@ func TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResur
 	cleared, err := repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, *afterFirstCancel.marker)
 	require.NoError(t, err)
 	require.True(t, cleared, "precondition: the repair pass must successfully clear the marker")
-	assertPlaidMarkerInvariantCleanupComplete(t, pool, user.ID, "after repair pass clears the marker")
+	assertPlaidMarkerInvariant(t, pool, user.ID, "after repair pass clears the marker")
 
 	// A DISTINCT, LATER terminal webhook for the SAME still-cancelled subscription arrives — NOT a
 	// genuine transition (the row was already 'cancelled' before this call).
@@ -565,7 +592,7 @@ func TestUpdateSubscriptionFromPaddle_Integration_LaterTerminalEventDoesNotResur
 	row := readPlaidMarkerRow(t, pool, user.ID)
 	assert.Equal(t, "cancelled", row.status)
 	assert.Nil(t, row.marker, "a later terminal webhook for a user ALREADY cancelled must NOT resurrect a new marker — cleanup for this episode already completed")
-	assertPlaidMarkerInvariantCleanupComplete(t, pool, user.ID, "after later distinct terminal event for the same episode")
+	assertPlaidMarkerInvariant(t, pool, user.ID, "after later distinct terminal event for the same episode")
 }
 
 // TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker is the positive

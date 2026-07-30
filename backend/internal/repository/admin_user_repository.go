@@ -587,17 +587,97 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // #1443 follow-up, headline finding): round 15 called a spurious round-14 M1 stamp "merely an untidy
 // non-NULL timestamp the repair query's own live-item EXISTS clause filters out forever (an accepted,
 // separately-tracked residue class, #1453)". That is WRONG, and so is every other place on this
-// branch that called this state inert or harmless. The COALESCE just above
-// (removeUserTierOverrideUpdate's plaid_cleanup_pending_at = CASE ...) is exactly the mechanism that
-// turns a stale-but-non-NULL marker into live harm: if a PRIOR episode's cleanup completed but the
-// marker was never cleared (e.g. StampMissingPlaidCleanupMarkers's clearing counterpart,
-// ClearCompletedPlaidCleanupMarkers, has not yet run — see its own doc comment,
-// profile_repository.go), this UPDATE's COALESCE(u.plaid_cleanup_pending_at, NOW()) preserves that
-// stale timestamp instead of starting a fresh one, even though the user has since relinked a bank and
-// the removed comp is handing them straight back to repairPlaidDisconnects. The next pass sees a live
-// item paired with an already-expired grace window and disconnects the newly-linked bank immediately
-// — the grace window this whole mechanism exists to provide, silently skipped. Not filtered out
-// forever; reachable, and harmful, the moment a comp is granted and removed over it.
+// branch that called this state inert or harmless. The COALESCE that USED to sit just above (see
+// ROUND 18 below — it is gone now) was exactly the mechanism that turned a stale-but-non-NULL marker
+// into live harm: if a PRIOR episode's cleanup completed but the marker was never cleared (e.g.
+// StampMissingPlaidCleanupMarkers's clearing counterpart, ClearCompletedPlaidCleanupMarkers, has not
+// yet run — see its own doc comment, profile_repository.go), that COALESCE(u.plaid_cleanup_pending_at,
+// NOW()) preserved that stale timestamp instead of starting a fresh one, even though the user had
+// since relinked a bank and the removed comp was handing them straight back to
+// repairPlaidDisconnects. The next pass would see a live item paired with an already-expired grace
+// window and disconnect the newly-linked bank immediately — the grace window this whole mechanism
+// exists to provide, silently skipped. Not filtered out forever; reachable, and harmful, the moment a
+// comp is granted and removed over it. ROUND 18 (below) is the fix for exactly this.
+//
+// ROUND 18 (Issue #1413 High finding, Codex review, PR #1443 follow-up): the immediately preceding
+// paragraph, and round 16's ClearCompletedPlaidCleanupMarkers (profile_repository.go), each treated
+// the hazard above as something Clear could fully close given enough time. It cannot, on its own —
+// Clear is only a PARTIAL mitigation, because it can act only if a repair pass happens to RUN while
+// the user genuinely has no live item. Two sequences skip that window entirely, and both end with a
+// freshly-relinked bank disconnected immediately, with ZERO grace:
+//
+//   - Path A (an all-disconnected user): a stale marker T sits on a user whose items are all
+//     disconnected (Clear's own WHERE clause — anyLinkedItemExistsClause AND NOT
+//     liveLinkedItemExistsClause — WOULD match this row). An admin grants a comp; the user relinks a
+//     bank (permitted — the comp makes their EFFECTIVE status active, internal/huma/middleware/
+//     read_only.go); the admin removes the comp BEFORE the next repair pass gets a turn to run Clear
+//     over this exact row. Clear never observed the no-live-item state in time. The live item now
+//     makes the row ineligible for Clear anyway (NOT liveLinkedItemExistsClause is false), and the old
+//     COALESCE preserved T — already past grace the instant it's read.
+//   - Path B (the #1453 zero-row population): same sequence, but the user has ZERO linked_items rows
+//     when T is set (never linked Plaid, or migration residue) — anyLinkedItemExistsClause is false,
+//     so Clear's WHERE clause can NEVER match this row, not before the relink and not after. This path
+//     is structurally unreachable for Clear, not merely unlucky timing like Path A.
+//
+// See TestRemoveUserTierOverride_Integration_Finding1PathA_AllDisconnectedWithStaleMarker_FreshGraceOnRelink
+// and TestRemoveUserTierOverride_Integration_Finding1PathB_ZeroLinkedItemsPopulation_FreshGraceOnRelink
+// (admin_user_repository_remove_tier_override_integration_test.go) for both reproduced end to end
+// through production writers.
+//
+// Root cause: plaid_cleanup_pending_at is supposed to record when the CURRENT episode became
+// observable (domain.User.PlaidCleanupPendingAt's doc comment). The COALESCE kept whatever value was
+// already sitting in the column — which, in both paths above, belongs to a PREVIOUS, already-completed
+// episode, not the one this removal is (re-)arming. No amount of clearing logic anywhere else in the
+// codebase fixes a WRITER that resurrects a stale value; the writer itself has to stop doing that.
+//
+// The fix, in removeUserTierOverrideUpdate below: should_mark_plaid_cleanup_pending's CASE now writes
+// NOW() UNCONDITIONALLY, never COALESCE. should_mark_plaid_cleanup_pending is already gated on
+// liveLinkedItemExistsClause (round 16 restored it — see above) — a LIVE item genuinely exists every
+// single time this CASE fires. That is exactly when an episode SHOULD be open, by the invariant's own
+// definition, so its start time is properly "now", never whatever a prior, unrelated episode happened
+// to leave behind.
+//
+// This reads like a regression, and deliberately is not one — record why, because the next reviewer
+// will see a COALESCE replaced by NOW() and reach for the revert:
+//
+//  1. For a user whose episode was genuinely ONGOING (the marker already reflects a live, still-open
+//     episode when this CASE fires), writing NOW() instead of keeping the existing value RESTARTS the
+//     72-hour grace window rather than continuing it. That is not merely safe — it is MORE principled.
+//     The user held a live comp for some or all of the interim (should_mark_plaid_cleanup_pending only
+//     fires on a removal, i.e. a prior override existed), so the window in which they can react to
+//     actually losing access should run from the moment they actually lose it — comp removal — not from
+//     whatever moment, possibly long before the comp was even granted, first opened the episode. A comp
+//     is exactly the kind of intervening fact that should extend, not be silently ignored by, the grace
+//     window computed on top of it.
+//  2. The two failure directions are asymmetric, and that asymmetry is what settles the direction of
+//     this fix. Restarting a grace window on an ongoing episode DELAYS a disconnect — recoverable: the
+//     worst outcome is a Plaid connection that stays live a little longer than the strict minimum before
+//     the next repair pass would have caught it anyway once the (now fresh) window elapses. Preserving a
+//     stale marker instead SKIPS the grace window ENTIRELY for a bank connection that may be only
+//     moments old — not recoverable: the user's bank is already gone the instant the next repair pass
+//     runs, with zero chance to react. When one direction of getting it wrong costs a delay and the
+//     other costs an unrecoverable, notice-free disconnection, the fix must err toward the delay.
+//
+// State the accepted cost explicitly, rather than leaving it implicit: an admin who repeatedly grants
+// and removes a comp over the SAME user postpones that user's eventual disconnect by a fresh 72 hours
+// EVERY time. That is entirely admin-driven — it requires an admin action on every single postponement,
+// not something that happens on its own — and an admin choosing to remove a comp is, definitionally,
+// signalling that they want this user's ineligibility to actually take effect. Seventy-two hours of
+// grace per deliberate removal is proportionate to that signal, not a loophole.
+//
+// Reassessing ClearCompletedPlaidCleanupMarkers (profile_repository.go) now that this writer no longer
+// needs it to prevent the harm above: KEEP IT. It still repairs the case that originally motivated it,
+// entirely independent of any comp ever being involved — a user whose repair pass disconnected every
+// item successfully but whose marker-clear retries all failed (a genuine, if rare, DB blip outlasting
+// the retry loop's backoff window) is left with a stale non-NULL marker on a row with zero live items,
+// and NOTHING else in this codebase clears it if that user simply stays in their ineligible status
+// forever with no comp ever granted over them — Stamp cannot help either, since Stamp's own WHERE
+// clause requires the marker to be NULL, and this marker is not. Without Clear, that specific violation
+// of the invariant (domain.User.PlaidCleanupPendingAt's doc comment, case (b)) would sit unrepaired
+// indefinitely for exactly that population. This fix closes the ONE additional way a stale marker could
+// turn into unrecoverable harm (a comp cycle over it); it does not make the marker's own steady-state
+// correctness unconditionally self-maintaining without Clear's help. Do NOT remove Clear on the
+// strength of this fix alone — it closes a different hole and still has a live, unrelated job to do.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
@@ -621,6 +701,11 @@ const removeUserTierOverrideCASClause = `
 // removeUserTierOverrideUpdate is the shared UPDATE body for both variants: clear the override
 // columns, and conditionally re-arm/initialise retention per should_rearm_retention (see
 // removeUserTierOverrideSelectPrior's comment).
+//
+// plaid_cleanup_pending_at's CASE writes NOW() UNCONDITIONALLY when should_mark_plaid_cleanup_pending
+// is true — deliberately NOT COALESCE(u.plaid_cleanup_pending_at, NOW()) — see ROUND 18 in
+// removeUserTierOverrideSelectPrior's doc comment just above for the full Path A/Path B hazard this
+// closes and the reasoning for why writing NOW() unconditionally here is correct, not a regression.
 const removeUserTierOverrideUpdate = `
 	UPDATE users u
 	SET manual_tier_override = NULL,
@@ -630,7 +715,7 @@ const removeUserTierOverrideUpdate = `
 	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN NOW() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
 	    retention_notice_30d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_30d_sent_at END,
 	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END,
-	    plaid_cleanup_pending_at = CASE WHEN prior.should_mark_plaid_cleanup_pending THEN COALESCE(u.plaid_cleanup_pending_at, NOW()) ELSE u.plaid_cleanup_pending_at END
+	    plaid_cleanup_pending_at = CASE WHEN prior.should_mark_plaid_cleanup_pending THEN NOW() ELSE u.plaid_cleanup_pending_at END
 	FROM prior
 	WHERE u.id = $1
 	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override
