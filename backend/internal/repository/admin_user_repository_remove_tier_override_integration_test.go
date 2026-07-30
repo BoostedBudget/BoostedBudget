@@ -141,6 +141,49 @@ func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
 	return now
 }
 
+// waitUntilBlockedBy is a real synchronization barrier for lock-contention tests — Issue #1413
+// Finding 3 (Low, Codex review, PR #1443 follow-up): a fixed time.Sleep before this existed only
+// ASSUMED a concurrent goroutine's transaction had begun and reached its intended blocked FOR
+// UPDATE wait. It proved neither. If pool-connection acquisition or Go's own scheduler delayed that
+// goroutine past the point where the controlling transaction released its lock, the goroutine's
+// transaction would simply acquire the (already-free) lock and run to completion having never been
+// blocked on anything — the test would still pass, but against a WRONG implementation, because
+// nothing it asserted ever depended on the lock wait actually happening.
+//
+// This polls pg_blocking_pids(pid), from a SEPARATE pool connection, for a backend that is
+// genuinely, currently blocked waiting on blockerPID specifically — not a query-text match (which
+// cannot distinguish "blocked on OUR row" from "blocked on some unrelated concurrent test's row" if
+// other integration tests are running against the same database at the same time), and not a mere
+// "some backend is in a Lock wait" check (same ambiguity). pg_blocking_pids(candidate_pid) returns
+// exactly the PIDs currently blocking candidate_pid, so `blockerPID = ANY(pg_blocking_pids(pid))`
+// is true only for a backend that is, right now, waiting specifically on blockerPID's held lock(s).
+//
+// blockerPID must be fetched via `SELECT pg_backend_pid()` run ON the connection/transaction
+// actually holding the lock (pg_backend_pid() returns the CALLING backend's own pid, so it must be
+// queried on that exact connection, not on pool).
+func waitUntilBlockedBy(t *testing.T, pool *pgxpool.Pool, blockerPID int32, timeout time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(timeout)
+	for {
+		var blocked bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE $1 = ANY(pg_blocking_pids(pid))
+			)
+		`, blockerPID).Scan(&blocked)
+		require.NoError(t, err)
+		if blocked {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for a backend to be genuinely blocked on PID %d — the concurrent goroutine's transaction never reached the expected lock wait; the test cannot claim determinism if this happens", timeout, blockerPID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // assertBetweenFence asserts ts falls within [before, after] inclusive — the DB-clock-fenced
 // replacement for assert.WithinDuration(..., beforeCall, 10*time.Second): before/after must both be
 // dbNow(t, pool) calls bracketing the write under test, so this never depends on how far the Go
@@ -1218,35 +1261,58 @@ func TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_Marker
 		"the marker must be healed by StampMissingPlaidCleanupMarkers on the next repair pass — this cancelled user's live bank connection must not be permanently invisible to GetUsersNeedingPlaidDisconnectRepair just because one pass's writer lost this race")
 }
 
-// ─── Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up, ROUND 20): the grace anchor
-// must use statement/wall time, not PostgreSQL's transaction-start NOW() ──────────────────────────
+// ─── Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up, ROUND 20/21): the grace/
+// deadline anchors must use statement/wall time, not PostgreSQL's transaction-start NOW() ─────────
 //
 // removeTierOverride opens an explicit transaction (r.db.Begin(ctx)) and only then runs the CTE's
 // FOR UPDATE lock acquisition inside it. PostgreSQL's NOW() (transaction_timestamp()) is fixed at
 // that transaction's BEGIN, not at the statement that actually executes — so if the lock acquisition
 // blocks a long time on a row a concurrent transaction already holds, NOW() would still reflect the
 // pre-wait instant, silently backdating the marker by however long the wait lasted. See
-// removeUserTierOverrideSelectPrior's own doc comment (ROUND 20, admin_user_repository.go) for the
-// full reasoning; clock_timestamp() (real statement-execution wall time) is the fix.
-
+// removeUserTierOverrideSelectPrior's own doc comment (ROUND 20/21, admin_user_repository.go) for
+// the full reasoning; clock_timestamp() (real statement-execution wall time) is the fix — applied to
+// BOTH plaid_cleanup_pending_at (ROUND 20) and retention_expires_at (ROUND 21: the SAME statement,
+// the SAME lock wait, and — unlike updated_at — a real GDPR deletion deadline, not mere audit).
+//
 // TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait forces genuine,
 // deterministic lock contention across two real connections — not a synthetic pg_sleep-in-isolation
 // proof — because the actual failure mode is specifically about removeTierOverride's own transaction
 // boundary racing its own FOR UPDATE wait, not merely about which Postgres clock function returns
 // which value in the abstract. Connection 1 holds a real row lock; RemoveUserTierOverride (on its
-// own connection, via a goroutine) blocks trying to acquire the same lock; only after a multi-second
-// hold does connection 1 release it. The marker written must reflect the RELEASE instant, not the
-// removal transaction's own (much earlier) BEGIN instant.
+// own connection, via a goroutine) blocks trying to acquire the same lock; only after connection 1
+// releases it does the removal's own UPDATE actually execute. Both timestamps written by that SAME
+// UPDATE statement must reflect the RELEASE instant, not the removal transaction's own (much
+// earlier) BEGIN instant.
 //
 // The override is deliberately STILL LIVE at removal — this isolates Finding 2 from Finding 1's
 // lapsed-anchor branch (which anchors on the stored manual_tier_ends_at and never reads any clock at
 // removal time at all): only the still-live branch calls clock_timestamp()/NOW() at removal, so this
 // is the one shape that can actually exercise the transaction-start-vs-statement-time distinction.
+// target's status is 'cancelled' (createRemoveTierOverrideUser above), so should_rearm_retention is
+// also true here — this single removal exercises BOTH fixed anchors (plaid_cleanup_pending_at AND
+// retention_expires_at) in one real lock-contention scenario, rather than needing a second,
+// separately-held multi-second lock wait to prove the same underlying defect twice.
 //
-// Falsifiability: reverting removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE to write
-// NOW() (transaction_timestamp()) instead of clock_timestamp() makes this test fail — the marker
-// would land at (or a few milliseconds after) startFence, well BEFORE the lock was actually
-// released, instead of at or after releaseFence.
+// Issue #1413 Finding 3 (Low, Codex review, PR #1443 follow-up): this test used to hold the lock for
+// a FIXED time.Sleep(3 * time.Second) and simply ASSUME the goroutine's transaction had, by then,
+// begun and reached its blocked FOR UPDATE — proving neither. A slow pool-connection acquisition or
+// an unlucky goroutine-scheduling delay could let the goroutine's Begin()+FOR UPDATE attempt land
+// AFTER connection 1 already committed and released the lock — the goroutine would then acquire an
+// already-free lock and run to completion having never been blocked at all, and this test would
+// still PASS, even against a reverted, broken NOW()-based implementation, because nothing it
+// asserted ever actually depended on the wait happening. Replaced with waitUntilBlockedBy (this
+// file, above): a real barrier, polling pg_blocking_pids() from a separate connection until the
+// goroutine's backend is CONFIRMED blocked specifically on connection 1's held lock, before this
+// test ever proceeds to release it. See waitUntilBlockedBy's own doc comment for the full reasoning.
+//
+// Falsifiability: reverting removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE (or,
+// separately, its retention_expires_at CASE) to write NOW() (transaction_timestamp()) instead of
+// clock_timestamp() makes this test fail on that column's own assertion — the value would land at
+// (or a few milliseconds after) startFence, well BEFORE the lock was actually released, instead of
+// at or after releaseFence. Verified by reverting each CASE in isolation and confirming the
+// corresponding assertion below fails reliably, run repeatedly (see this file's PR description /
+// commit history for the manual verification this test's own falsifiability claim depends on —
+// Finding 3 exists precisely because that claim must be checked, not merely asserted).
 func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -1270,9 +1336,14 @@ func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcross
 	var locked int
 	require.NoError(t, tx1.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, target.ID).Scan(&locked))
 
+	// tx1's own backend PID — waitUntilBlockedBy below polls for a backend genuinely blocked ON this
+	// specific PID's held lock(s), not merely "some backend is waiting on something".
+	var tx1PID int32
+	require.NoError(t, tx1.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&tx1PID))
+
 	// startFence marks a point strictly BEFORE RemoveUserTierOverride's own transaction opens (the
-	// goroutine below launches after this). If the marker's grace anchor were transaction-start time
-	// (NOW()), it would land close to startFence — well before the lock is released seconds later.
+	// goroutine below launches after this). If the anchors' grace/deadline logic were transaction-start
+	// time (NOW()), they would land close to startFence — well before the lock is released.
 	startFence := dbNow(t, pool)
 
 	type result struct {
@@ -1285,11 +1356,16 @@ func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcross
 		done <- result{row, callErr}
 	}()
 
-	// Hold the lock long enough that the goroutine's Begin()+FOR UPDATE attempt is certainly already
-	// blocked on it before we release — Go schedules the goroutine's first statement within
-	// microseconds, so this margin is generous, not tight.
-	const lockHoldDuration = 3 * time.Second
-	time.Sleep(lockHoldDuration)
+	// Real barrier (Issue #1413 Finding 3): block here until the goroutine's own backend is CONFIRMED
+	// waiting on tx1's lock — not merely assumed to be, after a fixed sleep.
+	waitUntilBlockedBy(t, pool, tx1PID, 5*time.Second)
+
+	// Hold the lock a bit longer than the bare minimum after confirming the block, purely so the
+	// eventual timestamps land comfortably clear of startFence for the assertions below — this
+	// duration is NOT load-bearing for correctness (waitUntilBlockedBy already proved the block is
+	// real before this sleep even starts), only for a generous, unambiguous assertion margin.
+	const postBlockHoldDuration = 2 * time.Second
+	time.Sleep(postBlockHoldDuration)
 	releaseFence := dbNow(t, pool)
 	require.NoError(t, tx1.Commit(ctx))
 
@@ -1306,8 +1382,26 @@ func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcross
 	require.NotNil(t, snap.PlaidCleanupPendingAt)
 	assert.False(t, snap.PlaidCleanupPendingAt.Before(releaseFence),
 		"plaid_cleanup_pending_at must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean the marker used transaction-start time instead and was backdated by the entire lock wait", releaseFence, *snap.PlaidCleanupPendingAt)
-	assert.True(t, snap.PlaidCleanupPendingAt.After(startFence.Add(lockHoldDuration/2)),
+	assert.True(t, snap.PlaidCleanupPendingAt.After(startFence.Add(postBlockHoldDuration/2)),
 		"plaid_cleanup_pending_at must NOT be anywhere near the removal transaction's own start (%v) — got %v", startFence, *snap.PlaidCleanupPendingAt)
+
+	// Issue #1413 Finding 2 (ROUND 21): retention_expires_at must ALSO reflect wall time across the
+	// same lock wait, not just plaid_cleanup_pending_at — both are written by the SAME UPDATE
+	// statement in the SAME transaction. Recover the anchor instant retention_expires_at was actually
+	// computed from (retention_expires_at minus the retentionMonths interval this call used) via
+	// Postgres's OWN make_interval arithmetic, never Go's — comparing a Go-computed calendar-month
+	// offset against a Postgres timestamptz is exactly the Go-time-vs-Postgres-time mixing this
+	// branch has already been bitten by four times.
+	require.NotNil(t, snap.RetentionExpiresAt)
+	var retentionAnchor time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT retention_expires_at - make_interval(months => $1) FROM users WHERE id = $2`,
+		testRetentionMonths, target.ID,
+	).Scan(&retentionAnchor))
+	assert.False(t, retentionAnchor.Before(releaseFence),
+		"retention_expires_at's anchor instant must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean the GDPR deletion deadline used transaction-start time instead and was backdated by the entire lock wait", releaseFence, retentionAnchor)
+	assert.True(t, retentionAnchor.After(startFence.Add(postBlockHoldDuration/2)),
+		"retention_expires_at's anchor instant must NOT be anywhere near the removal transaction's own start (%v) — got %v", startFence, retentionAnchor)
 }
 
 // TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears verifies the CAS

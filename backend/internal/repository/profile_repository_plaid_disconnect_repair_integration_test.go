@@ -1538,3 +1538,247 @@ func TestPlaidDisconnectRepair_Integration_1453ZeroRowsCase_KeepsMarkerAndIsNeve
 		assert.NotEqual(t, user.ID, c.ID, "a user with zero linked_items rows can never have a live item, so the candidate query's own live-item requirement excludes them regardless of marker age")
 	}
 }
+
+// ─── Issue #1413 Finding 1 (Medium, Codex review, PR #1443 follow-up, headline finding of this
+// round): grace must measure actual read-only time, not the marker's raw age ───────────────────────
+//
+// A comp SUSPENDS Plaid-disconnect eligibility (noActiveManualOverridePredicate excludes the row
+// while it's live), but plaid_cleanup_pending_at keeps aging regardless — round-13 deliberately left
+// it untouched by a comp grant, so it can already be arbitrarily old by the time a LATER comp lapses.
+// Round 10's removal-path anchor (removeUserTierOverrideUpdate, admin_user_repository.go, ROUND
+// 19/20) does not reach this at all: no writer runs when a comp simply lapses on its own clock with
+// nobody clicking "Remove Override" and the daily expiry job hasn't caught up yet — the marker is
+// exactly as stale as whatever cancelled the subscription in the first place, and the ENTIRE 72h
+// grace window can elapse while the user still has full comped access, disconnecting them the
+// instant the comp lapses with almost none of their OWN grace period spent.
+//
+// The fix (GetUsersNeedingPlaidDisconnectRepair, profile_repository.go) anchors the grace
+// comparison on GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at) instead of
+// plaid_cleanup_pending_at alone — the SAME rule removeUserTierOverrideUpdate's own lapse-anchor
+// CASE already expresses on the writer side (ROUND 19: anchor on manual_tier_ends_at when it is the
+// more recent loss-of-access instant). Both sites now say "grace runs from when access was actually
+// lost," from two different angles (a query predicate here, a write-time anchor there) — see each
+// site's own doc comment for the cross-reference, so they cannot silently drift apart.
+
+// TestPlaidDisconnectRepair_Integration_LapsedCompRestartsGraceFromLapseNotFromMarker is Finding 1's
+// own regression test, reached via the SAME production-writer-only pattern
+// TestPlaidDisconnectRepair_Integration_CompGrantedOverAlreadyCancelled_LapsedNeverRemoved_StillRepaired
+// established (raw SQL only for the override columns themselves, mirroring
+// TestPlaidDisconnectRepair_Integration_ExcludesLiveComp's own convention for that one piece of
+// state) — deliberately using the FULL 72h production-shaped grace period, not a near-zero one, so
+// the marker's raw age and the lapse's actual age fall on OPPOSITE sides of the grace cutoff.
+//
+// Scenario:
+//  1. plaid_cleanup_pending_at is stamped 100 hours ago — already past the 72h grace window on its
+//     own raw age.
+//  2. A comp is granted over this already-marked user (round-13: the marker survives, untouched) and
+//     lapses just 1 hour ago — well within 72h of actually losing access.
+//  3. The expiry job has NOT run — manual_tier_override/manual_tier_ends_at are still on the row,
+//     exactly the window Finding 1 exists to close.
+//
+// Falsifiability: reverting the query to a bare `plaid_cleanup_pending_at < clock_timestamp() -
+// make_interval(...)` (dropping GREATEST/manual_tier_ends_at) makes this test fail — the 100-hour-old
+// marker alone is already past grace, so the user would be wrongly selected minutes after actually
+// losing access.
+func TestPlaidDisconnectRepair_Integration_LapsedCompRestartsGraceFromLapseNotFromMarker(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_lapsedgrace_" + suffix,
+		Email:              "lapsedgrace-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	// Marker is 100 hours old — past the 72h grace window on its raw age alone.
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-100*time.Hour))
+
+	// Comp granted, then lapsed just 1 hour ago; the expiry job has not yet run, so the override
+	// columns are still present on the row exactly as Finding 1's scenario requires.
+	lapsed := time.Now().Add(-1 * time.Hour)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, lapsed, user.ID)
+	require.NoError(t, err)
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID,
+			"a comp that lapsed only 1 hour ago must still have ~71 hours of grace left, even though the marker's own raw timestamp is 100 hours old — grace must measure actual read-only time (since the lapse), not the marker's unrelated raw age")
+	}
+}
+
+// TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedByGreatest is the
+// brief's fourth reasoned case: a lapsed comp OLDER than the marker. Here manual_tier_ends_at
+// predates plaid_cleanup_pending_at, so GREATEST picks the marker (the larger/more recent of the
+// two) exactly as the bare, pre-fix comparison always did — this must behave IDENTICALLY to today,
+// proving the fix is a strict widening of the anchor (never earlier than the marker), not a
+// wholesale replacement of it.
+func TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedByGreatest(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_oldlapse_" + suffix,
+		Email:              "oldlapse-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	// Marker is 80 hours old — past the 72h grace window on its own, and MORE RECENT than the lapse
+	// below (a comp that lapsed long before this episode's marker was even written, e.g. an old
+	// comp the expiry job never got around to clearing, unrelated to the CURRENT cancellation).
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-80*time.Hour))
+	lapsed := time.Now().Add(-200 * time.Hour)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, lapsed, user.ID)
+	require.NoError(t, err)
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	found := false
+	for _, c := range candidates {
+		if c.ID == user.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "when the lapsed comp is OLDER than the marker, GREATEST must pick the marker — behavior must be identical to the pre-fix, marker-only comparison")
+}
+
+// TestStampMissingPlaidCleanupMarkers_Integration_ClockTimestampReflectsWallTimeAcrossLockWait is
+// Issue #1413 Finding 2's (Medium, Codex review, PR #1443 follow-up) OWN regression test for
+// StampMissingPlaidCleanupMarkers specifically — a separate statement, and a separate CALLER
+// (RetentionCleanupCheckWorker.repairPlaidDisconnects, not removeTierOverride), from the
+// admin_user_repository.go removal path's own lock-contention test
+// (TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait).
+//
+// The bug this closes: round-20 left StampMissingPlaidCleanupMarkers on NOW(), reasoning that a
+// single autocommit UPDATE has no earlier lock-acquiring statement in the same transaction and so
+// could not suffer the transaction-start-vs-statement-execution skew the removal path's fix closed.
+// That reasoning is wrong: NOW()/transaction_timestamp() is fixed at the (implicit) transaction's
+// BEGIN, which for a bare autocommit statement is essentially "when the statement was submitted" —
+// BEFORE Postgres acquires the row locks the UPDATE itself needs in order to actually write. If this
+// backstop's own WHERE clause happens to match a row a CONCURRENT transaction already holds locked
+// (e.g. an admin's RemoveUserTierOverride call, mid-transaction, on that exact row), this UPDATE
+// blocks waiting for that lock — and once unblocked, NOW() still reflects the pre-wait instant, not
+// the moment the row was actually written. See StampMissingPlaidCleanupMarkers's own doc comment
+// (profile_repository.go) for the full reasoning.
+//
+// Uses waitUntilBlockedBy (admin_user_repository_remove_tier_override_integration_test.go, same
+// package) as its synchronization barrier, for the identical Finding 3 reason that test's own doc
+// comment explains: a fixed time.Sleep only assumes the goroutine's statement has reached its
+// blocked lock wait, and proves neither that it has nor that this test is exercising real
+// contention at all.
+//
+// Falsifiability: reverting StampMissingPlaidCleanupMarkers's SQL from clock_timestamp() back to
+// NOW() makes this test fail — the stamped marker would land at (or a few milliseconds after)
+// startFence, well BEFORE the lock was actually released, instead of at or after releaseFence.
+// Verified by reverting and confirming the assertion below fails reliably across multiple runs, not
+// merely once (Issue #1413 Finding 3's own lesson: falsifiability must be checked, not assumed).
+func TestStampMissingPlaidCleanupMarkers_Integration_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_stamplockwait_" + suffix,
+		Email:              "stamplockwait-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Ineligible status, live linked item, NULL marker, no override — exactly the population
+	// StampMissingPlaidCleanupMarkers's own WHERE clause targets.
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+
+	// Connection 1: hold a real FOR UPDATE lock on the user row, forcing StampMissingPlaidCleanupMarkers's
+	// own UPDATE (below, on a separate connection via a goroutine) to block behind it when it tries
+	// to acquire the row lock needed to write this row's plaid_cleanup_pending_at.
+	tx1, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx1.Rollback(ctx) //nolint:errcheck // no-op after Commit below
+	var locked int
+	require.NoError(t, tx1.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&locked))
+
+	var tx1PID int32
+	require.NoError(t, tx1.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&tx1PID))
+
+	startFence := dbNow(t, pool)
+
+	type result struct {
+		healed int
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		healed, callErr := repo.StampMissingPlaidCleanupMarkers(ctx)
+		done <- result{healed, callErr}
+	}()
+
+	// Real barrier (Issue #1413 Finding 3): block here until the goroutine's own backend is
+	// CONFIRMED waiting on tx1's lock — not merely assumed to be, after a fixed sleep.
+	waitUntilBlockedBy(t, pool, tx1PID, 5*time.Second)
+
+	// Not load-bearing for correctness (waitUntilBlockedBy already proved the block is real) — only
+	// widens the assertion margin below.
+	const postBlockHoldDuration = 2 * time.Second
+	time.Sleep(postBlockHoldDuration)
+	releaseFence := dbNow(t, pool)
+	require.NoError(t, tx1.Commit(ctx))
+
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for StampMissingPlaidCleanupMarkers to complete after the lock was released")
+	}
+	require.NoError(t, res.err)
+	require.GreaterOrEqual(t, res.healed, 1, "the backstop must report this user healed")
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker)
+	assert.False(t, marker.Before(releaseFence),
+		"plaid_cleanup_pending_at must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean StampMissingPlaidCleanupMarkers used transaction-start time instead and was backdated by the entire lock wait", releaseFence, *marker)
+	assert.True(t, marker.After(startFence.Add(postBlockHoldDuration/2)),
+		"plaid_cleanup_pending_at must NOT be anywhere near the backstop's own transaction start (%v) — got %v", startFence, *marker)
+}

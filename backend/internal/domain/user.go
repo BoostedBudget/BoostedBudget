@@ -211,7 +211,10 @@ type User struct {
 	//
 	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. The
 	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueWithRetention(Occurrence),
-	// ExpireTrialIfNoOverride (all profile_repository.go), AdminUserRepository's
+	// ExpireTrialIfNoOverride, UpdateTrialStatus (all profile_repository.go — this last one's own
+	// eligible-status branch COALESCEs a fresh value in exactly like its siblings; see its doc
+	// comment for the "granting a trial to a cancelled user with an outstanding marker" case this
+	// closes), AdminUserRepository's
 	// removeUserTierOverrideUpdate (admin_user_repository.go, shared by RemoveUserTierOverride/
 	// RemoveUserTierOverrideIfMatches), profileRepository.StampMissingPlaidCleanupMarkers
 	// (profile_repository.go) — the one exception to "begins on a status transition" in the episode

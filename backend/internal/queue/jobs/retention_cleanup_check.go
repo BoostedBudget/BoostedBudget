@@ -865,14 +865,18 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// episode's cleanup already completed (e.g. every clearPlaidCleanupMarkerWithRetry attempt below
 	// failing after a successful disconnect) is NOT harmless residue the candidate query's live-item
 	// EXISTS clause quietly filters out forever — several comments across this branch said exactly
-	// that, and they were wrong. A comp granted and later removed over that stale marker
-	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it instead of
-	// starting a fresh episode, so a freshly-relinked bank inherits an already-expired grace window
-	// and gets disconnected with zero notice. Running this clear on every pass — same as the Stamp
-	// half — is what closes that window within one backstop interval instead of leaving it open
-	// indefinitely: as long as this runs at least once between a completed-but-unclear marker and a
-	// comp being granted over it, removeUserTierOverrideUpdate's COALESCE sees NULL and the later
-	// removal starts a genuinely fresh grace window.
+	// that, and they were wrong. At the time this was written, a comp granted and later removed over
+	// that stale marker resurrected it via removeUserTierOverrideUpdate's COALESCE
+	// (admin_user_repository.go) instead of starting a fresh episode, so a freshly-relinked bank
+	// inherited an already-expired grace window and got disconnected with zero notice. ROUND 18
+	// (admin_user_repository.go, removeUserTierOverrideSelectPrior's own doc comment) independently
+	// removed that COALESCE — should_mark_plaid_cleanup_pending's CASE now overwrites unconditionally
+	// — so THIS specific comp-involving path no longer depends on this method having run first
+	// either. This method is kept regardless: it still closes the population that scenario never
+	// depended on a comp for at all — a stale marker with zero live items that no comp is ever
+	// granted over, which nothing else in this codebase revisits. Running this clear on every pass —
+	// same as the Stamp half — is what closes THAT gap within one backstop interval instead of
+	// leaving it open indefinitely.
 	//
 	// Deliberately a SEPARATE non-fatal failure branch, not folded into the Stamp block above: mirrors
 	// StampMissingPlaidCleanupMarkers's own handling exactly (a persistently failing clear is also a
@@ -882,7 +886,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// misbehaving, not just that "the backstop" is unhappy.
 	if clearedCount, clearErr := w.profileRepo.ClearCompletedPlaidCleanupMarkers(ctx); clearErr != nil {
 		observability.PlaidCleanupBackstopFailuresTotal.Inc()
-		w.logger.Error("plaid_cleanup_pending_at stale-marker backstop FAILED — a marker left set after its episode's cleanup completed will not be cleared, so a later admin comp-removal's COALESCE can preserve that stale timestamp instead of starting a fresh grace window for a freshly-relinked bank; see ClearCompletedPlaidCleanupMarkers's doc comment",
+		w.logger.Error("plaid_cleanup_pending_at stale-marker backstop FAILED — a marker left set after its episode's cleanup completed will not be cleared, so a user with no live items stays uncorrected indefinitely; see ClearCompletedPlaidCleanupMarkers's doc comment",
 			"job_id", jobID, "error", clearErr)
 	} else if clearedCount > 0 {
 		w.logger.Info("plaid_cleanup_pending_at stale-marker backstop cleared completed-episode markers",
@@ -1157,13 +1161,16 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// timestamp, not a repeat billing/access risk" — that was WRONG, and is exactly Finding 1's
 	// headline finding: GetUsersNeedingPlaidDisconnectRepair's live-item EXISTS clause does keep this
 	// SAME episode from ever being reselected, but nothing stopped a LATER episode from inheriting the
-	// stale timestamp — an admin comp granted and removed over a stuck marker
-	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it instead of
-	// starting fresh, so a bank the user relinks in the meantime gets disconnected immediately, with
-	// zero grace, the next time this pass runs. ClearCompletedPlaidCleanupMarkers now nulls that stuck
-	// marker on the very next pass (see its own doc comment, profile_repository.go, for the full
-	// scenario and the #1453 exception it preserves), closing the gap within one backstop interval
-	// instead of leaving it open indefinitely. This does not change the return-nil decision itself —
+	// stale timestamp — at the time this was found, an admin comp granted and removed over a stuck
+	// marker resurrected it via removeUserTierOverrideUpdate's COALESCE (admin_user_repository.go)
+	// instead of starting fresh, so a bank the user relinks in the meantime got disconnected
+	// immediately, with zero grace, the next time this pass ran. ROUND 18 (admin_user_repository.go)
+	// independently removed that COALESCE, closing the comp-involving path on the writer side too —
+	// but a stale marker on a user no comp is EVER granted over gets no help from that fix. Clear
+	// closes that population: it nulls a stuck marker on the very next pass (see its own doc comment,
+	// profile_repository.go, for the full scenario and the #1453 exception it preserves), so this
+	// backstop's second gap is bounded to one repair-pass interval too. This does not change the
+	// return-nil decision itself —
 	// per-user error isolation here is still preserved for the same reasons stated above, and a
 	// persistent clear failure is already independently visible via its own Error log line and the
 	// shared PlaidCleanupBackstopFailuresTotal counter (see this function's Clear call site) — but it
