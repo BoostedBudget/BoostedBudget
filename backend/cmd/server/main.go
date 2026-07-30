@@ -1299,37 +1299,34 @@ func main() {
 			}
 
 			// Issue #930: Retention cleanup check (daily)
-			// Issue #1413: RetentionCleanupCheckUniqueOpts (retention_cleanup_check.go)
-			// documents the same shape below as the source of truth this must stay in sync
-			// with. UniqueOpts constrains to one check job in any non-terminal state AT
-			// ALL within a 23-hour window (job-level defense in depth only — the real
-			// correctness mechanism is ExecuteDeletion's work_claims claim, not this) so
-			// concurrent River clients/schedulers can't double-run the daily check.
+			//
+			// Issue #1413 Finding 2 (Codex review, PR #1443): InsertOpts (Queue + UniqueOpts) is
+			// built by jobs.RetentionCleanupCheckInsertOpts() rather than hand-written here — a
+			// previous version of this literal called jobs.RetentionCleanupCheckUniqueOpts() from
+			// NOWHERE, hand-copying its OWN independent (and stale) ByState list instead, so the
+			// round that added Completed to that function's ByState was a no-op in production: a
+			// completed retention job still failed to block a RunOnStart insertion after every
+			// process restart or leader election, silently re-running the 30-day/7-day GDPR
+			// pre-deletion notices and deleteExpiredAccounts on every deploy. This is the third
+			// "defined, tested, never wired" instance on this branch — see
+			// jobs.ManualTierOverrideExpiryCheckInsertOpts's doc comment (used one registration
+			// below this one) for the identical failure mode recurring in the sibling job. main.go
+			// now calls jobs.RetentionCleanupCheckInsertOpts() directly instead of hand-writing the
+			// InsertOpts literal, so main.go is no longer a second, independently-maintained
+			// expression of the same shape — a future change to jobs.RetentionCleanupCheckUniqueOpts()
+			// automatically propagates to what actually ships.
 			if retentionCleanupCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
 					func() (river.JobArgs, *river.InsertOpts) {
 						return jobs.RetentionCleanupCheckArgs{
-								TriggerSource: "periodic",
-							}, &river.InsertOpts{
-								Queue: "low",
-								UniqueOpts: river.UniqueOpts{
-									ByArgs:   false,
-									ByPeriod: 23 * time.Hour,
-									ByState: []rivertype.JobState{
-										rivertype.JobStateAvailable,
-										rivertype.JobStateScheduled,
-										rivertype.JobStateRunning,
-										rivertype.JobStateRetryable,
-										rivertype.JobStatePending,
-									},
-								},
-							}
+							TriggerSource: "periodic",
+						}, jobs.RetentionCleanupCheckInsertOpts()
 					},
 					// Issue #1413 P0: RunOnStart MUST be true — see
 					// jobs.RetentionCleanupCheckPeriodicOpts()'s doc comment for the full
-					// River in-memory-scheduler rationale. Safe only because the InsertOpts
-					// above carries UniqueOpts.
+					// River in-memory-scheduler rationale. Safe only because
+					// jobs.RetentionCleanupCheckInsertOpts() above always carries UniqueOpts.
 					jobs.RetentionCleanupCheckPeriodicOpts(),
 				))
 				appLogger.Info("Retention cleanup check periodic job configured (daily)")
@@ -1349,6 +1346,15 @@ func main() {
 			// noManualOverrideAtAllPredicate keeps a user out of the retention pipeline
 			// (profile_repository.go), so duplicate or missed runs directly affect whether
 			// accounts are ever deleted.
+			//
+			// Issue #1413 Finding 2 (Codex review, PR #1443): the IDENTICAL failure mode this
+			// comment describes recurred one job ABOVE this one — the retention cleanup check's
+			// periodic registration hand-wrote its own InsertOpts literal instead of calling
+			// jobs.RetentionCleanupCheckInsertOpts(), the fix G3 established here. That was the
+			// third "defined, tested, never wired" instance on this branch; it is now fixed the
+			// same way. If a THIRD job's registration is ever found hand-writing UniqueOpts
+			// instead of calling its own *InsertOpts() builder, treat it as this same recurring
+			// class of bug, not a one-off.
 			if manualTierOverrideExpiryCheckWorker != nil {
 				periodicJobs = append(periodicJobs, river.NewPeriodicJob(
 					river.PeriodicInterval(24*time.Hour),
