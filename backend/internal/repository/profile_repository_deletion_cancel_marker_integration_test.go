@@ -80,6 +80,22 @@ func TestCancelDeletion_Integration_ClearsStaleMarkerRestoresFullGraceWindow(t *
 	// Act: the user changes their mind and cancels the deletion.
 	require.NoError(t, repo.CancelDeletion(ctx, user.ID))
 
+	// Discriminating assertion — this is the one that locks in NULL rather than NOW(), and without it
+	// EVERY other assertion in this test is satisfied by the plausible WRONG fix. If CancelDeletion
+	// wrote clock_timestamp() directly instead of NULL: the candidate query below would not select a
+	// fresh marker either; StampMissingPlaidCleanupMarkers would simply SKIP this row (its WHERE
+	// requires plaid_cleanup_pending_at IS NULL), leaving the value CancelDeletion had just written —
+	// still inside the WithinDuration tolerance further down. So the whole test would pass while the
+	// decision it exists to protect had been reversed.
+	//
+	// Writing NOW() directly is wrong because it stamps a marker unconditionally, including for a user
+	// whose episode is NOT open (e.g. they resubscribed while the deletion request was pending) —
+	// manufacturing exactly the phantom rows #1453 tracks. NULL delegates that judgement to the
+	// backstop, which stamps only when an episode is genuinely open. Two facts, two sources.
+	afterCancel := readPlaidMarkerRow(t, pool, user.ID)
+	assert.Nil(t, afterCancel.marker,
+		"CancelDeletion must NULL plaid_cleanup_pending_at and let StampMissingPlaidCleanupMarkers decide whether an episode is still open — writing NOW() directly would stamp a marker even for a user whose episode has already closed")
+
 	// THE assertion that matters: immediately after cancellation, with no repair pass having run
 	// yet, this user must NOT be selected for repair. Before the fix, they ARE selected — the
 	// stale marker (frozen at staleMarker, now visible again) is already far past the grace
