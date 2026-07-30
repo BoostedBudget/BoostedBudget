@@ -864,7 +864,20 @@ func TestAdminUserService_UpdateUserTier_ClerkFailure_StillSucceeds(t *testing.T
 
 	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, (*time.Time)(nil)).
 		Return(repository.UpdateTierRow{ClerkUserID: "clerk_x", SubscriptionTier: "premium", SubscriptionStatus: "active"}, nil)
-	mockClerk.On("UpdateUserMetadata", ctx, "clerk_x", mock.Anything).Return(errors.New("clerk is down"))
+	// Issue #1413 (Codex review, PR #1443 follow-up — Finding 6): mock.Anything on a Clerk payload
+	// path hides exactly the regression this whole matcher family exists to catch — see the
+	// Household4 test above for the established len(m) == 3 standard. Tightened to the same exact
+	// key-set check; falsified against a broken ClerkPublicMetadata() (domain/user.go) that
+	// returned "tier": "premium" instead of nil, which mock.Anything did not catch.
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_x", mock.MatchedBy(func(m map[string]interface{}) bool {
+		tierVal, hasTierKey := m["subscription_tier"]
+		statusVal, hasStatusKey := m["subscription_status"]
+		nilTierVal, hasNilTierKey := m["tier"]
+		return len(m) == 3 &&
+			hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "active" &&
+			hasNilTierKey && nilTierVal == nil
+	})).Return(errors.New("clerk is down"))
 
 	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
 	require.NoError(t, err, "Clerk sync failure must not fail the overall call")

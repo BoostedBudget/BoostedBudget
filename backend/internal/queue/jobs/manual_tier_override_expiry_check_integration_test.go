@@ -137,8 +137,22 @@ func TestManualTierOverrideExpiryCheckWorker_Integration_ExpiresAndRearmsRetenti
 	require.NoError(t, err)
 
 	mockClerk := new(mockClerkService)
+	// Issue #1413 (Codex review, PR #1443 follow-up — Finding 6): pin the exact key set
+	// ({subscription_tier, subscription_status, tier}, len(metadata) == 3), matching the standard
+	// already established in manual_tier_override_expiry_check_test.go and
+	// admin_user_service_test.go. A two-key check (this matcher's previous shape) silently accepted
+	// a payload missing "tier": nil — the key whose entire purpose is retroactively cleaning up a
+	// poisoned Clerk user — or one carrying extra keys; falsified against a broken
+	// ClerkPublicMetadata() (domain/user.go) that returned "tier": "premium" instead of nil before
+	// this tightening, which the old two-key matcher did not catch.
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_"+suffix, mock.MatchedBy(func(metadata map[string]interface{}) bool {
-		return metadata["subscription_tier"] == "premium" && metadata["subscription_status"] == "cancelled"
+		tierVal, hasTierKey := metadata["subscription_tier"]
+		statusVal, hasStatusKey := metadata["subscription_status"]
+		nilTierVal, hasNilTierKey := metadata["tier"]
+		return len(metadata) == 3 &&
+			hasTierKey && tierVal == "premium" &&
+			hasStatusKey && statusVal == "cancelled" &&
+			hasNilTierKey && nilTierVal == nil
 	})).Return(nil)
 
 	worker := NewManualTierOverrideExpiryCheckWorker(ManualTierOverrideExpiryCheckWorkerDeps{

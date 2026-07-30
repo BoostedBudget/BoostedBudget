@@ -32,31 +32,45 @@ import (
 // though the side effect were done.
 var ErrSideEffectClaimBusy = errors.New("side-effect claim held by another flow")
 
-// ErrCleanupAborted is returned by DisconnectAllUserItemsIfEligible (via cleanupItems) when the
-// per-item eligibility recheck reports the user is no longer eligible partway through the item
-// loop — e.g. an admin granted a comp mid-run. Issue #1413 round-14 H1 (Codex review): before
-// this sentinel existed, that outcome returned nil, indistinguishable from "every item was
-// attempted and none remained". repairPlaidDisconnects (retention_cleanup_check.go) treated any
-// nil return as full completion and called ClearPlaidCleanupPendingIfMatches — and round-13
-// (36455e78) had already stopped a comp grant from touching the marker, so the CAS guard on that
-// clear still matched and the clear SUCCEEDED, permanently hiding a user with live linked items
-// from the only code path that ever disconnects them.
+// ErrCleanupAborted is returned by cleanupItems (via any of its three callers — RemoveAllUserItems,
+// DisconnectAllUserItems, DisconnectAllUserItemsIfEligible) whenever the pass finishes without
+// attempting every live linked item for the user, for either of TWO distinct reasons:
+//
+//  1. The per-item eligibility recheck (DisconnectAllUserItemsIfEligible only) reports the user is
+//     no longer eligible partway through the item loop — e.g. an admin granted a comp mid-run.
+//     Issue #1413 round-14 H1 (Codex review): before this sentinel existed, that outcome returned
+//     nil, indistinguishable from "every item was attempted and none remained".
+//     repairPlaidDisconnects (retention_cleanup_check.go) treated any nil return as full completion
+//     and called ClearPlaidCleanupPendingIfMatches — and round-13 (36455e78) had already stopped a
+//     comp grant from touching the marker, so the CAS guard on that clear still matched and the
+//     clear SUCCEEDED, permanently hiding a user with live linked items from the only code path
+//     that ever disconnects them.
+//  2. A linked item was created (by a path outside this call's side-effect claim — LinkAccounts is
+//     the only production inserter, see account_service.go) AFTER cleanupItems's initial fetch, so
+//     the loop never even saw it. Issue #1413 H1 residue (Codex review, PR #1443 follow-up): reason
+//     1's fix computed abortedCount only over the originally-fetched slice, so a pass that
+//     successfully attempted (or correctly skipped) every item it DID see still returned nil —
+//     verifyNoNewLinkedItemAppeared (below) is what catches this reason.
 //
 // This is neither success nor failure — like ErrSideEffectClaimBusy, it is a correct, EXPECTED
-// outcome (do not disconnect a user Plaid recheck says is no longer eligible), not a Plaid error:
-// callers must not log it at Warn or count it against a failure metric. Some items may already
-// have been disconnected (and are durably marked so via MarkItemsDisconnected) before the abort;
-// others were deliberately never attempted. errors.Is-checkable so a caller can tell this apart
-// from both a clean completion (nil) and a genuine per-item failure (the errors.Join-wrapped
-// error cleanupItems returns when itemErrs is non-empty) — and, critically, so it knows NOT to
-// treat this as "cleanup finished": the marker must be LEFT SET so the user is re-considered on a
-// future run once the comp (or whatever made them ineligible) lapses.
+// outcome (more work exists than this pass attempted, for a legitimate reason), not a Plaid error:
+// callers must not log it at Warn or count it against a failure metric, for either reason. Some
+// items may already have been disconnected (and are durably marked so via MarkItemsDisconnected)
+// before the abort; others were deliberately never attempted. errors.Is-checkable so a caller can
+// tell this apart from both a clean completion (nil) and a genuine per-item failure (the
+// errors.Join-wrapped error cleanupItems returns when itemErrs is non-empty) — and, critically, so
+// it knows NOT to treat this as "cleanup finished": for repairPlaidDisconnects specifically, the
+// marker must be LEFT SET so the user is re-considered on a future run.
 //
-// Never returned when the recheck itself errors (eligibility could not be determined at all) —
-// that branch is fail-closed and already surfaces as a genuine, non-nil error via the
-// errors.Join aggregation below, which callers must treat as a real failure (Warn-logged,
-// counted), not this benign sentinel.
-var ErrCleanupAborted = errors.New("plaid item cleanup aborted before completion: eligibility recheck reported the user no longer eligible; some items were not attempted")
+// Callers do not need to (and cannot cheaply) distinguish WHICH of the two reasons produced this
+// sentinel — the correct action is identical either way: don't treat it as done, retry later.
+//
+// Never returned when the recheck itself errors (eligibility could not be determined at all), nor
+// when verifyNoNewLinkedItemAppeared's own re-fetch fails (a genuine infrastructure error, not "new
+// item found") — both of those branches are fail-closed and already surface as a genuine, non-nil
+// error, which callers must treat as a real failure (Warn-logged, counted), not this benign
+// sentinel.
+var ErrCleanupAborted = errors.New("plaid item cleanup aborted before completion: some linked item(s) were not attempted")
 
 // plaidDisconnectSideEffectLease is the lease requested for repository.ActionPlaidDisconnectUser.
 // Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, pastDueClaimLease,
@@ -160,7 +174,10 @@ type PlaidItemCleanupService interface {
 	// returning nil, which would silently reopen H6.
 	//
 	// Returns a non-nil error if the initial repository query fails, or if one or more items
-	// failed to be removed from Plaid (wrapping each underlying error via errors.Join).
+	// failed to be removed from Plaid (wrapping each underlying error via errors.Join). Issue
+	// #1413 H1 residue (Codex review, PR #1443 follow-up): also returns ErrCleanupAborted
+	// (errors.Is-checkable, not a Plaid error) if a NEW linked item was created for this user
+	// after this call's initial fetch — see ErrCleanupAborted's doc comment.
 	RemoveAllUserItems(ctx context.Context, userID string) error
 
 	// RemoveItem calls Plaid /item/remove for a single linked item.
@@ -185,6 +202,9 @@ type PlaidItemCleanupService interface {
 	//
 	// Returns error only if the initial repository query fails.
 	// Plaid API errors are logged but processing continues.
+	// Issue #1413 H1 residue (Codex review, PR #1443 follow-up): also returns ErrCleanupAborted
+	// (errors.Is-checkable, not a Plaid error) if a NEW linked item was created for this user
+	// after this call's initial fetch — see ErrCleanupAborted's doc comment.
 	DisconnectAllUserItems(ctx context.Context, userID string) error
 
 	// DisconnectAllUserItemsIfEligible behaves exactly like DisconnectAllUserItems, except recheck
@@ -212,6 +232,15 @@ type PlaidItemCleanupService interface {
 	// fail-closed, and that error IS surfaced (distinct from, and always taking priority over,
 	// ErrCleanupAborted — see cleanupItems's doc comment). Either way, items already removed
 	// before the abort stay removed and durably marked.
+	//
+	// Separately (Issue #1413 H1 residue, Codex review, PR #1443 follow-up): even when every
+	// originally-fetched item is attempted (no recheck-triggered abort) and none fail, this method
+	// still returns ErrCleanupAborted — never nil — if a NEW linked item was created for this user
+	// after the initial fetch (e.g. by LinkAccounts, which does not participate in this call's
+	// side-effect claim). See ErrCleanupAborted's doc comment and
+	// plaidItemCleanupService.verifyNoNewLinkedItemAppeared for the full contract. This applies to
+	// all three methods on this interface, not just this one — RemoveAllUserItems and
+	// DisconnectAllUserItems share the same cleanupItems implementation.
 	DisconnectAllUserItemsIfEligible(ctx context.Context, userID string, recheck func(ctx context.Context) (bool, error)) error
 
 	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
@@ -378,8 +407,17 @@ type fetchLinkedItemsFn func(ctx context.Context, userID string) ([]domain.Linke
 //     the caller — via the same errors.Join aggregation as a genuine per-item failure, taking
 //     priority over ErrCleanupAborted (see the return logic at the bottom of this function).
 //     recheck is nil for RemoveAllUserItems/DisconnectAllUserItems, preserving their exact
-//     pre-round-7 behavior (and this function never returns ErrCleanupAborted for either, since
-//     there is no recheck to abort on).
+//     pre-round-7 loop behavior — but (see the next bullet) this does NOT mean those two never
+//     return ErrCleanupAborted at all; they can, for the separate reason below.
+//   - Issue #1413 H1 residue (Codex review, PR #1443 follow-up): AFTER the loop (or the "no items"
+//     branch) finishes with no genuine per-item failure and no recheck-triggered abort, this
+//     function re-fetches ONE more time and checks for any item whose ID was not part of the
+//     ORIGINAL fetch above — i.e. one created (by a path outside this claim, such as LinkAccounts)
+//     after cleanupItems started. If one is found, ErrCleanupAborted is returned here too, even
+//     though there was no recheck to trigger the round-7/round-14 abort path — so, unlike the
+//     stale pre-this-fix assumption, RemoveAllUserItems and DisconnectAllUserItems (recheck == nil)
+//     CAN return ErrCleanupAborted, via this check specifically. See ErrCleanupAborted's doc
+//     comment and verifyNoNewLinkedItemAppeared (below) for the full contract.
 //   - Issue #1413 round-14 (Codex review): a residual, IRREDUCIBLE TOCTOU remains between a
 //     per-item recheck reporting eligible and the actual Plaid /item/remove call two lines later
 //     — a comp could be granted in that exact window and this item would still be disconnected.
@@ -407,9 +445,19 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 			return fmt.Errorf("failed to get linked items for user %s: %w", userID, err)
 		}
 
+		// Issue #1413 H1 residue (Codex review, PR #1443 follow-up): every item ID seen on THIS
+		// fetch, so the post-loop re-verification below can tell a genuinely NEW item — created
+		// after this fetch by a path that does not participate in this call's side-effect claim —
+		// apart from one this pass already knew about and handled. See that check's doc comment
+		// for the full contract.
+		knownItemIDs := make(map[string]struct{}, len(items))
+		for _, item := range items {
+			knownItemIDs[item.ID] = struct{}{}
+		}
+
 		if len(items) == 0 {
 			s.logger.Info("no linked items to clean up for user", "user_id", userID)
-			return nil
+			return s.verifyNoNewLinkedItemAppeared(ctx, userID, fetch, knownItemIDs)
 		}
 
 		s.logger.Info("cleaning up Plaid items for user",
@@ -513,6 +561,60 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 			return fmt.Errorf("%w for user %s (%d of %d item(s) not attempted)",
 				ErrCleanupAborted, userID, abortedCount, len(items))
 		}
-		return nil
+		return s.verifyNoNewLinkedItemAppeared(ctx, userID, fetch, knownItemIDs)
 	})
+}
+
+// verifyNoNewLinkedItemAppeared is cleanupItems's post-loop guard against the H1 residue (Issue
+// #1413, Codex review, PR #1443 follow-up): round-14's ErrCleanupAborted fix closed the case where
+// a mid-loop recheck aborts partway through the ORIGINALLY-fetched items slice, but abortedCount is
+// still computed only over that same slice. An item created by a path that does not participate in
+// cleanupItems's side-effect claim — LinkAccounts (account_service.go) is the only production
+// inserter into linked_items, confirmed by an audit of every repository.LinkedItemRepository
+// consumer — AFTER the fetch at the top of cleanupItems is invisible to everything above: the loop
+// (or the "no items" branch) completes having never even seen it, itemErrs stays empty, and
+// abortedCount stays 0. Returning nil at that point would tell the caller "fully done" while that
+// item is still live and was never attempted.
+//
+// repairPlaidDisconnects (retention_cleanup_check.go) is the concrete consumer this protects: a nil
+// return there clears plaid_cleanup_pending_at — the ONLY marker that makes a read-only user a
+// repair candidate again — permanently hiding the new item from the one code path that ever
+// disconnects it.
+//
+// Called ONLY from the two return paths that would otherwise report nil (the "no items" branch and
+// the final return of the main path) — a genuine per-item failure or a recheck-triggered abort must
+// still take priority and return before ever reaching this, per cleanupItems's existing precedence
+// rule.
+//
+// Re-fetching (rather than diffing against something cheaper) is deliberate: every item from the
+// ORIGINAL fetch has, by the time this runs, either been durably marked 'disconnected' (a fresh
+// success) or already carried that status (skipped) — so any item this second fetch returns whose
+// ID is NOT in knownItemIDs (the original fetch's ID set) must be one this pass never attempted.
+//
+// Reuses ErrCleanupAborted rather than a new sentinel: every existing caller already treats it
+// generically as "not actually done, do not clear the marker, this is benign and expected" —
+// repairPlaidDisconnects's errors.Is(disconnectErr, ErrCleanupAborted) branch does not distinguish
+// WHY the loop didn't cover every item, and RemoveAllUserItems/DisconnectAllUserItems's callers
+// (deletion, past-due dunning, the cancellation webhook) already treat any non-
+// ErrSideEffectClaimBusy error as "abort this attempt, retry next run" — exactly the safe behavior
+// for a newly-appeared live item this pass never touched. No caller-side change is required.
+//
+// A failure of THIS re-fetch itself (a genuine infrastructure error, not "new item found") is
+// surfaced as a plain wrapped error — deliberately NOT ErrCleanupAborted — so it is NOT mistaken
+// for the benign signal and is treated (and counted) as a real failure by every caller.
+func (s *plaidItemCleanupService) verifyNoNewLinkedItemAppeared(ctx context.Context, userID string, fetch fetchLinkedItemsFn, knownItemIDs map[string]struct{}) error {
+	freshItems, err := fetch(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to verify no new linked items appeared for user %s after cleanup: %w", userID, err)
+	}
+	for _, item := range freshItems {
+		if _, known := knownItemIDs[item.ID]; known {
+			continue
+		}
+		s.logger.Info("Plaid item cleanup: a new linked item appeared after the initial fetch and was never attempted — leaving cleanup marked incomplete",
+			"user_id", userID, "item_id", item.ID)
+		return fmt.Errorf("%w for user %s (a linked item was created after cleanup's initial fetch and was never attempted)",
+			ErrCleanupAborted, userID)
+	}
+	return nil
 }
