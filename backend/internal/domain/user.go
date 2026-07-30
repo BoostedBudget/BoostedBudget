@@ -79,10 +79,26 @@ type User struct {
 	//   plaid_cleanup_pending_at is non-NULL EXACTLY WHEN an ineligibility EPISODE has begun —
 	//   i.e. domain.SubscriptionStatus(subscription_status).IsEligibleForPlaidDisconnectRepair()
 	//   is true (raw status is 'inactive' or 'cancelled') — AND outstanding Plaid cleanup for that
-	//   episode has not yet completed. Its value is the instant the CURRENT episode began — never
-	//   an earlier episode's (a stale write must not resurrect a value a newer episode already
+	//   episode MAY not yet have completed. Its value is the instant the CURRENT episode began —
+	//   never an earlier episode's (a stale write must not resurrect a value a newer episode already
 	//   superseded) and never a later one's (a fresh episode must get its OWN fresh value, not the
 	//   survivor of a stale COALESCE).
+	//
+	//   Round-15: note "MAY not yet have completed" — the marker is deliberately OPTIMISTIC, and
+	//   this is a weakening of the round-13/round-14 wording, made knowingly. Writers cannot decide
+	//   reliably whether cleanup is still outstanding, because that depends on the linked_items
+	//   lifecycle, which they do not serialize against: the override-removal path's liveness-gated
+	//   stamp lost a race with LinkAccounts (its EXISTS is a snapshot, and FOR UPDATE locks the
+	//   users row, not linked_items — so a held lock merely delays the concurrent insert until after
+	//   the admin's commit, producing the leak rather than preventing it). Between "missed stamp =
+	//   permanent, unrecoverable leak (live bank connections never disconnected)" and "spurious
+	//   stamp = phantom row the repair query already filters out", writers must err toward stamping.
+	//   So: a non-NULL marker means cleanup MIGHT be outstanding, and
+	//   GetUsersNeedingPlaidDisconnectRepair's live-item EXISTS is the sole authority on whether it
+	//   actually is. A marker with zero live items is an accepted phantom (#1453 — which this makes
+	//   an ongoing population rather than a historical one), NOT a violation. What remains strict,
+	//   and what every writer must still hold, is the LEAK direction: never a NULL marker while an
+	//   episode is open, and never a marker while no episode is open.
 	//
 	//   Deliberately NOT part of this invariant: manual_tier_override. Whether the user carries a
 	//   currently-active admin comp is a function of WALL-CLOCK TIME (HasActiveManualOverride()
@@ -116,17 +132,20 @@ type User struct {
 	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride (all
 	// profile_repository.go), and AdminUserRepository's removeUserTierOverrideUpdate
 	// (admin_user_repository.go, shared by RemoveUserTierOverride/RemoveUserTierOverrideIfMatches).
-	// Round-14 finding M1 (Codex review): this last site's should_mark_plaid_cleanup_pending CASE
-	// previously fired for ANY prior override on an inactive/cancelled user regardless of whether
-	// cleanup was actually still outstanding — reachable via the ordinary, non-imported path (cancel
-	// -> repair completes and clears the marker -> comp granted over the now-cleaned-up user ->
-	// comp removed while raw status is still ineligible), re-arming a phantom marker for an episode
-	// that had already ended. It is now additionally gated on liveLinkedItemExistsClause (the same
-	// live-item check GetUsersNeedingPlaidDisconnectRepair's own query uses for "cleanup genuinely
-	// outstanding") — see that CASE's own doc comment for the full reasoning. It still serves its
-	// original purpose too (a user whose raw status was already ineligible before ever gaining a
-	// marker, e.g. an imported/backfilled row), and is a no-op COALESCE in the ordinary
-	// comp-over-already-churned-BUT-still-uncleaned-up case, since that marker is already set. Not
+	// Round-14 finding M1, and its round-15 REVERSAL — read both halves, the second supersedes the
+	// first: round-14 gated this last site's should_mark_plaid_cleanup_pending CASE on
+	// liveLinkedItemExistsClause, because firing for ANY prior override on an inactive/cancelled
+	// user re-armed a phantom marker for an already-ended episode (cancel -> repair completes and
+	// clears -> comp granted over the cleaned-up user -> comp removed while raw status is still
+	// ineligible). Round-15 REMOVED that gate again and restored the unconditional stamp: the gate
+	// introduced a strictly worse bug, losing a race with LinkAccounts as described in the invariant
+	// note above, and no lock available to this repository can close it (LinkAccounts' insert is an
+	// independent autocommit statement, so locking only reorders the interleaving into the leak).
+	// A phantom marker is untidy; a missed one is an unrecoverable leak. The stamp still serves its
+	// original purpose (a user whose raw status was already ineligible before ever gaining a marker,
+	// e.g. an imported/backfilled row) and is a no-op COALESCE whenever the marker is already set.
+	// The two round-14 M1 regression tests were renamed and flipped (Nil -> NotNil) rather than left
+	// silently broken, and assertPlaidMarkerInvariant was relaxed to match — see its own comment. Not
 	// a SET/CLEAR site: UpdateSubscriptionStatus (Issue #1413 round-14 finding L1) — it writes
 	// subscription_status directly but never touches this column at all; see its own doc comment
 	// for why it must not be used for any transition into or out of a read-only status. The known
