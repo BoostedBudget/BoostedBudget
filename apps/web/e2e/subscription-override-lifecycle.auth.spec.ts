@@ -371,7 +371,17 @@ test.describe('Subscription override lifecycle', () => {
     await expect(page.getByRole('alert')).toContainText(/your subscription has expired/i)
 
     const guardWrapper = page.locator('[title="Resubscribe to customize your dashboard"]').first()
-    await expect(guardWrapper).toBeVisible()
+    // Longer timeout on THIS wait only, and only because `networkidle` above can resolve before
+    // React has finished rendering the guard. It is a race against render, not against the
+    // behaviour: the `getByRole('alert')` assertion immediately above has already proven the page
+    // loaded AND that the user is genuinely read-only again, so if the guard were truly absent this
+    // still fails — the extra time cannot manufacture a pass. Needed because CI runs this spec
+    // roughly 3x slower than local (≈22s vs ≈7s) under full-suite parallel load on a self-hosted
+    // runner, which pushed this single lookup past the 10s default and failed 6/6 CI attempts while
+    // passing locally every time. Deliberately not applied to the assertions below: once the
+    // wrapper is visible they resolve immediately, and widening them would start masking real
+    // regressions in the blocked-state behaviour this step exists to verify.
+    await expect(guardWrapper).toBeVisible({ timeout: 30_000 })
     await expect(guardWrapper).toHaveAttribute('inert', '')
     await expect(guardWrapper.locator('[aria-disabled="true"]')).toBeVisible()
 
