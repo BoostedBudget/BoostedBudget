@@ -1883,9 +1883,17 @@ func (r *profileRepository) IsRetentionNotice7dEligibleForOccurrence(ctx context
 // minimal constant so GetUsersNeedingPlaidDisconnectRepair's GREATEST guard (below) can reuse it
 // instead of hand-copying a third rewording of a check noActiveManualOverridePredicate and
 // admin_user_repository.go's should_rearm_retention/should_mark_plaid_cleanup_pending already embed
-// inline. Deliberately NOT spliced into noActiveManualOverridePredicate's own definition, and
-// neither of those two existing call sites is refactored to use it — both stay byte-for-byte as
-// they were; this is a NEW, single-purpose extraction for NEW code, not a retrofit of old code.
+// inline. As of Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round),
+// noActiveManualOverridePredicate below also splices this constant in rather than restating its
+// own copy of the same "IS NOT NULL AND <> ''" text, closing the drift risk the original version of
+// this comment flagged (a change to one copy silently not reaching the other); the
+// should_rearm_retention/should_mark_plaid_cleanup_pending Go-side inline copies are untouched —
+// this substitution is scoped to this one production SQL string. The substitution is text-only:
+// `manual_tier_override IS NOT NULL` and `AND manual_tier_override <> ''` used to sit on their own
+// lines inside noActiveManualOverridePredicate's raw string; splicing this single-line constant in
+// their place changes only whitespace layout (a newline+indent becomes a space) — the token
+// sequence, and therefore the generated SQL Postgres actually parses, is identical. Verified via
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo, which still passes unchanged.
 // Says nothing about expiry — an empty-string override and a NULL override are the SAME "no real
 // comp" fact this predicate exists to test; manual_tier_ends_at is meaningless without a genuine,
 // non-empty manual_tier_override to pair it with (see the GREATEST guard's own doc comment below).
@@ -1920,10 +1928,18 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // noManualOverrideAtAllPredicate's "not even a lapsed one") is actually the correct rule to
 // enforce, because these are point-in-time transitions guarded against a comp granted in a race
 // window, not the retention-notice/hard-delete queries' cross-job-ordering hazard.
+//
+// Issue #1413 Finding 4 (Low, Codex review, PR #1443 second follow-up round): the non-empty-override
+// half of this predicate (`manual_tier_override IS NOT NULL AND manual_tier_override <> ''`) used to
+// be hand-restated here, duplicating manualTierOverrideNonEmptyClause's own copy of the identical
+// text — a real drift risk (if one were edited and not the other, cleanup could ignore an override
+// in this final predicate while its end date still deferred cleanup via the GREATEST guard below).
+// Now splices manualTierOverrideNonEmptyClause in directly; see that constant's own doc comment for
+// why this is a text-only (whitespace-only) change with no effect on the generated SQL. This
+// predicate's live-override RULE is unchanged in every other respect.
 const noActiveManualOverridePredicate = `
 	  AND NOT (
-	      manual_tier_override IS NOT NULL
-	      AND manual_tier_override <> ''
+	      ` + manualTierOverrideNonEmptyClause + `
 	      AND (manual_tier_ends_at IS NULL OR manual_tier_ends_at >= NOW())
 	  )
 `
