@@ -148,4 +148,87 @@ describe('UserDetailModal', () => {
 
     expect(mockOnClose).toHaveBeenCalledTimes(1)
   })
+
+  // Issue #1413 M10 follow-up: the admin list row already shows comp state (Comped chip +
+  // Override Status column) for a user with a manual tier override; the detail modal must show
+  // the same information, not "Premium (inactive)" with zero indication of the override.
+  describe('manual tier override (comp) rendering', () => {
+    it('should show a comp indicator and override label for a live, known-tier override', () => {
+      const futureEndsAt = new Date(Date.now() + 7 * 864e5).toISOString()
+      render(
+        <UserDetailModal
+          user={{
+            ...mockUser,
+            manual_tier_override: 'household_2',
+            manual_tier_ends_at: futureEndsAt,
+          }}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.getByText('Comped')).toBeInTheDocument()
+      expect(screen.getByText(/Expires in \d+d/)).toBeInTheDocument()
+      // Effective tier reflects the override, not the raw subscription_tier ('premium')
+      expect(screen.getByText(/household \(2\)/i)).toBeInTheDocument()
+    })
+
+    it('should NOT show a comp indicator when manual_tier_override names no configured tier', () => {
+      const futureEndsAt = new Date(Date.now() + 7 * 864e5).toISOString()
+      render(
+        <UserDetailModal
+          user={{
+            ...mockUser,
+            manual_tier_override: 'not_a_tier',
+            manual_tier_ends_at: futureEndsAt,
+          }}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      // Falls back to the raw subscription_tier, never renders the malformed value itself
+      expect(screen.getByText(/premium/i)).toBeInTheDocument()
+      expect(screen.queryByText('not_a_tier')).not.toBeInTheDocument()
+    })
+
+    it('should show the true base tier and an Expired label when the override has lapsed', () => {
+      const pastEndsAt = new Date(Date.now() - 7 * 864e5).toISOString()
+      render(
+        <UserDetailModal
+          user={{
+            ...mockUser,
+            subscription_tier: 'household_2',
+            manual_tier_override: 'premium',
+            manual_tier_ends_at: pastEndsAt,
+          }}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.getByText('Expired')).toBeInTheDocument()
+      // Renders the true base tier ('household_2'), not the expired override tier ('premium')
+      expect(screen.getByText(/household \(2\)/i)).toBeInTheDocument()
+    })
+
+    it('should render no comp indicator for a plain non-comped user (positive control)', () => {
+      render(
+        <UserDetailModal
+          user={mockUser}
+          loading={false}
+          open={true}
+          onClose={mockOnClose}
+        />
+      )
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Expires in|Permanent|Expired/)).not.toBeInTheDocument()
+    })
+  })
 })
