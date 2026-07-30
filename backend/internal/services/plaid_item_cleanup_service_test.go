@@ -558,11 +558,16 @@ func TestPlaidCleanup_RetryAfterPartialFailure_OnlyOutstandingItemsAttempted(t *
 	// outstanding. This mock call stands in for what the REAL repository would return; the
 	// repository-level proof that a disconnected item is actually excluded from
 	// GetActiveItemsByUserID lives in linked_item_repository_mark_disconnected_integration_test.go.
+	// Deliberately NOT .Once(): Issue #1413 (Codex review, PR #1443 follow-up — H1 residue)
+	// cleanupItems now re-fetches once more AFTER the loop, before reporting success, to verify no
+	// new item appeared mid-pass (see the H1-residue tests below for the dedicated coverage). This
+	// second pass's fetch is therefore called TWICE — once to drive the loop, once to verify — and
+	// an unlimited stub lets both calls return the same (fully-settled) item set.
 	secondPassItems := []domain.LinkedItem{
 		{ID: "item-1", UserID: userID, AccessToken: "tok-1"}, // still outstanding
 		{ID: "item-2", UserID: userID, AccessToken: "tok-2", Status: domain.LinkedItemStatusDisconnected},
 	}
-	mockRepo.On("GetByUserID", ctx, userID).Return(secondPassItems, nil).Once()
+	mockRepo.On("GetByUserID", ctx, userID).Return(secondPassItems, nil)
 	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil).Once()
 	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil).Once()
 
@@ -619,7 +624,10 @@ func TestPlaidCleanup_C2_ItemListReadAfterClaimNotBefore(t *testing.T) {
 	err := service.RemoveAllUserItems(ctx, userID)
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"Claim", "GetByUserID"}, callOrder,
+	// GetByUserID appears twice: once to drive the loop, once more for cleanupItems's post-loop
+	// re-verification (Issue #1413 H1 residue, Codex review PR #1443 follow-up) that no new item
+	// appeared mid-pass — see the dedicated H1-residue tests below. Both calls happen after Claim.
+	require.Equal(t, []string{"Claim", "GetByUserID", "GetByUserID"}, callOrder,
 		"the item list must be read AFTER the side-effect claim is won, not before — a stale pre-claim snapshot would miss an item LinkAccounts created in the gap")
 	mockPlaid.AssertCalled(t, "RemoveItem", ctx, "tok-late")
 }
@@ -777,4 +785,179 @@ func TestPlaidCleanup_DisconnectIfEligible_RecheckErrors_FailsClosedAbortsRemain
 	require.Error(t, err)
 	assert.ErrorIs(t, err, recheckErr)
 	mockPlaid.AssertNotCalled(t, "RemoveItem", mock.Anything, mock.Anything)
+}
+
+// ─── Issue #1413 H1 residue (Codex review, PR #1443 follow-up) ────────────────
+//
+// Round-14's ErrCleanupAborted fix (above) closed the mid-loop-recheck-abort case: abortedCount is
+// computed over the items slice fetched at the top of cleanupItems, so a recheck-triggered
+// `break itemLoop` correctly returns ErrCleanupAborted, not nil. But abortedCount is STILL computed
+// only over that same originally-fetched slice — an item created by a path that does not
+// participate in this call's side-effect claim (LinkAccounts, account_service.go:~413 — the only
+// production inserter into linked_items; confirmed by an audit of every repository.
+// LinkedItemRepository consumer) AFTER the fetch is invisible to the whole function. A loop that
+// successfully attempts (or correctly skips, as already-disconnected) every item it DID see still
+// reports nil — indistinguishable, to repairPlaidDisconnects, from "nothing left to do" — and the
+// worker clears plaid_cleanup_pending_at, the only marker that makes a read-only user a repair
+// candidate again, permanently hiding the untouched new item.
+//
+// The fix: cleanupItems now re-fetches once more, AFTER the loop (or the "no items" branch)
+// finishes, before ever reporting nil. Every item from the ORIGINAL fetch has, by that point,
+// either been durably marked 'disconnected' (a fresh success) or already carried that status
+// (skipped) — so any item this second fetch returns whose ID was NOT in the original fetch must be
+// one this pass never attempted. Reuses ErrCleanupAborted (not a new sentinel): every existing
+// caller already treats it generically as "not actually done, do not clear the marker, this is
+// benign and expected" — repairPlaidDisconnects's errors.Is(disconnectErr, ErrCleanupAborted)
+// branch does not distinguish WHY the loop didn't cover every item, and RemoveAllUserItems/
+// DisconnectAllUserItems's callers (deletion, past-due dunning, the cancellation webhook) already
+// treat any non-ErrSideEffectClaimBusy error as "abort this attempt, retry next run" — exactly the
+// safe behavior for a newly-appeared live item this pass never touched.
+
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAfterFetch_ReturnsAbortedNotNil is the
+// RemoveAllUserItems-path RED test for the H1 residue.
+//
+// Falsifiability: on cleanupItems as it existed before this fix (single fetch, no post-loop
+// re-verification), this test fails on the ErrorIs assertion below — err is nil, not
+// ErrCleanupAborted — even though item-2 (returned only by the SECOND GetByUserID stub, standing in
+// for a row LinkAccounts inserted after this pass's initial fetch) was never attempted.
+func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAfterFetch_ReturnsAbortedNotNil(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-new-item-appears"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	// Simulates the state a concurrent LinkAccounts call left behind by the time cleanupItems
+	// re-fetches: item-1 now disconnected (just marked above), plus a brand-new item-2 this pass's
+	// original fetch never saw.
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1", Status: domain.LinkedItemStatusDisconnected},
+		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err, "a live item created after the initial fetch must not be silently reported as full completion")
+	assert.ErrorIs(t, err, ErrCleanupAborted)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-2")
+}
+
+// TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsAfterLoopCompletes_ReturnsAbortedNotNil is the
+// repair-pass-shaped RED test for the H1 residue: this is the exact concrete scenario the finding
+// describes — a comp granted and removed inside one repairPlaidDisconnects iteration lets
+// LinkAccounts insert a new item this pass's fetch never saw, even though recheck reports the user
+// eligible for every item it DID attempt.
+func TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsAfterLoopCompletes_ReturnsAbortedNotNil(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-new-item-if-eligible"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-2", UserID: userID, AccessToken: "tok-2"},
+	}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	recheck := func(context.Context) (bool, error) { return true, nil }
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
+
+	require.Error(t, err, "the repair pass's marker must not be cleared while a newly-appeared item is still live")
+	assert.ErrorIs(t, err, ErrCleanupAborted)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-2")
+}
+
+// TestPlaidCleanup_NoItemsInitially_NewItemAppearsBeforeVerify_ReturnsAbortedNotNil closes the
+// narrowest form of the same race: the initial fetch finds nothing (the "no linked items" branch),
+// but a new item appears before the post-loop verification runs. This must not report nil either.
+func TestPlaidCleanup_NoItemsInitially_NewItemAppearsBeforeVerify_ReturnsAbortedNotNil(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-empty-then-new-item"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByUserID", ctx, userID).Return([]domain.LinkedItem{}, nil).Once()
+	postLoopItems := []domain.LinkedItem{{ID: "item-new", UserID: userID, AccessToken: "tok-new"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrCleanupAborted)
+	mockPlaid.AssertNotCalled(t, "RemoveItem")
+}
+
+// TestPlaidCleanup_GenuineFailureTakesPriority_NoRefetchAttempted proves the existing precedence
+// rule still holds with the post-loop check added: a genuine per-item failure must be reported as
+// itself, and cleanupItems must not even attempt the post-loop re-verification fetch in that case.
+func TestPlaidCleanup_GenuineFailureTakesPriority_NoRefetchAttempted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-genuine-failure-priority"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	// .Once() is deliberate: if cleanupItems regressed to ALWAYS re-fetching — even after a genuine
+	// per-item failure, which must return immediately per the existing priority rule — this stub
+	// would already be exhausted by the initial fetch, and the unexpected second call would panic
+	// ("mock: I don't know what to return"), failing this test loudly rather than silently passing.
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil).Once()
+
+	plaidErr := errors.New("plaid API error")
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(plaidErr)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, plaidErr, "a genuine per-item failure must still take priority over the new-item check")
+	assert.False(t, errors.Is(err, ErrCleanupAborted), "a genuine failure must be reported as itself, not conflated with the benign new-item-appeared signal")
+}
+
+// TestPlaidCleanup_VerifyRefetchFails_ReturnsError proves a failure of the post-loop verification
+// fetch itself (a genuine infrastructure error, not "new item found") is surfaced as a real error —
+// not silently swallowed into a nil "success".
+func TestPlaidCleanup_VerifyRefetchFails_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-refetch-fails"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	refetchErr := errors.New("database unavailable")
+	mockRepo.On("GetByUserID", ctx, userID).Return(nil, refetchErr).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, refetchErr)
+	assert.False(t, errors.Is(err, ErrCleanupAborted))
 }
