@@ -19,6 +19,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -128,6 +129,14 @@ func TestLinkedItemRepository_MarkItemsDisconnected_EmptyIDsIsNoop(t *testing.T)
 // status NOT IN ('disconnected', 'replaced') guard: a replaced item passed in by mistake must not
 // be flipped back to 'disconnected' — 'replaced' is a terminal soft-delete state from a re-link,
 // not an active connection that can be un-disconnected.
+//
+// Issue #1413 Medium finding (PR #1443 Codex review round 4): this is also the reachable,
+// legitimate scenario proving MarkItemsDisconnected must NOT turn a zero-rows-affected write into
+// an unconditional hard failure — the UPDATE affects zero rows here (the only given id is already
+// excluded by the WHERE guard), so the call now returns ErrNoLinkedItemsUpdated (errors.Is-
+// checkable) instead of the previous silent nil. See that sentinel's doc comment
+// (linked_item_repository.go) for why this must stay a distinguishable, non-escalated anomaly
+// rather than an ordinary error every caller treats as a genuine per-item failure.
 func TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -142,7 +151,9 @@ func TestLinkedItemRepository_MarkItemsDisconnected_AlreadyReplacedIsNotReverted
 	_, err := pool.Exec(ctx, `UPDATE linked_items SET status = 'replaced', replaced_at = NOW() WHERE id = $1`, item.ID)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.MarkItemsDisconnected(ctx, []string{item.ID}))
+	markErr := repo.MarkItemsDisconnected(ctx, []string{item.ID})
+	require.Error(t, markErr, "a write that matched zero rows must now be surfaced, not silently reported as success")
+	assert.True(t, errors.Is(markErr, ErrNoLinkedItemsUpdated), "a lone already-replaced item is a legitimate no-op, errors.Is-checkable via ErrNoLinkedItemsUpdated — not a generic error")
 
 	got, err := repo.GetByID(ctx, item.ID)
 	require.NoError(t, err)

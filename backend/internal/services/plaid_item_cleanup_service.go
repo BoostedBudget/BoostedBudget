@@ -524,12 +524,27 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 
 		if len(successIDs) > 0 {
 			if markErr := s.linkedItemRepo.MarkItemsDisconnected(ctx, successIDs); markErr != nil {
-				// Losing the per-item durable marker reopens H2's "duplicate call on retry" risk
-				// for these items — surface it rather than silently dropping it (a subsequent
-				// retry would just re-attempt them; ITEM_NOT_FOUND being mapped to success limits
-				// the actual damage to a wasted API call, not a real duplicate side effect, but a
-				// caller should still know this failed).
-				itemErrs = append(itemErrs, fmt.Errorf("failed to persist per-item cleanup state for %d item(s): %w", len(successIDs), markErr))
+				if errors.Is(markErr, repository.ErrNoLinkedItemsUpdated) {
+					// Issue #1413 Medium finding (PR #1443 Codex review round 4): a legitimate
+					// no-op, not a genuine per-item failure — every id in successIDs was already
+					// in a terminal state ('disconnected' or 'replaced') by the time this write
+					// ran (e.g. a lone already-'replaced' item swept in by RemoveAllUserItems's
+					// GetByUserID fetch, which does not filter by status). Logged for
+					// observability so an operator or a test CAN still detect it via errors.Is on
+					// the repository call directly, but escalating it into itemErrs here would
+					// turn an idempotent, expected no-op into a hard per-item failure — exactly
+					// the false-positive-abort failure mode #1453 (verifyNoNewLinkedItemAppeared,
+					// below) exists to avoid reproducing.
+					s.logger.Warn("MarkItemsDisconnected updated zero rows — every id was likely already disconnected/replaced",
+						"user_id", userID, "ids_count", len(successIDs), "error", markErr)
+				} else {
+					// Losing the per-item durable marker reopens H2's "duplicate call on retry" risk
+					// for these items — surface it rather than silently dropping it (a subsequent
+					// retry would just re-attempt them; ITEM_NOT_FOUND being mapped to success limits
+					// the actual damage to a wasted API call, not a real duplicate side effect, but a
+					// caller should still know this failed).
+					itemErrs = append(itemErrs, fmt.Errorf("failed to persist per-item cleanup state for %d item(s): %w", len(successIDs), markErr))
+				}
 			}
 		}
 
@@ -591,6 +606,16 @@ func (s *plaidItemCleanupService) cleanupItems(ctx context.Context, userID strin
 // success) or already carried that status (skipped) — so any item this second fetch returns whose
 // ID is NOT in knownItemIDs (the original fetch's ID set) must be one this pass never attempted.
 //
+// Issue #1413 #1453 (Codex review, PR #1443 follow-up): a new ID alone does NOT mean a live item
+// was missed — RemoveAllUserItems's GetByUserID fetch has no status filter at all, so this second
+// fetch can surface an item that was created AND ALREADY disconnected/replaced by some other path
+// before this re-fetch ran. That is phantom residue (#1453), not a leak — no live item was ever
+// unattended — so the comparison below is status-aware (isLiveLinkedItemStatus): only a new ID
+// that is ALSO still live triggers ErrCleanupAborted. Getting this wrong in the other direction is
+// the higher-stakes bug: RemoveAllUserItems is DeletionService's pre-cascade call, and
+// DeletionService aborts the ENTIRE GDPR deletion on any non-nil error from it — a false abort here
+// would block a user's deletion over residue that was never actually outstanding.
+//
 // Reuses ErrCleanupAborted rather than a new sentinel: every existing caller already treats it
 // generically as "not actually done, do not clear the marker, this is benign and expected" —
 // repairPlaidDisconnects's errors.Is(disconnectErr, ErrCleanupAborted) branch does not distinguish
@@ -611,10 +636,41 @@ func (s *plaidItemCleanupService) verifyNoNewLinkedItemAppeared(ctx context.Cont
 		if _, known := knownItemIDs[item.ID]; known {
 			continue
 		}
+		if !isLiveLinkedItemStatus(item.Status) {
+			// Issue #1413 #1453 (Codex review, PR #1443 follow-up): a new ID alone is NOT enough
+			// to conclude a live item was missed. RemoveAllUserItems's underlying fetch
+			// (GetByUserID) returns items in ANY status, so this second fetch can just as easily
+			// surface an item that was created AND ALREADY disconnected/replaced by some other
+			// path before this re-fetch ever ran — phantom residue (tracked separately as #1453),
+			// not a leak. Aborting cleanup here would falsely trip ErrCleanupAborted even though
+			// no live item remains — and DeletionService aborts a GDPR deletion on ANY non-nil
+			// error from this call chain, so a false positive here is a compliance failure, not
+			// mere untidiness. Only a LIVE new item (below) still triggers the abort.
+			s.logger.Info("Plaid item cleanup: a new item ID appeared after the initial fetch but is not live (already disconnected/replaced) — not treated as outstanding work",
+				"user_id", userID, "item_id", item.ID, "status", item.Status)
+			continue
+		}
 		s.logger.Info("Plaid item cleanup: a new linked item appeared after the initial fetch and was never attempted — leaving cleanup marked incomplete",
 			"user_id", userID, "item_id", item.ID)
 		return fmt.Errorf("%w for user %s (a linked item was created after cleanup's initial fetch and was never attempted)",
 			ErrCleanupAborted, userID)
 	}
 	return nil
+}
+
+// isLiveLinkedItemStatus reports whether status represents a still-live linked item — i.e. NOT
+// 'disconnected' or 'replaced' — the Go-side mirror of profile_repository.go's
+// liveLinkedItemExistsClause (`status IS NULL OR status NOT IN ('disconnected', 'replaced')`;
+// read-only for this task, see that constant's doc comment for the canonical SQL form and #1444's
+// rationale for the NULL arm). Used exclusively by verifyNoNewLinkedItemAppeared above to decide
+// whether a newly-appeared item ID is actually outstanding work or merely phantom residue (#1453).
+//
+// The SQL clause's `status IS NULL` arm has no Go-side counterpart here: every real repository
+// scan path this service fetches through (GetByUserID, GetActiveItemsByUserID —
+// linked_item_repository.go) already normalizes a NULL column to domain.LinkedItemStatusActive
+// via normalizeLinkedItemStatus before a domain.LinkedItem value exists at all, so a genuinely
+// NULL status is not a reachable Go-level input to this function; only the SQL clause needs that
+// explicit arm.
+func isLiveLinkedItemStatus(status domain.LinkedItemStatus) bool {
+	return status != domain.LinkedItemStatusDisconnected && status != domain.LinkedItemStatusReplaced
 }

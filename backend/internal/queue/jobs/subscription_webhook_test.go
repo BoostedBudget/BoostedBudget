@@ -1265,6 +1265,75 @@ func TestWorker_SubscriptionCanceled_SuccessfulDisconnect_ClearsPlaidMarker(t *t
 	mockProfileRepo.AssertCalled(t, "ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince)
 }
 
+// TestWorker_SubscriptionCanceled_ClearMarkerFails_RetriesThenLogsErrorNotEscalated is the Issue
+// #1413 #1453 (Codex review, PR #1443 follow-up) RED test: before this fix, a SINGLE failed
+// ClearPlaidCleanupPendingIfMatches attempt here was logged at Warn and swallowed — a transient DB
+// error at exactly this moment left plaid_cleanup_pending_at stuck non-NULL forever, since the
+// disconnect that just succeeded already removed the live linked item
+// GetUsersNeedingPlaidDisconnectRepair's own predicate requires to ever reselect this user again.
+// This brings the cancellation-webhook path into line with RetentionCleanupCheckWorker.
+// repairPlaidDisconnects's established pattern (retention_cleanup_check.go, same package): bounded
+// retry, then an Error-level log (not Warn) plus the shared failure counter once every attempt is
+// exhausted.
+//
+// Falsifiability: reverting processSubscriptionCanceled's clear step to a single unretried attempt
+// makes this test fail on the AssertNumberOfCalls assertion below (1 call, not
+// plaidCleanupMarkerClearMaxAttempts) and on the log-level assertion (no "level=ERROR" line — the
+// single-attempt code logs the failure at Warn only).
+func TestWorker_SubscriptionCanceled_ClearMarkerFails_RetriesThenLogsErrorNotEscalated(t *testing.T) {
+	worker, mockWebhookRepo, mockProfileRepo, mockClerk, _, _ := setupWorkerTest(t)
+	ctx := context.Background()
+
+	var logBuf bytes.Buffer
+	worker.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	mockPlaid := new(mockPlaidItemCleanupService)
+	worker.SetPlaidCleanupService(mockPlaid)
+
+	webhook := loadWebhookFixture(t, "subscription_canceled.json")
+	args := SubscriptionWebhookArgs{
+		WebhookID: "test-webhook-id-123",
+		EventID:   webhook.EventID,
+		EventType: "subscription.canceled",
+	}
+	job := createRiverJob(args)
+
+	preCancelUser := &domain.User{
+		ID:               "user_2abc123def456",
+		ClerkUserID:      "clerk_user_123",
+		SubscriptionTier: "premium",
+	}
+	pendingSince := time.Now().Add(-time.Hour)
+	postCancelUser := &domain.User{
+		ID:                    "user_2abc123def456",
+		ClerkUserID:           "clerk_user_123",
+		SubscriptionTier:      "premium",
+		SubscriptionStatus:    "cancelled",
+		PlaidCleanupPendingAt: &pendingSince,
+	}
+
+	mockWebhookRepo.On("GetByID", ctx, "test-webhook-id-123").Return(webhook, nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(preCancelUser, nil).Once()
+	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
+	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(postCancelUser, nil)
+	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
+	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
+	clearErr := errors.New("db unavailable")
+	mockProfileRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince).Return(false, clearErr)
+	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a persistently-failing marker clear must not fail the whole webhook — the cancellation/retention writes already succeeded")
+	mockProfileRepo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", plaidCleanupMarkerClearMaxAttempts)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "exhausting every retry must be logged at ERROR, not swallowed at Warn")
+	assert.Contains(t, logOutput, "user_2abc123def456", "the ERROR log must carry the identifying user_id")
+}
+
 // TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds tests that a nil plaidCleanupSvc is skipped gracefully.
 // Issue #896: Nil guard ensures existing tests continue to pass without wiring.
 func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {

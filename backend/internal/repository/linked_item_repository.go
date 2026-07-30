@@ -18,6 +18,25 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrNoLinkedItemsUpdated is returned by MarkItemsDisconnected when its UPDATE affected ZERO
+	// rows despite being given a non-empty ids slice (Issue #1413 Medium finding, PR #1443 Codex
+	// review round 4): before this fix, RowsAffected was never inspected, so a write that silently
+	// touched nothing (every given id already 'disconnected'/'replaced', excluded by this query's
+	// own WHERE guard — see MarkItemsDisconnected's doc comment) was indistinguishable from a
+	// genuine success to both a caller and a test.
+	//
+	// Deliberately still a case NOT to escalate to a hard failure: cleanupItems (plaid_item_
+	// cleanup_service.go), the only production caller, does not filter 'replaced' items out of
+	// the ids it passes here (only 'disconnected' items are skipped before ever reaching this
+	// write) — RemoveAllUserItems's GetByUserID fetch returns items in ANY status, so a lone
+	// already-'replaced' item legitimately reaching this call (e.g. Plaid's ITEM_NOT_FOUND mapped
+	// to success for an item replaced by a re-link before this pass ever ran) is a reachable,
+	// expected no-op, not a bug — see TestLinkedItemRepository_MarkItemsDisconnected_
+	// AlreadyReplacedIsNotReverted. Callers should treat this as a logged anomaly (errors.Is-
+	// checkable) rather than a genuine per-item failure — turning an idempotent no-op into a hard
+	// abort would reproduce the exact false-positive failure mode Issue #1413 #1453's sibling
+	// finding (verifyNoNewLinkedItemAppeared) exists to avoid.
+	ErrNoLinkedItemsUpdated = errors.New("MarkItemsDisconnected: update affected zero rows (all given ids already disconnected/replaced?)")
 )
 
 // normalizeLinkedItemStatus treats a NULL linked_items.status value as
@@ -123,6 +142,11 @@ type LinkedItemRepository interface {
 	// item's status stays untouched (still visible to GetActiveItemsByUserID / still present in
 	// GetByUserID with a non-disconnected status) instead of being silently marked done alongside
 	// its successful siblings. A nil or empty ids is a no-op (not an error).
+	//
+	// Returns ErrNoLinkedItemsUpdated (errors.Is-checkable) if the UPDATE affected zero rows
+	// despite a non-empty ids — see that sentinel's doc comment for why this is a reachable,
+	// legitimate no-op (not automatically a bug) and must not be conflated with a genuine
+	// database error.
 	MarkItemsDisconnected(ctx context.Context, ids []string) error
 
 	// GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user
@@ -1039,6 +1063,12 @@ func (r *linkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Context,
 // Issue #1413 round-8 Blocker 1: WHERE guard treats a NULL status as live too — see
 // MarkAllUserItemsDisconnected's doc comment above for why a bare `status NOT IN (...)` silently
 // excludes a NULL-status row under SQL three-valued logic.
+//
+// Issue #1413 Medium finding (PR #1443 Codex review round 4): the UPDATE's RowsAffected is now
+// inspected — previously only the query error was returned, so a write that matched zero rows
+// (every given id already excluded by the WHERE guard above) succeeded silently, indistinguishable
+// from a genuine write to both a caller and a test. See ErrNoLinkedItemsUpdated's doc comment for
+// why this is surfaced as an errors.Is-checkable sentinel rather than folded into a hard failure.
 func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -1054,8 +1084,14 @@ func (r *linkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []
 		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
 	`
 
-	_, err := r.db.Exec(ctx, query, now, ids)
-	return err
+	tag, err := r.db.Exec(ctx, query, now, ids)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: 0 of %d given id(s) matched", ErrNoLinkedItemsUpdated, len(ids))
+	}
+	return nil
 }
 
 // GetActiveItemsByUserID retrieves all active (non-replaced, non-disconnected) linked items for a user

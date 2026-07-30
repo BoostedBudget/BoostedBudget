@@ -1015,15 +1015,39 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// UpdateSubscriptionFromPaddle write, before the comp/claim logic above) as the CAS "expected"
 	// value — ClearPlaidCleanupPendingIfMatches, not the unconditional ClearPlaidCleanupPending, so a
 	// brand-new episode's marker (e.g. an admin comp granted then removed between that re-read and
-	// this point) survives untouched rather than being erased. A clear failure or CAS mismatch is
-	// logged and swallowed, not escalated: unlike SetRetentionDates above, losing this write cannot
-	// cause "never warned, never deleted" — it can only leave an already-fully-disconnected user's
-	// marker harmlessly set, which the live-item check makes inert, and retrying the whole webhook
-	// would just redo an already-idempotent disconnect for no benefit.
+	// this point) survives untouched rather than being erased. Losing this write cannot cause "never
+	// warned, never deleted" — unlike SetRetentionDates above — but leaving it set FOREVER is real
+	// phantom residue (#1453), not harmless: since the disconnect that just succeeded removed the
+	// very live linked item GetUsersNeedingPlaidDisconnectRepair's own EXISTS check requires,
+	// repairPlaidDisconnects can never reselect this user again to retry the clear either. Issue #1413
+	// #1453 (Codex review, PR #1443 follow-up): a single, swallowed clear attempt used to leave the
+	// marker stuck non-NULL on any transient DB error at exactly this moment — bring this into line
+	// with the identical fix already applied to RetentionCleanupCheckWorker.repairPlaidDisconnects's
+	// own marker clear (retention_cleanup_check.go, same package): retry up to
+	// plaidCleanupMarkerClearMaxAttempts times, then Error-log (not Warn) plus the shared failure
+	// counter if every attempt still fails. Still not escalated to fail the whole webhook — this
+	// handler's cancellation/retention writes already succeeded regardless of whether the marker
+	// clears, and retrying the whole webhook would just redo an already-idempotent disconnect for no
+	// benefit.
 	if w.plaidCleanupSvc != nil && freshUser.PlaidCleanupPendingAt != nil {
-		if cleared, clearErr := w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, *freshUser.PlaidCleanupPendingAt); clearErr != nil {
-			w.logger.Warn("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at — repair pass would harmlessly re-consider this user, but has nothing left to disconnect",
-				"user_id", userID, "error", clearErr)
+		expectedMarker := *freshUser.PlaidCleanupPendingAt
+		var cleared bool
+		var clearErr error
+		for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
+			cleared, clearErr = w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+			if clearErr == nil {
+				break
+			}
+			if attempt < plaidCleanupMarkerClearMaxAttempts {
+				w.logger.Warn("failed to clear plaid_cleanup_pending_at after subscription-cancelled Plaid disconnect — retrying",
+					"user_id", userID, "attempt", attempt, "error", clearErr)
+				time.Sleep(plaidCleanupMarkerClearRetryDelay)
+			}
+		}
+		if clearErr != nil {
+			w.logger.Error("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at after all retries — this user's Plaid items are already disconnected, so GetUsersNeedingPlaidDisconnectRepair's live-item requirement will never match them again; the marker may now be stuck non-NULL permanently unless cleared through another path",
+				"user_id", userID, "attempts", plaidCleanupMarkerClearMaxAttempts, "error", clearErr)
+			observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
 		} else if !cleared {
 			w.logger.Info("Plaid disconnect succeeded, but plaid_cleanup_pending_at had already moved on to a new episode — leaving the new episode's marker untouched",
 				"user_id", userID)

@@ -961,3 +961,215 @@ func TestPlaidCleanup_VerifyRefetchFails_ReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, refetchErr)
 	assert.False(t, errors.Is(err, ErrCleanupAborted))
 }
+
+// ─── Issue #1413 #1453 (Codex review, PR #1443 follow-up): status-aware new-item check ────────
+//
+// verifyNoNewLinkedItemAppeared's post-loop re-fetch (added for the H1 residue above) used to
+// compare IDs alone: any ID absent from the original fetch tripped ErrCleanupAborted, regardless
+// of that item's CURRENT status. But RemoveAllUserItems's underlying GetByUserID fetch returns
+// items in ANY status, so the re-fetch can legitimately surface an item that was created AND
+// ALREADY disconnected/replaced by some other path before the re-fetch ran — phantom residue
+// (#1453), not a leak. Falsely aborting on that residue matters more than its severity label
+// suggests: DeletionService aborts an ENTIRE GDPR deletion on any non-nil error from
+// RemoveAllUserItems, so a false positive here is a compliance failure, not mere untidiness.
+
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyDisconnected_NotAborted proves a new ID
+// whose CURRENT status is already 'disconnected' does not trip ErrCleanupAborted.
+//
+// Falsifiability: on a version of verifyNoNewLinkedItemAppeared that compares IDs alone (pre-#1453
+// fix), this test fails — err would be ErrCleanupAborted, not nil.
+func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyDisconnected_NotAborted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-new-item-already-disconnected"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	// item-phantom is a NEW id (never in the original fetch) — but it is ALREADY 'disconnected' by
+	// the time the post-loop re-fetch runs, e.g. disconnected by some other path in the window
+	// between the initial fetch and this re-fetch. No live item was ever missed.
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1", Status: domain.LinkedItemStatusDisconnected},
+		{ID: "item-phantom", UserID: userID, AccessToken: "tok-phantom", Status: domain.LinkedItemStatusDisconnected},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.NoError(t, err, "a NEW item ID that is already disconnected must not trip ErrCleanupAborted — no live item was ever missed")
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
+}
+
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyReplaced_NotAborted is the 'replaced'
+// sibling of the test above — the liveness definition excludes both terminal statuses.
+func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAlreadyReplaced_NotAborted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-new-item-already-replaced"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1", Status: domain.LinkedItemStatusDisconnected},
+		{ID: "item-phantom", UserID: userID, AccessToken: "tok-phantom", Status: domain.LinkedItemStatusReplaced},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.NoError(t, err, "a NEW item ID that is already replaced must not trip ErrCleanupAborted — no live item was ever missed")
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
+}
+
+// TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsStillLive_StillAborted is the positive control:
+// preserving what the previous round got right. A genuinely LIVE new item must still abort — this
+// is TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsAfterFetch_ReturnsAbortedNotNil's exact
+// scenario, restated here (with an explicit non-terminal status) directly alongside the new
+// not-live tests above so the contrast between the two outcomes is unambiguous in one place.
+func TestPlaidCleanup_RemoveAllUserItems_NewItemAppearsStillLive_StillAborted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-new-item-still-live"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-1", UserID: userID, AccessToken: "tok-1", Status: domain.LinkedItemStatusDisconnected},
+		{ID: "item-2-live", UserID: userID, AccessToken: "tok-live", Status: domain.LinkedItemStatusActive},
+	}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err, "a genuinely LIVE new item must still abort — status-awareness must not weaken this")
+	assert.ErrorIs(t, err, ErrCleanupAborted)
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-live")
+}
+
+// TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsButNotLive_NotAborted is the repair-pass-shaped
+// (DisconnectAllUserItemsIfEligible) sibling of the RemoveAllUserItems tests above.
+func TestPlaidCleanup_DisconnectIfEligible_NewItemAppearsButNotLive_NotAborted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-repair-new-item-not-live"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	initialItems := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(initialItems, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(nil)
+
+	postLoopItems := []domain.LinkedItem{
+		{ID: "item-phantom", UserID: userID, AccessToken: "tok-phantom", Status: domain.LinkedItemStatusReplaced},
+	}
+	mockRepo.On("GetActiveItemsByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	recheck := func(context.Context) (bool, error) { return true, nil }
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.DisconnectAllUserItemsIfEligible(ctx, userID, recheck)
+
+	require.NoError(t, err, "a NEW item ID that is not live must not block the repair pass from clearing its marker")
+	mockPlaid.AssertNotCalled(t, "RemoveItem", ctx, "tok-phantom")
+}
+
+// TestPlaidCleanup_NoItemsInitially_NewItemAppearsButNotLive_NotAborted closes the narrowest form:
+// the initial fetch finds nothing (the "no linked items" branch), and the item that appears before
+// the post-loop verification is not live either.
+func TestPlaidCleanup_NoItemsInitially_NewItemAppearsButNotLive_NotAborted(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-empty-then-new-item-not-live"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	mockRepo.On("GetByUserID", ctx, userID).Return([]domain.LinkedItem{}, nil).Once()
+	postLoopItems := []domain.LinkedItem{{ID: "item-new", UserID: userID, AccessToken: "tok-new", Status: domain.LinkedItemStatusDisconnected}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(postLoopItems, nil).Once()
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.NoError(t, err, "a new but already-disconnected item must not trip ErrCleanupAborted when the initial fetch found nothing")
+	mockPlaid.AssertNotCalled(t, "RemoveItem")
+}
+
+// ─── Issue #1413 Medium finding (PR #1443 Codex review round 4): MarkItemsDisconnected RowsAffected ─
+
+// TestPlaidCleanup_MarkItemsDisconnected_ZeroRowsAffected_LoggedNotEscalated proves cleanupItems
+// treats repository.ErrNoLinkedItemsUpdated (Issue #1413 Medium finding) as a logged anomaly, not a
+// genuine per-item failure — an idempotent retry that legitimately passes a now-stale successIDs
+// set (e.g. every item already 'disconnected'/'replaced' by the time the write runs) must not start
+// failing the whole cleanup pass.
+//
+// Falsifiability: reverting cleanupItems to append EVERY MarkItemsDisconnected error to itemErrs
+// (regardless of errors.Is(markErr, repository.ErrNoLinkedItemsUpdated)) makes this test fail — err
+// would be non-nil instead of nil.
+func TestPlaidCleanup_MarkItemsDisconnected_ZeroRowsAffected_LoggedNotEscalated(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-mark-zero-rows"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil)
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).
+		Return(fmt.Errorf("%w: 0 of 1 given id(s) matched", repository.ErrNoLinkedItemsUpdated))
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.NoError(t, err, "a zero-rows-affected MarkItemsDisconnected outcome must be logged, not treated as a genuine per-item failure")
+}
+
+// TestPlaidCleanup_MarkItemsDisconnected_GenuineError_StillEscalated proves the OTHER branch of the
+// same decision: a genuine (non-ErrNoLinkedItemsUpdated) MarkItemsDisconnected error must still be
+// escalated exactly as before — only the zero-rows anomaly is demoted, not every error from this
+// call.
+func TestPlaidCleanup_MarkItemsDisconnected_GenuineError_StillEscalated(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-mark-genuine-error"
+
+	mockRepo := new(MockLinkedItemRepoForCleanup)
+	mockPlaid := new(MockPlaidServiceForCleanup)
+
+	items := []domain.LinkedItem{{ID: "item-1", UserID: userID, AccessToken: "tok-1"}}
+	mockRepo.On("GetByUserID", ctx, userID).Return(items, nil).Once()
+	mockPlaid.On("RemoveItem", ctx, "tok-1").Return(nil)
+	dbErr := errors.New("connection reset by peer")
+	mockRepo.On("MarkItemsDisconnected", ctx, []string{"item-1"}).Return(dbErr)
+
+	service := newTestPlaidCleanupService(mockRepo, mockPlaid)
+
+	err := service.RemoveAllUserItems(ctx, userID)
+
+	require.Error(t, err, "a genuine MarkItemsDisconnected database error must still be escalated as a per-item failure")
+	assert.ErrorIs(t, err, dbErr)
+}

@@ -120,20 +120,31 @@ var (
 
 	// PlaidDisconnectRepairUserFailuresTotal counts per-user failures inside
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects's per-user loop (retention_cleanup_check.go)
-	// — Issue #1413. Incremented at THREE per-user failure sites (Finding 4, Codex review PR #1443,
-	// added the third): the pre-disconnect isStillEligible re-read erroring; DisconnectAllUserItemsIfEligible
-	// itself failing for any reason other than the two benign, non-failure outcomes it can return
-	// (services.ErrSideEffectClaimBusy — another flow already mid-disconnect for that user — and, as
-	// of round-14 (Issue #1413 H1), services.ErrCleanupAborted — the per-item eligibility recheck
-	// correctly stopped mid-run because the user became ineligible partway through, e.g. a comp
-	// granted between items; some items may already be disconnected, others deliberately left live
-	// for a future run — neither represents a Plaid failure, so neither counts here); and, as of
-	// Finding 4, ClearPlaidCleanupPendingIfMatches still failing after
+	// — Issue #1413. Incremented at THREE per-user failure sites within that worker (Finding 4, Codex
+	// review PR #1443, added the third): the pre-disconnect isStillEligible re-read erroring;
+	// DisconnectAllUserItemsIfEligible itself failing for any reason other than the two benign,
+	// non-failure outcomes it can return (services.ErrSideEffectClaimBusy — another flow already
+	// mid-disconnect for that user — and, as of round-14 (Issue #1413 H1), services.ErrCleanupAborted
+	// — the per-item eligibility recheck correctly stopped mid-run because the user became ineligible
+	// partway through, e.g. a comp granted between items; some items may already be disconnected,
+	// others deliberately left live for a future run — neither represents a Plaid failure, so neither
+	// counts here); and, as of Finding 4, ClearPlaidCleanupPendingIfMatches still failing after
 	// plaidCleanupMarkerClearMaxAttempts retries — this THIRD site is arguably the highest-risk of
 	// the three: a successful disconnect already removed the live linked item
 	// GetUsersNeedingPlaidDisconnectRepair's own EXISTS clause requires, so a user stuck here can
 	// never be reselected by a future run at all, unlike the other two sites (which the daily
-	// schedule naturally retries). Deliberately NOT labeled by user_id:
+	// schedule naturally retries).
+	//
+	// Issue #1413 #1453 (Codex review, PR #1443 follow-up): also incremented from TWO more call
+	// sites outside this worker — services.PastDueService's grace-expiry disconnect
+	// (past_due_service.go) and queue/jobs.SubscriptionWebhookWorker's cancellation handler
+	// (subscription_webhook.go) — each brought into line with repairPlaidDisconnects's identical
+	// bounded-retry-then-Error-log pattern for the SAME underlying write
+	// (ClearPlaidCleanupPendingIfMatches after an already-successful synchronous disconnect).
+	// Reused (not duplicated per call site) deliberately: all five sites represent the exact same
+	// operational hazard — a marker left stuck non-NULL after the live item it described has
+	// already been disconnected, so no future repairPlaidDisconnects run can ever reselect that user
+	// to retry the clear either. Deliberately NOT labeled by user_id:
 	// an unbounded, per-entity Prometheus label is a cardinality/ops hazard this codebase avoids
 	// everywhere else (see JobsCompleted/PlaidAPIErrors above — every label here is a small, fixed
 	// set of values).
