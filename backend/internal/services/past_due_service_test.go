@@ -304,6 +304,63 @@ func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaid
 	repo.AssertCalled(t, "ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince)
 }
 
+// TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogsErrorNotEscalated is
+// the Issue #1413 #1453 (Codex review, PR #1443 follow-up) RED test: before this fix, a SINGLE
+// failed ClearPlaidCleanupPendingIfMatches attempt here was logged at Warn and swallowed — a
+// transient DB error at exactly this moment left plaid_cleanup_pending_at stuck non-NULL forever,
+// since the disconnect that just succeeded already removed the live linked item
+// GetUsersNeedingPlaidDisconnectRepair's own predicate requires to ever reselect this user again.
+// This brings the past-due path into line with RetentionCleanupCheckWorker.repairPlaidDisconnects's
+// established pattern (retention_cleanup_check.go): bounded retry, then an Error-level log (not
+// Warn) plus the shared failure counter once every attempt is exhausted.
+//
+// Falsifiability: reverting processGraceExpiry's clear step to a single unretried attempt makes
+// this test fail on the AssertNumberOfCalls assertion below (1 call, not
+// plaidCleanupMarkerClearMaxAttempts) and on the log-level assertion (no "level=ERROR" line — the
+// single-attempt code logs the failure at Warn only).
+func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogsErrorNotEscalated(t *testing.T) {
+	repo := &mockPastDueProfileRepo{}
+	plaid := &mockPastDuePlaidCleanup{}
+	paddle := &mockPastDuePaddleClient{}
+	clerk := &mockPastDueClerkClient{}
+	notif := &mockPastDueNotificationRepo{}
+
+	svc := newTestPastDueService(repo, plaid, paddle, clerk, notif)
+	var logBuf bytes.Buffer
+	svc.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	userID := "user-grace-clear-marker-fails"
+	now := time.Now()
+	pastDueStarted := now.Add(-time.Duration(testGraceDays+1) * 24 * time.Hour)
+	user := userWithPastDue(userID, pastDueStarted)
+	subID := *user.PaddleSubscriptionID
+
+	pendingSince := time.Now().Add(-time.Minute)
+	postFlipUser := userWithPastDue(userID, pastDueStarted)
+	postFlipUser.SubscriptionStatus = string(domain.SubscriptionStatusCancelled)
+	postFlipUser.PlaidCleanupPendingAt = &pendingSince
+
+	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil).Twice()
+	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
+	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
+	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	clearErr := errors.New("db unavailable")
+	repo.On("ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince).Return(false, clearErr)
+	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
+	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
+	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
+
+	err := svc.ProcessPastDueUser(context.Background(), user, now)
+
+	require.NoError(t, err, "a persistently-failing marker clear is best-effort tidying, not correctness-critical for THIS cycle — it must not fail the whole grace-expiry flow")
+	repo.AssertNumberOfCalls(t, "ClearPlaidCleanupPendingIfMatches", plaidCleanupMarkerClearMaxAttempts)
+
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "level=ERROR", "exhausting every retry must be logged at ERROR, not swallowed at Warn")
+	assert.Contains(t, logOutput, userID, "the ERROR log must carry the identifying user_id")
+}
+
 // Test 2: Plaid failure stops the flow — no cancel, no status flip
 func TestPastDueService_ProcessUser_GraceExpiry_PlaidFails_DoesNotCancel(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}

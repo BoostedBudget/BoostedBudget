@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 	"time"
@@ -821,5 +822,61 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 	// The service layer should filter by status as needed
 	assert.NoError(t, err)
 	assert.Len(t, items, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_MarkItemsDisconnected_RowsAffectedMatchesIDs is the happy-path proof
+// that a normal write (every given id actually matched and transitioned) still returns nil — no
+// regression from the RowsAffected check added below.
+func TestLinkedItemRepository_MarkItemsDisconnected_RowsAffectedMatchesIDs(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	ids := []string{uuid.New().String(), uuid.New().String()}
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	`)).WithArgs(pgxmock.AnyArg(), ids).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	err := repo.MarkItemsDisconnected(ctx, ids)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_MarkItemsDisconnected_ZeroRowsAffected_ReturnsErrNoLinkedItemsUpdated is
+// the Issue #1413 Medium finding RED test (PR #1443 Codex review round 4): before this fix,
+// MarkItemsDisconnected returned only the query's own error, so an UPDATE that matched zero rows
+// (every given id already excluded by the WHERE guard's terminal-state check) succeeded silently —
+// a caller (or a test) had no way to detect that the write did nothing.
+//
+// Falsifiability: reverting MarkItemsDisconnected to discard the CommandTag and return only the
+// query error makes this test fail — err would be nil, not ErrNoLinkedItemsUpdated.
+func TestLinkedItemRepository_MarkItemsDisconnected_ZeroRowsAffected_ReturnsErrNoLinkedItemsUpdated(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	ids := []string{uuid.New().String()}
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	`)).WithArgs(pgxmock.AnyArg(), ids).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkItemsDisconnected(ctx, ids)
+
+	require.Error(t, err, "zero rows affected must now be surfaced, not silently reported as success")
+	assert.True(t, errors.Is(err, ErrNoLinkedItemsUpdated), "the zero-rows outcome must be errors.Is-checkable via ErrNoLinkedItemsUpdated")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

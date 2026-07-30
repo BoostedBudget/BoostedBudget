@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -27,6 +28,20 @@ var ErrPaddleAlreadyCancelled = errors.New("paddle subscription already cancelle
 // and the fencing token (repository.WorkClaimsRepository) makes an over-run detectable rather
 // than silently re-granted to a second worker.
 const pastDueClaimLease = 15 * time.Minute
+
+// plaidCleanupMarkerClearMaxAttempts / plaidCleanupMarkerClearRetryDelay mirror
+// RetentionCleanupCheckWorker.repairPlaidDisconnects's bounded-retry pattern for the identical
+// marker-clear write (queue/jobs/retention_cleanup_check.go's plaidCleanupMarkerClearMaxAttempts/
+// plaidCleanupMarkerClearRetryDelay) — Issue #1413 #1453 (Codex review, PR #1443 follow-up): a
+// single, swallowed clear attempt here used to leave plaid_cleanup_pending_at stuck non-NULL
+// forever on any transient DB error, since this flow's synchronous disconnect already removed the
+// live linked item GetUsersNeedingPlaidDisconnectRepair's own predicate requires to ever reselect
+// this user again. Duplicated here (not imported) rather than shared: retention_cleanup_check.go's
+// constants are unexported in a different package (queue/jobs vs services).
+const (
+	plaidCleanupMarkerClearMaxAttempts = 3
+	plaidCleanupMarkerClearRetryDelay  = 50 * time.Millisecond
+)
 
 // PastDueProfileRepository defines the repository methods needed by PastDueService.
 type PastDueProfileRepository interface {
@@ -453,18 +468,41 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// success/failure) to obtain the exact marker value THIS flip just wrote, then clears it via the
 	// CAS-guarded ClearPlaidCleanupPendingIfMatches — never the unconditional ClearPlaidCleanupPending
 	// — so a brand-new episode's marker (e.g. a comp granted then removed in the narrow window since
-	// the flip) survives untouched. A failed re-read/clear is logged and swallowed, not escalated:
-	// like Step 5 below, this is best-effort tidying, not correctness-critical for THIS cycle — a
+	// the flip) survives untouched. Losing this write is NOT correctness-critical for THIS cycle — a
 	// stuck marker on an already-fully-disconnected user is inert (GetUsersNeedingPlaidDisconnectRepair
-	// requires a LIVE linked item, and none remain).
+	// requires a LIVE linked item, and none remain) — but leaving it set FOREVER is real phantom
+	// residue (#1453), not harmless: since the disconnect that just succeeded removed the very live
+	// item that predicate requires, GetUsersNeedingPlaidDisconnectRepair can never reselect this user
+	// again to retry the clear either. Issue #1413 #1453 (Codex review, PR #1443 follow-up): a single,
+	// swallowed clear attempt used to leave the marker stuck non-NULL on any transient DB error at
+	// exactly this moment — bring this into line with the identical fix already applied to
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects's own marker clear (retention_cleanup_check.go):
+	// retry up to plaidCleanupMarkerClearMaxAttempts times, then Error-log (not Warn) plus the shared
+	// failure counter if every attempt still fails. Still not escalated to fail THIS cycle's overall
+	// result — this flow's own cancellation already succeeded regardless of whether the marker clears.
 	if s.plaidCleanup != nil {
 		if freshUser, reErr := s.repo.GetUserByID(ctx, user.ID); reErr != nil {
 			s.logger.Warn("failed to re-read user before clearing plaid_cleanup_pending_at after grace-expiry disconnect",
 				"user_id", user.ID, "error", reErr)
 		} else if freshUser.PlaidCleanupPendingAt != nil {
-			if cleared, clearErr := s.repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, *freshUser.PlaidCleanupPendingAt); clearErr != nil {
-				s.logger.Warn("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at",
-					"user_id", user.ID, "error", clearErr)
+			expectedMarker := *freshUser.PlaidCleanupPendingAt
+			var cleared bool
+			var clearErr error
+			for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
+				cleared, clearErr = s.repo.ClearPlaidCleanupPendingIfMatches(ctx, user.ID, expectedMarker)
+				if clearErr == nil {
+					break
+				}
+				if attempt < plaidCleanupMarkerClearMaxAttempts {
+					s.logger.Warn("failed to clear plaid_cleanup_pending_at after grace-expiry disconnect — retrying",
+						"user_id", user.ID, "attempt", attempt, "error", clearErr)
+					time.Sleep(plaidCleanupMarkerClearRetryDelay)
+				}
+			}
+			if clearErr != nil {
+				s.logger.Error("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at after all retries — this user's Plaid items are already disconnected, so GetUsersNeedingPlaidDisconnectRepair's live-item requirement will never match them again; the marker may now be stuck non-NULL permanently unless cleared through another path",
+					"user_id", user.ID, "attempts", plaidCleanupMarkerClearMaxAttempts, "error", clearErr)
+				observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
 			} else if !cleared {
 				s.logger.Info("plaid_cleanup_pending_at had already moved on to a new episode when clearing after grace-expiry disconnect — leaving the new episode's marker untouched",
 					"user_id", user.ID)
