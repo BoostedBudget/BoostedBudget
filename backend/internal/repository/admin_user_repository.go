@@ -518,25 +518,59 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // non-NULL forever and making the stated invariant (domain.User.PlaidCleanupPendingAt's doc
 // comment: non-NULL exactly when an episode has begun AND cleanup has not completed) false.
 //
-// The fix: gate should_mark_plaid_cleanup_pending on the SAME live-linked-item existence check the
-// repair query itself uses for "cleanup genuinely outstanding" — liveLinkedItemExistsClause
-// (profile_repository.go, shared by GetUsersNeedingPlaidDisconnectRepair) — rather than a second,
-// independently-worded copy of that condition that could drift from it. With that guard: a comp
-// removed over a user whose cleanup already fully completed (no live items left) now correctly
-// leaves the marker untouched (NULL stays NULL — nothing outstanding), while a comp removed over a
-// user who still has a live item (the genuine "cleanup interrupted by a comp" case, e.g. round-14
-// H1's abort scenario) still (re-)arms the marker exactly as before. This CASE therefore now fires
-// for TWO overlapping reasons, not one: a row that reached an ineligible raw status WITHOUT ever
-// passing through a SET-site writer (e.g. an imported/backfilled row), AND the ordinary
-// comp-removed-while-cleanup-still-outstanding case — both share the same "is there actually a live
-// item to clean up" test.
+// Round-14's fix gated should_mark_plaid_cleanup_pending on the SAME live-linked-item existence
+// check the repair query itself uses — liveLinkedItemExistsClause (profile_repository.go, shared
+// by GetUsersNeedingPlaidDisconnectRepair) — instead of a second, independently-worded copy that
+// could drift. That closed M1, but a LATER Codex review round on PR #1443 (Finding 3, High) found
+// the guard itself races:
+//
+//   - This CTE's EXISTS(...) is evaluated as a snapshot at SELECT time, and the query's
+//     FOR UPDATE locks the users row — it does not, and cannot, serialize against a concurrent
+//     INSERT into linked_items. AccountService.LinkAccounts (internal/services/account_service.go)
+//     creates a linked item via a single, independent, autocommit statement
+//     (LinkedItemRepository.Create) with no lock or shared transaction of its own — it never
+//     contends for the users row at all, so no lock strength taken here can make it wait for an
+//     event (its own INSERT) that has not been issued to Postgres yet. Concretely: a user with a
+//     LIVE comp is not read-only and CAN link (the read-only allow-list contains only
+//     /api/v1/plaid/webhook, so this is the only reachable window); if LinkAccounts starts before
+//     an admin removes that comp, the removal's EXISTS can see "no live item" (the INSERT hasn't
+//     landed yet), commit with the marker left NULL, and only THEN does LinkAccounts' insert land —
+//     a cancelled user with a live bank connection and a NULL marker, invisible to
+//     GetUsersNeedingPlaidDisconnectRepair (non-NULL marker required) FOREVER. Re-checking EXISTS a
+//     second time inside this same transaction does not help either: under READ COMMITTED a later
+//     statement only sees writes that already COMMITTED, and if this transaction's own FOR UPDATE
+//     is held across that re-check, the concurrent INSERT cannot even complete (its FK-driven lock
+//     on this row conflicts with FOR UPDATE) until this transaction ends — so the "fresher" read
+//     would still see nothing. Closing this for real would require LinkAccounts itself to
+//     coordinate (e.g. lock the user row before its own insert, or self-heal after inserting) —
+//     out of scope for a repository-only fix here.
+//   - The two failure directions are not symmetric. A missed stamp (this race) is a PERMANENT
+//     data-retention leak: nothing ever revisits the decision, so the bank connection is never
+//     disconnected. A spurious stamp (M1's phantom) is merely an untidy non-NULL timestamp the
+//     repair query's own live-item EXISTS clause filters out forever — annoying, but harmless,
+//     and already an accepted, separately-tracked residue class (see #1453, which documents the
+//     000119/000120 backfill leaving exactly this kind of harmless marker behind). Erring toward
+//     stamping is therefore the safer default.
+//
+// Decision: drop the liveLinkedItemExistsClause guard here and go back to the round-13 predicate —
+// should_mark_plaid_cleanup_pending fires whenever a prior override existed and the reverted raw
+// status is inactive/cancelled, full stop, regardless of live-item state at CTE time. This
+// reintroduces M1's phantom-marker outcome for a comp removed over an already-fully-cleaned-up user
+// (see TestRemoveUserTierOverride_Integration_M1_PhantomMarkerNowAccepted_WhenCleanupAlreadyComplete
+// and TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_PhantomMarkerAccepted,
+// both renamed and updated to assert the phantom is now expected, not absent) — a deliberate,
+// documented trade against the unrecoverable leak above, tracked for cleanup alongside #1453. See
+// TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_MarkerNotLost for the actual
+// Finding 3 regression test. liveLinkedItemExistsClause itself is unchanged and still used by
+// GetUsersNeedingPlaidDisconnectRepair (profile_repository.go) to decide which rows to ACT on — a
+// phantom marker here never causes a wrong disconnect, since that query's own live-item check still
+// filters it out.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
 	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
-	        AND subscription_status IN ('inactive', 'cancelled')
-	        AND ` + liveLinkedItemExistsClause + `) AS should_mark_plaid_cleanup_pending
+	        AND subscription_status IN ('inactive', 'cancelled')) AS should_mark_plaid_cleanup_pending
 	FROM users
 	WHERE id = $1 AND is_deleted = FALSE
 `
