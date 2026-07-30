@@ -1870,7 +1870,12 @@ func TestWorker_SubscriptionCanceled_CompGrantedAfterClaim_NoDestructiveWork(t *
 		SubscriptionTier: "premium",
 	}
 	overrideEndsAt := time.Now().Add(24 * time.Hour) // still active
-	override := "household_7"
+	// A VALID configured tier (config/subscription_tiers.yaml: premium, household_2..household_5).
+	// This previously read "household_7", which names no configured tier — so the test proved the
+	// post-claim guard fires for a MALFORMED override rather than for an ordinary valid comp, which
+	// is the case that actually matters here. HasActiveManualOverride() does not validate tier names,
+	// so the guard fired either way and the test passed; the fixture was simply unrealistic.
+	override := "household_2"
 	compedUser := &domain.User{
 		ID:                 "user_2abc123def456",
 		ClerkUserID:        "clerk_user_123",

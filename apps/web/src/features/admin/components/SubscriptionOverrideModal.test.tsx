@@ -226,6 +226,15 @@ describe('SubscriptionOverrideModal', () => {
             // here so the regression is visible as "two cells lying, one correct" if reintroduced.
             const effectiveTierLabel = screen.getByText('Effective tier')
             expect(effectiveTierLabel.nextElementSibling).toHaveTextContent('Premium')
+
+            // THE COUNTERWEIGHT, and the reason the fix splits raw presence from validity rather
+            // than replacing one with the other: Remove Override must STILL render for a malformed
+            // override, because this row is precisely the one an admin needs to clear. Gating the
+            // button on validity instead of on `hasOverride` would make a malformed comp
+            // permanently unremovable — trading a display bug for a lockout, with no way out of the
+            // admin UI. Nothing else pins this, so an over-tight future fix would pass every other
+            // assertion in this file.
+            expect(screen.getByRole('button', { name: /remove override/i })).toBeInTheDocument()
         })
 
         it('still shows the green chip and Complimentary badge for a validly-configured, live override (positive control)', async () => {
