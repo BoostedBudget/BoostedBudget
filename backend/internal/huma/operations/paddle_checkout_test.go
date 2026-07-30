@@ -140,9 +140,6 @@ func (m *mockProfileRepo) GetUsersWithExpiredTrials(ctx context.Context) ([]*dom
 func (m *mockProfileRepo) GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *mockProfileRepo) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	return nil
-}
 func (m *mockProfileRepo) CancelDeletion(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepo) UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error {
 	return nil

@@ -108,11 +108,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiringTrials(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	args := m.Called(ctx, userID, status)
-	return args.Error(0)
-}
-
 func (m *MockProfileRepositoryForDeletion) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
 	return args.Error(0)

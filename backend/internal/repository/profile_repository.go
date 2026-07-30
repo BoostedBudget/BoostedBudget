@@ -60,27 +60,6 @@ type ProfileRepository interface {
 	// UpdateTrialStatus updates trial-related fields for a user
 	UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error
 
-	// UpdateSubscriptionStatus updates just the subscription status.
-	//
-	// Issue #1413 round-14 finding L1 (Codex review) — DO NOT call this for any transition into or
-	// out of a read-only status ('inactive'/'cancelled'): unlike every other subscription_status
-	// writer in this interface (UpdateSubscriptionFromPaddle, UpdateTrialStatus,
-	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride), this method does NOT
-	// maintain plaid_cleanup_pending_at at all — an active-to-inactive/cancelled call through this
-	// method would leave the marker NULL while the user becomes a genuine repair candidate,
-	// making them permanently invisible to GetUsersNeedingPlaidDisconnectRepair (the ONLY code path
-	// that ever disconnects a read-only user's Plaid items — see that method's doc comment). As of
-	// round-14, `rg` found NO production caller of this method anywhere in the codebase (only its
-	// own implementation and test-mock mirrors of the interface) — it is very likely dead code, a
-	// pre-#1413 relic superseded by the transition-aware writers above (in particular
-	// ExpireTrialIfNoOverride, its likely historical trial-expiry successor — see
-	// profile_repository_trial_expiry_integration_test.go's header comment). If you are about to
-	// add a new caller, do not: use one of the transition-aware writers instead, or extend this
-	// method to maintain the marker the same way they do FIRST. Recommended: delete this method
-	// once confirmed permanently unused, rather than leaving a trap a future caller could silently
-	// fall into.
-	UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error
-
 	// GetEffectiveSubscriptionStatusByUserID retrieves the user's EFFECTIVE subscription
 	// status — "active" when a non-expired manual tier override (admin comp) is in effect,
 	// otherwise the raw subscription_status (Issue #1413: an admin comp must actually unlock
@@ -1399,35 +1378,6 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 	return nil
 }
 
-// UpdateSubscriptionStatus updates just the subscription status for a user.
-// Issue #679, #680: Trial expiration.
-//
-// See the ProfileRepository interface doc comment for this method — Issue #1413 round-14 finding
-// L1 (Codex review): this does NOT touch plaid_cleanup_pending_at, unlike every other
-// subscription_status writer in this file, and `rg` found no production caller as of round-14. Do
-// not add one without first reading that warning.
-func (r *profileRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	now := time.Now()
-
-	query := `
-		UPDATE users
-		SET subscription_status = $1,
-		    updated_at = $2
-		WHERE id = $3 AND is_deleted = FALSE
-	`
-
-	ct, err := r.db.Exec(ctx, query, status, now, userID)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return ErrUserNotFound
-	}
-
-	return nil
-}
-
 // GetEffectiveSubscriptionStatusByUserID retrieves the EFFECTIVE subscription status for a
 // user — "active" when a non-expired manual tier override (admin comp) is in effect,
 // otherwise the raw subscription_status (Issue #1413). Used by the read-only middleware
@@ -2122,7 +2072,7 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 // too (round-7 fix; see GetUsersNeedingPlaidDisconnectRepair's doc comment below for the
 // NULL-status rationale this clause must preserve). Correlates against the unaliased `users` table
 // at least five call sites SELECT FROM — GetUsersNeedingPlaidDisconnectRepair just below, and
-// admin_user_repository.go's removeUserTierOverrideSelectPrior — so both must keep using this SAME
+// admin_user_repository.go's removeUserTierOverrideSelectPrior — so all must keep using this SAME
 // Go constant, not a second hand-copied SQL literal, so "live" cannot silently drift apart between
 // them. A second, independently-worded copy is exactly how Issue #1413 round-14 finding M1 slipped
 // in: removeUserTierOverrideSelectPrior's should_mark_plaid_cleanup_pending stamped the marker for
@@ -2736,6 +2686,24 @@ func (r *profileRepository) ClearCompletedPlaidCleanupMarkers(ctx context.Contex
 // manual_tier_ends_at IS NOT NULL additionally excludes PERMANENT overrides (no expiry date
 // set) — those never lapse on their own and must only ever be cleared by an explicit admin
 // removal.
+//
+// Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — deliberately NOT a strict complement of
+// domain.User.HasActiveManualOverride() / hasActiveManualOverrideAt(), unlike
+// noActiveManualOverridePredicate's genuine parity with that same Go method. They diverge on
+// EXACTLY one case: a NULL manual_tier_ends_at. This predicate's `manual_tier_ends_at IS NOT
+// NULL` excludes such a row outright (a permanent override never lapses, so it is never a
+// candidate here), while HasActiveManualOverride() treats a NULL end date as an indefinite,
+// still-live comp — i.e. "active", not "expired". Both are correct for what each asks: this
+// predicate answers "has this override's clock run out", the Go method answers "is this
+// override in effect right now" — a permanent override is never the former but is always the
+// latter. Do NOT write a naive SQL/Go parity test asserting "predicate selects <=> Go reports
+// expired" for this pair (of the kind that correctly exists for noActiveManualOverridePredicate,
+// see TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — it would fail on this
+// correct, intentional divergence, and the failure would look exactly like a real bug, tempting
+// a "fix" that breaks permanent overrides instead. An honest parity test is only possible scoped
+// to non-NULL manual_tier_ends_at (where the two really are complements); see
+// ManualTierOverrideExpiryCheckWorker.Work's doc comment (manual_tier_override_expiry_check.go)
+// for the Go-side half of this note.
 const expiredManualTierOverridePredicate = `
 	  manual_tier_override IS NOT NULL
 	  AND manual_tier_override <> ''
