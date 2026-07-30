@@ -473,6 +473,94 @@ func TestRemoveUserTierOverride_Integration_AuditRow_ActorAndTarget(t *testing.T
 	assert.Equal(t, "remove_manual_tier", audit.Action)
 }
 
+// TestRemoveUserTierOverride_Integration_AuditChanges_ContainsReason closes Issue #1413 AC13's
+// test gap: the `reason` argument is required non-empty at the schema, threaded handler -> service
+// -> repository, and encrypted into audit_logs.changes by removeTierOverride's detailsMap
+// (admin_user_repository.go), but every removal audit test above
+// (AuditRow_ActorAndTarget, EmptyActor_NoFKViolation, ...) reads the row via fetchLatestAuditRow
+// (this file, above), which selects only user_id/resource_id/action — none of them ever decrypt
+// `changes` or assert the reason value. Dropping the "reason" entry from detailsMap, or writing it
+// unencrypted, passes every other test in this file green today.
+//
+// Reuses fetchAuditChanges — the exact helper
+// TestUpdateUserTier_Integration_AuditChanges_ContainsTargetAndPriorOverride
+// (admin_user_repository_update_tier_integration_test.go, same package, same build tag) already
+// uses to make this identical assertion on the sibling apply path (UpdateUserTier).
+//
+// Falsifiability: deleting `"reason": reason` from removeTierOverride's detailsMap makes this test
+// fail on the assert.Equal below — verified by making that exact edit locally, confirming this test
+// (and only this test, among the file's removal-audit tests) failed, and reverting.
+func TestRemoveUserTierOverride_Integration_AuditChanges_ContainsReason(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewAdminUserRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "active")
+
+	override := "household_2"
+	setManualOverride(t, pool, target.ID, &override, nil)
+
+	const wantReason = "escalating comp removal, AC13 audit-changes reason check"
+	_, err := repo.RemoveUserTierOverride(ctx, actor.ID, target.ID, wantReason, testRetentionMonths)
+	require.NoError(t, err)
+
+	changes := fetchAuditChanges(t, pool, enc, target.ID, "remove_manual_tier")
+	assert.Equal(t, wantReason, changes["reason"], "AC13: audit_logs.changes must contain the caller-supplied reason, encrypted and recoverable via the standard decrypt-changes helper")
+}
+
+// TestRemoveUserTierOverride_Integration_ChainedWithEffectiveStatus_LosesEntitlement closes Issue
+// #1413 AC12's test gap: "the user loses the comped entitlement on the next request" is asserted
+// nowhere as a causal chain. Column-clearing is well covered (e.g. ClearsBothColumns above), and
+// there is no caching layer — the read-only middleware (huma/middleware/clerk.go) calls
+// GetEffectiveSubscriptionStatusByUserID (profile_repository.go) fresh on every request — but
+// nothing in the existing suite calls RemoveUserTierOverride and then
+// GetEffectiveSubscriptionStatusByUserID: the access-path tests in profile_repository_test.go
+// (TestGetEffectiveSubscriptionStatusByUserID_*, pgxmock-driven fixtures) are wholly independent of
+// any removal.
+//
+// This seeds a live override through the PRODUCTION WRITER AdminUserRepository.UpdateUserTier — no
+// raw `UPDATE users SET manual_tier_override ...` — confirms GetEffectiveSubscriptionStatusByUserID
+// actually reports "active" while the comp is live (despite a read-only raw status), then calls
+// RemoveUserTierOverride and re-reads GetEffectiveSubscriptionStatusByUserID to confirm it now
+// returns the RAW read-only status: the real causal chain from removal to the next access check,
+// not two facts that merely happen to both be true in isolation.
+//
+// Falsifiability: verified locally by leaving the override columns set (commenting out the
+// `manual_tier_override = NULL, manual_tier_ends_at = NULL` clauses in removeUserTierOverrideUpdate,
+// admin_user_repository.go, so the clear itself is effectively stubbed out) and confirming the
+// final assert.Equal below fails — GetEffectiveSubscriptionStatusByUserID still reports "active"
+// after the "removal" — then reverting.
+func TestRemoveUserTierOverride_Integration_ChainedWithEffectiveStatus_LosesEntitlement(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	adminRepo := NewAdminUserRepository(pool, enc)
+	profileRepo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	actor := createRemoveTierOverrideUser(t, pool, enc, suffix+"_actor", "premium", "active")
+	target := createRemoveTierOverrideUser(t, pool, enc, suffix+"_target", "premium", "cancelled")
+
+	// Seed a live override through the production writer, not raw SQL.
+	future := time.Now().Add(24 * time.Hour)
+	_, err := adminRepo.UpdateUserTier(ctx, actor.ID, target.ID, "household_2", "comp for AC12 entitlement chain test", &future)
+	require.NoError(t, err)
+
+	statusWhileComped, err := profileRepo.GetEffectiveSubscriptionStatusByUserID(ctx, target.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", statusWhileComped, "precondition: a live override must make the effective status active despite the raw status being read-only ('cancelled')")
+
+	_, err = adminRepo.RemoveUserTierOverride(ctx, actor.ID, target.ID, "comp ended, AC12 entitlement chain test", testRetentionMonths)
+	require.NoError(t, err)
+
+	statusAfterRemoval, err := profileRepo.GetEffectiveSubscriptionStatusByUserID(ctx, target.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "cancelled", statusAfterRemoval, "AC12: the user must lose the comped entitlement on the very next request — GetEffectiveSubscriptionStatusByUserID must now return the raw read-only status, not 'active'")
+}
+
 // TestRemoveUserTierOverride_Integration_EmptyActor_NoFKViolation verifies that an empty
 // actorUserID is coerced to SQL NULL (not an invalid-UUID / FK violation), since audit_logs.user_id
 // is nullable with ON DELETE SET NULL and a missing actor must never abort a legitimate admin action.
