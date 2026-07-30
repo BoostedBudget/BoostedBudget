@@ -91,6 +91,32 @@ const SUB_DETAIL_MALFORMED_OVERRIDE = {
     manual_tier_ends_at: null,
 }
 
+// Round 8 / Task MC: the chip's status was computed from an inline `isExpired` that never
+// consulted tier validity at all — only the fixture above (malformed tier + NULL expiry) had
+// coverage, which cannot distinguish "the chip is gone because the tier is invalid" from "the
+// chip is gone because isExpired collapsed the whole thing". Pairing the same malformed tier with
+// a genuinely live, FUTURE, relative expiry isolates the reachable defect: a malformed tier with
+// an expiry that hasn't lapsed. Computed from Date.now(), never a hardcoded literal — a fixed date
+// here would silently drift onto (or off of) the expired branch as real time passes.
+const SUB_DETAIL_MALFORMED_TIER_FUTURE_EXPIRY = {
+    ...SUB_DETAIL_MALFORMED_OVERRIDE,
+    manual_tier_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+}
+
+// Round 8 / Task MC: `manual_tier_ends_at` is a TIMESTAMPTZ serialised from a typed Go *time.Time,
+// so an unparseable value is not reachable through the normal API — fixed for defense in depth,
+// not because it's a live production bug. household_4 is a validly-configured tier, isolating the
+// date axis from the tier-name-validity axis exercised by SUB_DETAIL_MALFORMED_TIER_FUTURE_EXPIRY.
+const SUB_DETAIL_MALFORMED_DATE = {
+    ...SUB_DETAIL,
+    base_tier: 'premium',
+    effective_tier: 'premium',
+    subscription_status: 'inactive',
+    effective_status: 'inactive',
+    manual_tier_override: 'household_4',
+    manual_tier_ends_at: 'not-a-real-date',
+}
+
 // Issue #1413: the expired-override branch (' (expired)', the "Expired:" date label, and the
 // effective badge falling back off a lapsed override) had zero test coverage before this fix —
 // every other fixture in this file sets manual_tier_ends_at: null. household_4 is a validly
@@ -256,6 +282,60 @@ describe('SubscriptionOverrideModal', () => {
             expect(chip).toBeInTheDocument()
             expect(chip.textContent).not.toMatch(/expired/i)
             expect(chip.closest('div')).toHaveClass('bg-success/10')
+        })
+    })
+
+    // Round 8 / Task MC: the chip's status ("Manual override active" / "(expired)" / "Expires:"
+    // vs "Expired:") was driven by an inline `isExpired` that only looked at the date, never the
+    // tier — while the effective badge above it already goes through the shared, validated
+    // isOverrideActive/isLiveOverride. That let the card contradict itself on the same row.
+    describe('Chip status must agree with the effective badge on both axes (Issue #1413 round 8)', () => {
+        it('never claims an active override for a malformed tier, even with a live future expiry (reachable case)', async () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_MALFORMED_TIER_FUTURE_EXPIRY,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // The effective badge is server-driven and already correct — this is the "other half"
+            // of the same card that the chip must not contradict.
+            const effectiveBadge = await screen.findByLabelText(/effective status: active/i)
+            expect(effectiveBadge).toHaveTextContent('Active')
+            expect(screen.queryByLabelText(/effective status: complimentary/i)).not.toBeInTheDocument()
+
+            // The chip must not claim an active (or any) override state for a tier name that
+            // names no configured tier — a live-looking future expiry must not resurrect it.
+            expect(screen.queryByText(/manual override active/i)).not.toBeInTheDocument()
+        })
+
+        it('never renders the green "active" chip when manual_tier_ends_at is unparseable, for a validly-named tier (defense in depth)', async () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_MALFORMED_DATE,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            // isLiveOverride already fails closed on an unparseable date (Number.isNaN check in
+            // isOverrideActive), so the effective badge is already correct here — pinned as the
+            // contradiction check, same as the malformed-tier test above.
+            const effectiveBadge = await screen.findByLabelText(/effective status: inactive/i)
+            expect(effectiveBadge).toHaveTextContent('Inactive')
+            expect(screen.queryByLabelText(/effective status: complimentary/i)).not.toBeInTheDocument()
+
+            // The tier itself is validly named, so the chip still renders (unlike the malformed-tier
+            // case above) — but it must render in its non-live "(expired)" treatment, never the
+            // unqualified green "active" one. `NaN < now` is `false`, which is exactly what let the
+            // old inline `isExpired` fall through to the live/green branch.
+            const chip = screen.getByText(/manual override active/i)
+            expect(chip.textContent).toMatch(/expired/i)
+            expect(chip.closest('div')).toHaveClass('bg-warning/10')
+            expect(chip.closest('div')).not.toHaveClass('bg-success/10')
         })
     })
 
