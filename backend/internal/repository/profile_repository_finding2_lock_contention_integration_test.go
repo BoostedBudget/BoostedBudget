@@ -15,15 +15,21 @@ package repository
 // neither a bare NOW() nor a bare clock_timestamp() substitution closes the backdating bug; only
 // moving the lock acquisition into its own, earlier CTE step does.
 //
-// Each test below proves ONE writer's restructured COALESCE(plaid_cleanup_pending_at,
+// Each test below proves ONE writer call path's restructured COALESCE(plaid_cleanup_pending_at,
 // clock_timestamp()) reflects real, post-lock-wait wall-clock time — using the SAME real
 // synchronization barrier (waitUntilBlockedBy, admin_user_repository_remove_tier_override_integration_test.go)
-// as StampMissingPlaidCleanupMarkers's own equivalent test, per Issue #1413 Finding 4 (Low, Codex
-// review): the barrier must confirm the SPECIFIC backend running the writer under test is blocked,
-// not merely that some backend somewhere is in a lock wait.
+// as StampMissingPlaidCleanupMarkers's own equivalent test. waitUntilBlockedBy polls
+// `blockerPID = ANY(pg_blocking_pids(pid))`, which is true only for a backend genuinely, currently
+// blocked on blockerPID's own held lock — not "some backend somewhere is in a lock wait" (which an
+// unrelated concurrent backend could satisfy). Combined with each test's fresh, uniquely-suffixed
+// row and this suite's serialized (-p 1, no t.Parallel) execution, blockerPID's lock has exactly one
+// possible contender at any time: the writer under test — so this barrier does identify that
+// specific backend, satisfying Issue #1413 Finding 1 (Medium, Codex review, PR #1443 second
+// follow-up round). Six tests cover the five writers — UpdateSubscriptionFromPaddle has two,
+// covering its two independent query paths per Finding 3 (Low, same round) below.
 //
 // Falsifiability (Issue #1413's own standing requirement, sharpened by this round's brief): each of
-// these five tests was verified RED against BOTH of the following, by temporarily reverting the
+// these tests was verified RED against BOTH of the following, by temporarily reverting the
 // corresponding writer in profile_repository.go and re-running — never against only one probe, since
 // a probe that only catches the bare-NOW() case cannot distinguish a real fix from a cosmetic one:
 //   (a) the ORIGINAL bare `UPDATE ... SET plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())`
@@ -35,8 +41,12 @@ package repository
 //       evaluated against the pre-lock-wait row version and is never re-evaluated once the wait
 //       resolves, so probe (b) backdates identically to probe (a) despite the different function name.
 // Each probe was run three times per writer against each broken variant; every run failed the
-// post-wait assertion below deterministically (never flaky) — see this round's report for the exact
-// counts.
+// post-wait assertion below deterministically (never flaky). Issue #1413 Finding 2 (Low, Codex
+// review, PR #1443 second follow-up round): this claim used to exist ONLY as this paragraph, with no
+// way to re-run it short of hand-reverting profile_repository.go — see
+// profile_repository_finding2_probe_test.go (this package) for the checked-in, FINDING2_RUN_PROBES=1
+// gated reproduction of exactly this falsification, which a future maintainer can re-run from source
+// without reconstructing anything from prose.
 //
 // Run with:
 //
@@ -119,9 +129,13 @@ const finding2PostBlockHoldDuration = 2 * time.Second
 
 // TestFinding2LockContention_UpdateSubscriptionFromPaddle_ClockTimestampReflectsWallTimeAcrossLockWait
 // covers UpdateSubscriptionFromPaddle's ROUND 23 restructure — a live Paddle-webhook writer. Exercises
-// the "no subscriptionID" query variant (subscriptionID == nil); the "with subscriptionID" variant
-// shares the IDENTICAL CTE + FOR NO KEY UPDATE + clock_timestamp() shape, differing only in which
-// extra columns are set, so this one call path validates the mechanism for both.
+// the "no subscriptionID" query variant (subscriptionID == nil, profile_repository.go:1003). Issue
+// #1413 Finding 3 (Low, Codex review, PR #1443 second follow-up round): this method has a SECOND,
+// separate query path for subscriptionID != nil (profile_repository.go:995) — despite sharing the
+// same CTE + FOR NO KEY UPDATE + clock_timestamp() shape, it is a textually distinct query string a
+// future edit could break independently of this one, so it is no longer "equivalent by comment
+// only" — see TestFinding2LockContention_UpdateSubscriptionFromPaddle_WithSubscriptionID_ClockTimestampReflectsWallTimeAcrossLockWait
+// below, which exercises it directly.
 func TestFinding2LockContention_UpdateSubscriptionFromPaddle_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -146,6 +160,47 @@ func TestFinding2LockContention_UpdateSubscriptionFromPaddle_ClockTimestampRefle
 	startedAt := time.Now()
 	startFence, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
 		return repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", &startedAt, nil, nil)
+	})
+	require.NoError(t, callErr)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assertMarkerReflectsPostWaitTime(t, startFence, releaseFence, finding2PostBlockHoldDuration, marker)
+}
+
+// TestFinding2LockContention_UpdateSubscriptionFromPaddle_WithSubscriptionID_ClockTimestampReflectsWallTimeAcrossLockWait
+// covers UpdateSubscriptionFromPaddle's OTHER query variant (subscriptionID != nil,
+// profile_repository.go:995) — Issue #1413 Finding 3 (Low, Codex review, PR #1443 second follow-up
+// round). Before this test, only the nil-subscriptionID path was ever exercised by a real call, and
+// this path's ROUND 23 correctness was asserted equivalent by doc comment only; a future change
+// breaking just this branch (e.g. a hand-edit that touches only the paddle_subscription_id columns
+// and slips the CTE) would have left the suite green. This test drives the identical lock-contention
+// scenario through the non-nil branch directly.
+func TestFinding2LockContention_UpdateSubscriptionFromPaddle_WithSubscriptionID_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_f2_paddlesub_" + suffix,
+		Email:              "f2-paddlesub-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "active", // NOT already repair-eligible: a genuine transition into ineligibility
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
+
+	startedAt := time.Now()
+	subscriptionID := "sub_f2_" + suffix
+	startFence, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
+		return repo.UpdateSubscriptionFromPaddle(ctx, user.ID, "premium", "cancelled", &startedAt, nil, &subscriptionID)
 	})
 	require.NoError(t, callErr)
 
