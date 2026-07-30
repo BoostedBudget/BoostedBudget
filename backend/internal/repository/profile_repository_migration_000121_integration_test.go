@@ -149,14 +149,24 @@ func TestMigration000121_LapsedOverrideRowNowRepaired(t *testing.T) {
 		"BEFORE migration 000121: a cancelled user with a lapsed override, a live item, and a NULL marker must NOT be selected — this is the bug")
 
 	// ─── Apply the real migration 000121 up SQL. ──────────────────────────────────────────────
+	// Both bounds below are fenced with Postgres's own clock rather than Go's. The migration writes
+	// this column from Postgres NOW(), and CI runs Postgres in a separate container whose clock can
+	// lag the runner's — a Go-side bound needs an arbitrary tolerance to absorb that skew, and the
+	// sibling floor test failed CI for exactly this reason. Same-clock fences need no tolerance:
+	// NOW() only advances, so floorFence <= stamped <= upperFence holds exactly.
+	var floorFence time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW() - INTERVAL '48 hours'").Scan(&floorFence))
+
 	_, err = pool.Exec(ctx, migration000121UpSQL(t))
 	require.NoError(t, err, "migration 000121 failed")
 
+	var upperFence time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW()").Scan(&upperFence))
+
 	pendingAt := mig121GetPlaidCleanupPendingAt(t, repo, user.ID)
 	require.NotNil(t, pendingAt, "migration 000121 must stamp the marker for this row")
-	assert.False(t, pendingAt.Before(time.Now().Add(-48*time.Hour).Add(-time.Minute)),
-		"stamped value must respect the 48-hour floor (with a small tolerance for test runtime)")
-	assert.False(t, pendingAt.After(time.Now().Add(time.Minute)), "stamped value must not be in the future")
+	assert.False(t, pendingAt.Before(floorFence), "stamped value must respect the 48-hour floor")
+	assert.False(t, pendingAt.After(upperFence), "stamped value must not be in the future")
 
 	// ─── After: visible to the repair pass — the exact bug closed. ───────────────────────────
 	after, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, 0)
@@ -348,7 +358,16 @@ func TestMigration000121_FloorsAt48Hours(t *testing.T) {
 	// above), not a raw UPDATE against plaid_cleanup_pending_at itself.
 	setRetentionStartedAt(t, pool, user.ID, time.Now().Add(-100*time.Hour))
 
-	fence := time.Now().Add(-48 * time.Hour)
+	// The fence MUST come from Postgres, not from Go's clock. plaid_cleanup_pending_at is written
+	// by the migration as Postgres's own `NOW() - INTERVAL '48 hours'`; CI runs Postgres in a
+	// separate container whose clock can lag the runner's by milliseconds, so a Go-side
+	// time.Now().Add(-48h) sits *after* the value Postgres wrote and this assertion flips. That
+	// passes locally (one host clock) and fails only in CI — which is exactly what happened here,
+	// and on commit ff2cc4bb before it. Taking the fence before the migration also keeps the
+	// comparison sound in the other direction: NOW() only advances, so the stamped value can never
+	// precede this fence.
+	var fence time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT NOW() - INTERVAL '48 hours'").Scan(&fence))
 
 	_, err = pool.Exec(ctx, migration000121UpSQL(t))
 	require.NoError(t, err, "migration 000121 failed")
