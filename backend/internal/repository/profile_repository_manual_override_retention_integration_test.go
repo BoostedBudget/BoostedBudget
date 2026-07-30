@@ -486,3 +486,13 @@ func TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary(t *test
 // here. See TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond
 // (admin_user_service_test.go) for the regression test that actually exercises this fix, by
 // asserting on the exact value handed to the repository rather than on predicate agreement.
+//
+// Read the scope of this note precisely: what is not constructible is a FENCED, single-shared-instant
+// CROSS-SYSTEM agreement test — that and nothing broader. The underlying property IS pinnable, and is
+// pinned, by TestHasActiveManualOverrideAt_SubMicrosecondTruncationIsLoadBearing
+// (internal/domain/user_test.go): choosing an instant strictly INSIDE the truncated remainder — after
+// floor(E), at or before E — makes the raw and floored values disagree about the very same override,
+// deterministically and with no database involved. The impossibility above comes entirely from the
+// fencing requirement forcing N to be microsecond-aligned; drop the shared-instant constraint and the
+// divergence is trivially observable. (Distinction added after Codex adversarial review of the round-7
+// diff flagged that "not constructible", unqualified, overstated the case.)

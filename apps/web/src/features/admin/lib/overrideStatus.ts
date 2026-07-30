@@ -42,7 +42,15 @@ export function isOverrideActive(
   now: Date = new Date()
 ): boolean {
   if (!override) return false
-  if (endsAt && new Date(endsAt).getTime() < now.getTime()) return false
+  if (endsAt) {
+    const endsAtMs = new Date(endsAt).getTime()
+    // An UNPARSEABLE date must fail CLOSED. Every comparison against NaN is false, so the naive
+    // `new Date(endsAt).getTime() < now` form silently falls through and reports the override as
+    // LIVE — precisely backwards. The three-axis rule's *representation* axis says: when the data
+    // does not let us establish a live comp, do not claim one. (Issue #1413; found by Codex
+    // adversarial review of the round-7 diff.)
+    if (Number.isNaN(endsAtMs) || endsAtMs < now.getTime()) return false
+  }
   if (knownTierNames === undefined) return true
   const known = knownTierNames instanceof Set ? knownTierNames : new Set(knownTierNames)
   return known.has(override)
@@ -68,6 +76,10 @@ export function getOverrideStatus(
   const expiresAt = new Date(manualTierEndsAt)
   const now = new Date()
 
+  // Unparseable date: report it as such rather than rendering "Expires in NaNd", and use the
+  // non-live `expired` variant so the row is never styled as an active comp. Matches
+  // isOverrideActive's fail-closed handling above — the two must not disagree about the same row.
+  if (Number.isNaN(expiresAt.getTime())) return { label: 'Invalid expiry', variant: 'expired' }
   if (expiresAt < now) return { label: 'Expired', variant: 'expired' }
 
   const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))

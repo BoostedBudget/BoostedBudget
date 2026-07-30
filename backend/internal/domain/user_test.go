@@ -307,6 +307,50 @@ func TestHasActiveManualOverrideAt_BoundarySemantics(t *testing.T) {
 	})
 }
 
+// TestHasActiveManualOverrideAt_SubMicrosecondTruncationIsLoadBearing proves WHY
+// AdminUserService.UpdateUserTier floors a caller-supplied expiresAt to microsecond precision
+// before it is both persisted and evaluated in Go (Issue #1413 round-7 gap J5).
+//
+// Postgres stores manual_tier_ends_at as timestamptz — MICROSECOND precision. Go's time.Time
+// carries NANOSECONDS, and expiresAt arrives as a JSON-decoded *time.Time with no precision
+// constraint. Left untruncated, the in-memory value and its own persisted form are DIFFERENT
+// instants, and this test picks the one moment where that difference is observable: an instant
+// strictly between the truncated value and the raw one. There, the two disagree about whether the
+// very same override is still active.
+//
+// This is the deterministic, constructible counterpart to the test that is NOT constructible — a
+// FENCED cross-system (Go-predicate vs SQL-predicate) integration test, where the shared comparison
+// instant must come from a single SELECT NOW() and is therefore itself microsecond-aligned, which
+// makes floor-truncation monotonic with respect to it and the two sides unable to disagree. See
+// profile_repository_manual_override_retention_integration_test.go for that argument. The property
+// worth pinning is this one, and it lives here.
+//
+// Added after Codex adversarial review of the round-7 diff observed, correctly, that the original
+// "not constructible" claim was stated too broadly.
+func TestHasActiveManualOverrideAt_SubMicrosecondTruncationIsLoadBearing(t *testing.T) {
+	override := "household_2"
+
+	// 789ns past a microsecond boundary — representable in Go, not in timestamptz.
+	raw := time.Date(2027, 3, 4, 5, 6, 7, 123456789, time.UTC)
+	truncated := raw.Truncate(time.Microsecond)
+	require.NotEqual(t, raw, truncated, "fixture must actually carry sub-microsecond precision")
+
+	// An instant inside the discarded remainder: after what Postgres would store, at or before what
+	// Go was handed. This is the ONLY window where the two representations disagree.
+	now := truncated.Add(500 * time.Nanosecond)
+	require.True(t, now.After(truncated) && !now.After(raw), "fixture must sit strictly inside the truncated remainder")
+
+	rawUser := &User{ManualTierOverride: &override, ManualTierEndsAt: &raw}
+	truncatedUser := &User{ManualTierOverride: &override, ManualTierEndsAt: &truncated}
+
+	assert.True(t, rawUser.hasActiveManualOverrideAt(now),
+		"the untruncated in-memory value still reads as ACTIVE at this instant")
+	assert.False(t, truncatedUser.hasActiveManualOverrideAt(now),
+		"its own persisted (floored) form reads as EXPIRED at the same instant — this divergence is "+
+			"exactly what truncating once at the service boundary eliminates, by making the value "+
+			"handed to Go and the value written to Postgres the same instant by construction")
+}
+
 // TestComputeEffectiveTier_Characterization is a characterization test proving the
 // ComputeEffectiveTier refactor (delegating onto HasActiveManualOverride) is
 // behaviour-preserving across the same matrix already covered by the individual

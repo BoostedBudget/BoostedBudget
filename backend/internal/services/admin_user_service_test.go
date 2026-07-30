@@ -822,11 +822,28 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 // argument matcher below (which requires exact microsecond alignment) does not match the raw
 // nanosecond-precision fixture, so mockRepo has no matching expectation and testify's mock.Mock
 // panics with "I don't know what to return" — confirmed by temporarily reverting the truncation
-// during development. See admin_user_service.go's UpdateUserTier for why a companion
-// cross-system (Go predicate vs SQL predicate) integration test was deliberately NOT added: it
-// was attempted and found incapable of discriminating truncated from untruncated input once the
-// clock-fencing rule required for CI stability is followed (see
-// profile_repository_manual_override_retention_integration_test.go's comment on that finding).
+// during development.
+//
+// Scope of this test, stated precisely: it pins the value handed to the REPOSITORY. It does not by
+// itself pin the Clerk-sync path, which reads the same variable a few lines later
+// (admin_user_service.go builds a scratch domain.User from it). That is structurally the same value
+// today, but this test would not notice if a refactor split them.
+//
+// The Clerk half cannot be discriminated deterministically here: the Clerk payload carries only
+// subscription_tier / subscription_status / tier — never the timestamp itself — so an untruncated
+// expiry is observable through Clerk ONLY when it straddles the evaluation instant, and that instant
+// is an un-injectable time.Now() inside the service.
+//
+// The property that actually matters — that a sub-microsecond remainder changes the answer, which is
+// why truncation exists at all — is pinned deterministically at the domain layer by
+// TestHasActiveManualOverrideAt_SubMicrosecondTruncationIsLoadBearing (internal/domain/user_test.go).
+//
+// What remains genuinely not constructible is narrower than earlier wording here implied: a FENCED
+// cross-system (Go predicate vs SQL predicate) integration test, where the shared comparison instant
+// must come from a single SELECT NOW() for CI clock stability and is therefore microsecond-aligned,
+// making floor-truncation monotonic with respect to it. See
+// profile_repository_manual_override_retention_integration_test.go for that argument. (Narrowed after
+// Codex adversarial review of the round-7 diff observed the original claim was too absolute.)
 func TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
 	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
