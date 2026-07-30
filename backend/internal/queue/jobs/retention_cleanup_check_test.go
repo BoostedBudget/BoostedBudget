@@ -1020,6 +1020,72 @@ func TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery(t *testing.T) 
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestRetentionCleanupCheck_PlaidRepairSkipsIfDeletionRequestedSinceQuery is Issue #1413 Task JA's
+// Part 2 RED test (PR #1443 round-7 gap analysis, live production defect): isStillEligible
+// (retention_cleanup_check.go:1023) re-checks subscription status, active override, and
+// marker-occurrence identity on every re-read — but, before this fix, never re-checked
+// deletion_requested_at. So a deletion request filed in the race window between
+// GetUsersNeedingPlaidDisconnectRepair's candidate selection and this worker's per-item Plaid call
+// would NOT abort an in-flight disconnect: a user who files for deletion in that exact window would
+// have their live bank connections severed anyway, even though GetUsersNeedingPlaidDisconnectRepair
+// itself (and both marker backstops) would have excluded them outright had the deletion request been
+// on the row before the candidate query ran at all — see that query's own
+// `deletion_requested_at IS NULL` filter (profile_repository.go).
+//
+// Modeled exactly like TestRetentionCleanupCheck_PlaidRepairSkipsIfCompedSinceQuery just above (same
+// shape, different axis): the BATCH candidate snapshot carries no deletion_requested_at at all
+// (passes any belt-and-braces guard, reaching the re-read), but the RE-READ reflects a deletion
+// request filed in the window since the candidate query ran.
+//
+// Falsifiability: removing isStillEligible's deletion_requested_at check (or never adding it) makes
+// this test fail — DisconnectAllUserItemsIfEligible WOULD be called for this candidate.
+func TestRetentionCleanupCheck_PlaidRepairSkipsIfDeletionRequestedSinceQuery(t *testing.T) {
+	ctx := context.Background()
+
+	stalePendingSince := time.Now().Add(-100 * time.Hour)
+	staleUser := &domain.User{ID: "user-deletionrequestedsincequery", Email: "deletionrequestedsincequery@example.com", SubscriptionStatus: "cancelled", PlaidCleanupPendingAt: &stalePendingSince}
+	users := []*domain.User{staleUser}
+	deletionRequestedAt := time.Now()
+	currentUser := &domain.User{
+		ID: "user-deletionrequestedsincequery", Email: "deletionrequestedsincequery@example.com", SubscriptionStatus: "cancelled",
+		PlaidCleanupPendingAt: &stalePendingSince,
+		DeletionRequestedAt:   &deletionRequestedAt,
+	}
+
+	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil).Maybe()
+	mockDeletion := new(MockRetentionDeletionService)
+	mockEmail := new(MockRetentionEmailService)
+	mockPlaid := new(MockRetentionPlaidCleanup)
+
+	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return(users, nil)
+	mockRepo.On("GetUserByID", ctx, "user-deletionrequestedsincequery").Return(currentUser, nil)
+	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
+	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
+	// DisconnectAllUserItemsIfEligible and ClearPlaidCleanupPendingIfMatches are deliberately left
+	// unstubbed: an unexpected call panics, proving isStillEligible's OWN deletion_requested_at
+	// re-check (not any belt-and-braces guard above the loop, which this batch user does not trip,
+	// since the batch snapshot itself carries no deletion_requested_at) is what stops the repair.
+
+	worker := NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{
+		ProfileRepo:     mockRepo,
+		DeletionService: mockDeletion,
+		EmailService:    mockEmail,
+		RetentionMonths: 6,
+		Logger:          slog.Default(),
+	})
+	worker.SetPlaidCleanup(mockPlaid)
+	job := newTestRetentionCleanupJob(RetentionCleanupCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+	require.NoError(t, err)
+
+	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItemsIfEligible", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestRetentionCleanupCheck_PlaidRepairFailure_NonFatal_ContinuesToNoticesAndDeletion proves the
 // Plaid-disconnect repair step is non-fatal, like the retention-clock repair and notice/deletion
 // steps: a repair failure must not prevent the notice and deletion steps from still running in the

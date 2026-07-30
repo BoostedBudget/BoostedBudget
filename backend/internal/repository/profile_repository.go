@@ -1022,7 +1022,45 @@ func (r *profileRepository) MarkForDeletion(ctx context.Context, userID string, 
 	return nil
 }
 
-// CancelDeletion cancels a pending deletion request
+// CancelDeletion cancels a pending deletion request.
+//
+// Issue #1413 Task JA (live production defect, PR #1443 round-7 gap analysis, highest severity):
+// also sets plaid_cleanup_pending_at = NULL. GetUsersNeedingPlaidDisconnectRepair,
+// StampMissingPlaidCleanupMarkers, and ClearCompletedPlaidCleanupMarkers (all three, this file) filter
+// deletion_requested_at IS NULL — so while a deletion request is pending, plaid_cleanup_pending_at is
+// completely frozen: no backstop can touch it, and the repair candidate query cannot see the user at
+// all, no matter how stale the marker gets. Before this fix, CancelDeletion cleared only
+// deletion_requested_at/deletion_scheduled_at, making the user visible to the candidate query again
+// with whatever marker value had been frozen for however long the deletion request sat open — for a
+// lapsed user with a live linked item, that marker is typically already far past the 72-hour grace
+// window the instant they become visible again. The very next repairPlaidDisconnects pass (which runs
+// on every process boot, RunOnStart: true — see retention_cleanup_check.go) would then disconnect
+// every one of that user's bank connections with ZERO grace, at the exact moment they signalled they
+// wanted to keep the account by cancelling the deletion.
+//
+// NULL, not NOW() (Task JA — this choice matters more than the edit itself): NULL delegates the
+// decision to StampMissingPlaidCleanupMarkers, which only re-stamps a fresh NOW() if an episode is
+// GENUINELY still open (ineligible status AND a live linked item AND no active comp — its own doc
+// comment, this file). Writing NOW() directly here would unconditionally stamp a marker even when no
+// episode is actually open (e.g. the user resubscribed while their deletion request was pending),
+// manufacturing exactly the phantom-marker rows issue #1453 tracks. This is the subsystem's "two
+// facts, two sources" rule, restated for this writer: this column records only that an episode BEGAN;
+// StampMissingPlaidCleanupMarkers is the sole place that decides whether one is currently open. A NULL
+// marker can never itself trigger a disconnect (GetUsersNeedingPlaidDisconnectRepair requires
+// plaid_cleanup_pending_at IS NOT NULL), so this intermediate state fails safe even before the next
+// backstop pass runs.
+//
+// Restores a FULL grace window within a single repairPlaidDisconnects pass, not after a delay:
+// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers both run before the candidate
+// query on every pass (repairPlaidDisconnects, retention_cleanup_check.go) — so in the very same pass,
+// Stamp writes a fresh clock_timestamp() for this NULL marker (episode still open: ineligible status,
+// live item, no comp) and the candidate query's own GREATEST(...) < clock_timestamp() - grace
+// comparison then evaluates false against that just-written value. The user is not selected, and a
+// clean 72-hour grace window starts from this cancellation instant, not from whatever the frozen
+// value used to be.
+//
+// See TestCancelDeletion_Integration_ClearsStaleMarkerRestoresFullGraceWindow
+// (profile_repository_deletion_cancel_marker_integration_test.go) for the regression proof.
 func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) error {
 	now := time.Now()
 
@@ -1030,6 +1068,7 @@ func (r *profileRepository) CancelDeletion(ctx context.Context, userID string) e
 		UPDATE users
 		SET deletion_requested_at = NULL,
 		    deletion_scheduled_at = NULL,
+		    plaid_cleanup_pending_at = NULL,
 		    updated_at = $1
 		WHERE id = $2 AND is_deleted = FALSE
 	`
