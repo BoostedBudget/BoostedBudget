@@ -485,9 +485,20 @@ func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQu
 	mockEmail := new(MockRetentionEmailService)
 	mockPlaid := new(MockRetentionPlaidCleanup)
 
+	// Record the ACTUAL call order. Round 17 (Codex review): this test previously asserted only that
+	// both methods were called, which the test's own name ("...BeforeCandidateQuery") and the
+	// production requirement both make insufficient — it passed identically if the candidate query ran
+	// FIRST, which would defeat the entire point of the backstop (a user healed this pass would not be
+	// selected until the next one). Ordering is the behaviour under test, so ordering is what must be
+	// asserted.
+	var callOrder []string
 	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return([]*domain.User{}, nil)
-	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).Return(2, nil).Once()
-	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
+	mockRepo.On("StampMissingPlaidCleanupMarkers", ctx).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "stamp") }).
+		Return(2, nil).Once()
+	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).
+		Run(func(mock.Arguments) { callOrder = append(callOrder, "candidates") }).
+		Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersWithExpiredRetention", ctx).Return([]*domain.User{}, nil)
@@ -510,6 +521,13 @@ func TestRetentionCleanupCheck_PlaidRepair_StampsMissingMarkersBeforeCandidateQu
 
 	mockRepo.AssertCalled(t, "StampMissingPlaidCleanupMarkers", ctx)
 	assert.Contains(t, logBuf.String(), "healed_count=2", "a non-zero heal count must be logged so the backstop's activity is observable")
+
+	// The assertion the test's name actually promises: the backstop ran BEFORE the candidate query.
+	// Falsifiable by construction — moving the StampMissingPlaidCleanupMarkers call after the
+	// GetUsersNeedingPlaidDisconnectRepair call in repairPlaidDisconnects flips this to
+	// ["candidates","stamp"] and fails here.
+	require.Equal(t, []string{"stamp", "candidates"}, callOrder,
+		"the self-healing backstop must run BEFORE the candidate query — a user healed in this pass has to be selectable in this same pass, otherwise every heal costs an extra full repair-pass interval")
 }
 
 // TestRetentionCleanupCheck_PlaidRepair_StampMissingMarkersFailure_NonFatal proves a backstop

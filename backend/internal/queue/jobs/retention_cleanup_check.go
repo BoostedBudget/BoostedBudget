@@ -798,11 +798,25 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// Issue #1413 round 16: the self-healing backstop runs FIRST, before the candidate query, on
 	// every single pass — see StampMissingPlaidCleanupMarkers's own doc comment
 	// (profile_repository.go) for the full rationale and the four properties this ordering and
-	// shape are chosen to satisfy. A failure here is logged and does NOT fail this step (let alone
-	// the whole job): the backstop is itself idempotent and re-attempted on every future pass, so a
-	// transient failure to heal THIS run is not lost — it is simply retried, for free, next time.
+	// shape are chosen to satisfy.
+	//
+	// Round 17 (Codex review) corrected how a failure here is reported. It still does NOT fail this
+	// step or the job — returning an error would skip the 30-day/7-day GDPR pre-deletion notices and
+	// deleteExpiredAccounts for EVERY user, and that isolation is deliberate. But the original
+	// handling (a Warn, excluded from errorCount and from every metric) was wrong for THIS call
+	// specifically, and the distinction is worth stating because it is easy to get backwards:
+	//
+	// A per-user failure below is self-limiting — that user keeps a non-NULL marker, so the candidate
+	// query still selects them next pass and the retry is free. That is why `return nil` is right
+	// there. Nothing, however, covers for the backstop: it is the ONLY thing that returns a
+	// NULL-marker/live-item user to visibility, and such a user is otherwise invisible to the
+	// candidate query forever, meaning their bank connections are never disconnected. A persistently
+	// broken backstop is therefore a silent data-retention failure, and it must not be detectable
+	// only as an ABSENCE of "healed" log lines while Work() goes on recording a successful heartbeat.
+	// Hence: Error (not Warn) plus a dedicated counter to alert on.
 	if healedCount, healErr := w.profileRepo.StampMissingPlaidCleanupMarkers(ctx); healErr != nil {
-		w.logger.Warn("plaid_cleanup_pending_at self-healing backstop failed — continuing with the candidate query as-is; this is naturally retried on the next pass",
+		observability.PlaidCleanupBackstopFailuresTotal.Inc()
+		w.logger.Error("plaid_cleanup_pending_at self-healing backstop FAILED — any user with a live linked item and a NULL marker stays invisible to the repair candidate query until a later pass heals them; a sustained failure rate here means their Plaid items are never disconnected",
 			"job_id", jobID, "error", healErr)
 	} else if healedCount > 0 {
 		w.logger.Info("plaid_cleanup_pending_at self-healing backstop stamped missing markers",

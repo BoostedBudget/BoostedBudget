@@ -973,9 +973,23 @@ func TestStampMissingPlaidCleanupMarkers_Integration_HealsNullMarkerWithLiveItem
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerAfter))
 	require.NotNil(t, markerAfter, "the backstop must stamp a marker for an ineligible user with a live item and a NULL marker")
 
-	// AFTER: past a (near-zero) grace period, the now-healed user must be selected.
-	time.Sleep(5 * time.Millisecond)
-	after, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+	// AFTER: past the grace period, the now-healed user must be selected.
+	//
+	// The two facts are asserted SEPARATELY and deliberately, because coupling them makes this test
+	// flaky in CI. `markerAfter != nil` above already proves the backstop stamped — that assertion is
+	// skew-free, since it only reads back what Postgres wrote. Selection is a different fact, and
+	// GetUsersNeedingPlaidDisconnectRepair computes its cutoff as a GO-side `time.Now().Add(-grace)`
+	// (profile_repository.go) which it compares against this Postgres-written marker. That mixes
+	// clocks. Production is unaffected — the real grace is 72h, so millisecond skew is irrelevant —
+	// but the original form here slept 5ms in Go against a 1ms grace, where a Postgres container
+	// clock a few ms ahead of the runner's flips `marker < cutoff` to false and fails the test. That
+	// is precisely the cross-clock class this same round fixed in the migration-000121 tests.
+	//
+	// So: back-date the (already-proven) marker by an hour using the package's established
+	// Postgres-side helper, then query with a grace far larger than any plausible skew. Now neither
+	// assertion depends on a millisecond race, and both still test what their names claim.
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+	after, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Minute)
 	require.NoError(t, err)
 	found := false
 	for _, c := range after {
