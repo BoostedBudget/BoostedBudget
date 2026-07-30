@@ -582,6 +582,22 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // (internal/services/account_service.go). That is exactly why round 16 chose the backstop instead:
 // it needs no coordination between the two unrelated paths at all, closing the gap from a third,
 // independent location rather than asking two unrelated writers to agree on a lock.
+//
+// A second correction, this one to round 15's OTHER claim (Issue #1413 Finding 1, Codex review, PR
+// #1443 follow-up, headline finding): round 15 called a spurious round-14 M1 stamp "merely an untidy
+// non-NULL timestamp the repair query's own live-item EXISTS clause filters out forever (an accepted,
+// separately-tracked residue class, #1453)". That is WRONG, and so is every other place on this
+// branch that called this state inert or harmless. The COALESCE just above
+// (removeUserTierOverrideUpdate's plaid_cleanup_pending_at = CASE ...) is exactly the mechanism that
+// turns a stale-but-non-NULL marker into live harm: if a PRIOR episode's cleanup completed but the
+// marker was never cleared (e.g. StampMissingPlaidCleanupMarkers's clearing counterpart,
+// ClearCompletedPlaidCleanupMarkers, has not yet run — see its own doc comment,
+// profile_repository.go), this UPDATE's COALESCE(u.plaid_cleanup_pending_at, NOW()) preserves that
+// stale timestamp instead of starting a fresh one, even though the user has since relinked a bank and
+// the removed comp is handing them straight back to repairPlaidDisconnects. The next pass sees a live
+// item paired with an already-expired grace window and disconnects the newly-linked bank immediately
+// — the grace window this whole mechanism exists to provide, silently skipped. Not filtered out
+// forever; reachable, and harmful, the moment a comp is granted and removed over it.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''

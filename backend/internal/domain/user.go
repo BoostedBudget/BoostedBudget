@@ -144,6 +144,22 @@ type User struct {
 	//   ordinary Plaid-less cancellation and true migration residue are indistinguishable at the row
 	//   level, and both are legitimate, reachable states.
 	//
+	//   Issue #1413 Finding 1 (Codex review, PR #1443 follow-up): until this fix, this genuine
+	//   violation was only ever CHECKED (assertPlaidMarkerInvariant), never HEALED — nothing cleared a
+	//   marker left set after its episode's cleanup completed, and several comments across this branch
+	//   incorrectly described that state as harmless "inert" or "untidy" residue the candidate query's
+	//   own live-item EXISTS clause would filter out forever. It is not harmless: a stale marker left
+	//   set through a comp grant, a relink, and a comp removal survives
+	//   removeUserTierOverrideUpdate's COALESCE(existing, NOW()) unchanged (admin_user_repository.go),
+	//   so the NEXT repair pass sees a genuinely fresh live item paired with an already-expired
+	//   grace-window timestamp and disconnects it immediately — the exact protection this whole grace
+	//   window exists to provide, silently skipped. ClearCompletedPlaidCleanupMarkers
+	//   (profile_repository.go) is this violation's healer, symmetric with StampMissingPlaidCleanupMarkers
+	//   for the OTHER direction: both run on every repairPlaidDisconnects pass, so this invariant's
+	//   second conjunct is now, like the first, guaranteed true again within at most one repair-pass
+	//   interval of any writer failing to maintain it — never true permanently, by design, for the
+	//   same reason stated above.
+	//
 	//   Deliberately NOT part of this invariant: manual_tier_override. Whether the user carries a
 	//   currently-active admin comp is a function of WALL-CLOCK TIME (HasActiveManualOverride()
 	//   compares manual_tier_ends_at against time.Now() on every read), not of any write — an

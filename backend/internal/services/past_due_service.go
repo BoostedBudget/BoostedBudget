@@ -36,11 +36,24 @@ const pastDueClaimLease = 15 * time.Minute
 // single, swallowed clear attempt here used to leave plaid_cleanup_pending_at stuck non-NULL
 // forever on any transient DB error, since this flow's synchronous disconnect already removed the
 // live linked item GetUsersNeedingPlaidDisconnectRepair's own predicate requires to ever reselect
-// this user again. Duplicated here (not imported) rather than shared: retention_cleanup_check.go's
-// constants are unexported in a different package (queue/jobs vs services).
+// this user again.
+//
+// Issue #1413 Finding 3 (Codex review, PR #1443 follow-up): through that fix, this comment said
+// these were "duplicated here (not imported) rather than shared" because "retention_cleanup_check.go's
+// constants are unexported in a different package (queue/jobs vs services)" — true, and exactly the
+// drift risk Finding 3 flagged: two independently hand-copied definitions of the same two numbers,
+// the identical failure mode that produced this branch's main.go wiring bug elsewhere. `services`
+// still cannot import `queue/jobs` (that package already imports `services`; importing back would
+// invert the dependency), but both packages already import `repository` — the package that defines
+// ClearPlaidCleanupPendingIfMatches itself, the call these retries wrap — so these two names are now
+// plain aliases to repository.PlaidCleanupMarkerClearMaxAttempts /
+// repository.PlaidCleanupMarkerClearRetryDelay (see that pair's own doc comment, profile_repository.go)
+// rather than a second independent literal. Every existing reference in this file (and its tests)
+// keeps working unchanged; only the underlying LITERAL moved, to the one place both packages can
+// reach without inverting anything.
 const (
-	plaidCleanupMarkerClearMaxAttempts = 3
-	plaidCleanupMarkerClearRetryDelay  = 50 * time.Millisecond
+	plaidCleanupMarkerClearMaxAttempts = repository.PlaidCleanupMarkerClearMaxAttempts
+	plaidCleanupMarkerClearRetryDelay  = repository.PlaidCleanupMarkerClearRetryDelay
 )
 
 // PastDueProfileRepository defines the repository methods needed by PastDueService.
@@ -468,12 +481,19 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// success/failure) to obtain the exact marker value THIS flip just wrote, then clears it via the
 	// CAS-guarded ClearPlaidCleanupPendingIfMatches — never the unconditional ClearPlaidCleanupPending
 	// — so a brand-new episode's marker (e.g. a comp granted then removed in the narrow window since
-	// the flip) survives untouched. Losing this write is NOT correctness-critical for THIS cycle — a
-	// stuck marker on an already-fully-disconnected user is inert (GetUsersNeedingPlaidDisconnectRepair
-	// requires a LIVE linked item, and none remain) — but leaving it set FOREVER is real phantom
-	// residue (#1453), not harmless: since the disconnect that just succeeded removed the very live
-	// item that predicate requires, GetUsersNeedingPlaidDisconnectRepair can never reselect this user
-	// again to retry the clear either. Issue #1413 #1453 (Codex review, PR #1443 follow-up): a single,
+	// the flip) survives untouched. Losing this write is not correctness-critical for THIS cycle in
+	// isolation — GetUsersNeedingPlaidDisconnectRepair requires a LIVE linked item, and none remain
+	// right now — but leaving it set FOREVER is real phantom residue (#1453), and Issue #1413 Finding 1
+	// (Codex review, PR #1443 follow-up, headline finding) is the correction that matters here: this
+	// comment used to call that residue "inert". It is not. A comp granted and later removed over that
+	// stale marker (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it
+	// instead of starting a fresh episode, so a bank the user relinks in the meantime inherits an
+	// already-expired grace window and gets disconnected with zero notice the next
+	// repairPlaidDisconnects pass. RetentionCleanupCheckWorker's self-healing backstop
+	// (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what actually closes this residual
+	// within one backstop interval — not the residue being harmless on its own — since the disconnect
+	// that just succeeded removed the very live item that predicate requires, GetUsersNeedingPlaidDisconnectRepair
+	// can never reselect this user again to retry the clear either. Issue #1413 #1453 (Codex review, PR #1443 follow-up): a single,
 	// swallowed clear attempt used to leave the marker stuck non-NULL on any transient DB error at
 	// exactly this moment — bring this into line with the identical fix already applied to
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects's own marker clear (retention_cleanup_check.go):

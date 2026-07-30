@@ -999,10 +999,21 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// cleanup for THIS episode is already done — per the invariant
 	// (domain.User.PlaidCleanupPendingAt's doc comment), the marker must go back to NULL, or it
 	// permanently overstates "cleanup outstanding" for a user whose Plaid items are already
-	// disconnected. GetUsersNeedingPlaidDisconnectRepair's own live-linked-item EXISTS check means a
-	// stuck marker here can never cause a WRONG disconnect (there is nothing left to disconnect), but
-	// the invariant's value is being unconditionally checkable, not merely harmless in practice — see
-	// the task brief this fix closes.
+	// disconnected.
+	//
+	// Correction (Issue #1413 Finding 1, Codex review, PR #1443 follow-up, headline finding): this
+	// comment used to claim a stuck marker here "can never cause a WRONG disconnect (there is nothing
+	// left to disconnect)". That is FALSE, and was the exact belief Finding 1 overturned. A stuck
+	// marker CAN cause a wrong disconnect later, through a different user action entirely: if this
+	// clear (below) never succeeds, the stale marker survives; an admin can grant a comp, the user can
+	// relink a bank (a genuinely NEW live item, under the OLD stale timestamp), and removing the comp
+	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves that stale
+	// timestamp instead of starting a fresh episode — so repairPlaidDisconnects's next pass sees a
+	// live item paired with an already-expired grace window and disconnects the newly-linked bank
+	// immediately, with zero grace. RetentionCleanupCheckWorker.repairPlaidDisconnects's own
+	// self-healing backstop (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what
+	// actually closes this residual now — see its doc comment for the full scenario — rather than the
+	// stuck marker being inert on its own.
 	//
 	// Gated on w.plaidCleanupSvc != nil: a nil collaborator means NO disconnect call was made at all
 	// (Issue #896's existing nil-guard, tested by TestWorker_SubscriptionCanceled_PlaidCleanupNil_

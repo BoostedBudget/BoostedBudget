@@ -1127,3 +1127,397 @@ func TestStampMissingPlaidCleanupMarkers_Integration_Idempotent(t *testing.T) {
 	require.NotNil(t, secondStamp)
 	assert.True(t, firstStamp.Equal(*secondStamp), "a second backstop run must not re-stamp (and thus re-arm the grace window for) a marker that is already set")
 }
+
+// ─── Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, headline finding):
+// ClearCompletedPlaidCleanupMarkers, the self-healing backstop's symmetric CLEARING half ──────
+//
+// Until this fix, a marker left set after its episode's cleanup completed (e.g. every
+// clearPlaidCleanupMarkerWithRetry attempt failing after a successful disconnect) was believed
+// harmless — several comments across this branch called it "inert" or "untidy residue" the
+// candidate query's own live-item EXISTS clause would filter out forever. That belief was WRONG: a
+// comp granted and later removed over that stale marker (removeUserTierOverrideUpdate's COALESCE,
+// admin_user_repository.go) preserves it instead of starting a fresh episode, so a bank the user
+// relinks in the meantime inherits an already-expired grace window and gets disconnected
+// immediately, with ZERO grace, the next repairPlaidDisconnects pass. See
+// TestPlaidDisconnectRepair_Integration_StaleMarkerHealedBeforeRelink_FreshGraceWindowEnforced below
+// for the full five-step scenario reproduced end to end.
+
+// TestClearCompletedPlaidCleanupMarkers_Integration_ClearsStaleMarkerWithCompletedCleanup is the
+// headline RED test the task brief calls for at the repository level: a user who is ineligible,
+// whose marker is set, and whose ONLY linked item is already disconnected (cleanup for this episode
+// genuinely completed) must have that marker cleared by ClearCompletedPlaidCleanupMarkers.
+//
+// Falsifiability: reverting ClearCompletedPlaidCleanupMarkers to a no-op (or deleting it) makes this
+// test fail to compile — mirrors TestStampMissingPlaidCleanupMarkers_Integration_HealsNullMarkerWithLiveItem's
+// own precedent for the Stamp half (reported failing via build error before that method existed).
+func TestClearCompletedPlaidCleanupMarkers_Integration_ClearsStaleMarkerWithCompletedCleanup(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_clearcompleted_" + suffix,
+		Email:              "clearcompleted-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Models the state left behind by a disconnect that succeeded but whose marker-clear retries all
+	// failed: the ONLY linked item is already 'disconnected' (zero live), but the marker is still set,
+	// stale — older than the grace period.
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "disconnected")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour))
+
+	clearedCount, err := repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, clearedCount, 1, "at least this fixture's row must be cleared")
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "a marker on a user whose cleanup has already completed (zero live items, at least one linked_items row) must be cleared")
+}
+
+// TestClearCompletedPlaidCleanupMarkers_Integration_KeepsMarkerWithZeroLinkedItemsAtAll pins the
+// #1453 allowance, unchanged and mandatory: a user with ZERO linked_items rows at all (an ordinary
+// never-linked-Plaid cancellation, or genuine 000119/000120 migration residue — indistinguishable at
+// the row level, and both legitimate) must KEEP their marker. Clearing those would silently change
+// behavior for a population this branch has deliberately, repeatedly left alone.
+//
+// Falsifiability: dropping the anyLinkedItemExistsClause condition (clearing on
+// "NOT liveLinkedItemExistsClause" alone) makes this test fail — the marker would be nulled even
+// though this user has never linked a single Plaid item.
+func TestClearCompletedPlaidCleanupMarkers_Integration_KeepsMarkerWithZeroLinkedItemsAtAll(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_clearzerorows_" + suffix,
+		Email:              "clearzerorows-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Deliberately NO seedLinkedItem call — this user has never linked Plaid at all (the #1453 shape).
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker, "the #1453 allowance: a user with ZERO linked_items rows at all must KEEP their marker")
+	assert.True(t, staleMarker.Equal(*marker), "the marker's VALUE must be completely untouched, not just non-NULL")
+}
+
+// TestClearCompletedPlaidCleanupMarkers_Integration_ExcludesUserWithLiveItem proves the clear never
+// touches a user who genuinely still has outstanding cleanup — mirrors
+// TestStampMissingPlaidCleanupMarkers_Integration_ExcludesUserWithNoLiveItems's own shape for the
+// opposite direction.
+func TestClearCompletedPlaidCleanupMarkers_Integration_ExcludesUserWithLiveItem(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_clearlive_" + suffix,
+		Email:              "clearlive-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker, "a user with at least one LIVE linked item must never have their marker cleared — cleanup is still genuinely outstanding")
+	assert.True(t, staleMarker.Equal(*marker))
+}
+
+// TestClearCompletedPlaidCleanupMarkers_Integration_ClearsRegardlessOfActiveOverride proves the
+// deliberate asymmetry with StampMissingPlaidCleanupMarkers (which DOES exclude a currently-comped
+// user via noActiveManualOverridePredicate): Clear must NOT exclude one. If it did, a comp granted in
+// the narrow window between a failed clear and this backstop's next scheduled pass would suppress
+// the heal for as long as the comp stays active — reproducing Finding 1's exact bug on the very next
+// removal, since removeUserTierOverrideUpdate's COALESCE only starts a fresh episode when the column
+// is genuinely NULL.
+func TestClearCompletedPlaidCleanupMarkers_Integration_ClearsRegardlessOfActiveOverride(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_clearcomped_" + suffix,
+		Email:              "clearcomped-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "disconnected")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour))
+	future := time.Now().Add(24 * time.Hour)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, future, user.ID)
+	require.NoError(t, err)
+
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "unlike Stamp, Clear must NOT exclude a currently-comped user — the stale marker must be healed before, not after, a later comp removal's COALESCE can preserve it")
+}
+
+// TestClearCompletedPlaidCleanupMarkers_Integration_Idempotent proves the clear backstop is safe to
+// run on every single pass: once a marker is cleared, a second call must be a pure no-op (nothing
+// left to clear).
+func TestClearCompletedPlaidCleanupMarkers_Integration_Idempotent(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_clearidem_" + suffix,
+		Email:              "clearidem-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "disconnected")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-testGracePeriod-time.Hour))
+
+	firstClearedCount, err := repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, firstClearedCount, 1)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.Nil(t, marker)
+
+	// A second run must not error and must not touch this already-NULL row again (there is nothing
+	// left matching plaid_cleanup_pending_at IS NOT NULL for this user).
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker)
+}
+
+// TestPlaidDisconnectRepair_Integration_StaleMarkerHealedBeforeRelink_FreshGraceWindowEnforced is
+// THE test the task brief calls "the test that matters": the verified five-step scenario reproduced
+// end to end at the repository level (RetentionCleanupCheckWorker.repairPlaidDisconnects itself lives
+// in package jobs and cannot be driven from here without an import cycle, so this test drives the
+// SAME sequence of repository calls that function makes on every pass — Stamp, then Clear, then the
+// candidate query — directly).
+//
+//  1. A user's repair completed (all linked items disconnected) but the marker-clear retries all
+//     failed at the time: marker T survives, stale (older than grace), on a user with ZERO live
+//     items. Modeled via seedLinkedItem("disconnected") + setPlaidCleanupPendingAt(T) — raw SQL,
+//     because CreateUserTx never sets plaid_cleanup_pending_at and no production writer models
+//     "disconnect succeeded but the clear itself failed" as an isolated setup step.
+//  2. The NEXT repairPlaidDisconnects pass runs its backstop (this is the fix): calling
+//     ClearCompletedPlaidCleanupMarkers here nulls the stale marker, since cleanup for this episode
+//     has genuinely completed (zero live items, at least one linked_items row).
+//  3. The user relinks a bank — a genuinely NEW live item, modeled via seedLinkedItem("active")
+//     (the established convention this entire file already uses for a linked item, since driving a
+//     real Plaid Link flow through AccountService would require mocking the Plaid client, out of
+//     scope for a repository-layer test).
+//  4. The backstop's Stamp half (StampMissingPlaidCleanupMarkers) now fires for this user: marker is
+//     NULL, a live item exists, status is ineligible, no active override — so it stamps a FRESH
+//     NOW() marker for the new episode. This is what removeUserTierOverrideUpdate's COALESCE would
+//     otherwise have to do at comp-removal time; calling Stamp directly here is equivalent to "a comp
+//     was never granted at all in this run", which is the simpler and sufficient case to prove the
+//     window is closed — admin_user_repository_remove_tier_override_integration_test.go's own suite
+//     separately covers the COALESCE write itself.
+//  5. GetUsersNeedingPlaidDisconnectRepair, called with the production-shaped grace period, must NOT
+//     select this user — the marker is fresh, not past grace. Before this fix (step 2 removed), the
+//     marker would still be T (stale), and this same call would WRONGLY select the user, disconnecting
+//     a bank connection that is only moments old with zero grace.
+//
+// RED confirmation (documented, not left implicit): with the ClearCompletedPlaidCleanupMarkers call
+// in step 2 removed/no-op'd (simulating pre-fix code, since the method did not exist before this
+// change), this test fails — GetUsersNeedingPlaidDisconnectRepair DOES select the user in step 5,
+// because the stale marker T (older than grace) survives the relink untouched. Confirmed by running
+// this exact scenario with step 2 stubbed out before ClearCompletedPlaidCleanupMarkers was
+// implemented; see this task's report for the transcript.
+func TestPlaidDisconnectRepair_Integration_StaleMarkerHealedBeforeRelink_FreshGraceWindowEnforced(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_gracebypass_" + suffix,
+		Email:              "gracebypass-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Step 1: repair completed, clear failed — stale marker T survives on a user with zero live items.
+	seedLinkedItem(t, pool, user.ID, "item-old-"+suffix, "disconnected")
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+
+	// Precondition: without any backstop intervention, this user IS currently a "stale marker, zero
+	// live items" row — the exact shape assertPlaidMarkerInvariant
+	// (profile_repository_plaid_marker_invariant_integration_test.go) already classifies as a
+	// violation, and the exact shape this fix must heal.
+	total, live := plaidMarkerLinkedItemCounts(t, pool, user.ID)
+	require.Equal(t, 1, total)
+	require.Equal(t, 0, live)
+
+	// Step 2 (the fix): the backstop's Clear half runs and heals the stale marker BEFORE the relink.
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	var markerAfterClear *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerAfterClear))
+	require.Nil(t, markerAfterClear, "precondition for the rest of this test: the stale marker must be healed before the relink")
+
+	// Step 3: the user relinks a bank — a genuinely NEW live item.
+	seedLinkedItem(t, pool, user.ID, "item-new-"+suffix, "active")
+
+	// Step 4: the backstop's Stamp half fires on the next pass, arming a FRESH marker for the new
+	// episode (equivalent to removeUserTierOverrideUpdate's COALESCE seeing NULL at comp-removal time).
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	var markerAfterStamp *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerAfterStamp))
+	require.NotNil(t, markerAfterStamp, "the backstop must arm a fresh marker for the newly-live episode")
+	assert.True(t, markerAfterStamp.After(staleMarker), "the fresh marker must NOT be the old stale value T — it must be a new timestamp, giving a full fresh grace window")
+
+	// Step 5: the candidate query, with the production-shaped grace period, must NOT select this user
+	// — the marker is fresh, not past grace. This is the assertion that would have FAILED against the
+	// stale marker T (older than grace) if step 2 had not healed it first.
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID,
+			"a freshly-relinked bank must get its OWN fresh grace window — it must not inherit a stale, already-expired timestamp from a completed prior episode and be disconnected with zero grace")
+	}
+}
+
+// TestPlaidDisconnectRepair_Integration_1453ZeroRowsCase_KeepsMarkerAndIsNeverSelected pins the
+// #1453 allowance end to end, through both halves of the backstop plus the candidate query: a user
+// with ZERO linked_items rows at all must keep whatever marker they have (Clear must not touch it),
+// and must never be selected by the candidate query either way (no live item can ever exist for
+// them) — the two Plaid-cleanup-marker guarantees this branch makes for that population, proven
+// together.
+func TestPlaidDisconnectRepair_Integration_1453ZeroRowsCase_KeepsMarkerAndIsNeverSelected(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_1453e2e_" + suffix,
+		Email:              "1453e2e-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Deliberately NO seedLinkedItem call at all — never linked Plaid / migration-residue shape.
+	staleMarker := time.Now().Add(-testGracePeriod - time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+
+	_, err = repo.ClearCompletedPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker, "the #1453 allowance: a zero-linked-items user keeps their marker through BOTH backstop halves")
+	assert.True(t, staleMarker.Equal(*marker), "the marker's value must be completely untouched")
+
+	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
+	require.NoError(t, err)
+	for _, c := range candidates {
+		assert.NotEqual(t, user.ID, c.ID, "a user with zero linked_items rows can never have a live item, so the candidate query's own live-item requirement excludes them regardless of marker age")
+	}
+}

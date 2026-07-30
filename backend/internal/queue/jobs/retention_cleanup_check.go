@@ -64,7 +64,18 @@ const plaidDisconnectRepairGracePeriod = 72 * time.Hour
 // EXISTS clause requires to ever reselect this user again. Retrying a handful of times, in the same
 // process, immediately after the failure, closes the common case (a transient DB blip) for a call
 // that is a simple conditional UPDATE, not a remote/rate-limited API call.
-const plaidCleanupMarkerClearMaxAttempts = 3
+//
+// Issue #1413 Finding 3 (Codex review, PR #1443 follow-up): this value, and
+// plaidCleanupMarkerClearRetryDelay just below, are no longer independent literals — both now alias
+// repository.PlaidCleanupMarkerClearMaxAttempts / repository.PlaidCleanupMarkerClearRetryDelay (see
+// that pair's own doc comment, profile_repository.go, for the full rationale). Before this fix,
+// services/past_due_service.go carried a second, genuinely independent copy of these same two
+// numbers, with its own doc comment explicitly acknowledging the duplication. Aliasing here — rather
+// than qualifying every reference in this file and subscription_webhook.go as
+// repository.PlaidCleanupMarkerClearMaxAttempts — keeps every existing unqualified reference in both
+// files (and their tests) compiling unchanged, while ensuring there is exactly one place either
+// number is actually written down as a literal.
+const plaidCleanupMarkerClearMaxAttempts = repository.PlaidCleanupMarkerClearMaxAttempts
 
 // plaidCleanupMarkerClearRetryDelay is the BASE delay clearPlaidCleanupMarkerWithRetry (this file)
 // backs off from between attempts — Issue #1413 round 16 (a later Codex review round on PR #1443):
@@ -82,8 +93,10 @@ const plaidCleanupMarkerClearMaxAttempts = 3
 // (processSubscriptionCanceled's Finding-4 fix) that also references this exact constant with a
 // plain, non-backed-off time.Sleep. Renaming or repurposing it here would have silently broken that
 // file's build; only this file's OWN retry loop (clearPlaidCleanupMarkerWithRetry) is changed to
-// back off and to respect context cancellation.
-const plaidCleanupMarkerClearRetryDelay = 50 * time.Millisecond
+// back off and to respect context cancellation. See the Finding 3 note on
+// plaidCleanupMarkerClearMaxAttempts above: the underlying LITERAL now lives in the repository
+// package; this name is a same-package alias to it, unchanged for every caller in this package.
+const plaidCleanupMarkerClearRetryDelay = repository.PlaidCleanupMarkerClearRetryDelay
 
 // plaidCleanupMarkerClearBackoff returns the delay before retry attempt (attempt+1), given that
 // `attempt` (1-based) just failed — exponential backoff from plaidCleanupMarkerClearRetryDelay
@@ -96,21 +109,6 @@ const plaidCleanupMarkerClearRetryDelay = 50 * time.Millisecond
 func plaidCleanupMarkerClearBackoff(attempt int) time.Duration {
 	return plaidCleanupMarkerClearRetryDelay * time.Duration(1<<uint(attempt-1)) //nolint:gosec // attempt is always small and non-negative (loop-bounded)
 }
-
-// errPlaidCleanupNotConfigured is returned by repairPlaidDisconnects when w.plaidCleanup is nil —
-// Issue #1413 round-10 (round-9 review Blocker): a missing Plaid cleanup collaborator is a
-// CONFIGURATION ERROR, not a "nothing to do here" outcome. repairPlaidDisconnects is the ONLY
-// place a read-only user's Plaid items are ever disconnected (see its own doc comment), so a
-// deployment that silently ran this pass with no Plaid cleanup wired up would disconnect nobody,
-// forever, while reporting a healthy daily run — exactly the "silently not disconnect while
-// reporting success" failure mode every prior round of this task has produced a new instance of.
-// Work() checks for this specific sentinel (errors.Is) to fail the WHOLE job when it occurs,
-// blocking the observability.RecordJobSuccess heartbeat — every OTHER repairPlaidDisconnects
-// failure (e.g. a transient error fetching candidates) stays non-fatal, matching this worker's
-// existing per-step resilience. Mirrors the "<method>: <dependency> not configured" phrasing used
-// throughout this codebase for a required-but-missing collaborator (e.g.
-// processGraceExpiry/processPlaidDisconnectWindow's claimsRepo checks, past_due_service.go).
-var errPlaidCleanupNotConfigured = errors.New("repairPlaidDisconnects: Plaid cleanup service not configured")
 
 // RetentionCleanupCheckArgs contains the arguments for the retention cleanup check job.
 // This job runs daily to:
@@ -166,6 +164,24 @@ type RetentionProfileRepository interface {
 	// StampMissingPlaidCleanupMarkers's for why this, like several other occurrence/repair-scoped
 	// methods, belongs only to this narrower consumer interface.
 	StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error)
+
+	// ClearCompletedPlaidCleanupMarkers is StampMissingPlaidCleanupMarkers's symmetric counterpart —
+	// Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, headline finding). See its full doc
+	// comment on profileRepository (profile_repository.go) for the complete rationale, including the
+	// verified five-step scenario in which a marker left set after its episode's cleanup completed
+	// disconnects a freshly-relinked bank with ZERO grace period. Called by repairPlaidDisconnects
+	// (below) immediately after StampMissingPlaidCleanupMarkers, at the very start of every pass: a
+	// single atomic UPDATE that nulls the marker for any user who is ineligible-status, has the marker
+	// set, has AT LEAST ONE linked_items row, and has NO live linked_items row. That last two-part
+	// condition is mandatory: a user with ZERO linked_items rows at all (the #1453 allowance) keeps
+	// their marker untouched. Returns the number of rows cleared (for logging only) and a non-nil
+	// error only on a genuine database failure, which repairPlaidDisconnects treats as non-fatal
+	// (logged, not retried here) — like its Stamp sibling, this backstop's own idempotency means the
+	// NEXT pass retries it for free.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason as
+	// StampMissingPlaidCleanupMarkers.
+	ClearCompletedPlaidCleanupMarkers(ctx context.Context) (int, error)
 
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
 	// (inactive/cancelled), whose plaid_cleanup_pending_at marker (Issue #1413 round-10) is older
@@ -276,12 +292,27 @@ type RetentionCleanupCheckWorker struct {
 	deletionService RetentionDeletionService
 	emailService    RetentionEmailService
 	// plaidCleanup backs repairPlaidDisconnects (Issue #1413 round-7 grace-window repair path).
-	// Wired via SetPlaidCleanup() after Plaid is configured. Issue #1413 round-11 correction: a nil
-	// value does NOT "simply skip the repair pass" — since round-10 Fix 1, repairPlaidDisconnects
-	// treats a nil plaidCleanup as errPlaidCleanupNotConfigured, a hard configuration error that
-	// fails the WHOLE job (see that sentinel's doc comment and Work()'s handling of it). This field
-	// itself cannot panic on a nil call (repairPlaidDisconnects checks before ever calling through
-	// it), but "nil-safe" no longer describes the OUTCOME — it is a loud failure, not a quiet skip.
+	// Wired via SetPlaidCleanup() after Plaid is configured.
+	//
+	// Round-11 through the CI finding fixed below made opposite claims about what a nil value here
+	// means, and it is worth reading both: round-11 (through round-9's own review) said a nil value
+	// does NOT "simply skip the repair pass" — it was made a hard configuration error
+	// (errPlaidCleanupNotConfigured) that failed the WHOLE job, specifically to catch a deployment
+	// that silently ran this pass with no Plaid cleanup wired up. That reasoning held as long as this
+	// job only ran on its daily timer. Once RetentionCleanupCheckPeriodicOpts set RunOnStart: true
+	// (see that function's own doc comment), this job started running at EVERY process boot in EVERY
+	// environment — including QA/E2E, which legitimately has no Plaid service configured at all. A
+	// misconfiguration detector that fires on a genuinely correct QA configuration is not a detector
+	// anymore; it is recurring noise that fails the whole job (retention-clock repair, GDPR notices,
+	// and expired-account deletion included) on every deploy, and CI's E2E job showed exactly that:
+	// this error repeating at ERROR level across retries toward the dead-letter queue. A nil
+	// plaidCleanup is now a QUIET skip of the Plaid-disconnect repair pass specifically (Warn-logged,
+	// counted via observability.PlaidCleanupServiceNotConfiguredTotal so a sustained PRODUCTION rate
+	// is still visible and alertable) — see repairPlaidDisconnects's own doc comment for the nil-check
+	// itself, which now runs AFTER the backstop (Stamp/Clear), not before: the backstop is pure SQL
+	// with no Plaid dependency, and keeping plaid_cleanup_pending_at correct is valuable regardless of
+	// whether this particular pass can act on it. This field itself still cannot panic on a nil call
+	// (repairPlaidDisconnects checks before ever calling through it).
 	plaidCleanup RetentionPlaidCleanup
 	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
 	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
@@ -335,12 +366,16 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 // #1413 round-6 repair path. Called after Plaid is configured (main.go), mirroring
 // TrialService.SetPlaidCleanup/PastDueService.SetPlaidCleanup's late-binding convention.
 //
-// Issue #1413 round-11 correction: this comment previously (incorrectly) said an unset plaidCleanup
-// makes repairPlaidDisconnects "log and skip rather than panic" — true only through round-9. Since
-// round-10 Fix 1, an unset plaidCleanup is a hard configuration error (errPlaidCleanupNotConfigured)
-// that fails the WHOLE retention_cleanup_check job, not a quiet per-step skip — see that sentinel's
-// doc comment. Never calling this setter is therefore not a safe way to run without Plaid
-// configured; it is a misconfiguration that surfaces loudly on the next run.
+// Issue #1413 round-11 said an unset plaidCleanup was a hard configuration error that failed the
+// WHOLE retention_cleanup_check job — correct reasoning at the time, but it stopped being correct
+// once RetentionCleanupCheckPeriodicOpts set RunOnStart: true and this job started running at every
+// process boot in every environment, including QA/E2E, which legitimately never configures Plaid.
+// A later CI finding (fixed alongside Issue #1413 Finding 1) restored a QUIET skip: never calling
+// this setter now makes repairPlaidDisconnects Warn-log and skip ONLY the Plaid-disconnect repair
+// pass (retention-clock repair, GDPR notices, and expired-account deletion all still run), while
+// still incrementing observability.PlaidCleanupServiceNotConfiguredTotal so a sustained PRODUCTION
+// rate remains visible and alertable — see repairPlaidDisconnects's own doc comment for the nil
+// check itself and why it now runs AFTER the self-healing backstop, not before.
 func (w *RetentionCleanupCheckWorker) SetPlaidCleanup(c RetentionPlaidCleanup) {
 	w.plaidCleanup = c
 }
@@ -413,24 +448,23 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	// Issue #1413 round-7 (Codex review). This is the ONLY place a read-only user's Plaid items
 	// are disconnected at all; TrialService.ExpireTrial never calls Plaid (see that function's doc
 	// comment for why no ordering of a status flip and an irreversible Plaid call can be safe).
-	// Unlike Step 0/1/2, a missing Plaid cleanup collaborator (errPlaidCleanupNotConfigured) DOES
-	// fail the whole job — see errPlaidCleanupNotConfigured's doc comment and the handling just
-	// below (Issue #1413 round-10 Fix 1). Every OTHER repairPlaidDisconnects failure stays
-	// non-fatal, like Step 0/1/2.
+	//
+	// A missing Plaid cleanup collaborator no longer fails the whole job (through round-10 Fix 1 it
+	// did) — see repairPlaidDisconnects's own doc comment and the RetentionCleanupCheckWorker.plaidCleanup
+	// field comment above for why: RunOnStart: true means this job now runs at every process boot in
+	// every environment, including QA/E2E, which legitimately has no Plaid service configured, and a
+	// misconfiguration detector that fails the whole job (GDPR notices and deletion included) on every
+	// correct QA deploy is not a detector, it is noise. repairPlaidDisconnects now handles that case
+	// internally (Warn-logged, observability.PlaidCleanupServiceNotConfiguredTotal incremented,
+	// returns nil) — so every repairPlaidDisconnects failure that DOES still reach here is a genuine,
+	// non-configuration failure (e.g. a transient candidate-fetch error) and stays non-fatal, matching
+	// Step 0/1/2's existing per-step resilience.
 	if repairErr := w.repairPlaidDisconnects(ctx, job.ID); repairErr != nil {
 		w.logger.Error("failed to repair Plaid disconnects",
 			"job_id", job.ID,
 			"error", repairErr,
 		)
-		if errors.Is(repairErr, errPlaidCleanupNotConfigured) {
-			// Issue #1413 round-10 (Fix 1): a missing Plaid cleanup dependency is a configuration
-			// error, not a "nothing to do" outcome — fail the WHOLE job loudly so the
-			// RecordJobSuccess heartbeat below does NOT advance, rather than reporting a healthy
-			// daily run that silently disconnected nobody. Every other repairPlaidDisconnects
-			// failure (e.g. a transient candidate-fetch error) stays non-fatal, matching this
-			// worker's existing per-step resilience — continue with other steps below either way.
-			err = repairErr
-		}
+		// Don't fail job — continue with other steps
 	}
 
 	// Step 1: Send 30-day pre-deletion warnings
@@ -770,9 +804,14 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 // GetUsersNeedingPlaidDisconnectRepair's predicates (status, and — since a resubscribe clears the
 // marker — plaid_cleanup_pending_at) before this pass ever reaches them.
 //
-// Requires w.plaidCleanup to be configured: a nil collaborator is a configuration error
-// (errPlaidCleanupNotConfigured), not a "nothing to do" outcome — see that sentinel's doc comment
-// and Work()'s handling of it (Issue #1413 round-10 Fix 1 / round-9 review Blocker).
+// w.plaidCleanup being nil no longer fails this function or the job (through round-10 Fix 1 it did,
+// via the errPlaidCleanupNotConfigured sentinel) — see the RetentionCleanupCheckWorker.plaidCleanup
+// field's own doc comment for why that changed. The self-healing backstop (Stamp/Clear, below) still
+// runs unconditionally either way — it is pure SQL with no Plaid dependency — and only the candidate
+// query and the per-user disconnect loop are actually skipped when Plaid is unconfigured, logged at
+// Warn with observability.PlaidCleanupServiceNotConfiguredTotal incremented so a sustained rate in
+// PRODUCTION (where Plaid must always be configured) stays visible and alertable, without failing
+// the whole job on every QA/E2E boot the way the old hard-fail did.
 //
 // round-10 replaced the grace-window anchor (previously retention_started_at, which rounds 8/9
 // demonstrated cannot be made sound as a Plaid-disconnect signal: it is written by several
@@ -791,14 +830,10 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 // already-disconnected item is harmless (idempotent: ITEM_NOT_FOUND is mapped to success, and the
 // per-item durable 'disconnected' marker skips items already handled by a prior attempt).
 func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context, jobID int64) error {
-	if w.plaidCleanup == nil {
-		return errPlaidCleanupNotConfigured
-	}
-
-	// Issue #1413 round 16: the self-healing backstop runs FIRST, before the candidate query, on
-	// every single pass — see StampMissingPlaidCleanupMarkers's own doc comment
-	// (profile_repository.go) for the full rationale and the four properties this ordering and
-	// shape are chosen to satisfy.
+	// Issue #1413 round 16: the self-healing backstop runs FIRST, before the w.plaidCleanup nil check
+	// and before the candidate query, on every single pass — see StampMissingPlaidCleanupMarkers's own
+	// doc comment (profile_repository.go) for the full rationale and the four properties this
+	// ordering and shape are chosen to satisfy.
 	//
 	// Round 17 (Codex review) corrected how a failure here is reported. It still does NOT fail this
 	// step or the job — returning an error would skip the 30-day/7-day GDPR pre-deletion notices and
@@ -821,6 +856,62 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	} else if healedCount > 0 {
 		w.logger.Info("plaid_cleanup_pending_at self-healing backstop stamped missing markers",
 			"job_id", jobID, "healed_count", healedCount)
+	}
+
+	// Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, headline finding): the symmetric
+	// counterpart to the Stamp call just above — see ClearCompletedPlaidCleanupMarkers's own doc
+	// comment (profile_repository.go) for the full five-step scenario this closes and why it must run
+	// on EVERY pass, not just when a candidate is found. In short: a marker left set after its
+	// episode's cleanup already completed (e.g. every clearPlaidCleanupMarkerWithRetry attempt below
+	// failing after a successful disconnect) is NOT harmless residue the candidate query's live-item
+	// EXISTS clause quietly filters out forever — several comments across this branch said exactly
+	// that, and they were wrong. A comp granted and later removed over that stale marker
+	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it instead of
+	// starting a fresh episode, so a freshly-relinked bank inherits an already-expired grace window
+	// and gets disconnected with zero notice. Running this clear on every pass — same as the Stamp
+	// half — is what closes that window within one backstop interval instead of leaving it open
+	// indefinitely: as long as this runs at least once between a completed-but-unclear marker and a
+	// comp being granted over it, removeUserTierOverrideUpdate's COALESCE sees NULL and the later
+	// removal starts a genuinely fresh grace window.
+	//
+	// Deliberately a SEPARATE non-fatal failure branch, not folded into the Stamp block above: mirrors
+	// StampMissingPlaidCleanupMarkers's own handling exactly (a persistently failing clear is also a
+	// silent, hard-to-detect drift from the invariant, so it gets the same Error-plus-counter
+	// treatment), but the two counts are logged under distinct field names (healed_count vs.
+	// cleared_count) so an operator reading these logs can tell which direction of the invariant is
+	// misbehaving, not just that "the backstop" is unhappy.
+	if clearedCount, clearErr := w.profileRepo.ClearCompletedPlaidCleanupMarkers(ctx); clearErr != nil {
+		observability.PlaidCleanupBackstopFailuresTotal.Inc()
+		w.logger.Error("plaid_cleanup_pending_at stale-marker backstop FAILED — a marker left set after its episode's cleanup completed will not be cleared, so a later admin comp-removal's COALESCE can preserve that stale timestamp instead of starting a fresh grace window for a freshly-relinked bank; see ClearCompletedPlaidCleanupMarkers's doc comment",
+			"job_id", jobID, "error", clearErr)
+	} else if clearedCount > 0 {
+		w.logger.Info("plaid_cleanup_pending_at stale-marker backstop cleared completed-episode markers",
+			"job_id", jobID, "cleared_count", clearedCount)
+	}
+
+	// A CI finding on this branch's head (fixed alongside Issue #1413 Finding 1, not from the Codex
+	// review itself): through round-10 Fix 1, a nil w.plaidCleanup failed this function AND the whole
+	// job (errPlaidCleanupNotConfigured) — deliberately, to make a missing Plaid dependency loud
+	// rather than a silent "disconnect nobody, report healthy" run. That reasoning stopped holding
+	// once RetentionCleanupCheckPeriodicOpts set RunOnStart: true: this job now runs at every process
+	// boot in every environment, including QA/E2E, which legitimately never configures Plaid at all —
+	// so the hard-fail fired on every correct QA deploy, burying GDPR-mandated retention-clock repair
+	// and 30d/7d notices under a repeating ERROR-level failure riding the SAME job toward the dead
+	// letter queue. This check now runs AFTER the backstop above (deliberately — Stamp/Clear are pure
+	// SQL with no Plaid dependency, so keeping plaid_cleanup_pending_at correct is worth doing even on
+	// a pass that cannot act on it) and returns nil so Work() still runs Steps 1-3 (30d/7d notices,
+	// expired-account deletion) — mirroring deleteExpiredAccounts's own established pattern for a
+	// missing DELETION_TOKEN_SECRET dependency just below in this same file. The signal is not lost:
+	// observability.PlaidCleanupServiceNotConfiguredTotal is a SEPARATE counter from
+	// PlaidCleanupBackstopFailuresTotal (that one means the backstop's own SQL failed, a narrower and
+	// different fact) — a sustained non-zero rate in PRODUCTION, where Plaid must always be
+	// configured, is exactly as alertable as the old hard failure was, without taking the rest of this
+	// job down in an environment where it is expected.
+	if w.plaidCleanup == nil {
+		observability.PlaidCleanupServiceNotConfiguredTotal.Inc()
+		w.logger.Warn("skipping Plaid-disconnect repair — no Plaid cleanup service configured; retention-clock repair, 30d/7d GDPR notices, and expired-account deletion still ran this pass",
+			"job_id", jobID)
+		return nil
 	}
 
 	users, err := w.profileRepo.GetUsersNeedingPlaidDisconnectRepair(ctx, plaidDisconnectRepairGracePeriod)
@@ -1056,21 +1147,28 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// from a per-user retry loop as a JOB-level failure would undo that isolation one level up,
 	// even though this function's own control flow never lets it undo it internally.
 	//
-	// Does the round 16 backstop (StampMissingPlaidCleanupMarkers, called at the top of this
-	// function) lower the stakes of this decision? Only PARTIALLY, and it is worth being precise
-	// about which failure mode it does and does not cover: the backstop heals a MISSING marker
-	// (NULL, while a live item exists) — it has no effect on a STUCK marker (the ClearPlaidCleanupPendingIfMatches
-	// exhaustion case just above), because its own WHERE clause only ever touches rows where
-	// plaid_cleanup_pending_at IS NULL. A marker stuck non-NULL after a real disconnect already
-	// completed is the OPPOSITE direction — but it was already the SAME shape of harm this
-	// invariant already tolerates elsewhere (see domain.User.PlaidCleanupPendingAt's doc comment
-	// and #1453): the item is genuinely disconnected, so GetUsersNeedingPlaidDisconnectRepair's own
-	// live-item EXISTS clause will never reselect this user again regardless of what happens to
-	// this job's return value — an untidy stuck timestamp, not a repeat billing/access risk. Making
-	// this step fail the whole job would not shrink that residual at all; it would only add
-	// unrelated retries (notices, deletion) that were never the problem. So: kept as a deliberate
-	// non-fatal step, per-user error isolation preserved, backstop lowers the stakes of the OTHER
-	// failure direction (a missed stamp) but does not change this decision either way.
+	// Does the self-healing backstop (StampMissingPlaidCleanupMarkers plus, as of Issue #1413 Finding
+	// 1, its clearing counterpart ClearCompletedPlaidCleanupMarkers — both called at the top of this
+	// function) lower the stakes of this decision? Yes, for BOTH directions now, and it is worth being
+	// precise about how: Stamp heals a MISSING marker (NULL, while a live item exists); Clear heals a
+	// STUCK marker — exactly the ClearPlaidCleanupPendingIfMatches exhaustion case just above, where a
+	// disconnect already succeeded but every retry to null the marker afterward still failed. Through
+	// round 17, this file's own comment here called a stuck marker in that state "an untidy stuck
+	// timestamp, not a repeat billing/access risk" — that was WRONG, and is exactly Finding 1's
+	// headline finding: GetUsersNeedingPlaidDisconnectRepair's live-item EXISTS clause does keep this
+	// SAME episode from ever being reselected, but nothing stopped a LATER episode from inheriting the
+	// stale timestamp — an admin comp granted and removed over a stuck marker
+	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it instead of
+	// starting fresh, so a bank the user relinks in the meantime gets disconnected immediately, with
+	// zero grace, the next time this pass runs. ClearCompletedPlaidCleanupMarkers now nulls that stuck
+	// marker on the very next pass (see its own doc comment, profile_repository.go, for the full
+	// scenario and the #1453 exception it preserves), closing the gap within one backstop interval
+	// instead of leaving it open indefinitely. This does not change the return-nil decision itself —
+	// per-user error isolation here is still preserved for the same reasons stated above, and a
+	// persistent clear failure is already independently visible via its own Error log line and the
+	// shared PlaidCleanupBackstopFailuresTotal counter (see this function's Clear call site) — but it
+	// does mean the residual this paragraph used to accept as merely cosmetic is now actively healed,
+	// not just tolerated.
 	return nil
 }
 

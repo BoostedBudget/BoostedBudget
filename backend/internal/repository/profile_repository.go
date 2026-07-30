@@ -1539,6 +1539,41 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 	return nil
 }
 
+// PlaidCleanupMarkerClearMaxAttempts and PlaidCleanupMarkerClearRetryDelay bound the retry loop
+// every ClearPlaidCleanupPendingIfMatches call site uses after a Plaid disconnect completes
+// synchronously — Issue #1413 Finding 3 (Codex review, PR #1443 follow-up).
+//
+// Before this fix, the SAME two numbers (3 attempts, 50ms base delay) existed as two independent,
+// hand-copied definitions: queue/jobs/retention_cleanup_check.go's own unexported
+// plaidCleanupMarkerClearMaxAttempts/plaidCleanupMarkerClearRetryDelay (which subscription_webhook.go
+// — same package — also references directly, so THAT pair was never actually duplicated), and a
+// second, genuinely independent pair in services/past_due_service.go, whose own doc comment said so
+// explicitly: "Duplicated here (not imported) rather than shared: retention_cleanup_check.go's
+// constants are unexported in a different package (queue/jobs vs services)." Codex measured the
+// runtime difference this queue/jobs's context-aware exponential backoff vs. past_due_service.go's
+// flat time.Sleep loop produces as cosmetic (~150ms vs ~100ms total, at most a 100ms shutdown delay)
+// — the actual risk Finding 3 identifies is DRIFT between two independently-maintained copies of the
+// same two numbers, not the timing shape. That is the exact failure mode that produced this branch's
+// main.go wiring bug (a helper corrected while a hand-written duplicate went stale), so it is worth
+// closing here too, proportionately: collapse the constants to ONE literal definition, leave every
+// retry LOOP's shape untouched.
+//
+// This lives in `repository`, not `services` or `queue/jobs`, because `services` cannot import
+// `queue/jobs` without inverting the existing dependency (queue/jobs already imports services — see
+// retention_cleanup_check.go's own import of this package's sibling), while both `queue/jobs` and
+// `services` already import `repository` (this is the package that defines
+// ClearPlaidCleanupPendingIfMatches itself, the call every one of these retry loops wraps). Both
+// queue/jobs (retention_cleanup_check.go, and by extension subscription_webhook.go in the same
+// package) and services (past_due_service.go) now define their own unexported, same-named constant
+// as a plain alias to these exported values (`= repository.PlaidCleanupMarkerClearMaxAttempts`, etc.)
+// rather than a second independent literal — so every existing internal reference and test in both
+// packages keeps working unchanged, but there is now exactly ONE place either NUMBER can be written
+// down, and a future edit to one can no longer silently leave the other stale.
+const (
+	PlaidCleanupMarkerClearMaxAttempts = 3
+	PlaidCleanupMarkerClearRetryDelay  = 50 * time.Millisecond
+)
+
 // ClearPlaidCleanupPending unconditionally clears the plaid_cleanup_pending_at marker for a user —
 // Issue #1413 round-10.
 //
@@ -2161,6 +2196,134 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 	`+noActiveManualOverridePredicate)
 	if err != nil {
 		return 0, fmt.Errorf("StampMissingPlaidCleanupMarkers: %w", err)
+	}
+	return int(ct.RowsAffected()), nil
+}
+
+// anyLinkedItemExistsClause is the EXISTS predicate for "this user has at least one linked_items
+// row at all" — live or not. Deliberately separate from liveLinkedItemExistsClause (no status
+// filter here): ClearCompletedPlaidCleanupMarkers below needs to distinguish "zero rows ever"
+// (the #1453 allowance — a never-linked-Plaid cancellation or genuine migration residue, both
+// legitimate and indistinguishable at the row level) from "rows exist, but none are live" (a real,
+// completed episode whose marker should have been cleared). Correlates against the unaliased
+// `users` table, matching liveLinkedItemExistsClause's own convention.
+const anyLinkedItemExistsClause = `EXISTS (
+	SELECT 1 FROM linked_items
+	WHERE linked_items.user_id = users.id
+)`
+
+// ClearCompletedPlaidCleanupMarkers is StampMissingPlaidCleanupMarkers's symmetric counterpart —
+// Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, headline finding): the self-healing
+// backstop round 16 added only heals ONE of the two ways plaid_cleanup_pending_at can violate
+// domain.User.PlaidCleanupPendingAt's invariant. It stamps a marker that is wrongly NULL (episode
+// open, nothing recorded); it does nothing for a marker wrongly left SET after its episode's
+// cleanup has already completed. That second direction was, until this fix, believed harmless —
+// several comments across this branch called it "inert" or "untidy residue" the candidate query's
+// own live-item EXISTS clause filters out forever. That belief was WRONG, and verified wrong by a
+// concrete five-step scenario:
+//
+//  1. repairPlaidDisconnects disconnects a user's items successfully, but all
+//     plaidCleanupMarkerClearMaxAttempts marker-clear retries fail (a genuine, if rare, DB blip
+//     lasting longer than the retry loop's total backoff window). The old marker timestamp T
+//     survives, non-NULL, on a user with zero LIVE linked items.
+//  2. That user has no live item, so GetUsersNeedingPlaidDisconnectRepair's own EXISTS clause never
+//     selects them again — nothing revisits T. Without this method, T would sit there indefinitely.
+//  3. An admin grants a comp. The user is effectively active again and relinks a bank — a genuinely
+//     NEW live linked item now exists, but T (the OLD episode's timestamp) is still what is
+//     recorded.
+//  4. The admin removes the comp. removeUserTierOverrideUpdate's
+//     COALESCE(u.plaid_cleanup_pending_at, NOW()) (admin_user_repository.go) preserves the stale T
+//     instead of starting a fresh episode, because the column was never NULL to begin with.
+//  5. The next repairPlaidDisconnects pass now sees a live item and a marker (T) already older than
+//     plaidDisconnectRepairGracePeriod — and disconnects the newly-linked bank IMMEDIATELY, with
+//     ZERO grace period. The grace window exists precisely so a lapsed user has time to recover;
+//     this path silently skips it entirely for a bank connection that is only hours old.
+//
+// The fix restores the invariant's SECOND half at runtime, not just on paper:
+// assertPlaidMarkerInvariant (profile_repository_plaid_marker_invariant_integration_test.go) has,
+// since round 16, already classified "marker set, ineligible status, at least one linked_items row,
+// none of them live" as a violation — nothing before this method ever enforced it. Symmetric with
+// StampMissingPlaidCleanupMarkers:
+//
+//   - Stamp: ineligible status, live linked item, marker IS NULL -> set NOW().
+//   - Clear (this method): ineligible status, marker IS NOT NULL, at least one linked_items row,
+//     no LIVE linked_items row -> set NULL.
+//
+// The "at least one linked_items row" condition is MANDATORY, not optional — this is the #1453
+// allowance, unchanged: a user with ZERO linked_items rows at all (an ordinary never-linked-Plaid
+// cancellation, or genuine 000119/000120 migration residue — indistinguishable at the row level,
+// both legitimate, both reachable) keeps whatever marker they have. Clearing those would silently
+// change behavior for a population this branch has deliberately, repeatedly left alone (see
+// anyLinkedItemExistsClause's own doc comment). This is why the WHERE clause below uses
+// anyLinkedItemExistsClause AND NOT liveLinkedItemExistsClause, rather than a single hand-derived
+// "COUNT(live) = 0" expression that could not tell the two zero-linked-item populations apart.
+//
+// Deliberately does NOT include noActiveManualOverridePredicate, unlike StampMissingPlaidCleanupMarkers
+// above — this is the one place this method is NOT a mirror of its sibling, and the asymmetry is
+// load-bearing, not an oversight. Stamp excludes a currently-comped user because stamping only ever
+// arms a marker for a population the candidate query would itself eventually act on, and the
+// candidate query already excludes a live comp — deferring to "re-arm the ordinary way once the comp
+// is removed" is correct there because the column starts from NULL either way. Clear has the
+// opposite obligation: per step 3 of the scenario above, the exact harm this method exists to close
+// requires healing a STALE marker BEFORE a comp is ever granted over it, precisely so that step 4's
+// COALESCE sees a NULL column and starts a genuinely fresh episode. If this WHERE clause excluded a
+// currently-comped user, a comp granted in the narrow window between a failed clear (step 1) and
+// this backstop's next scheduled pass would suppress the heal for as long as the comp stays active —
+// reproducing the exact bug on the very next removal. Clearing is a correction of a FACT already
+// true about linked_items (cleanup for this episode is done); that fact does not depend on, and
+// must not be gated on, whether an override happens to be live right now. See
+// domain.User.PlaidCleanupPendingAt's doc comment: manual_tier_override is deliberately not a term
+// in this invariant at all.
+//
+// Same four properties as StampMissingPlaidCleanupMarkers, restated for the clear direction: (1)
+// GetUsersNeedingPlaidDisconnectRepair is completely unchanged — this method only ever nulls a
+// marker on a user that query's own live-item EXISTS clause would already exclude, so no candidate
+// this backstop could ever select is affected; (2) one atomic UPDATE, so it cannot itself race —
+// the same argument StampMissingPlaidCleanupMarkers's own doc comment makes; (3) a user this method
+// clears gets a genuinely FRESH plaidDisconnectRepairGracePeriod the next time an episode opens for
+// them (via Stamp, or via removeUserTierOverrideUpdate's COALESCE now seeing NULL), never the OLD
+// episode's stale grace window resumed; (4) reuses anyLinkedItemExistsClause and
+// liveLinkedItemExistsClause — the SAME shared Go constants the candidate query, the backstop's own
+// Stamp half, and admin_user_repository.go's removeUserTierOverrideSelectPrior already use — so
+// "what counts as live" and "what counts as ever-linked" cannot silently drift between this method
+// and any of them.
+//
+// Called from exactly one place, immediately after StampMissingPlaidCleanupMarkers: see
+// RetentionCleanupCheckWorker.repairPlaidDisconnects's own doc comment (retention_cleanup_check.go)
+// for why running this alongside Stamp, at the very start of EVERY pass, is what actually closes the
+// scenario above within one backstop interval rather than leaving it open indefinitely.
+//
+// Deliberately two separate statements rather than one combined `CASE`-driven UPDATE touching both
+// directions atomically: the two populations (marker IS NULL vs. marker IS NOT NULL) are disjoint by
+// construction, so there is no row either statement could observe differently depending on run
+// order, and this is a periodic healer re-run daily, not a transaction that must commit both halves
+// together or not at all — each statement is independently idempotent and independently correct.
+// Two statements read as two named, separately-countable operations (`healed` vs `cleared` in
+// repairPlaidDisconnects's own log lines) rather than one CASE expression a reader has to mentally
+// split back into two before they can even tell how many rows moved in which direction — clearer to
+// read and clearer to count, at the acceptable cost of the pass as a WHOLE no longer being one atomic
+// unit (each half already was, and always was, meant to stand alone).
+//
+// Same CAUTION as StampMissingPlaidCleanupMarkers above: this is a global-scan WRITE with no user-id
+// parameter in its WHERE clause — every integration test fixture for this method must own its row
+// end-to-end (unique, `t.Cleanup`'d), never rely on a shared test-setup helper.
+//
+// Deliberately NOT part of the exported ProfileRepository interface, for the same reason as
+// StampMissingPlaidCleanupMarkers: needed only by RetentionCleanupCheckWorker's own narrow
+// RetentionProfileRepository consumer interface (retention_cleanup_check.go).
+func (r *profileRepository) ClearCompletedPlaidCleanupMarkers(ctx context.Context) (int, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET plaid_cleanup_pending_at = NULL, updated_at = NOW()
+		WHERE `+plaidDisconnectRepairEligibleStatusPredicate+`
+		  AND plaid_cleanup_pending_at IS NOT NULL
+		  AND is_deleted = FALSE
+		  AND deletion_requested_at IS NULL
+		  AND `+anyLinkedItemExistsClause+`
+		  AND NOT `+liveLinkedItemExistsClause+`
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("ClearCompletedPlaidCleanupMarkers: %w", err)
 	}
 	return int(ct.RowsAffected()), nil
 }
