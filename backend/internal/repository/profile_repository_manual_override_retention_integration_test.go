@@ -451,3 +451,38 @@ func TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary(t *test
 
 	require.True(t, excludedFromRetention, "SQL predicate must treat manual_tier_ends_at == NOW() as an active override and exclude the user (inclusive '>=' boundary, matching Go's !ends_at.Before(now)); a '>' operator would wrongly let this row through")
 }
+
+// Why there is no companion test here that writes a nanosecond-precision manual_tier_ends_at
+// through AdminUserRepository.UpdateUserTier, reads it back, and asserts
+// domain.User.hasActiveManualOverrideAt(now) agrees with noActiveManualOverridePredicate at that
+// SAME instant (Issue #1413 follow-up, Task JE — "close the expiry-tie gap"): it was attempted
+// and found NOT to discriminate, by both proof and experiment, so it was not added. Documenting
+// this so a future reader does not mistake the absence for an oversight and try to re-add it.
+//
+// The clock-fencing rule this kind of test must follow (learned the hard way — comparing a
+// Go-side time.Now() against a timestamp Postgres wrote failed CI once, on ff2cc4bb, because CI
+// runs Postgres in a separate container whose clock can lag the runner's) is: the comparison
+// instant fed to BOTH predicates must come from a single `SELECT NOW()` against the same pool,
+// exactly as txNow is used above.
+//
+// Any instant sourced that way is necessarily microsecond-precision — that is what timestamptz
+// stores, and it is all `SELECT NOW()` can return. Experimentally, Postgres/pgx TRUNCATE
+// (floor), not round, when writing a nanosecond-precision Go time.Time into a timestamptz column
+// (verified directly against this database for offsets of -999ns..+999ns around a
+// Postgres-sourced instant N: the stored, floored value and N agreed on `>=` in every single
+// case). Flooring is monotonic non-increasing (floor(E) <= E for all E), so for any
+// microsecond-aligned N: E >= N implies floor(E) >= N, and E < N implies floor(E) < N — the
+// ordering relative to N can never flip. So for any nanosecond-precision expiresAt, comparing
+// the RAW (untruncated) value against N and comparing its Postgres-truncated persisted form
+// against that SAME N are mathematically guaranteed to agree, with or without the
+// AdminUserService.UpdateUserTier truncation fix (admin_user_service.go).
+//
+// The gap the truncation fix actually closes is not "these two comparisons can disagree against
+// a shared instant" (they provably cannot — see above) — it is that, absent the fix,
+// UpdateUserTier's Clerk-sync scratch user and the row it persists silently carried two
+// DIFFERENT time values (nanosecond vs microsecond) for what is supposed to be the exact same
+// instant. That is worth fixing on its own (and trivial to fix), but no single-shared-instant
+// agreement test — the only kind that is not itself flaky — can observe it, so none is included
+// here. See TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond
+// (admin_user_service_test.go) for the regression test that actually exercises this fix, by
+// asserting on the exact value handed to the repository rather than on predicate agreement.

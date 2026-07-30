@@ -242,6 +242,29 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, actorUserID, user
 		return UpdateUserTierResult{}, errors.New("reason is required")
 	}
 
+	// Truncate expiresAt to microsecond precision once, here, at the point it enters the
+	// service — before it is used for BOTH the persisted write (step 1 below, via
+	// AdminUserRepository.UpdateUserTier) and the in-memory Go predicate evaluation (the
+	// Clerk-sync scratch user in step 2 below, via domain.User.hasActiveManualOverrideAt).
+	// Postgres's timestamptz column is microsecond precision; Go's time.Time carries
+	// nanoseconds. Left untruncated, a caller-supplied expiresAt with sub-microsecond precision
+	// (input.Body.ExpiresAt is a JSON-decoded *time.Time with no precision constraint) would
+	// evaluate as a very slightly later expiry in memory than what Postgres actually stores and
+	// later evaluates via noActiveManualOverridePredicate — a narrow but real disagreement
+	// window between the two systems at the exact tie. Doing it here, rather than at each call
+	// site, means both uses below are guaranteed to see the identical instant.
+	//
+	// nil is left untouched: nil means a permanent (non-expiring) override, a distinct,
+	// meaningful state — never coerce it into a zero time.
+	//
+	// RemoveUserTierOverride (below) has no mirrored concern: it only clears an override
+	// (manual_tier_ends_at -> NULL) and never receives or persists a caller-supplied expiresAt,
+	// so there is no second write/predicate pair for this field on that path.
+	if expiresAt != nil {
+		truncated := expiresAt.Truncate(time.Microsecond)
+		expiresAt = &truncated
+	}
+
 	// Defect 4: reject a tier that isn't a configured tier name, using the tier config (the
 	// single source of truth) rather than a hardcoded list. manual_tier_override is an
 	// unvalidated VARCHAR(50) column with no CHECK constraint, so a malformed value must fail

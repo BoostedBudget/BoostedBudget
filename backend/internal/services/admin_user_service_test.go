@@ -807,6 +807,74 @@ func TestAdminUserService_UpdateUserTier_RepoError(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond proves a caller-supplied
+// expiresAt is truncated to microsecond precision before it reaches the repository (Issue #1413
+// follow-up, Task JE: closing the expiry-tie gap). Postgres's timestamptz column is microsecond
+// precision; Go's time.Time carries nanoseconds, and input.Body.ExpiresAt
+// (huma/operations/admin_subscriptions.go) is a JSON-decoded *time.Time with no precision
+// constraint of its own — so without this truncation, the value the service hands to
+// AdminUserRepository.UpdateUserTier (and, via the Clerk-sync scratch user, to
+// domain.User.hasActiveManualOverrideAt) could carry sub-microsecond precision that Postgres
+// then silently drops on write, leaving the in-memory and persisted forms as two different
+// instants.
+//
+// This is a genuinely discriminating test: without the Truncate call in UpdateUserTier, the mock
+// argument matcher below (which requires exact microsecond alignment) does not match the raw
+// nanosecond-precision fixture, so mockRepo has no matching expectation and testify's mock.Mock
+// panics with "I don't know what to return" — confirmed by temporarily reverting the truncation
+// during development. See admin_user_service.go's UpdateUserTier for why a companion
+// cross-system (Go predicate vs SQL predicate) integration test was deliberately NOT added: it
+// was attempted and found incapable of discriminating truncated from untruncated input once the
+// clock-fencing rule required for CI stability is followed (see
+// profile_repository_manual_override_retention_integration_test.go's comment on that finding).
+func TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "comp with sub-microsecond expiry"
+
+	// 789 nanoseconds of sub-microsecond precision — representable in Go's time.Time, not in
+	// Postgres's timestamptz.
+	rawExpiresAt := time.Date(2027, 3, 4, 5, 6, 7, 123456789, time.UTC)
+	wantTruncated := rawExpiresAt.Truncate(time.Microsecond)
+	require.NotEqual(t, rawExpiresAt, wantTruncated, "fixture must actually carry sub-microsecond precision")
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, mock.MatchedBy(func(got *time.Time) bool {
+		return got != nil && got.Equal(wantTruncated) && got.Nanosecond()%int(time.Microsecond) == 0
+	})).Return(repository.UpdateTierRow{}, nil)
+
+	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, &rawExpiresAt)
+	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_NilExpiresAt_StaysNil proves a nil expiresAt (a permanent,
+// non-expiring override) is never coerced into a zero time.Time by the truncation added for Task
+// JE above — nil must reach the repository as nil, not as &time.Time{}.
+func TestAdminUserService_UpdateUserTier_NilExpiresAt_StaysNil(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "permanent comp"
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+
+	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, nil)
+	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
 // --- Issue #1413 Defect 1: Clerk sync uses the injected ClerkService + canonical payload ---
 
 // TestAdminUserService_UpdateUserTier_PushesEffectiveOverrideTier_Household4 proves the Clerk
