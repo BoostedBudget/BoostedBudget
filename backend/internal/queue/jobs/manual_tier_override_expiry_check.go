@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -78,6 +79,7 @@ type ManualTierOverrideExpiryCheckWorker struct {
 	clerkService    ClerkService
 	retentionMonths int
 	logger          *slog.Logger
+	analytics       phclient.Analytics // Optional PostHog analytics client (Issue #1413 Task MB)
 }
 
 // ManualTierOverrideExpiryCheckWorkerDeps contains the dependencies for
@@ -107,6 +109,13 @@ func NewManualTierOverrideExpiryCheckWorker(deps ManualTierOverrideExpiryCheckWo
 		retentionMonths: retentionMonths,
 		logger:          logger,
 	}
+}
+
+// SetAnalytics injects the analytics client for capturing tier-override-expiry events
+// (Issue #1413 Task MB). Mirrors SubscriptionWebhookWorker.SetAnalytics's setter-injection
+// pattern; nil-safe — Work() must remain a no-op for analytics when this is never called.
+func (w *ManualTierOverrideExpiryCheckWorker) SetAnalytics(a phclient.Analytics) {
+	w.analytics = a
 }
 
 // Work processes a manual tier override expiry check job.
@@ -210,6 +219,28 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 		}
 
 		w.syncClerkMetadata(ctx, job.ID, user.ID, row)
+
+		// Issue #1413 Task MB: fire the product-analytics event only for a claimed (actually
+		// expired) user — best-effort/nil-safe, same convention as syncClerkMetadata above and
+		// AdminUserService's own analytics calls. A distinct event from
+		// EventAdminSubscriptionOverrideRemoved (never reused — see that constant's doc comment):
+		// this is a system-initiated lapse, not an admin's deliberate removal, so there is no
+		// actor — say so explicitly with actor_user_id: nil rather than inventing one. had_expiry
+		// is always true here (this candidate list is, by construction, users whose
+		// manual_tier_ends_at has passed), included anyway for payload-shape parity with the
+		// other two admin-subscription-override events.
+		if w.analytics != nil {
+			var tier string
+			if user.ManualTierOverride != nil {
+				tier = *user.ManualTierOverride
+			}
+			w.analytics.Capture(user.ID, phclient.EventAdminSubscriptionOverrideExpired, map[string]interface{}{
+				"tier":          tier,
+				"had_expiry":    user.ManualTierEndsAt != nil,
+				"actor_user_id": nil,
+			})
+		}
+
 		expiredCount++
 	}
 

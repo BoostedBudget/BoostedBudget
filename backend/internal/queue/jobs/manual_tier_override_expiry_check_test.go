@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -664,4 +665,144 @@ func TestManualTierOverrideExpiryCheckPeriodicOpts_PairedWithUniqueOpts(t *testi
 	require.NotEmpty(t, insertOpts.UniqueOpts.ByState,
 		"RunOnStart: true's catch-up insert is only safe when the paired InsertOpts carries a "+
 			"non-empty ByState constraint")
+}
+
+// --- Analytics wiring tests (Issue #1413 Task MB) ---
+//
+// EventAdminSubscriptionOverrideExpired was a dead constant (posthog/events.go) with zero call
+// sites until this task. These tests use MockAnalytics, already defined in this package by
+// email_change_propagation_test.go (a testify mock.Mock, not a no-op stub) — reused rather than
+// declaring a second identically-shaped type, per this package's existing convention
+// (subscription_webhook_test.go's mockAnalyticsClient is a separate testify mock only because it
+// needs its own doc comment; MockAnalytics is the general-purpose one already exported within
+// this package for exactly this reuse).
+
+// TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_ForClaimedUser proves a successfully
+// expired (claimed) user fires EventAdminSubscriptionOverrideExpired with
+// {tier, had_expiry, actor_user_id} — a DISTINCT event from EventAdminSubscriptionOverrideRemoved
+// (never reused: an automatic expiry and an admin's deliberate removal are different events), with
+// actor_user_id explicitly nil (no acting admin — system-initiated).
+func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_ForClaimedUser(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-expired", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockAnalytics := new(MockAnalytics)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
+	mockAnalytics.On("Capture", "user-expired", phclient.EventAdminSubscriptionOverrideExpired, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return len(props) == 3 &&
+			props["tier"] == override &&
+			props["had_expiry"] == true &&
+			props["actor_user_id"] == nil
+	})).Return()
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
+	worker.SetAnalytics(mockAnalytics)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestManualTierOverrideExpiryCheck_ClaimLost_NoAnalyticsEvent proves a lost claim (an admin
+// changed the override concurrently — Issue #1413 High finding H4) fires no analytics event: the
+// worker did not actually expire anything, so there is nothing to report.
+func TestManualTierOverrideExpiryCheck_ClaimLost_NoAnalyticsEvent(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-extended", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockAnalytics := new(MockAnalytics)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-extended", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{}, false, nil)
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
+	worker.SetAnalytics(mockAnalytics)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManualTierOverrideExpiryCheck_RemoveFails_NoAnalyticsEvent proves a per-user
+// RemoveUserTierOverrideIfMatches failure fires no analytics event — the operation did not
+// succeed for that user, so capture must not claim it did.
+func TestManualTierOverrideExpiryCheck_RemoveFails_NoAnalyticsEvent(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-fail", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+	mockAnalytics := new(MockAnalytics)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-fail", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(nil, false, errors.New("db error"))
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
+	worker.SetAnalytics(mockAnalytics)
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	err := worker.Work(ctx, job)
+
+	require.Error(t, err)
+	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestManualTierOverrideExpiryCheck_NilAnalytics_NoPanic proves the worker is safe to use
+// without ever calling SetAnalytics — the real-world state in local dev/QA where PostHog is
+// unconfigured. A nil-pointer panic here would break the daily expiry sweep entirely.
+func TestManualTierOverrideExpiryCheck_NilAnalytics_NoPanic(t *testing.T) {
+	ctx := context.Background()
+
+	override := "household_2"
+	endsAt := time.Now().Add(-1 * time.Hour)
+	users := []*domain.User{
+		{ID: "user-expired", ManualTierOverride: &override, ManualTierEndsAt: &endsAt},
+	}
+
+	mockRepo := new(mockManualTierOverrideProfileRepository)
+	mockRemover := new(mockManualTierOverrideRemover)
+
+	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
+	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
+		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
+
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil) // SetAnalytics never called
+
+	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
+
+	require.NotPanics(t, func() {
+		err := worker.Work(ctx, job)
+		require.NoError(t, err)
+	})
+
+	mockRepo.AssertExpectations(t)
+	mockRemover.AssertExpectations(t)
 }

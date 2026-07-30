@@ -94,6 +94,13 @@ const (
 	// Admin subscription override events (Issue #1413)
 	EventAdminSubscriptionOverrideApplied = "admin_subscription_override_applied"
 	EventAdminSubscriptionOverrideRemoved = "admin_subscription_override_removed"
+	// EventAdminSubscriptionOverrideExpired fires from the daily
+	// ManualTierOverrideExpiryCheckWorker when a manual tier override lapses on its own
+	// (manual_tier_ends_at passed) rather than being cleared by an admin. Deliberately a
+	// separate event from EventAdminSubscriptionOverrideRemoved: an automatic expiry and an
+	// admin's deliberate removal are different events for funnel purposes, and this path also
+	// has a NULL actor (no admin acted) — conflating the two would make the funnel unreadable.
+	EventAdminSubscriptionOverrideExpired = "admin_subscription_override_expired"
 
 	// MCP server events (Issue #1087)
 	// NOTE: MCP analytics are fired exclusively by the Cloudflare Worker (apps/mcp-server/src/analytics/)
