@@ -504,7 +504,10 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // the marker already survived the comp's entire lifetime untouched, and COALESCE(existing, NOW())
 // just preserves that existing (earlier, correct) value.
 //
-// Issue #1413 round-14 M1 (Codex review) — the "purely a defense-in-depth backstop for an
+// Round 14 -> 15 -> 16 — read all three in order; the third is the one currently in force. The
+// next reader should see deliberate movement toward a better fix, not unexplained churn.
+//
+// ROUND 14 (finding M1, Codex review): the "purely a defense-in-depth backstop for an
 // imported/backfilled row" claim this comment made through round-13 was WRONG, and the wrongness
 // was the bug: the ORDINARY post-cleanup path reaches this CASE too. Sequence: (1) cancellation
 // sets the marker; (2) the repair pass actually completes cleanup and clears it
@@ -517,12 +520,13 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // a phantom the live-item-less repair query's EXISTS clause would then never select, leaving it
 // non-NULL forever and making the stated invariant (domain.User.PlaidCleanupPendingAt's doc
 // comment: non-NULL exactly when an episode has begun AND cleanup has not completed) false.
-//
-// Round-14's fix gated should_mark_plaid_cleanup_pending on the SAME live-linked-item existence
+// Round 14's fix: gate should_mark_plaid_cleanup_pending on the SAME live-linked-item existence
 // check the repair query itself uses — liveLinkedItemExistsClause (profile_repository.go, shared
 // by GetUsersNeedingPlaidDisconnectRepair) — instead of a second, independently-worded copy that
-// could drift. That closed M1, but a LATER Codex review round on PR #1443 (Finding 3, High) found
-// the guard itself races:
+// could drift. No live item, no re-arm.
+//
+// ROUND 15 (Finding 3, High — a later Codex review round on this same PR): round 14's gate itself
+// races a concurrent LinkAccounts INSERT:
 //
 //   - This CTE's EXISTS(...) is evaluated as a snapshot at SELECT time, and the query's
 //     FOR UPDATE locks the users row — it does not, and cannot, serialize against a concurrent
@@ -536,41 +540,55 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 //     an admin removes that comp, the removal's EXISTS can see "no live item" (the INSERT hasn't
 //     landed yet), commit with the marker left NULL, and only THEN does LinkAccounts' insert land —
 //     a cancelled user with a live bank connection and a NULL marker, invisible to
-//     GetUsersNeedingPlaidDisconnectRepair (non-NULL marker required) FOREVER. Re-checking EXISTS a
-//     second time inside this same transaction does not help either: under READ COMMITTED a later
-//     statement only sees writes that already COMMITTED, and if this transaction's own FOR UPDATE
-//     is held across that re-check, the concurrent INSERT cannot even complete (its FK-driven lock
-//     on this row conflicts with FOR UPDATE) until this transaction ends — so the "fresher" read
-//     would still see nothing. Closing this for real would require LinkAccounts itself to
-//     coordinate (e.g. lock the user row before its own insert, or self-heal after inserting) —
-//     out of scope for a repository-only fix here.
-//   - The two failure directions are not symmetric. A missed stamp (this race) is a PERMANENT
-//     data-retention leak: nothing ever revisits the decision, so the bank connection is never
-//     disconnected. A spurious stamp (M1's phantom) is merely an untidy non-NULL timestamp the
-//     repair query's own live-item EXISTS clause filters out forever — annoying, but harmless,
-//     and already an accepted, separately-tracked residue class (see #1453, which documents the
-//     000119/000120 backfill leaving exactly this kind of harmless marker behind). Erring toward
-//     stamping is therefore the safer default.
+//     GetUsersNeedingPlaidDisconnectRepair (non-NULL marker required). At the time, this was
+//     PERMANENT: nothing else in the codebase ever revisited the decision.
+//   - Round 15 weighed the two failure directions as asymmetric — a missed stamp (this race) was,
+//     at the time, an unrecoverable data-retention leak, while a spurious stamp (round 14's own M1
+//     phantom) is merely an untidy non-NULL timestamp the repair query's own live-item EXISTS
+//     clause filters out forever (an accepted, separately-tracked residue class, #1453) — and erred
+//     toward stamping: dropped the liveLinkedItemExistsClause guard again and went back to the
+//     round-13 predicate, unconditional. This deliberately reintroduced round 14's M1 phantom, and,
+//     as a forced consequence, contradicted the WRITTEN invariant
+//     (domain.User.PlaidCleanupPendingAt's doc comment had to be weakened to match — see that
+//     comment's own round-15 revision note, and assertPlaidMarkerInvariant's).
 //
-// Decision: drop the liveLinkedItemExistsClause guard here and go back to the round-13 predicate —
-// should_mark_plaid_cleanup_pending fires whenever a prior override existed and the reverted raw
-// status is inactive/cancelled, full stop, regardless of live-item state at CTE time. This
-// reintroduces M1's phantom-marker outcome for a comp removed over an already-fully-cleaned-up user
-// (see TestRemoveUserTierOverride_Integration_M1_PhantomMarkerNowAccepted_WhenCleanupAlreadyComplete
-// and TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_PhantomMarkerAccepted,
-// both renamed and updated to assert the phantom is now expected, not absent) — a deliberate,
-// documented trade against the unrecoverable leak above, tracked for cleanup alongside #1453. See
-// TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_MarkerNotLost for the actual
-// Finding 3 regression test. liveLinkedItemExistsClause itself is unchanged and still used by
-// GetUsersNeedingPlaidDisconnectRepair (profile_repository.go) to decide which rows to ACT on — a
-// phantom marker here never causes a wrong disconnect, since that query's own live-item check still
-// filters it out.
+// ROUND 16 (this comment, Issue #1413): a third option closes what rounds 14 and 15 each had to
+// trade away, because it does not depend on either writer's ordering at all.
+// profileRepository.StampMissingPlaidCleanupMarkers (profile_repository.go) now runs once at the
+// start of EVERY repairPlaidDisconnects pass (retention_cleanup_check.go) and atomically stamps any
+// ineligible, live-linked-item, NULL-marker user it finds — a missed stamp from round 15's exact
+// race now SELF-HEALS on the next pass instead of leaking forever. With that backstop in place,
+// round 14's gate is RESTORED here (liveLinkedItemExistsClause is back in the CASE below), so round
+// 14's phantom-marker bug stays fixed too — the one gap the gate itself can still open (round 15's
+// race) is no longer a permanent leak, just a delayed heal (see StampMissingPlaidCleanupMarkers's
+// own doc comment for the accepted consequence: up to one EXTRA grace window before disconnect, not
+// "never"). The two round-14 M1 regression tests
+// (TestRemoveUserTierOverride_Integration_M1_NoPhantomMarker_WhenCleanupAlreadyComplete and
+// TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NoLiveItems_MarkerNotArmed,
+// admin_user_repository_remove_tier_override_integration_test.go) are flipped back to their
+// original names and Nil assertions. Round 15's genuine two-connection concurrency proof that the
+// race is real — TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_MarkerNotLost —
+// is KEPT as the backstop's own regression test, with its assertion updated: the race still occurs
+// (the marker is still left NULL immediately after the concurrent insert lands), but the user is
+// now healed by StampMissingPlaidCleanupMarkers on the next pass instead of leaking permanently.
+//
+// A correction to round 15's own wording, while here: round 15's comment (and
+// domain.User.PlaidCleanupPendingAt's) both stated flatly that no lock available to this repository
+// could close this race. That is too absolute. A shared PostgreSQL advisory lock taken by BOTH this
+// removal path and LinkAccounts' insert path, or running both under SERIALIZABLE isolation with
+// retry-on-conflict, would each genuinely close it too. What is true, more narrowly, is that no lock
+// taken UNILATERALLY by this repository, acting alone, can close it — a real fix by locking requires
+// coordinating with LinkAccounts, a wholly separate, unrelated code path
+// (internal/services/account_service.go). That is exactly why round 16 chose the backstop instead:
+// it needs no coordination between the two unrelated paths at all, closing the gap from a third,
+// independent location rather than asking two unrelated writers to agree on a lock.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
 	        AND subscription_status IN ('inactive', 'cancelled', 'past_due')) AS should_rearm_retention,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
-	        AND subscription_status IN ('inactive', 'cancelled')) AS should_mark_plaid_cleanup_pending
+	        AND subscription_status IN ('inactive', 'cancelled')
+	        AND ` + liveLinkedItemExistsClause + `) AS should_mark_plaid_cleanup_pending
 	FROM users
 	WHERE id = $1 AND is_deleted = FALSE
 `

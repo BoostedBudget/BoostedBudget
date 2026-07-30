@@ -905,3 +905,211 @@ func TestProfileRepository_ClearPlaidCleanupPending_Integration(t *testing.T) {
 		assert.NotEqual(t, user.ID, c.ID, "a cleared marker must remove the user from the candidate list even though status/live-item are unchanged")
 	}
 }
+
+// ─── Issue #1413 round 16: StampMissingPlaidCleanupMarkers, the self-healing backstop ──
+//
+// Five prior review rounds each closed one way plaid_cleanup_pending_at could end up NULL while a
+// user still has a live linked item, and each fix opened another — because every attempt tried to
+// make some WRITER maintain the marker correctly, and writers cannot: they race with the
+// linked_items lifecycle they are trying to summarise (see removeUserTierOverrideSelectPrior's doc
+// comment, admin_user_repository.go, and domain.User.PlaidCleanupPendingAt's doc comment, for the
+// two concrete races — a re-fetch that just moves its own window, and a CTE snapshot that cannot
+// serialize against an independent autocommit INSERT).
+//
+// StampMissingPlaidCleanupMarkers stops trying to fix writers and instead heals: run once at the
+// start of every repairPlaidDisconnects pass (retention_cleanup_check.go), it atomically stamps
+// plaid_cleanup_pending_at for any user who is ineligible-status, has at least one live linked item,
+// and has a NULL marker. A missed or prematurely-cleared marker then self-heals on the very next
+// pass instead of leaking the user's bank connection forever.
+//
+// TestStampMissingPlaidCleanupMarkers_Integration_HealsNullMarkerWithLiveItem is the headline RED
+// test the task brief calls for: a user who is ineligible, has a live linked item, and a NULL
+// marker must be selected for repair AFTER the backstop runs, and must NOT be selected BEFORE it.
+// Reported failing (build failure — the method did not exist) before StampMissingPlaidCleanupMarkers
+// was implemented; passing after.
+func TestStampMissingPlaidCleanupMarkers_Integration_HealsNullMarkerWithLiveItem(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_stampheal_" + suffix,
+		Email:              "stampheal-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	// plaid_cleanup_pending_at deliberately left NULL (CreateUserTx's default) — this is the exact
+	// leaked state every prior round's writer-side fix could, under some race, still produce.
+
+	// BEFORE: a NULL marker must never invent work from a derived signal — the user is not selected,
+	// no matter how tight the grace period.
+	before, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+	require.NoError(t, err)
+	for _, c := range before {
+		assert.NotEqual(t, user.ID, c.ID, "precondition: a NULL marker must exclude the user before the backstop runs")
+	}
+	var markerBefore *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerBefore))
+	require.Nil(t, markerBefore, "precondition: the marker must genuinely be NULL before the backstop runs")
+
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var markerAfter *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&markerAfter))
+	require.NotNil(t, markerAfter, "the backstop must stamp a marker for an ineligible user with a live item and a NULL marker")
+
+	// AFTER: past a (near-zero) grace period, the now-healed user must be selected.
+	time.Sleep(5 * time.Millisecond)
+	after, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
+	require.NoError(t, err)
+	found := false
+	for _, c := range after {
+		if c.ID == user.ID {
+			found = true
+		}
+	}
+	assert.True(t, found, "the healed user must be selected for repair once past the grace window — GetUsersNeedingPlaidDisconnectRepair itself is completely unchanged by this backstop")
+}
+
+// TestStampMissingPlaidCleanupMarkers_Integration_ExcludesUserWithNoLiveItems is the property that
+// matters most about this backstop's shape: because it reuses liveLinkedItemExistsClause — the
+// SAME constant GetUsersNeedingPlaidDisconnectRepair uses — a user with no live items is NEVER
+// stamped, exactly preserving TestPlaidDisconnectRepair_Integration_ExcludesUserWithNoLiveItems
+// above without needing that pinned test to be reinterpreted in any way.
+func TestStampMissingPlaidCleanupMarkers_Integration_ExcludesUserWithNoLiveItems(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_stampnolive_" + suffix,
+		Email:              "stampnolive-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	// Both items already fully cleaned up — neither is "live" — mirrors
+	// TestPlaidDisconnectRepair_Integration_ExcludesUserWithNoLiveItems's fixture shape exactly.
+	seedLinkedItem(t, pool, user.ID, "item-disc-"+suffix, "disconnected")
+	seedLinkedItem(t, pool, user.ID, "item-repl-"+suffix, "replaced")
+
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "a user with no LIVE linked items must never be stamped by the backstop, mirroring the candidate query's own live-item requirement")
+}
+
+// TestStampMissingPlaidCleanupMarkers_Integration_ExcludesCurrentlyComped proves the backstop
+// mirrors GetUsersNeedingPlaidDisconnectRepair's own noActiveManualOverridePredicate: it only ever
+// creates a marker for a population the candidate query would itself eventually act on, never for a
+// currently-comped user the candidate query would never select regardless of marker state.
+func TestStampMissingPlaidCleanupMarkers_Integration_ExcludesCurrentlyComped(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_stampcomped_" + suffix,
+		Email:              "stampcomped-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+	future := time.Now().Add(24 * time.Hour)
+	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, future, user.ID)
+	require.NoError(t, err)
+
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "a user with a CURRENTLY-ACTIVE manual_tier_override must not be stamped by the backstop — the candidate query would never select them anyway")
+}
+
+// TestStampMissingPlaidCleanupMarkers_Integration_Idempotent proves the backstop is safe to run on
+// every single repair pass (its actual production cadence): once a marker is stamped, a second call
+// must not disturb it — the WHERE clause's own `plaid_cleanup_pending_at IS NULL` makes every
+// subsequent call for this user a no-op.
+func TestStampMissingPlaidCleanupMarkers_Integration_Idempotent(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_stampidem_" + suffix,
+		Email:              "stampidem-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: "cancelled",
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	seedLinkedItem(t, pool, user.ID, "item-"+suffix, "active")
+
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	var firstStamp *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&firstStamp))
+	require.NotNil(t, firstStamp)
+
+	time.Sleep(5 * time.Millisecond)
+	_, err = repo.StampMissingPlaidCleanupMarkers(ctx)
+	require.NoError(t, err)
+	var secondStamp *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&secondStamp))
+	require.NotNil(t, secondStamp)
+	assert.True(t, firstStamp.Equal(*secondStamp), "a second backstop run must not re-stamp (and thus re-arm the grace window for) a marker that is already set")
+}
