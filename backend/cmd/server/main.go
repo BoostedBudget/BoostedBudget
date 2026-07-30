@@ -454,6 +454,7 @@ func main() {
 			RetentionMonths: cfg.RetentionPeriodMonths,
 			Logger:          appLogger,
 		})
+		manualTierOverrideExpiryCheckWorker.SetAnalytics(phClient)
 		appLogger.Info("Manual tier override expiry check worker created (River)")
 
 		// Create services
@@ -1754,6 +1755,7 @@ func main() {
 		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
 		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
+		adminUserService.SetAnalytics(phClient)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(

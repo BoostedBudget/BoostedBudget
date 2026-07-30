@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -55,6 +56,11 @@ type AdminUserService interface {
 	// actorUserID is the acting admin's internal UUID (for the audit row; may be "").
 	// targetUserID is the user whose override is being cleared.
 	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (RemoveTierOverrideResult, error)
+
+	// SetAnalytics wires in the optional, nil-safe PostHog analytics client (Issue #1413 Task
+	// MB). Never called in some tests/environments (PostHog unconfigured in local dev/QA) — both
+	// UpdateUserTier and RemoveUserTierOverride must remain no-ops for analytics in that case.
+	SetAnalytics(a phclient.Analytics)
 }
 
 // UpdateUserTierResult communicates the outcome of setting a user's manual tier override
@@ -84,6 +90,7 @@ type adminUserService struct {
 	clerkService    ClerkService
 	retentionMonths int
 	tierConfig      *config.TierConfig
+	analytics       phclient.Analytics // Optional PostHog analytics client (Issue #1413 Task MB)
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
@@ -105,6 +112,11 @@ func NewAdminUserService(repo repository.AdminUserRepository, adminService Admin
 		retentionMonths: retentionMonths,
 		tierConfig:      tierConfig,
 	}
+}
+
+// SetAnalytics wires in the optional, nil-safe PostHog analytics client (Issue #1413 Task MB).
+func (s *adminUserService) SetAnalytics(a phclient.Analytics) {
+	s.analytics = a
 }
 
 // ListUsers returns a paginated list of users with optional filtering
@@ -326,6 +338,24 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, actorUserID, user
 		}
 	}
 
+	// Issue #1413 Task MB: fire the product-analytics event on the success path only, exactly
+	// like the Clerk sync above — best-effort, nil-safe (household_service.go's SetAnalytics
+	// convention). Payload mirrors the frontend's own trackEvent call
+	// (SubscriptionOverrideModal.tsx:142-145, {tier, had_expiry}) so the two sides are joinable
+	// in PostHog, plus actor_user_id for the backend's own value (nil, not "", when there is no
+	// acting admin — mirrors the repository's audit-row NULL-actor convention just above).
+	if s.analytics != nil {
+		var actorParam interface{}
+		if actorUserID != "" {
+			actorParam = actorUserID
+		}
+		s.analytics.Capture(userID, phclient.EventAdminSubscriptionOverrideApplied, map[string]interface{}{
+			"tier":          tier,
+			"had_expiry":    expiresAt != nil,
+			"actor_user_id": actorParam,
+		})
+	}
+
 	return result, nil
 }
 
@@ -359,6 +389,30 @@ func (s *adminUserService) RemoveUserTierOverride(ctx context.Context, actorUser
 			slog.ErrorContext(ctx, "failed to sync reverted tier to clerk metadata",
 				"clerk_user_id", row.ClerkUserID, "reverted_tier", row.RevertedTier, "error", syncErr)
 		}
+	}
+
+	// Issue #1413 Task MB: fire the product-analytics event only when an override was actually
+	// removed (row.Removed) — an idempotent no-op call (nothing to clear; see this method's own
+	// doc comment) is not a "removal" a product funnel should count, unlike the audit row above
+	// which always writes as a repair hook. Best-effort/nil-safe, same as the Clerk sync above.
+	//
+	// had_expiry is deliberately NOT included here (unlike the Applied event): RemoveTierOverrideRow
+	// only threads prior.manual_tier_override through the repository's RETURNING clause, not
+	// prior.manual_tier_ends_at (admin_user_repository.go's removeUserTierOverrideUpdate), so this
+	// call site has no way to know whether the removed override had an expiry without an
+	// additional round trip or a repository schema change — out of this task's scope (the
+	// repository file is not one of the three this task touches). actor_user_id is included and is
+	// nil, not "", when there is no acting admin — mirrors the repository's own audit-row NULL-actor
+	// convention (removeTierOverride's actorParam, just above the audit INSERT).
+	if s.analytics != nil && row.Removed {
+		var actorParam interface{}
+		if actorUserID != "" {
+			actorParam = actorUserID
+		}
+		s.analytics.Capture(targetUserID, phclient.EventAdminSubscriptionOverrideRemoved, map[string]interface{}{
+			"tier":          *row.PriorManualTierOverride,
+			"actor_user_id": actorParam,
+		})
 	}
 
 	return RemoveTierOverrideResult{

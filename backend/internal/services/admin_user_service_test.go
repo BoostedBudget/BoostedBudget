@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1418,6 +1419,266 @@ func TestAdminUserService_RemoveUserTierOverride_ActorAndTargetDiffer(t *testing
 
 	_, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
 	require.NoError(t, err)
+
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Analytics wiring tests (Issue #1413 Task MB) ---
+//
+// admin_user_service.go's UpdateUserTier and RemoveUserTierOverride previously fired no
+// analytics at all: EventAdminSubscriptionOverrideApplied/Removed (posthog/events.go) were
+// dead constants with zero call sites. These tests pin the wiring following the exact
+// mock/assertion style merchant_service_test.go uses for its own analytics coverage
+// (mockAnalytics + mock.MatchedBy + AssertExpectations) — a testify mock.Mock, not the
+// minimal no-op stub some other services' tests use, because a no-op stub cannot assert the
+// event name or payload, only that SetAnalytics didn't panic.
+
+// mockAnalyticsForAdminUser mocks the phclient.Analytics interface for test assertions.
+// Named distinctly from this package's several other analytics mocks (mockAnalytics in
+// merchant_service_test.go, MockAnalytics in savings_goal_service_test.go, etc.) — all share
+// package services, so a duplicate type name would not compile.
+type mockAnalyticsForAdminUser struct {
+	mock.Mock
+}
+
+func (m *mockAnalyticsForAdminUser) Capture(distinctID, event string, properties map[string]interface{}) {
+	m.Called(distinctID, event, properties)
+}
+
+func (m *mockAnalyticsForAdminUser) Identify(distinctID string, properties map[string]interface{}) {
+	m.Called(distinctID, properties)
+}
+
+func (m *mockAnalyticsForAdminUser) Close() {
+	m.Called()
+}
+
+var _ phclient.Analytics = (*mockAnalyticsForAdminUser)(nil)
+
+// TestAdminUserService_UpdateUserTier_FiresAnalyticsEvent proves a successful comp fires
+// EventAdminSubscriptionOverrideApplied with {tier, had_expiry, actor_user_id} — matching the
+// frontend's own trackEvent call (SubscriptionOverrideModal.tsx:142-145, {tier, had_expiry})
+// plus the backend's own actor_user_id. mock.MatchedBy pins every key AND the key count
+// (len(props) == 3): a looser mock.Anything payload matcher would pass even if the wrong
+// event name, a missing key, or an extra key were fired.
+func TestAdminUserService_UpdateUserTier_FiresAnalyticsEvent(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	userID := uuid.New().String()
+	tier := "household_2"
+	reason := "manual override"
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	mockRepo.On("UpdateUserTier", ctx, actorID, userID, tier, reason, mock.AnythingOfType("*time.Time")).
+		Return(repository.UpdateTierRow{}, nil)
+
+	mockAnalytics.On("Capture", userID, phclient.EventAdminSubscriptionOverrideApplied, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return len(props) == 3 &&
+			props["tier"] == tier &&
+			props["had_expiry"] == true &&
+			props["actor_user_id"] == actorID
+	})).Return()
+
+	_, err := service.UpdateUserTier(ctx, actorID, userID, tier, reason, &expiresAt)
+	require.NoError(t, err)
+
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_NoExpiry_HadExpiryFalse proves had_expiry reflects a nil
+// expiresAt (a permanent override) as false, and actor_user_id is nil (not the empty string)
+// when actorUserID is "" — mirroring the repository's own audit-row NULL-actor convention.
+func TestAdminUserService_UpdateUserTier_NoExpiry_HadExpiryFalse(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "permanent comp"
+
+	mockRepo.On("UpdateUserTier", ctx, "", userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+
+	mockAnalytics.On("Capture", userID, phclient.EventAdminSubscriptionOverrideApplied, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return len(props) == 3 &&
+			props["tier"] == tier &&
+			props["had_expiry"] == false &&
+			props["actor_user_id"] == nil
+	})).Return()
+
+	_, err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	require.NoError(t, err)
+
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestAdminUserService_UpdateUserTier_RepoError_NoAnalyticsEvent proves a failed DB write fires
+// no analytics event — capture claims an action that did not happen otherwise.
+func TestAdminUserService_UpdateUserTier_RepoError_NoAnalyticsEvent(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "promo"
+
+	mockRepo.On("UpdateUserTier", ctx, "", userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, errors.New("db down"))
+
+	_, err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+	require.Error(t, err)
+
+	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestAdminUserService_UpdateUserTier_NilAnalytics_NoPanic proves the service is safe to use
+// without ever calling SetAnalytics — the real-world state in local dev/QA where PostHog is
+// unconfigured (CLAUDE.md: "nil-safe no-op when the key is empty"). A nil-pointer panic here
+// would break admin comping entirely in exactly those environments.
+func TestAdminUserService_UpdateUserTier_NilAnalytics_NoPanic(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil) // SetAnalytics never called
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+	tier := "premium"
+	reason := "comp"
+
+	mockRepo.On("UpdateUserTier", ctx, "", userID, tier, reason, (*time.Time)(nil)).
+		Return(repository.UpdateTierRow{}, nil)
+
+	assert.NotPanics(t, func() {
+		_, err := service.UpdateUserTier(ctx, "", userID, tier, reason, nil)
+		require.NoError(t, err)
+	})
+
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_RemoveUserTierOverride_FiresAnalyticsEvent proves a successful removal
+// fires EventAdminSubscriptionOverrideRemoved with {tier, actor_user_id} — tier taken from
+// row.PriorManualTierOverride (the override that WAS just cleared). had_expiry is deliberately
+// not part of this payload (see the doc comment at the Capture call site in
+// admin_user_service.go for why); this test's len(props) == 2 pins that shape so a regression
+// that silently drops or adds a key is caught.
+func TestAdminUserService_RemoveUserTierOverride_FiresAnalyticsEvent(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "no longer needed"
+	priorOverride := "household_3"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: &priorOverride,
+		Removed:                 true,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+	}, nil)
+
+	mockAnalytics.On("Capture", targetID, phclient.EventAdminSubscriptionOverrideRemoved, mock.MatchedBy(func(props map[string]interface{}) bool {
+		return len(props) == 2 &&
+			props["tier"] == priorOverride &&
+			props["actor_user_id"] == actorID
+	})).Return()
+
+	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err)
+	assert.True(t, result.Removed)
+
+	mockAnalytics.AssertExpectations(t)
+}
+
+// TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_NoAnalyticsEvent proves the
+// idempotent no-op path (nothing to clear, Removed=false) fires no analytics event even though
+// the call itself succeeds — the audit row and Clerk re-sync still happen (existing repair-hook
+// behavior), but a "removed" product-analytics event when nothing was actually removed would be
+// a false positive in the funnel.
+func TestAdminUserService_RemoveUserTierOverride_NoExistingOverride_NoAnalyticsEvent(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "repair stale metadata"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: nil,
+		Removed:                 false,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+	}, nil)
+
+	result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.NoError(t, err)
+	assert.False(t, result.Removed)
+
+	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestAdminUserService_RemoveUserTierOverride_RepoError_NoAnalyticsEvent proves a failed DB
+// write fires no analytics event.
+func TestAdminUserService_RemoveUserTierOverride_RepoError_NoAnalyticsEvent(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	mockAnalytics := new(mockAnalyticsForAdminUser)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil)
+	service.SetAnalytics(mockAnalytics)
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "cleanup"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(nil, errors.New("db down"))
+
+	_, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+	require.Error(t, err)
+
+	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestAdminUserService_RemoveUserTierOverride_NilAnalytics_NoPanic proves the service is safe to
+// use without ever calling SetAnalytics (PostHog unconfigured in local dev/QA).
+func TestAdminUserService_RemoveUserTierOverride_NilAnalytics_NoPanic(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 6, nil) // SetAnalytics never called
+
+	ctx := context.Background()
+	actorID := uuid.New().String()
+	targetID := uuid.New().String()
+	reason := "cleanup"
+	priorOverride := "premium"
+
+	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 6).Return(repository.RemoveTierOverrideRow{
+		PriorManualTierOverride: &priorOverride,
+		Removed:                 true,
+		RevertedTier:            "premium",
+		RevertedStatus:          "active",
+	}, nil)
+
+	assert.NotPanics(t, func() {
+		result, err := service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
+		require.NoError(t, err)
+		assert.True(t, result.Removed)
+	})
 
 	mockRepo.AssertExpectations(t)
 }
