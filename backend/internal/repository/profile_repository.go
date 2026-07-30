@@ -2121,7 +2121,7 @@ const plaidDisconnectRepairEligibleStatusPredicate = `subscription_status IN ('i
 // linked item" — not 'disconnected' or 'replaced', with a NULL status explicitly treated as live
 // too (round-7 fix; see GetUsersNeedingPlaidDisconnectRepair's doc comment below for the
 // NULL-status rationale this clause must preserve). Correlates against the unaliased `users` table
-// both of its call sites SELECT FROM — GetUsersNeedingPlaidDisconnectRepair just below, and
+// at least five call sites SELECT FROM — GetUsersNeedingPlaidDisconnectRepair just below, and
 // admin_user_repository.go's removeUserTierOverrideSelectPrior — so both must keep using this SAME
 // Go constant, not a second hand-copied SQL literal, so "live" cannot silently drift apart between
 // them. A second, independently-worded copy is exactly how Issue #1413 round-14 finding M1 slipped

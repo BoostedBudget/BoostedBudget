@@ -103,9 +103,15 @@ func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx
 
 // GetOutstandingPlaidCleanupStats implements the interface doc comment's query: count of users
 // with plaid_cleanup_pending_at set AND at least one live linked item, plus the age of the OLDEST
-// such marker. Reuses plaidDisconnectRepairEligibleStatusPredicate and the identical
-// live-linked-item EXISTS clause GetUsersNeedingPlaidDisconnectRepair's own candidate query uses
-// (profile_repository.go) — both queries agree on eligible status and item liveness.
+// such marker. Reuses plaidDisconnectRepairEligibleStatusPredicate and liveLinkedItemExistsClause
+// (profile_repository.go) — the SAME Go constants GetUsersNeedingPlaidDisconnectRepair's own
+// candidate query uses, not a second hand-copied SQL literal, so this query and that one can never
+// silently drift apart on eligible status or item liveness. A second, independently-worded copy of
+// liveLinkedItemExistsClause is exactly the failure class that constant's own doc comment warns
+// against (Issue #1413 round-14 finding M1) — see
+// TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted
+// (job_health_repository_plaid_cleanup_integration_test.go) for the regression test pinning this
+// query to the shared constant's NULL-status-is-live rule specifically.
 //
 // This query deliberately does NOT also reuse noActiveManualOverridePredicate — see the interface
 // doc comment above for why this gauge and that repair pass are intentionally allowed to disagree
@@ -119,11 +125,7 @@ func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Contex
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND plaid_cleanup_pending_at IS NOT NULL
-		  AND EXISTS (
-		      SELECT 1 FROM linked_items
-		      WHERE linked_items.user_id = users.id
-		        AND (linked_items.status IS NULL OR linked_items.status NOT IN ('disconnected', 'replaced'))
-		  )
+		  AND ` + liveLinkedItemExistsClause + `
 	`
 
 	var count int64

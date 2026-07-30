@@ -191,6 +191,45 @@ func TestJobHealthRepository_Integration_MarkedUserWithLiveItemAndLiveComp_Still
 		"age must still reflect the actual time since plaid_cleanup_pending_at was set")
 }
 
+// TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted is the NULL-status
+// RED test this file was missing: linked_items.status is nullable (migration 000013), and a row
+// inserted without an explicit status (or predating the 'active' default) can be genuinely live
+// with a NULL status. GetUsersNeedingPlaidDisconnectRepair's own candidate query has always treated
+// NULL as live (round-7 fix, TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive,
+// profile_repository_plaid_disconnect_repair_integration_test.go) via the shared
+// liveLinkedItemExistsClause Go constant — but until now nothing pinned THIS gauge's query to that
+// same rule specifically; every fixture above seeds an "active" item
+// (createPlaidCleanupTestUser + seedLinkedItem), so a hand-copy of the clause that quietly dropped
+// the `status IS NULL OR` arm (e.g. "simplified" to a bare `status NOT IN (...)`) would pass every
+// other test in this file while silently undercounting the backlog for exactly the legacy
+// migration-000013 population that predates the 'active' default.
+//
+// Falsifiability: replacing GetOutstandingPlaidCleanupStats's `AND ` + liveLinkedItemExistsClause +
+// ` with the bare `linked_items.status NOT IN ('disconnected', 'replaced')` form makes this test
+// fail — SQL's three-valued logic evaluates `NULL NOT IN (...)` as UNKNOWN, not TRUE, so the
+// EXISTS subquery no longer matches this row and the marked user silently vanishes from the count.
+func TestJobHealthRepository_Integration_MarkedUserWithNullStatusLiveItem_Counted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewJobHealthRepository(pool)
+	ctx := context.Background()
+
+	skipIfPlaidCleanupBaselineNonZero(t, repo, ctx)
+
+	suffix := fmt.Sprintf("jh_plaid_nullstatus_%d", time.Now().UnixNano())
+	user := createPlaidCleanupTestUser(t, pool, enc, suffix, "cancelled")
+
+	seedLinkedItemNullStatus(t, pool, user.ID, "item-"+suffix)
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-5*24*time.Hour))
+
+	count, age, err := repo.GetOutstandingPlaidCleanupStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "a marked user whose only linked item has a NULL status must still be "+
+		"counted — NULL is not 'disconnected' or 'replaced', so it counts as live")
+	assert.InDelta(t, (5 * 24 * time.Hour).Seconds(), age.Seconds(), 30,
+		"age must reflect the actual time since plaid_cleanup_pending_at was set, within a 30s test-execution tolerance")
+}
+
 // TestJobHealthRepository_Integration_UserWithLiveItemsNoMarker_NotCounted is the mirror-image
 // negative control: a user with a perfectly live linked item but NO plaid_cleanup_pending_at
 // marker (the overwhelming common case — nothing pending) must not be counted.
