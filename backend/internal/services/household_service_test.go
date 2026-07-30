@@ -2507,14 +2507,16 @@ func TestHouseholdService_AcceptInvite_NonPayingInvitee_NotBlocked(t *testing.T)
 	}
 }
 
-// TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleSub_PinnedRaw is a #1413 pin
-// test: callerHasLivePaddleSubscription is about Paddle BILLING truth (refund/double-charge
-// risk when someone joins a household while paying) — NOT about access — and its doc
-// comment already states comps join freely. It is deliberately NOT converted to effective
-// status/tier by this task's otherwise-consistent sweep; this test locks in that a comped
-// user with no PaddleSubscriptionID still returns false, so a future "make everything
-// effective" sweep doesn't accidentally convert this site too.
-func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleSub_PinnedRaw(t *testing.T) {
+// TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely
+// documents (but does NOT pin the raw-vs-effective distinction of) the nil-PaddleSubscriptionID
+// short-circuit in callerHasLivePaddleSubscription (household_service.go:1440-1442): a comped
+// user with no Paddle billing relationship at all has no refund/double-charge risk and must join
+// freely. Because PaddleSubscriptionID is nil here, the function returns at that check BEFORE
+// ever reaching the status switch at :1443 — so this case can never fail on a raw-vs-effective
+// switch there, regardless of ManualTierOverride/effective status. The actual #1413 pin for that
+// switch is TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw
+// below, which sets a real PaddleSubscriptionID so the switch is actually exercised.
+func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely(t *testing.T) {
 	futureEnd := time.Now().Add(30 * 24 * time.Hour)
 	comped := &domain.User{
 		ID:                 "user-1",
@@ -2525,6 +2527,29 @@ func TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleSub_PinnedRaw(t *tes
 	}
 	assert.False(t, callerHasLivePaddleSubscription(comped),
 		"a comped user with no PaddleSubscriptionID has no refund/double-charge risk and must join freely, regardless of effective status/tier")
+}
+
+// TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw is the
+// #1413 PinnedRaw pin test for the status switch at household_service.go:1443. Unlike the test
+// above, PaddleSubscriptionID is set here so execution actually reaches that switch instead of
+// returning early at the nil check. Raw SubscriptionStatus is "cancelled" (the real Paddle
+// subscription is genuinely terminated — no refund/double-charge risk), while a LIVE manual
+// override is also set, so EFFECTIVE status would read "active". If callerHasLivePaddleSubscription
+// were switched from raw to effective status, this would flip from false to true — incorrectly
+// blocking a user whose real billing relationship poses no risk, contradicting the function's own
+// doc comment ("cancelled"/"inactive"... and manual-tier-override comps ... all join freely).
+func TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw(t *testing.T) {
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	paddleSubID := "sub_01abc123"
+	comped := &domain.User{
+		ID:                   "user-1",
+		SubscriptionStatus:   "cancelled",  // raw: the real Paddle subscription is genuinely terminated
+		PaddleSubscriptionID: &paddleSubID, // real Paddle billing relationship -> reaches the status switch
+		ManualTierOverride:   strPtr("household_4"),
+		ManualTierEndsAt:     &futureEnd, // admin comp, still active -> effective status would read "active"
+	}
+	assert.False(t, callerHasLivePaddleSubscription(comped),
+		`raw status "cancelled" has no refund/double-charge risk even though the comp override would make effective status read "active"`)
 }
 
 func TestHouseholdService_AcceptInvite_OwnerMarkedForDeletion_RollsBack(t *testing.T) {
