@@ -717,22 +717,57 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // stale and disconnects a connection with no meaningful grace at all. Same harm class ROUND 18 set
 // out to fix, caused by a different clock. Fix: use clock_timestamp() — statement/wall time,
 // re-evaluated fresh at actual execution — for the grace ANCHOR only (both branches in ROUND 19
-// above). Left deliberately alone: updated_at and the retention_* columns in
-// removeUserTierOverrideUpdate keep NOW() — those are ordinary audit/business timestamps where
-// transaction-consistent time is the conventional and here harmless choice, not a grace-window anchor
-// a delayed lock wait can silently backdate. Also left alone: StampMissingPlaidCleanupMarkers and
-// ClearCompletedPlaidCleanupMarkers (profile_repository.go) — each is a single autocommit statement
-// with no earlier lock-acquiring statement in the same transaction, so their own transaction start
-// and their own statement execution coincide; there is no earlier BEGIN for a lock wait to
-// stale-date NOW() against.
+// above).
+//
+// ROUND 21 correction (Issue #1413 Finding 2, Medium, PR #1443 follow-up round): ROUND 20 itself drew
+// the "left alone" line in the wrong place, on a reason that does not hold up. It reasoned that
+// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers (profile_repository.go) could
+// keep NOW() because "each is a single autocommit statement with no earlier lock-acquiring statement
+// in the same transaction, so their own transaction start and their own statement execution
+// coincide." That is FALSE: NOW()/transaction_timestamp() is fixed at the transaction's BEGIN, which
+// for a bare autocommit statement is essentially "when the statement was submitted" — BEFORE Postgres
+// acquires the row locks the statement itself needs in order to execute, not after. An autocommit
+// UPDATE that must WAIT for a row lock a concurrent transaction already holds (exactly
+// StampMissingPlaidCleanupMarkers's own situation if its WHERE clause matches a row THIS removal is
+// mid-transaction on) still writes a pre-wait NOW() once it finally acquires the lock — "no earlier
+// statement in the same transaction" was never the relevant fact; "can this statement block on a
+// lock at all" is. See StampMissingPlaidCleanupMarkers's own doc comment (profile_repository.go) for
+// that fix, now corrected there too. ClearCompletedPlaidCleanupMarkers only ever writes NULL, never a
+// timestamp value, so it was never actually at risk — the ROUND 20 comment lumped it in with its
+// sibling for symmetry, not because it shared the defect.
+//
+// The SAME wrong "autocommit is exempt" reasoning also left retention_expires_at on NOW() just below,
+// on the DIFFERENT (also invalid) ground that it is "an ordinary audit/business timestamp... not a
+// grace-window anchor." That one was simply wrong on the facts: retention_expires_at is not audit-only
+// — it IS a deadline, read directly by GetUsersNeedingRetention30dNotice/7dNotice and
+// GetUsersNeedingHardDeletion (profile_repository.go) to decide when to warn a user and when to
+// actually hard-delete their account under GDPR. removeTierOverride opens the SAME explicit
+// transaction this whole ROUND 20 paragraph is about, so a long FOR UPDATE wait backdates
+// retention_expires_at exactly as it would have backdated plaid_cleanup_pending_at: BEGIN at T0,
+// block on the row lock, then write retention_expires_at = NOW() + N months = T0 + N months —
+// shortening the user's actual GDPR deletion deadline by however long the wait lasted. Fixed the same
+// way: clock_timestamp() instead of NOW().
+//
+// What DOES stay on NOW(), correctly, and why each one is different in kind from the two fixed above:
+// `updated_at` (plain last-modified ordering, never read as an age or a deadline by anything);
+// retention_started_at (a paired audit field for retention_expires_at — recorded for when the
+// retention clock was armed, but nothing in this codebase computes an age FROM retention_started_at
+// or compares it to NOW()/clock_timestamp() anywhere; only retention_expires_at is ever read back as
+// a deadline). A tiny inconsistency this leaves on the record — retention_started_at can be a few
+// moments earlier than "retention_expires_at minus N months" whenever a lock wait actually occurs — is
+// accepted: it affects only what the started-at audit trail SAYS, never what any query DOES with it,
+// which is the same audit-vs-deadline line this whole correction draws everywhere else.
 //
 // Lock contention is inherently hard to force deterministically without either a real multi-second
 // wait or a genuine race. TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcrossLockWait
 // (admin_user_repository_remove_tier_override_integration_test.go) holds a real FOR UPDATE lock on a
-// second connection, launches the real RemoveUserTierOverride call on a third, and proves the marker
-// lands AFTER the lock is released rather than at the moment the removal's own transaction began — a
-// bounded, deterministic (not statistical) proof of the clock_timestamp()-vs-transaction_timestamp()
-// distinction ROUND 19's fix depends on.
+// second connection, launches the real RemoveUserTierOverride call on a third, and proves BOTH
+// plaid_cleanup_pending_at and retention_expires_at land AFTER the lock is released rather than at the
+// moment the removal's own transaction began — a bounded, deterministic (not statistical) proof of the
+// clock_timestamp()-vs-transaction_timestamp() distinction ROUND 19/21's fixes depend on. Round 21
+// also replaced that test's fixed time.Sleep-based "hope the goroutine is blocked by now" wait with a
+// real barrier (Issue #1413 Finding 3, Codex review, PR #1443 follow-up) — see waitUntilBlockedBy's
+// own doc comment (same test file) for why a sleep alone cannot prove what this test claims.
 const removeUserTierOverrideSelectPrior = `
 	SELECT manual_tier_override, manual_tier_ends_at, subscription_status, retention_expires_at,
 	       (manual_tier_override IS NOT NULL AND manual_tier_override <> ''
@@ -769,13 +804,21 @@ const removeUserTierOverrideCASClause = `
 //
 // Never COALESCE(u.plaid_cleanup_pending_at, ...) — that resurrects a stale PRIOR episode's
 // timestamp instead of anchoring the CURRENT one; see ROUND 18 above for why that was itself a bug.
+//
+// retention_expires_at's CASE (ROUND 21, Issue #1413 Finding 2, Codex review, PR #1443 follow-up)
+// also uses clock_timestamp(), not NOW(), for the SAME reason as the plaid_cleanup_pending_at CASE
+// just above: this whole UPDATE runs inside removeTierOverride's explicit transaction, behind the
+// SAME potentially-long FOR UPDATE wait, and retention_expires_at is a real GDPR deletion deadline
+// (read by GetUsersNeedingRetention30dNotice/7dNotice/HardDeletion, profile_repository.go), not mere
+// audit — see removeUserTierOverrideSelectPrior's ROUND 21 note just above for the full reasoning
+// and for why retention_started_at, immediately above this line, correctly keeps NOW() instead.
 const removeUserTierOverrideUpdate = `
 	UPDATE users u
 	SET manual_tier_override = NULL,
 	    manual_tier_ends_at = NULL,
 	    updated_at = NOW(),
 	    retention_started_at = CASE WHEN prior.should_rearm_retention THEN NOW() ELSE u.retention_started_at END,
-	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN NOW() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
+	    retention_expires_at = CASE WHEN prior.should_rearm_retention THEN clock_timestamp() + make_interval(months => $2::int) ELSE u.retention_expires_at END,
 	    retention_notice_30d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_30d_sent_at END,
 	    retention_notice_7d_sent_at = CASE WHEN prior.should_rearm_retention THEN NULL ELSE u.retention_notice_7d_sent_at END,
 	    plaid_cleanup_pending_at = CASE

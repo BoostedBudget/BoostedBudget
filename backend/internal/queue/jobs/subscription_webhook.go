@@ -1005,15 +1005,19 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// comment used to claim a stuck marker here "can never cause a WRONG disconnect (there is nothing
 	// left to disconnect)". That is FALSE, and was the exact belief Finding 1 overturned. A stuck
 	// marker CAN cause a wrong disconnect later, through a different user action entirely: if this
-	// clear (below) never succeeds, the stale marker survives; an admin can grant a comp, the user can
-	// relink a bank (a genuinely NEW live item, under the OLD stale timestamp), and removing the comp
-	// (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves that stale
-	// timestamp instead of starting a fresh episode — so repairPlaidDisconnects's next pass sees a
-	// live item paired with an already-expired grace window and disconnects the newly-linked bank
-	// immediately, with zero grace. RetentionCleanupCheckWorker.repairPlaidDisconnects's own
-	// self-healing backstop (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what
-	// actually closes this residual now — see its doc comment for the full scenario — rather than the
-	// stuck marker being inert on its own.
+	// clear (below) never succeeds, the stale marker survives, and — at the time this was found — an
+	// admin could grant a comp, the user could relink a bank (a genuinely NEW live item, under the OLD
+	// stale timestamp), and removing the comp resurrected that stale timestamp instead of starting a
+	// fresh episode via removeUserTierOverrideUpdate's then-COALESCE (admin_user_repository.go), so
+	// repairPlaidDisconnects's next pass saw a live item paired with an already-expired grace window
+	// and disconnected the newly-linked bank immediately, with zero grace. ROUND 18
+	// (admin_user_repository.go) independently removed that COALESCE, so a comp granted and removed
+	// over this exact stuck marker no longer resurrects it either way — but a stuck marker on a user
+	// no comp is EVER granted over gets no help from that fix.
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects's own self-healing backstop
+	// (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what actually closes THAT
+	// remaining population — see its doc comment for the full scenario — rather than the stuck
+	// marker being inert on its own.
 	//
 	// Gated on w.plaidCleanupSvc != nil: a nil collaborator means NO disconnect call was made at all
 	// (Issue #896's existing nil-guard, tested by TestWorker_SubscriptionCanceled_PlaidCleanupNil_

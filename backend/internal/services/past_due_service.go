@@ -485,14 +485,18 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// isolation — GetUsersNeedingPlaidDisconnectRepair requires a LIVE linked item, and none remain
 	// right now — but leaving it set FOREVER is real phantom residue (#1453), and Issue #1413 Finding 1
 	// (Codex review, PR #1443 follow-up, headline finding) is the correction that matters here: this
-	// comment used to call that residue "inert". It is not. A comp granted and later removed over that
-	// stale marker (removeUserTierOverrideUpdate's COALESCE, admin_user_repository.go) preserves it
-	// instead of starting a fresh episode, so a bank the user relinks in the meantime inherits an
-	// already-expired grace window and gets disconnected with zero notice the next
-	// repairPlaidDisconnects pass. RetentionCleanupCheckWorker's self-healing backstop
-	// (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what actually closes this residual
-	// within one backstop interval — not the residue being harmless on its own — since the disconnect
-	// that just succeeded removed the very live item that predicate requires, GetUsersNeedingPlaidDisconnectRepair
+	// comment used to call that residue "inert". It is not. At the time this was found, a comp
+	// granted and later removed over that stale marker resurrected it via
+	// removeUserTierOverrideUpdate's COALESCE (admin_user_repository.go) instead of starting a fresh
+	// episode, so a bank the user relinks in the meantime inherited an already-expired grace window
+	// and got disconnected with zero notice the next repairPlaidDisconnects pass. ROUND 18
+	// (admin_user_repository.go) independently removed that COALESCE — a comp granted and removed
+	// over this exact stuck marker no longer resurrects it either way — but a stuck marker on a user
+	// no comp is EVER granted over gets no help from that fix. RetentionCleanupCheckWorker's
+	// self-healing backstop (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what
+	// actually closes THAT remaining population within one backstop interval — not the residue being
+	// harmless on its own — since the disconnect that just succeeded removed the very live item that
+	// predicate requires, GetUsersNeedingPlaidDisconnectRepair
 	// can never reselect this user again to retry the clear either. Issue #1413 #1453 (Codex review, PR #1443 follow-up): a single,
 	// swallowed clear attempt used to leave the marker stuck non-NULL on any transient DB error at
 	// exactly this moment — bring this into line with the identical fix already applied to

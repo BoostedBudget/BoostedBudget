@@ -875,17 +875,40 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 
 	// CI-observed clock-skew fix: through the fix below, `updated_at` AND the
 	// plaid_cleanup_pending_at COALESCE both used a single Go-computed `now := time.Now()` passed as
-	// a query parameter — the ONE writer of this column that did not use Postgres's own NOW(), unlike
-	// every sibling writer (CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride,
+	// a query parameter — the ONE writer of this column that did not use a Postgres-native clock,
+	// unlike every sibling writer (CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride,
 	// UpdateTrialStatus below, removeUserTierOverrideUpdate). That inconsistency is exactly what
 	// failed TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker in CI: the
 	// test fences a "before" bound via `SELECT NOW()` (correctly, per this file's own established
 	// convention) and then asserts this method's freshly-stamped marker is not before that bound — but
 	// the marker's ACTUAL value came from the test RUNNER's clock (this method's Go `now`), not
 	// Postgres's, so a Postgres container clock lagging the runner's could make the fenced comparison
-	// fail even though nothing was actually wrong. Writing NOW() directly in the SQL below, like every
-	// other writer already does, removes the runner's clock from this column's value entirely — the
-	// stamped timestamp and every test fence built from `SELECT NOW()` now share one clock, always.
+	// fail even though nothing was actually wrong. Writing a Postgres clock function directly in the
+	// SQL below, like every other writer already does, removes the runner's clock from this column's
+	// value entirely — the stamped timestamp and every test fence built from `SELECT NOW()` now share
+	// one clock family, always.
+	//
+	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this method's own
+	// plaid_cleanup_pending_at COALESCE for the SAME transaction-start-vs-statement-execution risk
+	// StampMissingPlaidCleanupMarkers's own doc comment describes in full: this is a single,
+	// user-id-scoped autocommit UPDATE, and a row a concurrent transaction already holds locked (e.g.
+	// an admin's RemoveUserTierOverride call, mid-transaction, on the SAME row) could in principle
+	// make this statement block and then still write a pre-wait NOW(). Left as NOW(), NOT
+	// clock_timestamp(), DELIBERATELY: StampMissingPlaidCleanupMarkers's own doc comment records an
+	// empirically-verified (not merely reasoned) finding that a bare NOW()->clock_timestamp()
+	// substitution in a plain UPDATE does NOT actually fix this — PostgreSQL evaluates the SET-list
+	// target expressions against the pre-lock-wait row version regardless of which clock function is
+	// named, so clock_timestamp() alone would be a no-op here too, not a real fix. The genuine fix
+	// (mirrored from removeUserTierOverrideUpdate, admin_user_repository.go) requires restructuring
+	// into a `WITH candidate AS (SELECT ... FOR UPDATE) UPDATE ... FROM candidate` shape so the lock
+	// acquisition happens as its own earlier step. That is a larger, separate change to this
+	// business-critical Paddle-webhook writer (and to its 5 CAS-guarded siblings —
+	// CancelIfPastDueWithRetention(Occurrence), ExpireTrialIfNoOverride, UpdateTrialStatus — all of
+	// which share this exact same theoretical exposure and the exact same reason a naive substitution
+	// would not have helped), scoped OUT of this round as a documented follow-up rather than rushed
+	// through five more CAS/webhook rewrites without their own dedicated review and testing.
+	// `updated_at` keeps NOW() regardless — plain ordering, never compared as an age, not at risk
+	// either way.
 	//
 	// Issue #1413 round-10: maintain plaid_cleanup_pending_at atomically with THIS SAME
 	// subscription_status write, rather than in a later, separate call that could independently
@@ -1284,17 +1307,25 @@ func (r *profileRepository) ClaimForDeletion(ctx context.Context, userID string)
 // The bug this closes: granting a trial to a cancelled user with an outstanding marker used to
 // leave the STALE marker in place — trial is Plaid-eligible, so the invariant requires NULL here.
 // The stale marker then survived until this NEW trial itself later expired, at which point
-// ExpireTrialIfNoOverride's COALESCE(plaid_cleanup_pending_at, NOW()) preserved the OLD timestamp
-// instead of starting a fresh grace window — the user could be disconnected immediately against
-// an anchor from before this trial ever existed, rather than getting the grace period a fresh
-// ineligibility episode is entitled to.
+// ExpireTrialIfNoOverride's COALESCE(plaid_cleanup_pending_at, NOW()) preserved the OLD
+// timestamp instead of starting a fresh grace window — the user could be disconnected immediately
+// against an anchor from before this trial ever existed, rather than getting the grace period a
+// fresh ineligibility episode is entitled to.
 //
 // CI-observed clock-skew fix, same defect and same fix as UpdateSubscriptionFromPaddle's own doc
 // comment describes in full: `updated_at` and the plaid_cleanup_pending_at COALESCE both used to
-// share a single Go-computed `now := time.Now()` query parameter instead of Postgres's own NOW() —
-// this method's own sibling instance of the identical bug, caught by the same audit, fixed the same
-// way, for the same reason (every fence a test builds via `SELECT NOW()` must share Postgres's
-// clock with whatever this method actually stamps, never the Go runner's).
+// share a single Go-computed `now := time.Now()` query parameter instead of a Postgres-native
+// clock — this method's own sibling instance of the identical bug, caught by the same audit, fixed
+// the same way, for the same reason (every fence a test builds via `SELECT NOW()` must share
+// Postgres's clock with whatever this method actually stamps, never the Go runner's).
+//
+// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this method's own marker
+// COALESCE for the same transaction-start-vs-statement-execution risk as every sibling writer of
+// this column — see UpdateSubscriptionFromPaddle's own doc comment (this file) for the full
+// reasoning on why it is left as NOW(), not clock_timestamp(), here: a bare substitution does not
+// actually fix anything for a single, non-CTE UPDATE (verified empirically, see
+// StampMissingPlaidCleanupMarkers's doc comment), and the real fix is a larger, separate
+// restructuring scoped out as a documented follow-up rather than rushed through here.
 func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
 
@@ -2050,8 +2081,8 @@ const liveLinkedItemExistsClause = `EXISTS (
 //     ineligibility episode began at this instant, cleanup outstanding" — a durable,
 //     override-independent fact (see domain.User.PlaidCleanupPendingAt's doc comment) — and is
 //     NULL whenever nothing is pending (see ExpireTrialIfNoOverride/
-//     CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle
-//     for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
+//     CancelIfPastDueWithRetention/CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle/
+//     UpdateTrialStatus for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
 //     invent work from a derived signal.
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
@@ -2098,27 +2129,104 @@ const liveLinkedItemExistsClause = `EXISTS (
 // predicate simply stops excluding the row on the very next scheduled run. Do NOT "unify" this with
 // noManualOverrideAtAllPredicate — see TestRetentionQueries_Integration_MalformedOverride_StillExcluded
 // and this predicate's own doc comment for why the retention/deletion queries must stay as they are.
+//
+// Issue #1413 Finding 1 (Medium, Codex review, PR #1443 follow-up, headline finding of this round):
+// the split above (a durable write-time marker plus a live read-time override predicate) closed
+// round-13's P0 for CURRENT ELIGIBILITY, but left a second, narrower gap in the GRACE WINDOW itself.
+// A comp SUSPENDS eligibility while live, but plaid_cleanup_pending_at keeps aging regardless — round-13
+// deliberately left it untouched by a grant, so it can already be arbitrarily old by the time a LATER
+// comp lapses. No writer runs when a comp simply lapses on its own clock (noActiveManualOverridePredicate
+// is a read-time fact, not a write), so round-10's removal-path anchor
+// (removeUserTierOverrideUpdate, admin_user_repository.go, ROUND 19/20) never reaches this: it only
+// re-anchors the marker when someone actually calls RemoveUserTierOverride/RemoveUserTierOverrideIfMatches.
+// Concretely: cancellation stamps the marker at T0; an admin comps the user (marker untouched, per
+// round-13); the comp lapses at T_lapse with NOTHING written; before the expiry job ever runs, this
+// query would see plaid_cleanup_pending_at = T0 — possibly already older than gracePeriod — and select
+// the user for disconnect, even though they have been read-only (post-lapse) for far less than
+// gracePeriod. The user is disconnected almost the instant they actually lose access, having been
+// granted almost none of their entitled grace window.
+//
+// The fix: anchor the grace comparison on GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at),
+// not plaid_cleanup_pending_at alone — the SAME rule removeUserTierOverrideUpdate's own lapse-anchor
+// CASE already expresses on the writer side (ROUND 19 there: anchor on manual_tier_ends_at when it is
+// the more recent loss-of-access instant, never NOW()/"today" for a comp that lapsed long ago). Both
+// sites now say "grace runs from when access was actually lost," from two different angles — a query
+// predicate here, a write-time anchor there — and are cross-referenced so they cannot drift apart; if
+// this GREATEST expression ever changes, re-check removeUserTierOverrideUpdate's CASE (and vice
+// versa) for whether the underlying rule they're both expressing has actually changed too.
+//
+// Four cases were reasoned through against noActiveManualOverridePredicate, immediately below this
+// GREATEST clause in the query, and confirmed against a real database (not just reasoned about,
+// since PostgreSQL's GREATEST/NULL interaction is exactly the kind of thing an error here would be
+// silent about):
+//  1. manual_tier_ends_at in the FUTURE (a live comp): noActiveManualOverridePredicate already
+//     excludes this row outright (manual_tier_override non-empty AND ends_at >= NOW()) — the row
+//     never reaches the GREATEST comparison at all, so GREATEST cannot wrongly defer anything here.
+//  2. manual_tier_ends_at NULL with a non-empty override (a permanent, non-expiring comp):
+//     noActiveManualOverridePredicate's "ends_at IS NULL OR ends_at >= NOW()" branch treats a NULL
+//     end as still-active, so this row is ALSO excluded before the GREATEST comparison runs.
+//  3. manual_tier_ends_at NULL with NO override (the ordinary case — the overwhelming majority of
+//     rows): not excluded by noActiveManualOverridePredicate, so THIS is the case where a silent
+//     GREATEST/NULL regression would be catastrophic — if GREATEST ever returned NULL for one NULL
+//     argument (SQL's usual three-valued-logic behavior for arithmetic), every ordinary user's
+//     comparison would evaluate to UNKNOWN and nobody would ever be selected again. Verified directly
+//     against Postgres (not merely reasoned about): `GREATEST(x, NULL) = x` — GREATEST (unlike `+`
+//     or plain comparison operators) explicitly ignores NULL arguments unless EVERY argument is NULL,
+//     in which case the whole marker being NULL would already have failed the earlier
+//     `plaid_cleanup_pending_at IS NOT NULL` clause. Every pre-existing test in this file that has no
+//     override at all (the large majority) is a live regression check for this case on every run.
+//  4. A lapsed comp OLDER than the marker (manual_tier_ends_at predates plaid_cleanup_pending_at —
+//     e.g. an old, never-cleared comp from a PRIOR, unrelated episode): GREATEST picks the marker
+//     (the later of the two), so this must, and does, behave identically to the pre-fix, marker-only
+//     comparison — see TestPlaidDisconnectRepair_Integration_LapsedCompOlderThanMarker_UnaffectedByGreatest
+//     (profile_repository_plaid_disconnect_repair_integration_test.go).
+// The actual bug this closes is a fifth, implicit case none of the above: manual_tier_ends_at in the
+// past AND more recent than the marker — see
+// TestPlaidDisconnectRepair_Integration_LapsedCompRestartsGraceFromLapseNotFromMarker for that
+// scenario reproduced end to end through production writers.
+//
+// GetOutstandingPlaidCleanupStats (job_health_repository.go), the sibling backlog gauge, deliberately
+// does NOT get this same GREATEST treatment — it measures "how much cleanup is outstanding and how
+// long has it been outstanding", not "who is past grace right now", and its own doc comment already
+// states it must keep counting a comped user's backlog for the ENTIRE time a comp is live (a gauge
+// that went blind to that population would hide a chronic problem for as long as the comp lasts).
+// Anchoring it on GREATEST(..., manual_tier_ends_at) would UNDERSTATE that backlog's age for exactly
+// the population the gauge exists to keep visible, so the two are deliberately NOT aligned on this
+// axis — see that method's own doc comment for the full reasoning.
+//
 // CI-observed clock-skew fix (fourth failure of this exact class on this branch): through the fix
 // below, this method computed its grace-window cutoff in GO — `cutoff := time.Now().Add(-gracePeriod)`
 // — and compared it against plaid_cleanup_pending_at, a column every writer stamps from POSTGRES's
-// OWN clock (`NOW()`, or — after the sibling fix on UpdateSubscriptionFromPaddle/UpdateTrialStatus
-// below — now EVERY writer's own clock, full stop). CI runs Postgres in a separate container whose
-// clock can lag or lead the test runner's by single-digit milliseconds; mixing the two clocks in
-// one comparison meant every test exercising a near-zero grace boundary inherited that skew, no
-// matter how carefully the TEST fenced its own assertions — the mixing was in this production
-// query, not in any test. Two tests failed in CI on this exact defect:
-// TestMigration000121_LapsedOverrideRowNowRepaired (calls this method with gracePeriod=0
-// immediately after a migration stamps the column via Postgres's own NOW(); a lagging Go clock
-// could put `cutoff` before the stamped value, so `plaid_cleanup_pending_at < cutoff` was false)
-// and TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker (a DIFFERENT
-// manifestation of the same root cause — see UpdateSubscriptionFromPaddle's own doc comment).
+// OWN clock (`NOW()`, or — for removeUserTierOverrideUpdate's still-live branch and
+// StampMissingPlaidCleanupMarkers's global-scan heal, as of Issue #1413 Finding 2, Codex review, PR
+// #1443 follow-up — `clock_timestamp()` instead, for the subset of writers actually exposed to a
+// concurrent-lock-wait backdating risk in a way a bare NOW()->clock_timestamp() substitution could
+// genuinely close; see StampMissingPlaidCleanupMarkers's own doc comment for why that fix needed
+// more than a function-name swap, and for which OTHER writers of this column were audited and
+// deliberately left on NOW() pending a larger follow-up). CI runs Postgres in a separate container
+// whose clock can lag or lead the test runner's by
+// single-digit milliseconds; mixing the two clocks in one comparison meant every test exercising a
+// near-zero grace boundary inherited that skew, no matter how carefully the TEST fenced its own
+// assertions — the mixing was in this production query, not in any test. Two tests failed in CI on
+// this exact defect: TestMigration000121_LapsedOverrideRowNowRepaired (calls this method with
+// gracePeriod=0 immediately after a migration stamps the column via Postgres's own NOW(); a lagging
+// Go clock could put `cutoff` before the stamped value, so `plaid_cleanup_pending_at < cutoff` was
+// false) and TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker (a
+// DIFFERENT manifestation of the same root cause — see UpdateSubscriptionFromPaddle's own doc
+// comment).
 //
-// The fix moves the ENTIRE comparison into Postgres: `NOW() - make_interval(secs => $1)` computes
-// the cutoff using the SAME clock plaid_cleanup_pending_at was stamped from, so the two values are
-// never subject to inter-process/inter-container skew, no matter how tight the grace period. The
-// exported signature (gracePeriod time.Duration) is unchanged — callers are unaffected; only the
-// number that crosses the wire changes, from a pre-computed absolute timestamp to a plain float64
-// of seconds, which make_interval's `secs double precision` parameter accepts directly (mirrors
+// The fix moves the ENTIRE comparison into Postgres: `clock_timestamp() - make_interval(secs => $1)`
+// computes the cutoff using a Postgres-native clock, so the two sides are never subject to
+// inter-process/inter-container skew, no matter how tight the grace period. (Issue #1413 Finding 2:
+// this comparison itself was `NOW()`-based from round-10 through round-20 — switched to
+// clock_timestamp() alongside the GREATEST fix above, both landing in the same round; see
+// StampMissingPlaidCleanupMarkers's doc comment for why a plain autocommit SELECT does not strictly
+// NEED clock_timestamp() the way a lock-waiting UPDATE does, and why using it here anyway is still
+// the right call — consistency with every write-side anchor it is compared against, not a
+// correctness requirement of this particular read.) The exported signature (gracePeriod
+// time.Duration) is unchanged — callers are unaffected; only the number that crosses the wire
+// changes, from a pre-computed absolute timestamp to a plain float64 of seconds, which
+// make_interval's `secs double precision` parameter accepts directly (mirrors
 // removeUserTierOverrideUpdate's own established make_interval(months => $N) precedent,
 // admin_user_repository.go). Sub-second grace periods (several tests here call this with exactly
 // zero) lose no precision — Duration.Seconds() is a float64, and 0 maps to 0 exactly.
@@ -2128,7 +2236,7 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 		  AND plaid_cleanup_pending_at IS NOT NULL
-		  AND plaid_cleanup_pending_at < NOW() - make_interval(secs => $1)
+		  AND GREATEST(plaid_cleanup_pending_at, manual_tier_ends_at) < clock_timestamp() - make_interval(secs => $1)
 		  AND ` + liveLinkedItemExistsClause + `
 	` + noActiveManualOverridePredicate + `
 		ORDER BY updated_at ASC
@@ -2155,10 +2263,31 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 //
 // This stops fixing writers and instead heals: run once at the start of EVERY repairPlaidDisconnects
 // pass (retention_cleanup_check.go), before the candidate query, this is a single atomic UPDATE that
-// stamps NOW() for any user who is ineligible-status, has at least one live linked item, and has a
-// NULL marker. A writer that misses a stamp — for any reason, present or future, including a race no
-// one has found yet — self-heals on the very next repair pass instead of leaking the user's bank
-// connection forever.
+// stamps clock_timestamp() for any user who is ineligible-status, has at least one live linked item,
+// and has a NULL marker. A writer that misses a stamp — for any reason, present or future, including
+// a race no one has found yet — self-heals on the very next repair pass instead of leaking the
+// user's bank connection forever.
+//
+// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up): this used to write NOW()
+// (transaction_timestamp()), on the argument that a single autocommit UPDATE has no EARLIER
+// lock-acquiring statement in the same (implicit) transaction, so there was supposedly no wait for
+// NOW() to be staled across. That argument is wrong, and the correction matters beyond this one
+// call site: NOW()/transaction_timestamp() is fixed at the transaction's BEGIN, which for a bare
+// autocommit statement is essentially "when the statement was submitted" — BEFORE Postgres acquires
+// the row locks needed to actually perform the UPDATE, not after. If this statement's own WHERE
+// clause matches a row a CONCURRENT transaction already holds locked (e.g. removeUserTierOverrideUpdate's
+// FOR UPDATE, admin_user_repository.go, mid-removal on the very same row), THIS statement blocks
+// waiting for that lock — and once unblocked, NOW() still reflects the pre-wait instant, not the
+// moment the row was actually written. Concretely: this backstop starts at T0, blocks behind a
+// concurrent removal holding the row for (say) 73 hours, then finally writes plaid_cleanup_pending_at
+// = NOW() = T0 — the very next repair pass sees a marker already 73 hours stale and disconnects with
+// no meaningful grace at all. The fix: clock_timestamp() — real statement-execution wall time,
+// re-evaluated fresh when the statement actually runs, not when its enclosing (here: implicit,
+// one-statement) transaction began. This is the SAME fix, and the SAME corrected reasoning, as
+// removeUserTierOverrideUpdate's own plaid_cleanup_pending_at CASE (ROUND 20, admin_user_repository.go)
+// — the "autocommit statements are exempt" argument that used to distinguish this call site from
+// that one was the error; there is no such exemption for ANY statement that can block on a lock,
+// autocommit or not.
 //
 // Why this shape, against the four properties that matter here:
 //
@@ -2172,7 +2301,8 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 //     it is healed on the NEXT run instead) — there is no window in between where running this
 //     statement can itself observe or produce a torn, half-updated result.
 //  3. The existing grace-window logic is untouched: a healed user's plaidDisconnectRepairGracePeriod
-//     runs from the heal (this statement's own NOW()), exactly like every other SET site.
+//     runs from the heal (this statement's own clock_timestamp() — see the Finding 2 correction
+//     below for why NOW() would have been wrong here), exactly like every other SET site.
 //  4. Reuses the SAME shared Go constants plaidDisconnectRepairEligibleStatusPredicate and
 //     liveLinkedItemExistsClause the candidate query, the backlog gauge (GetOutstandingPlaidCleanupStats,
 //     job_health_repository.go), and migration 000121 all already use — copied verbatim there since a
@@ -2199,8 +2329,10 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 // populate), so it only ever creates a marker for a population the candidate query would ITSELF
 // eventually act on — never for a currently-comped user the candidate query would never touch
 // regardless of marker state. A currently-comped user's marker is instead re-armed the ordinary way
-// once the comp is actually removed (removeUserTierOverrideUpdate's COALESCE) or, if the comp lapses
-// and is never explicitly removed, by the NEXT run of this same backstop once
+// once the comp is actually removed (removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE —
+// ROUND 18/19/20, admin_user_repository.go; NOT a COALESCE, which this CASE stopped using at ROUND
+// 18 precisely because a COALESCE-preserved stale value is what Finding 1, above, closes) or, if the
+// comp lapses and is never explicitly removed, by the NEXT run of this same backstop once
 // noActiveManualOverridePredicate stops excluding them.
 //
 // Called from exactly one place: RetentionCleanupCheckWorker.repairPlaidDisconnects
@@ -2225,15 +2357,41 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 // precedent for ClearPastDueStartedAtIfMatches, CancelIfPastDueOccurrenceWithRetention, and the two
 // occurrence-scoped retention-notice-eligibility methods (see NewProfileRepository's own doc comment).
 func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error) {
+	// ROUND 21 correction (Issue #1413 Finding 2, Codex review, PR #1443 follow-up): a bare
+	// `UPDATE ... SET plaid_cleanup_pending_at = clock_timestamp() WHERE ...` is NOT enough, and this
+	// was verified empirically (against a real database, not reasoned about) while building this
+	// method's own regression test. PostgreSQL evaluates an UPDATE's SET-list target expressions —
+	// INCLUDING a volatile call like clock_timestamp() — against the row version obtained by the
+	// scan BEFORE any row-lock wait; if a candidate row is concurrently locked by another
+	// transaction, this statement blocks, but once unblocked it does NOT re-evaluate clock_timestamp()
+	// against the moment the lock was actually released — the value already computed pre-wait is what
+	// gets written. A bare substitution of NOW() for clock_timestamp() therefore leaves the EXACT same
+	// backdating bug this fix exists to close, just with a different function name.
+	//
+	// The fix that actually works, mirroring removeUserTierOverrideUpdate's own already-correct shape
+	// (admin_user_repository.go): acquire the row locks EXPLICITLY, as their own separate step, via a
+	// `SELECT ... FOR UPDATE` CTE — THAT step is what genuinely blocks and waits. Only once it
+	// resolves (lock already held by this transaction) does the outer UPDATE run, evaluating
+	// clock_timestamp() fresh, with nothing left to wait for — so it correctly reflects the
+	// post-wait, statement-execution instant. This is still ONE round trip (one r.db.Exec call, one
+	// implicit autocommit transaction) — the CTE only changes the ORDER PostgreSQL performs the lock
+	// acquisition and the target-list evaluation in, not the transaction shape.
 	ct, err := r.db.Exec(ctx, `
+		WITH candidates AS (
+			SELECT id FROM users
+			WHERE `+plaidDisconnectRepairEligibleStatusPredicate+`
+			  AND plaid_cleanup_pending_at IS NULL
+			  AND is_deleted = FALSE
+			  AND deletion_requested_at IS NULL
+			  AND `+liveLinkedItemExistsClause+`
+			`+noActiveManualOverridePredicate+`
+			FOR UPDATE
+		)
 		UPDATE users
-		SET plaid_cleanup_pending_at = NOW(), updated_at = NOW()
-		WHERE `+plaidDisconnectRepairEligibleStatusPredicate+`
-		  AND plaid_cleanup_pending_at IS NULL
-		  AND is_deleted = FALSE
-		  AND deletion_requested_at IS NULL
-		  AND `+liveLinkedItemExistsClause+`
-	`+noActiveManualOverridePredicate)
+		SET plaid_cleanup_pending_at = clock_timestamp(), updated_at = NOW()
+		FROM candidates
+		WHERE users.id = candidates.id
+	`)
 	if err != nil {
 		return 0, fmt.Errorf("StampMissingPlaidCleanupMarkers: %w", err)
 	}
@@ -2271,13 +2429,27 @@ const anyLinkedItemExistsClause = `EXISTS (
 //  3. An admin grants a comp. The user is effectively active again and relinks a bank — a genuinely
 //     NEW live linked item now exists, but T (the OLD episode's timestamp) is still what is
 //     recorded.
-//  4. The admin removes the comp. removeUserTierOverrideUpdate's
-//     COALESCE(u.plaid_cleanup_pending_at, NOW()) (admin_user_repository.go) preserves the stale T
-//     instead of starting a fresh episode, because the column was never NULL to begin with.
+//  4. The admin removes the comp. AT THE TIME this scenario was written, removeUserTierOverrideUpdate's
+//     plaid_cleanup_pending_at CASE used COALESCE(u.plaid_cleanup_pending_at, NOW()) (admin_user_repository.go),
+//     which preserved the stale T instead of starting a fresh episode, because the column was never
+//     NULL to begin with.
 //  5. The next repairPlaidDisconnects pass now sees a live item and a marker (T) already older than
 //     plaidDisconnectRepairGracePeriod — and disconnects the newly-linked bank IMMEDIATELY, with
 //     ZERO grace period. The grace window exists precisely so a lapsed user has time to recover;
 //     this path silently skips it entirely for a bank connection that is only hours old.
+//
+// Round-18 correction (admin_user_repository.go, removeUserTierOverrideSelectPrior's own doc
+// comment): step 4's COALESCE was independently REMOVED by a later round, for a different reason
+// (a stale marker resurrected across an ordinary ongoing-episode restart, no Clear-failure required
+// at all) — should_mark_plaid_cleanup_pending's CASE now overwrites UNCONDITIONALLY (the
+// manual_tier_ends_at anchor when lapsed, clock_timestamp() otherwise; see that file's ROUND
+// 18/19/20 notes), so step 4 as literally described can no longer happen via THIS writer regardless
+// of whether this method ever runs. This method is KEPT anyway, not made redundant by that fix: it
+// still closes the population step 4 never depended on a comp for at all — a stale marker with zero
+// live items that a comp is NEVER granted over, which sits uncorrected indefinitely with nothing
+// else in this codebase ever revisiting it (see the asymmetry paragraph below, and
+// removeUserTierOverrideSelectPrior's own "Reassessing ClearCompletedPlaidCleanupMarkers" note for
+// the identical conclusion reached independently from the writer side).
 //
 // The fix restores the invariant's SECOND half at runtime, not just on paper:
 // assertPlaidMarkerInvariant (profile_repository_plaid_marker_invariant_integration_test.go) has,
@@ -2304,16 +2476,17 @@ const anyLinkedItemExistsClause = `EXISTS (
 // arms a marker for a population the candidate query would itself eventually act on, and the
 // candidate query already excludes a live comp — deferring to "re-arm the ordinary way once the comp
 // is removed" is correct there because the column starts from NULL either way. Clear has the
-// opposite obligation: per step 3 of the scenario above, the exact harm this method exists to close
-// requires healing a STALE marker BEFORE a comp is ever granted over it, precisely so that step 4's
-// COALESCE sees a NULL column and starts a genuinely fresh episode. If this WHERE clause excluded a
-// currently-comped user, a comp granted in the narrow window between a failed clear (step 1) and
-// this backstop's next scheduled pass would suppress the heal for as long as the comp stays active —
-// reproducing the exact bug on the very next removal. Clearing is a correction of a FACT already
-// true about linked_items (cleanup for this episode is done); that fact does not depend on, and
-// must not be gated on, whether an override happens to be live right now. See
+// opposite obligation: it corrects a FACT already true about linked_items (cleanup for this episode
+// is done) regardless of whether an override happens to be live right now — see
 // domain.User.PlaidCleanupPendingAt's doc comment: manual_tier_override is deliberately not a term
-// in this invariant at all.
+// in this invariant at all. Belt-and-braces against removeUserTierOverrideUpdate's own writer-side
+// fix (ROUND 18, admin_user_repository.go), not merely redundant with it: that CASE only ever runs
+// AT a removal, gated on a LIVE linked item existing right then; a stale marker on a user who is
+// comped and STAYS comped (no removal ever happens, or one happens with no live item present yet)
+// gets no help from that CASE at all, and would sit uncorrected for as long as that holds if this
+// WHERE clause excluded a currently-comped user too. If this WHERE clause excluded a currently-comped
+// user, a comp granted in the narrow window between a failed clear (step 1) and this backstop's next
+// scheduled pass would suppress the heal for as long as the comp stays active.
 //
 // Same four properties as StampMissingPlaidCleanupMarkers, restated for the clear direction: (1)
 // GetUsersNeedingPlaidDisconnectRepair is completely unchanged — this method only ever nulls a
@@ -2321,8 +2494,10 @@ const anyLinkedItemExistsClause = `EXISTS (
 // this backstop could ever select is affected; (2) one atomic UPDATE, so it cannot itself race —
 // the same argument StampMissingPlaidCleanupMarkers's own doc comment makes; (3) a user this method
 // clears gets a genuinely FRESH plaidDisconnectRepairGracePeriod the next time an episode opens for
-// them (via Stamp, or via removeUserTierOverrideUpdate's COALESCE now seeing NULL), never the OLD
-// episode's stale grace window resumed; (4) reuses anyLinkedItemExistsClause and
+// them (via Stamp, or via removeUserTierOverrideUpdate's plaid_cleanup_pending_at CASE — which, as
+// of ROUND 18, overwrites unconditionally rather than COALESCE-preserving whatever this method left
+// behind — now seeing NULL), never the OLD episode's stale grace window resumed; (4) reuses
+// anyLinkedItemExistsClause and
 // liveLinkedItemExistsClause — the SAME shared Go constants the candidate query, the backstop's own
 // Stamp half, and admin_user_repository.go's removeUserTierOverrideSelectPrior already use — so
 // "what counts as live" and "what counts as ever-linked" cannot silently drift between this method
@@ -2579,6 +2754,13 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
 	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
 	// call re-pushing an already-running marker forward.
+	//
+	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
+	// for the same risk class every writer of this column shares — left as NOW(), not
+	// clock_timestamp(), because a bare substitution would not actually fix anything for a single,
+	// non-CTE UPDATE like this one (verified empirically; see UpdateSubscriptionFromPaddle's and
+	// StampMissingPlaidCleanupMarkers's own doc comments for the full reasoning and the follow-up
+	// this is scoped into instead).
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET subscription_status = 'cancelled',
@@ -2614,6 +2796,11 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
 	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
 	// call re-pushing an already-running marker forward.
+	//
+	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
+	// too — left as NOW() for the same reason as CancelIfPastDueWithRetention's own sibling note
+	// just above (this file): a bare substitution would not actually fix anything here, and the
+	// real fix is scoped into the same follow-up.
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET subscription_status = 'cancelled',
@@ -2643,6 +2830,11 @@ func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID 
 	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
 	// call re-pushing an already-running marker forward (defensive; the WHERE clause already
 	// makes this a one-shot transition per trial).
+	//
+	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
+	// too — left as NOW() for the same reason as UpdateSubscriptionFromPaddle's own doc comment
+	// (this file) explains in full: a bare substitution would not actually fix anything here, and
+	// the real fix is scoped into the same follow-up.
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET subscription_status = 'inactive', updated_at = NOW(),
