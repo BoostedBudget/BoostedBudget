@@ -139,9 +139,11 @@ func NewManualTierOverrideExpiryCheckWorker(deps ManualTierOverrideExpiryCheckWo
 // that this guard and the repository predicate are strict complements in general. They are not: a
 // NULL manual_tier_ends_at (a permanent override) is "active" to HasActiveManualOverride() but is
 // excluded outright by expiredManualTierOverridePredicate, so it never reaches this candidate list
-// at all — step 1 simply never observes that case in practice. Do not add a naive SQL/Go parity
-// test for this pair on the strength of this comment; see expiredManualTierOverridePredicate's doc
-// comment for the full reasoning and why such a test would be wrong, not merely redundant.
+// at all — step 1 simply never observes that case in practice. That is ONE of two divergences, not
+// the only one: the predicate also carries `is_deleted = FALSE`, which the Go method has no
+// counterpart for at all. Do not add a naive SQL/Go parity test for this pair on the strength of
+// this comment; see expiredManualTierOverridePredicate's doc comment for the authoritative list of
+// both divergences, and why such a test would be wrong rather than merely redundant.
 func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *river.Job[ManualTierOverrideExpiryCheckArgs]) (err error) {
 	args := job.Args
 

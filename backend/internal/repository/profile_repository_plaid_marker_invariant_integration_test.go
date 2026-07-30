@@ -842,6 +842,14 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 	// the fix does not depend on any writer ever re-visiting this row again.
 	t.Run("comp_grant_then_lapse_never_removed", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweepcomplapse", "cancelled")
+		// Seeded HERE, before the invariant assertions — not just before the repair query below.
+		// With zero linked_items rows assertPlaidMarkerInvariant's NULL-marker branch degenerates to
+		// assert.Equal(t, 0, live) against live == 0, which passes whatever the marker holds. So a
+		// comp grant that wrongly CLEARED the marker — the exact round-13 P0 regression this subtest
+		// exists to catch, and which the "after grant" assertion below is positioned to detect —
+		// would go completely unnoticed. One live item is what makes that branch bite.
+		// (Issue #1413 round-5 gap analysis; independently flagged as a High finding by Codex.)
+		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
 		assertPlaidMarkerInvariant(t, pool, user.ID, "comp-lapse: cancelled with marker, before grant")
 
@@ -852,7 +860,6 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 		// Deliberately NOT calling RemoveUserTierOverride / RemoveUserTierOverrideIfMatches — this
 		// is the whole point of this subtest: the expiry job never runs.
-		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, time.Millisecond)
 		require.NoError(t, err)
 		found := false

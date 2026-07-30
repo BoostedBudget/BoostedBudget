@@ -2689,19 +2689,31 @@ func (r *profileRepository) ClearCompletedPlaidCleanupMarkers(ctx context.Contex
 //
 // Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — deliberately NOT a strict complement of
 // domain.User.HasActiveManualOverride() / hasActiveManualOverrideAt(), unlike
-// noActiveManualOverridePredicate's genuine parity with that same Go method. They diverge on
-// EXACTLY one case: a NULL manual_tier_ends_at. This predicate's `manual_tier_ends_at IS NOT
-// NULL` excludes such a row outright (a permanent override never lapses, so it is never a
-// candidate here), while HasActiveManualOverride() treats a NULL end date as an indefinite,
-// still-live comp — i.e. "active", not "expired". Both are correct for what each asks: this
-// predicate answers "has this override's clock run out", the Go method answers "is this
-// override in effect right now" — a permanent override is never the former but is always the
-// latter. Do NOT write a naive SQL/Go parity test asserting "predicate selects <=> Go reports
-// expired" for this pair (of the kind that correctly exists for noActiveManualOverridePredicate,
-// see TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — it would fail on this
-// correct, intentional divergence, and the failure would look exactly like a real bug, tempting
-// a "fix" that breaks permanent overrides instead. An honest parity test is only possible scoped
-// to non-NULL manual_tier_ends_at (where the two really are complements); see
+// noActiveManualOverridePredicate's genuine parity with that same Go method. They agree on the
+// override-value checks (`IS NOT NULL AND <> ''` mirrors the Go method's nil/empty guard) and on
+// the expiry boundary (SQL `< NOW()` and Go `Before(now)` are both strict, so an exact tie is
+// "not expired" on both sides). They diverge on TWO independent cases:
+//
+//  1. A NULL manual_tier_ends_at. This predicate's `manual_tier_ends_at IS NOT NULL` excludes
+//     such a row outright (a permanent override never lapses, so it is never a candidate here),
+//     while HasActiveManualOverride() treats a NULL end date as an indefinite, still-live comp —
+//     i.e. "active", not "expired".
+//  2. `is_deleted = FALSE`, which has NO counterpart in the Go method at all — that method never
+//     looks at is_deleted. So a soft-deleted user with a lapsed override is "expired" to Go but
+//     is simply not selected here.
+//
+// Both are correct for what each asks: this predicate answers "has this override's clock run out
+// on a row this job should act on", the Go method answers "is this override in effect right now".
+//
+// Do NOT write a naive SQL/Go parity test asserting "predicate selects <=> Go reports expired"
+// for this pair (of the kind that correctly exists for noActiveManualOverridePredicate, see
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — it would fail on both of the
+// correct, intentional divergences above, and the failure would look exactly like a real bug,
+// tempting a "fix" that breaks permanent overrides instead. An honest parity test is possible
+// only when scoped to BOTH non-NULL manual_tier_ends_at AND is_deleted = FALSE; scoping to the
+// expiry column alone is NOT sufficient and still fails on soft-deleted rows. (The two-divergence
+// correction is Codex's round-6 Medium finding on the round-5 gap analysis; the original wording
+// here claimed a single divergence and understated the required scope.) See
 // ManualTierOverrideExpiryCheckWorker.Work's doc comment (manual_tier_override_expiry_check.go)
 // for the Go-side half of this note.
 const expiredManualTierOverridePredicate = `
