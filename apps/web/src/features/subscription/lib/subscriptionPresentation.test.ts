@@ -98,11 +98,42 @@ describe('getSubscriptionPresentation', () => {
     expect(result.badgeLabel).toBe('Trial — 5 days remaining')
   })
 
+  // These three cases are deliberately kept together, not "simplified" into one:
+  //   - The case immediately below has isComped and compEndsAt already *agreeing* (both say "not
+  //     comped"). It cannot tell "correctly trusts isComped" apart from "incorrectly re-derives
+  //     comp status from compEndsAt against the client clock" — a regression that only kicks in
+  //     for a *past* compEndsAt sails through it undetected.
+  //   - The two below it use *conflicting* signals and are what actually give this file power to
+  //     catch a clock-derivation regression (e.g.
+  //     `isComped = signals.isComped || new Date(compEndsAt) > now`).
   it('does not treat a past compEndsAt as comped — the server is authoritative, never re-derived from the clock', () => {
     const result = getSubscriptionPresentation({
       status: 'inactive',
       isComped: false,
       compEndsAt: '2020-01-01T00:00:00Z',
+    })
+
+    expect(result.kind).not.toBe('comped')
+    expect(result.isComped).toBe(false)
+  })
+
+  it('stays comped despite a past compEndsAt when isComped is true — a stale-looking end date must not override the server', () => {
+    const result = getSubscriptionPresentation({
+      status: 'inactive',
+      isComped: true,
+      compEndsAt: '2020-01-01T00:00:00Z',
+    })
+
+    expect(result.kind).toBe('comped')
+    expect(result.isComped).toBe(true)
+  })
+
+  it('does not treat a future compEndsAt as comped when isComped is false — the discriminating case for a clock-derivation regression', () => {
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const result = getSubscriptionPresentation({
+      status: 'inactive',
+      isComped: false,
+      compEndsAt: future,
     })
 
     expect(result.kind).not.toBe('comped')
