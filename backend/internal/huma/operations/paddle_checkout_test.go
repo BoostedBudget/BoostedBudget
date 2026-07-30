@@ -742,7 +742,17 @@ func TestHandlePreviewSubscriptionUpdate_CompedUser_NoRealSubscription_Rejected(
 	input.Body.NewTier = "household_3"
 	input.Body.BillingInterval = "month"
 
-	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil)
+	// .Once() is the pin: HandlePreviewSubscriptionUpdate's own initial GetUserByID call (line
+	// 370) is the only call this test permits. isSubscriptionModifiable's raw-status gate (line
+	// 384) must reject before getActiveSubscriptionID ever runs — and getActiveSubscriptionID
+	// (line 429) calls GetUserByID again. If the gate were silently switched to effective status,
+	// the comped user's forced "active" would pass it, execution would fall through to that
+	// second GetUserByID call, and — without this .Once() guard — the mock would happily answer
+	// it again and return the same "No active subscription found" substring from a completely
+	// different code path, so a bare assert.Contains(err.Error(), "No active subscription") could
+	// never distinguish the correct rejection from the silent fall-through. With .Once(), that
+	// second call has no matching expectation left and fails the test instead.
+	mockRepo.On("GetUserByID", ctx, "user_123").Return(user, nil).Once()
 
 	output, err := handler.HandlePreviewSubscriptionUpdate(ctx, input)
 

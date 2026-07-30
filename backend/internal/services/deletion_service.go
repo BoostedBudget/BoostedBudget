@@ -621,6 +621,13 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 	anonymizedEmail := fmt.Sprintf("deleted_%s@deleted.local", userID)
 
 	// Cancel active subscriptions
+	// #1413 PinnedRaw: deliberately reads the RAW user.SubscriptionStatus, not
+	// ComputeEffectiveStatus(). Cancelling a Paddle subscription must be driven by what Paddle
+	// itself reports the subscription's real state to be, not by a comp override that only
+	// relabels access — a comped user's forced "active" effective status must not make this
+	// gate fire against a subscription that (from Paddle's point of view) is already
+	// cancelled/inactive. See
+	// TestExecuteDeletion_CompedUser_RawCancelled_DoesNotCancelRealSubscription for the pin.
 	if user.PaddleSubscriptionID != nil {
 		status := domain.SubscriptionStatus(user.SubscriptionStatus)
 		if status.IsActiveSubscription() || status == domain.SubscriptionStatusPastDue {

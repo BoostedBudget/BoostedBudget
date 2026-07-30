@@ -1436,6 +1436,14 @@ func sameEmail(a, b string) bool {
 // paid+covered overlap. Local "trial" (60-day, no card), "cancelled"/"inactive"
 // (terminated Paddle sub), and manual-tier-override comps (no PaddleSubscriptionID) all
 // join freely — no refund risk.
+//
+// #1413 PinnedRaw: the status switch below deliberately reads the RAW user.SubscriptionStatus,
+// not ComputeEffectiveStatus(). This predicate is about Paddle BILLING truth (refund/double-charge
+// risk), not access — a comped user's forced "active" effective status must not block someone
+// whose real Paddle subscription is genuinely cancelled/inactive. See
+// TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw for the pin
+// (TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely covers
+// the nil-PaddleSubscriptionID short-circuit above, which never reaches this switch at all).
 func callerHasLivePaddleSubscription(u *domain.User) bool {
 	if u.PaddleSubscriptionID == nil {
 		return false

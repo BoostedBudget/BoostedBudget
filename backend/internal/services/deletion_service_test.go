@@ -1075,6 +1075,68 @@ func TestExecuteDeletion_InactiveSubscription_DoesNotCancel(t *testing.T) {
 	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
 }
 
+// TestExecuteDeletion_CompedUser_RawCancelled_DoesNotCancelRealSubscription is the
+// #1413 PinnedRaw pin test for cleanupPaddleResources (deletion_service.go:625-626).
+//
+// That gate deliberately reads the RAW user.SubscriptionStatus, not ComputeEffectiveStatus():
+// cancelling a Paddle subscription must be driven by what Paddle itself reports the
+// subscription's real state to be, not by a comp override that only relabels access. If this
+// switched to effective status, a comped user's forced "active" would make the gate true even
+// though the underlying Paddle subscription is genuinely cancelled — CancelSubscriptionImmediately
+// would fire against a subscription that (from Paddle's point of view) is already gone.
+//
+// The two pre-#1413 tests above (CancelledSubscription_DoesNotCancelAgain,
+// InactiveSubscription_DoesNotCancel) do NOT pin this: they set no ManualTierOverride, so raw and
+// effective status are identical for them and both survive a switch to effective silently. The
+// compedUser helper (used by the Part C guard tests) doesn't pin it either: it leaves
+// PaddleSubscriptionID and SubscriptionStatus unset, so execution never reaches this branch at
+// all. This test closes that gap: a LIVE override (so effective would read "active") combined
+// with a raw "cancelled" status AND a real PaddleSubscriptionID (so the branch is actually
+// entered), plus DeletionRequestedAt set so the user's own GDPR request clears the Part C guard
+// at ExecuteDeletion's top and execution reaches cleanupPaddleResources at all.
+func TestExecuteDeletion_CompedUser_RawCancelled_DoesNotCancelRealSubscription(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+	mockPaddle := new(MockPaddleDeletionCleaner)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+	service.SetPaddleCleanupService(mockPaddle)
+
+	tier := "premium"
+	paddleSubID := "sub_01abc123"
+	paddleCustID := "ctm_01abc123"
+	requestedAt := time.Now().Add(-1 * time.Hour)
+	user := &domain.User{
+		ID:                   "user-123",
+		ClerkUserID:          "user_123",
+		Email:                "test@example.com",
+		IsDeleted:            false,
+		SubscriptionStatus:   "cancelled", // raw: the real Paddle subscription is already cancelled
+		PaddleSubscriptionID: &paddleSubID,
+		PaddleCustomerID:     &paddleCustID,
+		ManualTierOverride:   &tier, // live comp -> effective status would read "active"
+		ManualTierEndsAt:     nil,
+		DeletionRequestedAt:  &requestedAt, // user's own GDPR request clears the Part C guard
+	}
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	service.SetWorkClaimsRepo(newAllowingClaimsRepo())
+	// CancelSubscriptionImmediately must NOT be called: raw status "cancelled" is not an active
+	// subscription and not past_due, regardless of the comp override's effective "active" status.
+	mockPaddle.On("ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail).Return(nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(true, nil)
+	mockClerk.On("DeleteUser", ctx, user.ClerkUserID).Return(nil)
+	mockAudit.On("Log", ctx, "user.deleted", "user", user.ID).Return(nil)
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+	assert.NoError(t, err)
+	mockPaddle.AssertNotCalled(t, "CancelSubscriptionImmediately", mock.Anything, mock.Anything)
+	mockPaddle.AssertCalled(t, "ArchiveAndAnonymizeCustomer", ctx, paddleCustID, expectedAnonymizedEmail)
+}
+
 // TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive verifies that when no customer ID
 // is set, ArchiveAndAnonymizeCustomer is not called. Issue #1006.
 func TestExecuteDeletion_NoPaddleCustomerID_SkipsArchive(t *testing.T) {
