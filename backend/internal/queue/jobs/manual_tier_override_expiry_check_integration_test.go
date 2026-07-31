@@ -85,6 +85,43 @@ func newJobsTestFieldEncryptor(t *testing.T) *appcrypto.FieldEncryptor {
 	return enc
 }
 
+// dbNow returns the database server's own current time — mirrors the identically-named helper in
+// internal/repository/admin_user_repository_remove_tier_override_integration_test.go (re-declared
+// here for this package, same convention as stubEncryptionService above): fencing must be against
+// Postgres's clock, never against a Go-side time.Now(), which a containerized Postgres server's
+// clock can disagree with by more than any fixed tolerance would safely assume.
+func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, pool.QueryRow(context.Background(), "SELECT NOW()").Scan(&now))
+	return now
+}
+
+// dbAddMonths computes ts + months entirely in Postgres via make_interval — the SAME semantics
+// AdminUserRepository.RemoveUserTierOverride's SQL uses for retention_expires_at, and the same
+// helper (mirrored here for this package) as admin_user_repository_remove_tier_override_integration_test.go's
+// dbAddMonths. Go's time.Time.AddDate normalizes month overflow FORWARD (2026-07-31 + 9mo ->
+// 2027-05-01); Postgres's make_interval CLAMPS to the target month's last day (-> 2027-04-30)
+// instead. Computing the expectation here — instead of via AddDate — keeps this assertion
+// calendar-immune by construction: expectation and actual value are both computed by Postgres,
+// so they can never disagree regardless of what day of the month the test runs on.
+func dbAddMonths(t *testing.T, pool *pgxpool.Pool, ts time.Time, months int) time.Time {
+	t.Helper()
+	var result time.Time
+	require.NoError(t, pool.QueryRow(context.Background(),
+		"SELECT $1::timestamptz + make_interval(months => $2)", ts, months).Scan(&result))
+	return result
+}
+
+// assertBetweenFence asserts ts falls within [before, after] inclusive — mirrors the
+// identically-named helper in admin_user_repository_remove_tier_override_integration_test.go,
+// re-declared here for this package.
+func assertBetweenFence(t *testing.T, before, after, ts time.Time, msg string) {
+	t.Helper()
+	require.False(t, ts.Before(before), "%s: got %v, expected not before fence-before %v", msg, ts, before)
+	require.False(t, ts.After(after), "%s: got %v, expected not after fence-after %v", msg, ts, after)
+}
+
 // TestManualTierOverrideExpiryCheckWorker_Integration_ExpiresAndRearmsRetention wires the REAL
 // ProfileRepository + AdminUserRepository (no mocks on either side of the DB boundary) against a
 // user with an expired override, a running retention clock, and a read-only reverted status
@@ -167,8 +204,10 @@ func TestManualTierOverrideExpiryCheckWorker_Integration_ExpiresAndRearmsRetenti
 		Args:   ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"},
 	}
 
+	before := dbNow(t, pool)
 	workErr := worker.Work(ctx, job)
 	require.NoError(t, workErr)
+	after := dbNow(t, pool)
 
 	var override *string
 	var endsAt, retStarted, retExpires, notice30, notice7 *time.Time
@@ -184,8 +223,12 @@ func TestManualTierOverrideExpiryCheckWorker_Integration_ExpiresAndRearmsRetenti
 	require.Nil(t, endsAt, "manual_tier_ends_at must be cleared")
 	require.NotNil(t, retStarted, "retention_started_at must be re-armed (restarted), not left stale")
 	require.NotNil(t, retExpires, "retention_expires_at must be re-armed")
-	require.WithinDuration(t, time.Now().AddDate(0, jobsIntegrationRetentionMonths, 0), *retExpires, 2*time.Minute,
-		"retention_expires_at must honor THIS JOB's configured retentionMonths (%d), not a hardcoded default", jobsIntegrationRetentionMonths)
+	// Expectation computed in Postgres (make_interval), not via Go's time.Time.AddDate — the two
+	// disagree on month-end dates (Go normalizes overflow forward, Postgres clamps to the target
+	// month's last day), so this fence is calendar-immune by construction rather than merely
+	// tolerant enough to survive today's run.
+	assertBetweenFence(t, dbAddMonths(t, pool, before, jobsIntegrationRetentionMonths), dbAddMonths(t, pool, after, jobsIntegrationRetentionMonths), *retExpires,
+		fmt.Sprintf("retention_expires_at must honor THIS JOB's configured retentionMonths (%d), not a hardcoded default", jobsIntegrationRetentionMonths))
 	require.Nil(t, notice30, "retention_notice_30d_sent_at must be nulled on re-arm")
 	require.Nil(t, notice7, "retention_notice_7d_sent_at must be nulled on re-arm")
 

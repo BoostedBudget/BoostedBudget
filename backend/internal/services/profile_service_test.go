@@ -146,7 +146,7 @@ func (m *MockProfileRepository) GetUsersWithActivePaddleSubscriptions(ctx contex
 func (m *MockProfileRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	return "", nil
 }
-func (m *MockProfileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+func (m *MockProfileRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
 	return nil
 }
 func (m *MockProfileRepository) ClearRetentionDates(ctx context.Context, userID string) error {

@@ -54,8 +54,8 @@ func (m *mockTrialRepository) GetUsersWithExpiringTrials(ctx context.Context, wi
 }
 
 // #930: SetRetentionDates stub — allows mock to satisfy updated TrialRepository interface
-func (m *mockTrialRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
-	return m.Called(ctx, userID, startedAt, expiresAt).Error(0)
+func (m *mockTrialRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+	return m.Called(ctx, userID, retentionMonths).Error(0)
 }
 
 // testTrialExpirationClaimToken is the fixed fencing token newAllowingTrialClaimsRepo's Claim
@@ -257,7 +257,7 @@ func TestTrialService_ExpireTrial_NeverCallsPlaid(t *testing.T) {
 
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
-	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
 
@@ -304,7 +304,7 @@ func TestTrialService_ExpireTrial_NotCoveredByHousehold_Proceeds(t *testing.T) {
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	checker.On("IsCoveredByHousehold", ctx, userID).Return(false, nil)
 	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
-	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
 
@@ -322,7 +322,7 @@ func TestTrialService_ExpireTrial_NoHouseholdCheckerConfigured_Proceeds(t *testi
 	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
-	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
 	require.NoError(t, err)
@@ -387,7 +387,7 @@ func TestTrialService_ExpireTrial_ActiveOverride_Skipped(t *testing.T) {
 	require.NoError(t, err)
 	repo.AssertNumberOfCalls(t, "GetUserByID", 1)
 	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
-	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
@@ -407,7 +407,7 @@ func TestTrialService_ExpireTrial_ExpiredOverride_Proceeds(t *testing.T) {
 	}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
-	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything).Return(nil)
 
 	err := service.ExpireTrial(ctx, userID)
 
@@ -452,7 +452,7 @@ func TestTrialService_ExpireTrial_ConcurrentSubscribe_CASFails_ClaimReleasedNotC
 	err := service.ExpireTrial(ctx, userID)
 
 	require.NoError(t, err, "a lost CAS is a normal skip, not a job failure")
-	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, "subscribe-race-token",
 		"precondition lost — comp granted or subscription status moved on concurrently")
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -506,7 +506,7 @@ func TestTrialService_ExpireTrial_WorkClaimLost_CollaboratorNotCalled(t *testing
 
 	require.NoError(t, err, "a lost work claim is a normal skip, not a job failure")
 	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
-	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -521,7 +521,7 @@ func TestTrialService_ExpireTrial_WorkClaimWon_CompletedAfterSuccess(t *testing.
 	user := &domain.User{ID: userID, SubscriptionStatus: "trial", TrialEndsAt: &trialEndsAt}
 	repo.On("GetUserByID", ctx, userID).Return(user, nil)
 	repo.On("ExpireTrialIfNoOverride", ctx, userID).Return(true, nil)
-	repo.On("SetRetentionDates", ctx, userID, mock.Anything, mock.Anything).Return(nil)
+	repo.On("SetRetentionDates", ctx, userID, mock.Anything).Return(nil)
 
 	mockClaims := new(MockWorkClaimsRepository)
 	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, trialExpirationClaimLease).
@@ -580,7 +580,7 @@ func TestTrialService_ExpireTrial_CompGrantedSinceClaim_SkipsFlip(t *testing.T) 
 
 	require.NoError(t, err)
 	repo.AssertNotCalled(t, "ExpireTrialIfNoOverride", mock.Anything, mock.Anything)
-	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	repo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionTrialExpiration, "comped-since-claim-token", "comp granted since claim")
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

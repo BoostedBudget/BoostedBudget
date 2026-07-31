@@ -136,7 +136,7 @@ func (m *MockProfileRepositoryForDeletion) GetEffectiveSubscriptionStatusByUserI
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }
-func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+func (m *MockProfileRepositoryForDeletion) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
 	return nil
 }
 func (m *MockProfileRepositoryForDeletion) ClearRetentionDates(ctx context.Context, userID string) error {

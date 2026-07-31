@@ -141,6 +141,28 @@ func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
 	return now
 }
 
+// dbAddMonths computes ts + months entirely in Postgres via make_interval — the SAME semantics
+// AdminUserRepository.RemoveUserTierOverride's own SQL uses for retention_expires_at
+// (clock_timestamp() + make_interval(months => $N)). Go's time.Time.AddDate normalizes month
+// overflow FORWARD (2026-07-31 + 9mo -> 2027-05-01); Postgres's make_interval CLAMPS to the target
+// month's last day (-> 2027-04-30) instead. They agree on every date whose day-of-month exists in
+// the target month and silently diverge otherwise — which is exactly why a test that computed its
+// expectation via ts.AddDate(...) and compared it against a value the production SQL computed via
+// make_interval could pass 27+ days a month and fail specifically on a month-end run.
+//
+// Fencing with THIS helper instead of AddDate keeps the assertion calendar-immune BY CONSTRUCTION:
+// the expectation and the actual stored value are both computed by the same engine (Postgres),
+// using the same function (make_interval), so they can never disagree regardless of what day of
+// the month the test happens to run on. This is not a wider tolerance — it removes the source of
+// divergence entirely rather than hiding it.
+func dbAddMonths(t *testing.T, pool *pgxpool.Pool, ts time.Time, months int) time.Time {
+	t.Helper()
+	var result time.Time
+	require.NoError(t, pool.QueryRow(context.Background(),
+		"SELECT $1::timestamptz + make_interval(months => $2)", ts, months).Scan(&result))
+	return result
+}
+
 // waitUntilBlockedBy is a real synchronization barrier for lock-contention tests — Issue #1413
 // Finding 3 (Low, Codex review, PR #1443 follow-up): a fixed time.Sleep before this existed only
 // ASSUMED a concurrent goroutine's transaction had begun and reached its intended blocked FOR
@@ -306,8 +328,8 @@ func TestRemoveUserTierOverride_Integration_RearmsRetention_WhenReadOnly(t *test
 			require.NotNil(t, snap.RetentionStartedAt)
 			require.NotNil(t, snap.RetentionExpiresAt)
 			assertBetweenFence(t, before, after, *snap.RetentionStartedAt, "retention_started_at must restart to ~now")
-			expectedExpiryFloor := before.AddDate(0, testRetentionMonths, 0)
-			expectedExpiryCeil := after.AddDate(0, testRetentionMonths, 0)
+			expectedExpiryFloor := dbAddMonths(t, pool, before, testRetentionMonths)
+			expectedExpiryCeil := dbAddMonths(t, pool, after, testRetentionMonths)
 			assertBetweenFence(t, expectedExpiryFloor, expectedExpiryCeil, *snap.RetentionExpiresAt,
 				"retention_expires_at must be ~now+retentionMonths, honoring the parameter (not hardcoded 6)")
 			assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled so the warning fires again")
@@ -402,7 +424,7 @@ func TestRemoveUserTierOverride_Integration_InitialisesRetention_WhenClockNeverR
 	require.NotNil(t, snap.RetentionStartedAt, "retention_started_at must be INITIALISED (H3 fix) even though the clock never ran before")
 	require.NotNil(t, snap.RetentionExpiresAt, "retention_expires_at must be INITIALISED (H3 fix) even though the clock never ran before")
 	assertBetweenFence(t, before, after, *snap.RetentionStartedAt, "retention_started_at must be ~now")
-	assertBetweenFence(t, before.AddDate(0, testRetentionMonths, 0), after.AddDate(0, testRetentionMonths, 0), *snap.RetentionExpiresAt, "retention_expires_at must be ~now+retentionMonths")
+	assertBetweenFence(t, dbAddMonths(t, pool, before, testRetentionMonths), dbAddMonths(t, pool, after, testRetentionMonths), *snap.RetentionExpiresAt, "retention_expires_at must be ~now+retentionMonths")
 	assert.Nil(t, snap.RetentionNotice30d)
 	assert.Nil(t, snap.RetentionNotice7d)
 }
@@ -738,7 +760,7 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	require.NotNil(t, snap.RetentionStartedAt, "retention_started_at must be (re-)armed on a CAS-matched clear, same as the unconditional path")
 	require.NotNil(t, snap.RetentionExpiresAt, "retention_expires_at must be (re-)armed on a CAS-matched clear, same as the unconditional path")
 	assertBetweenFence(t, before, after, *snap.RetentionStartedAt, "retention_started_at must be ~now")
-	assertBetweenFence(t, before.AddDate(0, testRetentionMonths, 0), after.AddDate(0, testRetentionMonths, 0), *snap.RetentionExpiresAt,
+	assertBetweenFence(t, dbAddMonths(t, pool, before, testRetentionMonths), dbAddMonths(t, pool, after, testRetentionMonths), *snap.RetentionExpiresAt,
 		"retention_expires_at must be ~now+retentionMonths, honoring the parameter (not hardcoded 6)")
 	assert.Nil(t, snap.RetentionNotice30d, "30d notice flag must be nulled on a CAS-matched clear")
 	assert.Nil(t, snap.RetentionNotice7d, "7d notice flag must be nulled on a CAS-matched clear")
@@ -1475,21 +1497,29 @@ func TestRemoveUserTierOverride_Integration_ClockTimestampReflectsWallTimeAcross
 
 	// Issue #1413 Finding 2 (ROUND 21): retention_expires_at must ALSO reflect wall time across the
 	// same lock wait, not just plaid_cleanup_pending_at — both are written by the SAME UPDATE
-	// statement in the SAME transaction. Recover the anchor instant retention_expires_at was actually
-	// computed from (retention_expires_at minus the retentionMonths interval this call used) via
-	// Postgres's OWN make_interval arithmetic, never Go's — comparing a Go-computed calendar-month
-	// offset against a Postgres timestamptz is exactly the Go-time-vs-Postgres-time mixing this
-	// branch has already been bitten by four times.
+	// statement in the SAME transaction.
+	//
+	// Task NA correction: this used to "recover" the anchor instant by subtracting the
+	// retentionMonths interval back OFF retention_expires_at (retention_expires_at - make_interval(
+	// months => N)) and compare THAT against the fences. That subtraction is not actually the
+	// inverse of the addition the production SQL performed, because make_interval CLAMPS on
+	// overflow: adding 9 months to a July 31st anchor clamps to April 30th (April 31st does not
+	// exist) — but subtracting 9 months back OFF April 30th lands on July 30th, a full day short of
+	// the original anchor. This is the exact Go-AddDate-vs-Postgres-make_interval divergence this
+	// task exists to fix, just triggered by Postgres's own arithmetic not being invertible under
+	// clamping, rather than by Go and Postgres disagreeing with each other — caught only because
+	// this test happened to run on a day (the 31st) where the 9-month offset actually overflows.
+	//
+	// Fix: never invert. Compare retention_expires_at DIRECTLY against the fences pushed forward by
+	// the SAME make_interval offset the production SQL used (dbAddMonths, defined above) — addition
+	// is monotonic in its base timestamp even where it clamps, so ordering against the fences still
+	// proves the same thing (statement-execution wall time, not transaction-start time) without
+	// ever reversing the arithmetic.
 	require.NotNil(t, snap.RetentionExpiresAt)
-	var retentionAnchor time.Time
-	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT retention_expires_at - make_interval(months => $1) FROM users WHERE id = $2`,
-		testRetentionMonths, target.ID,
-	).Scan(&retentionAnchor))
-	assert.False(t, retentionAnchor.Before(releaseFence),
-		"retention_expires_at's anchor instant must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean the GDPR deletion deadline used transaction-start time instead and was backdated by the entire lock wait", releaseFence, retentionAnchor)
-	assert.True(t, retentionAnchor.After(startFence.Add(postBlockHoldDuration/2)),
-		"retention_expires_at's anchor instant must NOT be anywhere near the removal transaction's own start (%v) — got %v", startFence, retentionAnchor)
+	assert.False(t, snap.RetentionExpiresAt.Before(dbAddMonths(t, pool, releaseFence, testRetentionMonths)),
+		"retention_expires_at must reflect statement-execution (wall) time, at or after the lock's release (%v) — got %v, which would mean the GDPR deletion deadline used transaction-start time instead and was backdated by the entire lock wait", releaseFence, *snap.RetentionExpiresAt)
+	assert.True(t, snap.RetentionExpiresAt.After(dbAddMonths(t, pool, startFence.Add(postBlockHoldDuration/2), testRetentionMonths)),
+		"retention_expires_at must NOT be anywhere near the removal transaction's own start (%v) — got %v", startFence, *snap.RetentionExpiresAt)
 }
 
 // TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_NilEndsAt_Clears verifies the CAS

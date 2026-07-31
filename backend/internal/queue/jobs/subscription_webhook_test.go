@@ -81,8 +81,8 @@ func (m *mockSubscriptionProfileRepository) UpdateSubscriptionFromPaddle(ctx con
 }
 
 // #930: Retention tracking methods
-func (m *mockSubscriptionProfileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
-	args := m.Called(ctx, userID, startedAt, expiresAt)
+func (m *mockSubscriptionProfileRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+	args := m.Called(ctx, userID, retentionMonths)
 	return args.Error(0)
 }
 
@@ -577,7 +577,7 @@ func TestWorker_SubscriptionCanceled_Success(t *testing.T) {
 	// Issues #747 #748: syncClerkMetadata called after cancel (no notification — user-initiated)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: past_due stamp cleared on cancellation
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -975,7 +975,7 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_Success(t *testing.T) {
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started when paused maps to cancelled
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: past_due stamp cleared on cancellation (paused → cancelled)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -1192,7 +1192,7 @@ func TestWorker_SubscriptionCanceled_DisconnectsPlaidItems(t *testing.T) {
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: past_due stamp cleared on cancellation
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -1254,7 +1254,7 @@ func TestWorker_SubscriptionCanceled_SuccessfulDisconnect_ClearsPlaidMarker(t *t
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(postCancelUser, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockProfileRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince).Return(true, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -1318,7 +1318,7 @@ func TestWorker_SubscriptionCanceled_ClearMarkerFails_RetriesThenLogsErrorNotEsc
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(postCancelUser, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	clearErr := errors.New("db unavailable")
 	mockProfileRepo.On("ClearPlaidCleanupPendingIfMatches", ctx, "user_2abc123def456", pendingSince).Return(false, clearErr)
@@ -1361,7 +1361,7 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupNil_Succeeds(t *testing.T) {
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started on cancellation (even when Plaid cleanup is nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: past_due stamp cleared on cancellation
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -1426,7 +1426,7 @@ func TestWorker_SubscriptionCanceled_PlaidCleanupError_Aborts_ReleasesClaim(t *t
 
 	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 	// Unconditional trio ran despite the claim-guarded work aborting.
@@ -1486,7 +1486,7 @@ func TestWorker_SubscriptionCanceled_PlaidSideEffectClaimBusy_Aborts_ReleasesCla
 
 	require.Error(t, err, "a busy side-effect claim must propagate so River retries the whole webhook")
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, services.ErrSideEffectClaimBusy.Error())
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 }
@@ -1530,7 +1530,7 @@ func TestWorker_SubscriptionCanceled_Comped_NoPlaidDisconnect(t *testing.T) {
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// Not under test here — stubbed permissively so an unrelated (not-yet-guarded) call
 	// doesn't panic and mask the assertion this test actually makes.
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -1581,7 +1581,7 @@ func TestWorker_SubscriptionCanceled_Comped_NoRetentionClock(t *testing.T) {
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertExpectations(t)
 }
 
@@ -1618,7 +1618,7 @@ func TestWorker_SubscriptionCanceled_Comped_StatusStillWrittenCancelled(t *testi
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(compedUser, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -1666,7 +1666,7 @@ func TestWorker_SubscriptionCanceled_Comped_ClerkMetadataNotClobbered(t *testing
 		// Must be the comp's effective values, NOT the raw "premium"/"cancelled" just written.
 		return m["subscription_tier"] == "household_3" && m["subscription_status"] == "active"
 	})).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -1721,7 +1721,7 @@ func TestWorker_SubscriptionCanceled_MalformedOverride_ClerkMetadataFallsBackToR
 		// string, nor force status to "active".
 		return m["subscription_tier"] == "premium" && m["subscription_status"] == "cancelled"
 	})).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil).Maybe()
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -1832,7 +1832,7 @@ func TestWorker_SubscriptionCanceled_CompGrantedMidProcessing_NoRetentionClock(t
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertExpectations(t)
 }
 
@@ -1901,7 +1901,7 @@ func TestWorker_SubscriptionCanceled_CompGrantedAfterClaim_NoDestructiveWork(t *
 
 	require.NoError(t, err)
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockProfileRepo.AssertNumberOfCalls(t, "GetUserByID", 4)
 	mockWebhookRepo.AssertExpectations(t)
 }
@@ -1948,7 +1948,7 @@ func TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestru
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
 
@@ -1956,7 +1956,7 @@ func TestWorker_SubscriptionCanceled_CompRemovedMidProcessing_ProceedsWithDestru
 
 	require.NoError(t, err)
 	mockPlaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
-	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_ReReadFails_PropagatesError proves that a failed post-write
@@ -2021,7 +2021,7 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_DisconnectsPlaidItems(t *tes
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
 	// #930: Retention clock started when paused maps to cancelled
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: past_due stamp cleared on cancellation (paused → cancelled)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -2081,7 +2081,7 @@ func TestWorker_SubscriptionPaused_MapsTo_Cancelled_PlaidCleanupError_Aborts_Rel
 
 	require.Error(t, err, "a Plaid disconnect failure must now propagate so River retries")
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, plaidErr.Error())
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
 	mockNotifRepo.AssertNotCalled(t, "Create")
 }
@@ -2545,7 +2545,7 @@ func TestWorker_SubscriptionCanceled_ClearsPastDueStamp(t *testing.T) {
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// #898: ClearPastDueStartedAt must be called on cancellation.
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -3043,7 +3043,7 @@ func TestWorker_SubscriptionCanceled_ClearsOverCapacity(t *testing.T) {
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "household_2", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("int")).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(hh, true, true, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -3235,7 +3235,7 @@ func TestWorker_SubscriptionCanceled_NonOwner_NoOp(t *testing.T) {
 	mockProfileRepo.On("GetUserByID", ctx, "user_2abc123def456").Return(user, nil)
 	mockProfileRepo.On("UpdateSubscriptionFromPaddle", ctx, "user_2abc123def456", "premium", "cancelled", (*time.Time)(nil), (*time.Time)(nil), (*string)(nil)).Return(nil)
 	mockClerk.On("UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything).Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.AnythingOfType("int")).Return(nil)
 	mockProfileRepo.On("ClearPastDueStartedAt", ctx, "user_2abc123def456").Return(nil)
 	mockHHRepo.On("GetHouseholdForUser", ctx, "user_2abc123def456").Return(nil, false, false, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -3282,7 +3282,7 @@ func TestWorker_SubscriptionCanceled_ClaimWonBeforeDestructiveWork(t *testing.T)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "plaid_disconnect") }).
 		Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "set_retention") }).
 		Return(nil)
 	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
@@ -3338,7 +3338,7 @@ func TestWorker_SubscriptionCanceled_ClaimAlreadyCompleted_SkipsDestructive(t *t
 	require.NoError(t, err, "ClaimAlreadyCompleted is a genuine, terminal skip, not a job failure")
 
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
 	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
 	mockWebhookRepo.AssertCalled(t, "MarkProcessed", ctx, "test-webhook-id-123")
@@ -3379,7 +3379,7 @@ func TestWorker_SubscriptionCanceled_ClaimHeldByOther_ReturnsErrorForRetry(t *te
 	require.Error(t, err, "ClaimHeldByOther must propagate an error so River retries — acking here would silently drop the work if the current holder crashed")
 
 	mockPlaid.AssertNotCalled(t, "DisconnectAllUserItems", mock.Anything, mock.Anything)
-	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockProfileRepo.AssertNotCalled(t, "SetRetentionDates", mock.Anything, mock.Anything, mock.Anything)
 	mockClerk.AssertCalled(t, "UpdateUserMetadata", ctx, "clerk_user_123", mock.Anything)
 	mockProfileRepo.AssertCalled(t, "ClearPastDueStartedAt", ctx, "user_2abc123def456")
 	mockWebhookRepo.AssertNotCalled(t, "MarkProcessed", mock.Anything, mock.Anything)
@@ -3412,7 +3412,7 @@ func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.
 	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkProcessed", ctx, "test-webhook-id-123").Return(nil)
@@ -3422,7 +3422,7 @@ func TestWorker_SubscriptionCanceled_ClaimWon_Success_CompletesClaim(t *testing.
 
 	mockClaims.AssertCalled(t, "Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken)
 	mockPlaid.AssertCalled(t, "DisconnectAllUserItems", ctx, "user_2abc123def456")
-	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything, mock.Anything)
+	mockProfileRepo.AssertCalled(t, "SetRetentionDates", mock.Anything, "user_2abc123def456", mock.Anything)
 }
 
 // TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed mirrors
@@ -3459,7 +3459,7 @@ func TestWorker_SubscriptionCanceled_CompleteReturnsFalse_LoggedNotSwallowed(t *
 	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(nil)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(nil)
 	// The lease was reclaimed by another worker before we could Complete it.
 	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken).
 		Return(false, nil)
@@ -3507,7 +3507,7 @@ func TestWorker_SubscriptionCanceled_SetRetentionDatesError_Aborts_ReleasesClaim
 	mockClaims.On("ClaimOutcome", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease).
 		Return(testWebhookClaimToken, repository.ClaimWon, nil)
 	mockPlaid.On("DisconnectAllUserItems", ctx, "user_2abc123def456").Return(nil)
-	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything, mock.Anything).Return(retentionErr)
+	mockProfileRepo.On("SetRetentionDates", ctx, "user_2abc123def456", mock.Anything).Return(retentionErr)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, testWebhookClaimToken, retentionErr.Error()).
 		Return(true, nil)
 	mockWebhookRepo.On("MarkFailed", ctx, "test-webhook-id-123", mock.Anything).Return(nil)
