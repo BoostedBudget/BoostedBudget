@@ -79,7 +79,7 @@ type ManualTierOverrideExpiryCheckWorker struct {
 	clerkService    ClerkService
 	retentionMonths int
 	logger          *slog.Logger
-	analytics       phclient.Analytics // Optional PostHog analytics client (Issue #1413 Task MB)
+	gdprAnalytics   phclient.GDPRAnalytics // Optional consent-gated PostHog client (Issue #1413 round-10)
 }
 
 // ManualTierOverrideExpiryCheckWorkerDeps contains the dependencies for
@@ -111,11 +111,19 @@ func NewManualTierOverrideExpiryCheckWorker(deps ManualTierOverrideExpiryCheckWo
 	}
 }
 
-// SetAnalytics injects the analytics client for capturing tier-override-expiry events
-// (Issue #1413 Task MB). Mirrors SubscriptionWebhookWorker.SetAnalytics's setter-injection
-// pattern; nil-safe — Work() must remain a no-op for analytics when this is never called.
-func (w *ManualTierOverrideExpiryCheckWorker) SetAnalytics(a phclient.Analytics) {
-	w.analytics = a
+// SetGDPRAnalytics injects the CONSENT-GATED analytics client for tier-override-expiry events
+// (Issue #1413 round-10). Nil-safe — Work() must remain a no-op for analytics when never called.
+//
+// This replaced a raw `SetAnalytics(phclient.Analytics)` in round 10. Round 8's Codex review had
+// explicitly cleared the raw client here as "system/operational telemetry"; round 9's Codex review
+// reversed that and it is right, so the reversal is recorded rather than silently applied: the
+// distinct_id is the EXPIRED TARGET USER's UUID and the payload is target-derived, so a user with
+// analytics consent = false would still receive a target-specific event on their own PostHog profile.
+// "Operational" describes what TRIGGERED the event (a daily system job, no user action); GDPR consent
+// governs WHOSE DATA is processed. Those are different questions, and the second one decides this.
+// Same reasoning that moved AdminUserService's Applied/Removed events to CaptureIfConsented.
+func (w *ManualTierOverrideExpiryCheckWorker) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
+	w.gdprAnalytics = a
 }
 
 // Work processes a manual tier override expiry check job.
@@ -222,22 +230,23 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 
 		// Issue #1413 Task MB: fire the product-analytics event only for a claimed (actually
 		// expired) user — best-effort/nil-safe, same convention as syncClerkMetadata above and
-		// AdminUserService's own analytics calls. Stays on raw phClient.Capture (not GDPR-gated):
-		// this event is genuinely operational (a daily system job, no user's action — Codex
-		// review, Issue #1413 Task NB, explicitly cleared it), unlike AdminUserService's Applied/
-		// Removed events which Task NB moved to CaptureIfConsented. A distinct event from
+		// AdminUserService's own analytics calls. **Consent-gated** via CaptureIfConsented
+		// (round 10): the distinct_id below is the target user's own UUID, so this is their personal
+		// data regardless of the fact that a system job triggered it — see SetGDPRAnalytics' doc
+		// comment for why round 8's "operational, raw is fine" clearance was reversed.
+		// A distinct event from
 		// EventAdminSubscriptionOverrideRemovedServer (never reused — see that constant's doc
 		// comment): this is a system-initiated lapse, not an admin's deliberate removal, so there
 		// is no actor — say so explicitly with actor_user_id: nil rather than inventing one.
 		// had_expiry is always true here (this candidate list is, by construction, users whose
 		// manual_tier_ends_at has passed), included anyway for payload-shape parity with the
 		// other two admin-subscription-override events.
-		if w.analytics != nil {
+		if w.gdprAnalytics != nil {
 			var tier string
 			if user.ManualTierOverride != nil {
 				tier = *user.ManualTierOverride
 			}
-			w.analytics.Capture(user.ID, phclient.EventAdminSubscriptionOverrideExpired, map[string]interface{}{
+			w.gdprAnalytics.CaptureIfConsented(ctx, user.ID, phclient.EventAdminSubscriptionOverrideExpired, map[string]interface{}{
 				"tier":          tier,
 				"had_expiry":    user.ManualTierEndsAt != nil,
 				"actor_user_id": nil,
