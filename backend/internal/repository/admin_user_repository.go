@@ -91,6 +91,12 @@ type RemoveTierOverrideRow struct {
 	// PriorManualTierOverride is the manual_tier_override value as it was immediately before
 	// this UPDATE (nil if no override was set).
 	PriorManualTierOverride *string
+	// PriorManualTierEndsAt is the manual_tier_ends_at value as it was immediately before this
+	// UPDATE (nil if no override was set, OR if a set override was permanent/non-expiring).
+	// Issue #1413 Task NB: threaded through purely so the service layer can compute had_expiry
+	// (PriorManualTierEndsAt != nil) for the Removed analytics event, matching the frontend's
+	// {tier, had_expiry} payload shape. Not otherwise used by this struct's existing consumers.
+	PriorManualTierEndsAt *time.Time
 	// Removed is true iff PriorManualTierOverride was non-nil and non-empty.
 	Removed bool
 	// RevertedTier is the user's base subscription_tier (unaffected by this UPDATE — this is
@@ -832,7 +838,8 @@ const removeUserTierOverrideUpdate = `
 	    END
 	FROM prior
 	WHERE u.id = $1
-	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override
+	RETURNING u.subscription_tier, u.subscription_status, u.clerk_user_id, prior.manual_tier_override,
+	          prior.manual_tier_ends_at
 `
 
 // removeUserTierOverrideQuery is the unconditional, admin-initiated removal: clicking "Remove
@@ -883,6 +890,7 @@ func (r *adminUserRepository) removeTierOverride(
 	var clerkUserIDEnc string
 	err = tx.QueryRow(ctx, query, args...).Scan(
 		&row.RevertedTier, &row.RevertedStatus, &clerkUserIDEnc, &row.PriorManualTierOverride,
+		&row.PriorManualTierEndsAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
