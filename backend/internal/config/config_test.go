@@ -9,6 +9,16 @@ import (
 )
 
 func TestLoad_ServerTimeoutDefaults(t *testing.T) {
+	// Stubbed rather than relying on ambient state: an exported ENVIRONMENT of
+	// "production"/"staging" would make Load() enter validate() and return an error
+	// instead, failing require.NoError for an unrelated reason; and an exported
+	// SERVER_*_TIMEOUT / MAX_BODY_SIZE would break the default assertions below.
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("SERVER_READ_TIMEOUT", "")
+	t.Setenv("SERVER_WRITE_TIMEOUT", "")
+	t.Setenv("SERVER_IDLE_TIMEOUT", "")
+	t.Setenv("MAX_BODY_SIZE", "")
+
 	cfg, err := Load()
 	require.NoError(t, err)
 
@@ -19,6 +29,9 @@ func TestLoad_ServerTimeoutDefaults(t *testing.T) {
 }
 
 func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
+	// See TestLoad_ServerTimeoutDefaults: an ambient production/staging ENVIRONMENT
+	// would fail require.NoError below for an unrelated reason.
+	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SERVER_READ_TIMEOUT", "60s")
 	t.Setenv("SERVER_WRITE_TIMEOUT", "45s")
 	t.Setenv("SERVER_IDLE_TIMEOUT", "180s")
@@ -126,7 +139,13 @@ func TestLoad_ProductionValidation_RequiresCFOriginSecret(t *testing.T) {
 }
 
 func TestLoad_DevelopmentPassesWithMinimalConfig(t *testing.T) {
-	// Development should work with minimal env vars (or defaults)
+	// Development should work with minimal env vars (or defaults).
+	// Cleared to "" rather than set to "development": getEnv returns its default for an
+	// empty value exactly as it does for an unset one (config.go:262-267), so this pins
+	// the unset-variable default path this test exists to cover, instead of bypassing it.
+	// Without the stub an ambient ENVIRONMENT export fails the assertion below.
+	t.Setenv("ENVIRONMENT", "")
+
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, "development", cfg.Environment)
@@ -291,6 +310,9 @@ func TestLoad_DatabaseMaxConnsDefault(t *testing.T) {
 }
 
 func TestLoad_DatabaseMaxConnsConfigurable(t *testing.T) {
+	// See TestLoad_DatabaseMaxConnsDefault: an ambient production/staging ENVIRONMENT
+	// would fail require.NoError below for an unrelated reason.
+	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("DATABASE_MAX_CONNS", "50")
 
 	cfg, err := Load()
@@ -314,6 +336,9 @@ func TestLoad_MCPWorkerSecretDefaultsEmpty(t *testing.T) {
 }
 
 func TestLoad_MCPWorkerSecretConfigurable(t *testing.T) {
+	// See TestLoad_MCPWorkerSecretDefaultsEmpty: an ambient production/staging
+	// ENVIRONMENT would fail require.NoError below for an unrelated reason.
+	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("MCP_WORKER_SECRET", "test-mcp-worker-secret")
 
 	cfg, err := Load()
