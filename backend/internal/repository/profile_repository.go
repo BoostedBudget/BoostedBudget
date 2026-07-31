@@ -76,10 +76,40 @@ type ProfileRepository interface {
 	// time.Now()/time.Time.AddDate, which disagrees with Postgres's make_interval on month-end
 	// dates (Go normalizes month overflow forward; Postgres clamps to the target month's last day).
 	// This mirrors AdminUserRepository.RemoveUserTierOverride's SQL, which already computed
-	// retention_expires_at this way, so every writer of this column now shares one semantics.
+	// retention_expires_at this way.
 	// Callers no longer supply startedAt/expiresAt themselves — verified that neither existing
 	// caller (subscription_webhook.go, trial_service.go) used those Go-computed values for anything
 	// besides this one write.
+	//
+	// Issue #1413 round-10 correction: this used to claim "every writer of this column now shares one
+	// semantics." That was FALSE and is scoped accordingly. Every writer with a PRODUCTION CALLER
+	// clamps — SetRetentionDates (here), RepairRetentionClock, CancelIfPastDueOccurrenceWithRetention,
+	// and AdminUserRepository.RemoveUserTierOverride. The exception is
+	// CancelIfPastDueWithRetention (the non-occurrence predecessor superseded by round-4 finding H1),
+	// which still takes a Go-computed expiry. It has ZERO production callers — verified exhaustively:
+	// the narrower PastDueProfileRepository interface past_due_service.go actually consumes does not
+	// even declare it — so it is not live drift, but it IS a landmine: wire it up and the month-end
+	// over-retention bug returns. Deleting it is filed as a follow-up.
+	//
+	// TWO POPULATIONS OF THIS COLUMN EXIST, and that is a deliberate decision, not an oversight.
+	// Rows written before commit 144b0e3a used Go's AddDate (month overflow normalized FORWARD); rows
+	// after clamp. So a pre-existing row can carry a GDPR deletion deadline up to ~3 days LATER than a
+	// new row with the same start date — only for clocks anchored on Mar 31, May 31, Aug 29/30/31,
+	// Oct 31 or Dec 31 (at the configured N=6). We deliberately did NOT backfill:
+	//   - every consumer (30d notice, 7d notice, GetUsersWithExpiredRetention, the occurrence CAS)
+	//     reads the row's OWN stored value, so an untouched row is internally consistent end to end —
+	//     no notice is skipped and nobody is deleted early;
+	//   - retention_notice_30d_sent_at / _7d_sent_at are SET-ONCE flags that gate re-send, and
+	//     GetUsersWithExpiredRetention does not reference them at all, so shrinking a deadline after a
+	//     notice had fired would delete an account on a SHORTER window than the email promised, with
+	//     no new notice;
+	//   - migrations 000119-000122 set this codebase's precedent for retroactively correcting a
+	//     grace timestamp: only ever defer the harmful action, never hasten it (000120: "never a
+	//     premature disconnect"), and both have deliberately no-op down migrations for that reason.
+	//     A backfill here would do the opposite, for a strictly more consequential and irreversible
+	//     action;
+	//   - the population self-resolves: each row proceeds notice -> notice -> delete on its own stored
+	//     deadline, or the user resubscribes and ClearRetentionDates nulls the field.
 	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
 
 	// ClearRetentionDates clears all retention tracking fields (called on resubscription).
@@ -3054,8 +3084,27 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 // which disagrees with Postgres's make_interval whenever the anchor's day-of-month does not exist
 // N months later (Go normalizes the overflow FORWARD; Postgres clamps to the target month's last
 // day instead) — the wrong direction for a GDPR deletion deadline. Matches SetRetentionDates and
-// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column now
-// shares one semantics. retention_started_at stays a plain Go-computed value ($2, unchanged) — per
+// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column **that has
+// a production caller** shares one semantics — see SetRetentionDates' interface doc comment for the
+// one exception (CancelIfPastDueWithRetention, dead code) and for why the pre-144b0e3a row population
+// was deliberately not backfilled. (Round 10 corrected this sentence: it read "every writer… now
+// shares one semantics," which was false while that dead sibling exists.)
+//
+// Round-10 note on the clock pairing, so it is not mistaken for an oversight: retention_started_at is
+// supplied by the caller while retention_expires_at is computed here from clock_timestamp() at write
+// time, so in a BATCH caller (past_due_check.go captures one time.Now() before its per-user loop, and
+// each iteration makes Plaid/Paddle calls before reaching this write) a later row's window is N months
+// plus the batch's elapsed time. That is the same class of skew removeUserTierOverrideUpdate's doc
+// comment already accepts for lock waits — "affects only what the started-at audit trail SAYS, never
+// what any query DOES with it" — but the batch magnitude (potentially minutes, not milliseconds) is
+// larger than that precedent analysed. Filed as a follow-up rather than fixed here: the obvious fix,
+// hoisting one clock_timestamp() into a `WITH t AS (SELECT clock_timestamp())` CTE, is NOT safe in
+// this method, because a trivial CTE like that can be evaluated BEFORE the sibling candidate CTE's
+// FOR NO KEY UPDATE lock wait completes — reintroducing exactly the pre-lock-wait-row-version hazard
+// ROUND 23 restructured this statement to fix. Trading microseconds of column skew for seconds of
+// lock-wait skew is the wrong direction.
+//
+// retention_started_at stays a plain Go-computed value ($2, unchanged) — per
 // removeUserTierOverrideUpdate's own doc comment (admin_user_repository.go), retention_started_at
 // is a paired audit field nothing computes an age from or compares to NOW()/clock_timestamp()
 // anywhere; only retention_expires_at is ever read back as a deadline, so basing it on a
