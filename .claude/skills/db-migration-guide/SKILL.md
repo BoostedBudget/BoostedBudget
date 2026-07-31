@@ -141,6 +141,98 @@ BEGIN
 END $$;
 ```
 
+## Grace-Window Timestamps and Large Backfills (Issue #1464)
+
+An adversarial audit of migrations `000119`-`000122` (Issue #1413 / PR #1443) found two hazard
+classes that every existing gate — Squawk and the 5-suite migration test — passed cleanly. Both
+are recorded here as conventions so they don't recur, not because those migrations were wrong to
+merge (they are already applied and immutable; see the down-migration note below).
+
+### Use a statement-time clock for grace-window/deadline anchors, never `NOW()`
+
+**A migration that writes a grace-window or deadline anchor column must compute that value with a
+statement-time clock (`clock_timestamp()`), not `NOW()`/`CURRENT_TIMESTAMP`.**
+
+PostgreSQL evaluates `NOW()` and `CURRENT_TIMESTAMP` once, at **transaction start** — not at the
+moment the statement actually runs. A migration transaction that runs long, or blocks waiting on a
+lock, writes a marker that is **backdated by however long the transaction took to reach that
+statement**, while application code compares the marker against the live, current clock. If the
+anchor gates an irreversible action, that gap silently eats into (or eliminates) the grace period
+the anchor exists to provide.
+
+This is not hypothetical for this codebase: `users.plaid_cleanup_pending_at` anchors a 72-hour
+grace window before a lapsed user's Plaid bank connections are disconnected — an irreversible
+external API call. Real instances that use `NOW()` for this column:
+
+- `000120_fix_plaid_cleanup_pending_at_backfill.up.sql:30` — `SET plaid_cleanup_pending_at = NOW()`, with no floor at all.
+- `000119_add_plaid_cleanup_pending_at.up.sql:47-48` and `000121_backfill_plaid_cleanup_pending_at_excluded_overrides.up.sql:56-57` — both compute their 48-hour safety floor as `NOW() - INTERVAL '48 hours'`.
+
+PR #1443 spent rounds 19-23 migrating every **application** writer of this same column
+(`StampMissingPlaidCleanupMarkers`, `UpdateSubscriptionFromPaddle`, `removeUserTierOverrideUpdate`)
+off `NOW()` onto `clock_timestamp()`, for exactly this reason — see
+`ExpireTrialIfNoOverride` in `backend/internal/repository/profile_repository.go` for the corrected
+pattern. The migrations that wrote the same column were never held to the same standard. Apply the
+lesson to migrations too: anywhere a migration stamps a grace-window or deadline column, use
+`clock_timestamp()`.
+
+### Never combine DDL with a large backfill in one transaction
+
+**Split a schema change and its data backfill into two separate migrations**: one migration that
+does only the `ALTER` (fast, holds its lock briefly), then a follow-up migration that does the
+backfill.
+
+Each migration file runs as a single transaction by default. If an `ALTER TABLE` and a full-table
+`UPDATE` share that transaction, the `ALTER`'s lock — `ACCESS EXCLUSIVE` for `ADD COLUMN` — is held
+for the **entire transaction**, not just for the instant the `ALTER` statement executes. Every
+read and write against that table blocks until the backfill finishes and the transaction commits.
+
+Real instance: `000119_add_plaid_cleanup_pending_at.up.sql` does `ALTER TABLE users ADD COLUMN IF
+NOT EXISTS plaid_cleanup_pending_at TIMESTAMPTZ;` at line 27, then a full-table `UPDATE users ...`
+backfill at lines 45-52, in the same transaction. At production row counts, that holds
+`ACCESS EXCLUSIVE` on `users` — one of the hottest tables in the schema — for as long as the
+backfill takes to run, blocking subscription, admin, deletion, and webhook writes for that entire
+window.
+
+### Batch large backfills
+
+Where a backfill must touch a large or unbounded number of rows, **batch it** — a bounded loop over
+a key range (e.g. `WHERE id BETWEEN $1 AND $2`, looping in application code or a `DO` block with a
+row-count-limited `UPDATE ... LIMIT`) rather than one unbounded full-table `UPDATE`. A batched
+backfill holds its row locks for a fraction of a second per batch instead of monopolizing them for
+the whole run.
+
+### Escape hatch: `ADD COLUMN IF NOT EXISTS` lets an operator pre-empt the lock
+
+Because `000119`'s `ALTER` is written as `ADD COLUMN IF NOT EXISTS`, an operator can run that exact
+`ALTER` ahead of time, in its own short transaction, during a low-traffic window. When the real
+migration runs later, its `ALTER ... IF NOT EXISTS` becomes a no-op (the column already exists), so
+no `ACCESS EXCLUSIVE` lock is acquired at all when the backfill statement runs — only the backfill's
+own (still worth batching) row locks apply. This is a useful general mitigation for a DDL-plus-backfill
+migration that, for whatever reason, can't be split into two files before it ships: write the `ALTER`
+as `IF NOT EXISTS` even when a same-migration backfill follows it, so the escape hatch exists even if
+it isn't used.
+
+### Why Squawk and the CI migration-test suites do not catch either of these
+
+Neither hazard above trips an existing gate — this is *why* they need to be a documented convention
+rather than something to rely on tooling to flag:
+
+- **Squawk lints statements, not transactions.** `squawk --pg-version=17` inspects each SQL
+  statement in isolation. An `ALTER TABLE ADD COLUMN` statement is fine on its own; a full-table
+  `UPDATE` is fine on its own. The hazard is entirely that the two statements share one transaction
+  — a property Squawk has no visibility into. It reported 0 issues across all nine of #1443's
+  migrations.
+- **`scripts/test-migrations.sh`'s five suites (idempotency, perf, data, schema, rollback) run
+  against a near-empty database.** A full-table backfill over a handful of test rows is
+  instantaneous, so the "perf" suite sees no slow migration and the lock-duration hazard never
+  materializes in CI. The job reported `success` for the same reason it would report success on a
+  migration that scales linearly to hours at production row counts.
+
+**A green Squawk run and a green Migration Tests job are not evidence that a migration is safe to
+apply against a production-sized table.** Review DDL-plus-backfill migrations and grace-window
+timestamp writers by eye against the two conventions above; don't rely on the gates having caught
+it.
+
 ## Rollback Patterns (.down.sql)
 
 ### Drop Table
