@@ -23,6 +23,10 @@ go test ./... -v            # All tests
 go test ./internal/huma/operations/... -v  # Single package
 go test -coverprofile=coverage.out ./...  # With coverage
 make -C backend lint        # golangci-lint
+# Integration tests (-tags integration) MUST add `-p 1`: without it, go test runs
+# packages concurrently against the one shared Postgres DB, and a global-scan
+# worker test can pick up another package's fixture and fail with a mismatched
+# entity — a convincing false failure (see .github/workflows/test.yml:777).
 
 # Frontend (from /apps/web)
 bun run test                # Unit tests (bun:test)
