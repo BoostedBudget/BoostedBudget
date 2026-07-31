@@ -276,8 +276,11 @@ type ProfileRepository interface {
 	// side effects work_claims exists to guard. Returns (true, nil) if the clock was set, (false,
 	// nil) if the user no longer matches (already repaired by a concurrent run, comp granted,
 	// deletion requested, or status changed) since the candidate query ran — a legitimate skip,
-	// not an error.
-	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
+	// not an error. retention_expires_at is computed in Postgres via clock_timestamp() +
+	// make_interval(months => retentionMonths) — see the implementation's own doc comment
+	// (Task NA2, Issue #1413 follow-up) for why this repair write must use the SAME arithmetic
+	// semantics as the writers it backstops.
+	RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error)
 
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
 	// (inactive/cancelled) but still have at least one LIVE linked item — status NOT
@@ -2082,11 +2085,27 @@ func (r *profileRepository) GetUsersNeedingRetentionClockRepair(ctx context.Cont
 
 // RepairRetentionClock implements the Issue #1413 H5 residual repair write — see the interface
 // doc comment for why a conditional UPDATE (not a work_claims claim) is sufficient here.
-func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+//
+// retention_expires_at is computed entirely in Postgres, clock_timestamp() + make_interval(months
+// => $3) — Task NA2 (Issue #1413 follow-up on PR #1443): this method used to accept a Go-computed
+// expiresAt time.Time built via now.AddDate(0, retentionMonths, 0) in
+// retention_cleanup_check.go's repairRetentionClocks, which disagrees with Postgres's
+// make_interval whenever the anchor's day-of-month does not exist N months later. This matters
+// MORE here than for an ordinary writer: this method exists specifically to repair rows OTHER
+// writers left with a NULL retention_expires_at, so if it computed the expiry using a DIFFERENT
+// semantics than the writers it backstops, a "repaired" row would land on a DIFFERENT deadline
+// than a fresh write from those writers would have produced — the repair pass itself becoming a
+// second source of drift, not a cure for the first. Matches SetRetentionDates and
+// AdminUserRepository.RemoveUserTierOverride's SQL exactly. retention_started_at stays a plain
+// Go-computed value ($2, unchanged) — per removeUserTierOverrideUpdate's own doc comment
+// (admin_user_repository.go), retention_started_at is a paired audit field nothing computes an
+// age from or compares to NOW()/clock_timestamp() anywhere; only retention_expires_at is ever
+// read back as a deadline.
+func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
 		SET retention_started_at = $2,
-		    retention_expires_at = $3,
+		    retention_expires_at = clock_timestamp() + make_interval(months => $3::int),
 		    updated_at = NOW()
 		WHERE id = $1
 		  AND retention_expires_at IS NULL
@@ -2094,7 +2113,7 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 		  AND is_deleted = FALSE
 		  AND deletion_requested_at IS NULL
 	`+noManualOverrideAtAllPredicate,
-		userID, startedAt, expiresAt)
+		userID, startedAt, retentionMonths)
 	if err != nil {
 		return false, fmt.Errorf("RepairRetentionClock: %w", err)
 	}
@@ -3028,7 +3047,21 @@ func (r *profileRepository) CancelIfPastDueWithRetention(ctx context.Context, us
 // the same "someone else's business, not an error" outcome for this caller: past_due_service.go's
 // processGraceExpiry Releases (never Completes) its claim and lets a future run handle whatever
 // cycle is actually current.
-func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error) {
+//
+// retention_expires_at is computed entirely in Postgres, clock_timestamp() + make_interval(months
+// => $3) — Task NA2 (Issue #1413 follow-up on PR #1443): this method used to accept a Go-computed
+// retentionExpires time.Time built via now.AddDate(0, retentionMonths, 0) in past_due_service.go,
+// which disagrees with Postgres's make_interval whenever the anchor's day-of-month does not exist
+// N months later (Go normalizes the overflow FORWARD; Postgres clamps to the target month's last
+// day instead) — the wrong direction for a GDPR deletion deadline. Matches SetRetentionDates and
+// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column now
+// shares one semantics. retention_started_at stays a plain Go-computed value ($2, unchanged) — per
+// removeUserTierOverrideUpdate's own doc comment (admin_user_repository.go), retention_started_at
+// is a paired audit field nothing computes an age from or compares to NOW()/clock_timestamp()
+// anywhere; only retention_expires_at is ever read back as a deadline, so basing it on a
+// DIFFERENT, fresher clock than retention_started_at is the established, already-reviewed pattern
+// here, not a new inconsistency.
+func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted time.Time, retentionMonths int) (bool, error) {
 	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
 	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
 	// call re-pushing an already-running marker forward.
@@ -3064,13 +3097,13 @@ func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.C
 		UPDATE users
 		SET subscription_status = 'cancelled',
 		    retention_started_at = $2,
-		    retention_expires_at = $3,
+		    retention_expires_at = clock_timestamp() + make_interval(months => $3::int),
 		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
 		    updated_at = NOW()
 		FROM candidate
 		WHERE users.id = candidate.id
 	`,
-		userID, retentionStarted, retentionExpires, expectedPastDueStartedAt)
+		userID, retentionStarted, retentionMonths, expectedPastDueStartedAt)
 	if err != nil {
 		return false, fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)
 	}

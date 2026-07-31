@@ -1906,7 +1906,7 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx 
 	return []*domain.User{}, nil
 }
 
-func (m *mockProfileRepoForCursorTests) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+func (m *mockProfileRepoForCursorTests) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
 	return false, nil
 }
 

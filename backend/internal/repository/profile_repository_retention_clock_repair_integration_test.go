@@ -64,10 +64,22 @@ func TestRetentionClockRepair_Integration_FindsAndRepairsCancelledUserWithNullCl
 	}
 	assert.True(t, found, "the cancelled user with a NULL retention clock must be a repair candidate")
 
+	// Task NA2 (Issue #1413 follow-up on PR #1443): retentionMonths replaces a Go-computed
+	// expiresAt time.Time — retention_expires_at is now computed entirely in Postgres via
+	// clock_timestamp() + make_interval(months => retentionMonths), so the expectation below is
+	// fenced with dbNow/dbAddMonths (not time.Now()/AddDate), exactly like
+	// profile_repository_set_retention_dates_integration_test.go's
+	// TestSetRetentionDates_Integration_ArmsClockWithPostgresArithmetic — calendar-immune by
+	// construction rather than merely tolerant of drift. retention_started_at, by contrast, stays
+	// a plain Go-computed value ($2, unchanged) — see RepairRetentionClock's own doc comment. Uses
+	// testRetentionMonths (9), deliberately not the config default of 6, for the same reason that
+	// constant's own file uses it: a wider variety of month-end landings across the year.
 	started := time.Now().Truncate(time.Microsecond)
-	expires := started.AddDate(0, 6, 0)
-	repaired, err := repo.RepairRetentionClock(ctx, user.ID, started, expires)
+	const retentionMonths = testRetentionMonths
+	before := dbNow(t, pool)
+	repaired, err := repo.RepairRetentionClock(ctx, user.ID, started, retentionMonths)
 	require.NoError(t, err)
+	after := dbNow(t, pool)
 	assert.True(t, repaired, "the repair write must succeed for a genuine candidate")
 
 	var (
@@ -80,7 +92,8 @@ func TestRetentionClockRepair_Integration_FindsAndRepairsCancelledUserWithNullCl
 	require.NotNil(t, retStarted)
 	require.NotNil(t, retExpires)
 	assert.WithinDuration(t, started, *retStarted, time.Microsecond)
-	assert.WithinDuration(t, expires, *retExpires, time.Microsecond)
+	assertBetweenFence(t, dbAddMonths(t, pool, before, retentionMonths), dbAddMonths(t, pool, after, retentionMonths), *retExpires,
+		"retention_expires_at must be ~now+retentionMonths, computed via Postgres's make_interval")
 
 	// After repair, the user must no longer be a candidate.
 	candidatesAfter, err := repo.GetUsersNeedingRetentionClockRepair(ctx)
@@ -129,7 +142,7 @@ func TestRetentionClockRepair_Integration_ExcludesUserWithExistingClock(t *testi
 
 	// RepairRetentionClock itself must also refuse to clobber the existing clock even if called
 	// directly (defense in depth against a stale candidate list).
-	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), time.Now().AddDate(0, 1, 0))
+	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), 1)
 	require.NoError(t, err)
 	assert.False(t, repaired, "RepairRetentionClock must refuse to overwrite an existing, non-NULL clock")
 
@@ -166,7 +179,7 @@ func TestRetentionClockRepair_Integration_ExcludesActiveUser(t *testing.T) {
 		assert.NotEqual(t, user.ID, c.ID, "an active user (not read-only status) must never be a repair candidate")
 	}
 
-	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), time.Now().AddDate(0, 6, 0))
+	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), 6)
 	require.NoError(t, err)
 	assert.False(t, repaired, "RepairRetentionClock must refuse to write for a non-read-only-status user")
 }
@@ -241,7 +254,7 @@ func TestRetentionClockRepair_Integration_RepairItselfRefusesComped(t *testing.T
 	_, err = pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, overrideEndsAt, user.ID)
 	require.NoError(t, err)
 
-	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), time.Now().AddDate(0, 6, 0))
+	repaired, err := repo.RepairRetentionClock(ctx, user.ID, time.Now(), 6)
 	require.NoError(t, err)
 	assert.False(t, repaired, "RepairRetentionClock must refuse to start the retention clock for a user with a live manual tier override, even called directly against a NULL-clock candidate")
 

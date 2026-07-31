@@ -63,8 +63,8 @@ func (m *MockRetentionProfileRepository) GetUsersNeedingRetentionClockRepair(ctx
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockRetentionProfileRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
-	args := m.Called(ctx, userID, startedAt, expiresAt)
+func (m *MockRetentionProfileRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
+	args := m.Called(ctx, userID, startedAt, retentionMonths)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -290,7 +290,7 @@ func TestRetentionCleanupCheck_RepairsRetentionClock(t *testing.T) {
 	mockEmail := new(MockRetentionEmailService)
 
 	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return(users, nil)
-	mockRepo.On("RepairRetentionClock", ctx, "user-needs-repair", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	mockRepo.On("RepairRetentionClock", ctx, "user-needs-repair", mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)
@@ -309,7 +309,7 @@ func TestRetentionCleanupCheck_RepairsRetentionClock(t *testing.T) {
 	err := worker.Work(ctx, job)
 	require.NoError(t, err)
 
-	mockRepo.AssertCalled(t, "RepairRetentionClock", ctx, "user-needs-repair", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	mockRepo.AssertCalled(t, "RepairRetentionClock", ctx, "user-needs-repair", mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 }
 
 // TestRetentionCleanupCheck_RepairSkipsCompedUser proves the belt-and-braces comp guard: even
@@ -377,7 +377,7 @@ func TestRetentionCleanupCheck_RepairFailure_NonFatal_ContinuesToNoticesAndDelet
 	mockEmail := new(MockRetentionEmailService)
 
 	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return(repairUsers, nil)
-	mockRepo.On("RepairRetentionClock", ctx, "user-repair-fail", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	mockRepo.On("RepairRetentionClock", ctx, "user-repair-fail", mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).
 		Return(false, errors.New("db unavailable"))
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
@@ -418,7 +418,7 @@ func TestRetentionCleanupCheck_RepairSkip_PreconditionLostSinceQuery(t *testing.
 	mockEmail := new(MockRetentionEmailService)
 
 	mockRepo.On("GetUsersNeedingRetentionClockRepair", ctx).Return(users, nil)
-	mockRepo.On("RepairRetentionClock", ctx, "user-repair-raced", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, nil)
+	mockRepo.On("RepairRetentionClock", ctx, "user-repair-raced", mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, nil)
 	mockRepo.On("GetUsersNeedingPlaidDisconnectRepair", ctx, plaidDisconnectRepairGracePeriod).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention30dNotice", ctx).Return([]*domain.User{}, nil)
 	mockRepo.On("GetUsersNeedingRetention7dNotice", ctx).Return([]*domain.User{}, nil)

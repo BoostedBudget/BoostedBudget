@@ -314,11 +314,10 @@ func TestFinding2LockContention_CancelIfPastDueOccurrenceWithRetention_ClockTime
 	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
 
 	started := time.Now()
-	expires := started.AddDate(0, 6, 0)
 	var flipped bool
 	startFence, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
 		var innerErr error
-		flipped, innerErr = repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, expires)
+		flipped, innerErr = repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, 6)
 		return innerErr
 	})
 	require.NoError(t, callErr)

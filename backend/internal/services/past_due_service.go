@@ -82,7 +82,14 @@ type PastDueProfileRepository interface {
 	// job can never re-select a user this already flipped to 'cancelled', so that user would be
 	// cancelled forever with no retention clock: never warned, never deleted. One statement means
 	// either both land or neither does.
-	CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error)
+	//
+	// retentionMonths replaces a Go-computed retentionExpires time.Time (Task NA2, Issue #1413
+	// follow-up on PR #1443): retention_expires_at is now computed entirely in Postgres via
+	// clock_timestamp() + make_interval(months => retentionMonths), matching SetRetentionDates and
+	// AdminUserRepository.RemoveUserTierOverride — Go's time.Time.AddDate normalizes month overflow
+	// FORWARD while Postgres's make_interval clamps to the target month's last day, and the Go
+	// semantics over-retained personal data relative to a GDPR deletion deadline.
+	CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted time.Time, retentionMonths int) (bool, error)
 
 	// ClearPastDueStartedAtIfMatches clears the past_due_started_at timestamp after auto-cancel,
 	// but ONLY if the column still holds expected — the SAME timestamp this flow captured at the
@@ -445,8 +452,13 @@ func (s *PastDueService) processGraceExpiry(ctx context.Context, user domain.Use
 	// belt-and-braces repair query, RepairRetentionClock, also exists in profile_repository.go for
 	// any user already stuck in this state from before this fix, or from any other path — see
 	// retention_cleanup_check.go.)
-	retentionExpires := now.AddDate(0, s.retentionMonths, 0)
-	flipped, err := s.repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, *user.PastDueStartedAt, now, retentionExpires)
+	//
+	// Task NA2 (Issue #1413 follow-up on PR #1443): retention_expires_at used to be computed here
+	// via now.AddDate(0, s.retentionMonths, 0) — Go's month arithmetic normalizes overflow FORWARD,
+	// disagreeing with the Postgres make_interval semantics every other retention_expires_at writer
+	// now uses. s.retentionMonths is passed straight through so
+	// CancelIfPastDueOccurrenceWithRetention can compute the deadline entirely in Postgres instead.
+	flipped, err := s.repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, *user.PastDueStartedAt, now, s.retentionMonths)
 	if err != nil {
 		s.releaseClaimOnFailure(ctx, user.ID, resourceID, repository.ActionPastDueGraceCancel, token, err.Error())
 		return fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)

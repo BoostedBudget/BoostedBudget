@@ -601,8 +601,8 @@ func (m *MockUserRepository) GetUsersNeedingRetentionClockRepair(ctx context.Con
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
-	args := m.Called(ctx, userID, startedAt, expiresAt)
+func (m *MockUserRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
+	args := m.Called(ctx, userID, startedAt, retentionMonths)
 	return args.Bool(0), args.Error(1)
 }
 

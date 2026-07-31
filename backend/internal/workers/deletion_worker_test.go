@@ -204,7 +204,7 @@ func (m *MockProfileRepoForWorker) GetUsersNeedingRetentionClockRepair(ctx conte
 	return []*domain.User{}, nil
 }
 
-func (m *MockProfileRepoForWorker) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+func (m *MockProfileRepoForWorker) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
 	return false, nil
 }
 
