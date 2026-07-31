@@ -18,12 +18,14 @@
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { SubscriptionOverrideModal } from './SubscriptionOverrideModal'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactNode } from 'react'
 // Issue #1323: Use centralized sonner mock (preloaded via bunfig.toml).
 // Inline mock.module('sonner') would clobber the global mock and pollute other tests.
-import { mockToastSuccess, mockToastError, mockToastWarning } from '@/test/mocks/sonner'
+import { mockToastSuccess, mockToastError, mockToastWarning, mockToastInfo } from '@/test/mocks/sonner'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import {
@@ -161,6 +163,8 @@ describe('SubscriptionOverrideModal', () => {
         mockToastError.mockClear()
         // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
         mockToastWarning.mockClear()
+        // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+        mockToastInfo.mockClear()
         mockTrackEvent.mockClear()
         mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
     })
@@ -370,6 +374,37 @@ describe('SubscriptionOverrideModal', () => {
             const chip = screen.getByText(/manual override active \(expired\)/i)
             expect(chip.closest('div')).toHaveClass('bg-warning/10')
             expect(screen.getByText(/expired:/i)).toBeInTheDocument()
+        })
+    })
+
+    // Codex adversarial review (round 9, Part 3 — Low): Round 8 stopped a malformed
+    // manual_tier_ends_at from being presented as a LIVE comp (isOverrideActive/getOverrideStatus
+    // both fail closed on it), but the date TEXT itself was untouched — formatDate() fed straight
+    // into `new Date('not-a-real-date').toLocaleDateString(...)`, which renders the literal string
+    // "Invalid Date". The chip already correctly read "(expired)" after round 8; the date after it
+    // still read "Expired: Invalid Date" — user-facing nonsense downstream of the round-8 fix.
+    //
+    // Reachability, honestly: manual_tier_ends_at is a TIMESTAMPTZ serialised from a typed Go
+    // *time.Time, so this is NOT reachable through the normal API today. This is defense-in-depth
+    // and internal consistency, not a live bug.
+    describe('Malformed expiry date text (Issue #1413 round 9, Part 3 — defense in depth)', () => {
+        it('never renders the literal string "Invalid Date" for an unparseable manual_tier_ends_at', async () => {
+            mockUseGetAdminUserSubscription.mockReturnValue({
+                isLoading: false,
+                data: SUB_DETAIL_MALFORMED_DATE,
+            })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={() => { }} />,
+                { wrapper }
+            )
+
+            const chip = await screen.findByText(/manual override active/i)
+            const chipText = chip.closest('div')?.textContent ?? ''
+            expect(chipText).not.toMatch(/invalid date/i)
+            // formatDate falls back to the same em dash it already uses for a missing date, rather
+            // than inventing new copy that could disagree with getOverrideStatus's "Invalid expiry"
+            // label used elsewhere (UsersPage.tsx / UserDetailModal.tsx).
+            expect(chipText).toMatch(/expired: —/i)
         })
     })
 
@@ -655,8 +690,14 @@ describe('SubscriptionOverrideModal', () => {
         })
 
         it('confirming calls the mutation with exactly { userId, data: { reason } }', async () => {
-            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
-                if (options?.onSuccess) options.onSuccess()
+            // This test's only concern is the mutate() call arguments, so onSuccess is given a
+            // well-formed `{ removed: true }` response — a real one, not `undefined` — so it
+            // doesn't incidentally (and unassertedly) exercise the malformed-response branch that
+            // has its own dedicated test below (Codex round 9 follow-up: this used to call
+            // `onSuccess()` with no argument and assert nothing about the result, which is the
+            // "test that cannot fail" pattern this file has produced repeatedly).
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { removed: boolean }) => void } | undefined) => {
+                options?.onSuccess?.({ removed: true })
             })
             mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
             mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mockMutate, isPending: false })
@@ -681,8 +722,14 @@ describe('SubscriptionOverrideModal', () => {
         })
 
         it('shows a success toast and closes the modal on success', async () => {
-            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
-                if (options?.onSuccess) options.onSuccess()
+            // Positive control (Issue #1413 round 9 / Part 1): the real endpoint is idempotent and
+            // always returns a `removed` flag (AdminRemoveTierOverrideOutputBody, confirmed in
+            // packages/api-client/src/models/adminRemoveTierOverrideOutputBody.ts). Prior to this
+            // fix, onSuccess never read the response at all, so this test passed while asserting
+            // nothing about `removed` — it would have passed identically for a no-op response. Now
+            // wired to the response so the "actually removed" branch is what's exercised here.
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { removed: boolean }) => void } | undefined) => {
+                options?.onSuccess?.({ removed: true })
             })
             mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
             mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mockMutate, isPending: false })
@@ -733,8 +780,10 @@ describe('SubscriptionOverrideModal', () => {
         })
 
         it('fires ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED with { tier, had_expiry } on success', async () => {
-            const mockMutate = mock((data: unknown, options: { onSuccess?: () => void } | undefined) => {
-                if (options?.onSuccess) options.onSuccess()
+            // Positive control (Issue #1413 round 9 / Part 1): see the note on the test above —
+            // this must supply `removed: true` explicitly now that the event is gated on it.
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { removed: boolean }) => void } | undefined) => {
+                options?.onSuccess?.({ removed: true })
             })
             mockUseGetAdminUserSubscription.mockReturnValue({
                 isLoading: false,
@@ -763,6 +812,94 @@ describe('SubscriptionOverrideModal', () => {
                     { tier: 'household_4', had_expiry: true }
                 )
             })
+        })
+
+        // Codex adversarial review (round 9, Part 1 — Medium): the clear endpoint is deliberately
+        // idempotent (backend/internal/huma/operations/admin_subscriptions.go ~:127-155) and returns
+        // 200 with `removed: false` when there was no override to remove (two admins racing, or one
+        // double-submit). onSuccess previously ignored the response body entirely, so a no-op
+        // removal still produced a false "removed successfully" toast AND a false
+        // ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED analytics event — the exact "UI tells the admin
+        // something untrue" bug this whole PR exists to fix. The backend's own equivalent event is
+        // already gated on `row.Removed` (admin_user_service.go:427); this brings the frontend in
+        // line so the two layers agree about when a removal actually happened.
+        it('does not toast success or fire ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED for a no-op removal (removed: false)', async () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: { removed: boolean }) => void } | undefined) => {
+                options?.onSuccess?.({ removed: false })
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
+            mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mockMutate, isPending: false })
+            const onClose = mock(() => { })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={onClose} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'No longer needed' } })
+            fireEvent.click(screen.getByRole('button', { name: /remove override/i }))
+            const dialog = screen.getByRole('alertdialog')
+            fireEvent.change(within(dialog).getByLabelText(/type/i), { target: { value: 'REMOVE' } })
+            fireEvent.click(within(dialog).getByRole('button', { name: /remove override/i }))
+
+            await waitFor(() => {
+                // The modal still closes — a definitive "nothing to remove" answer is a completed
+                // interaction, not a pending one — but it must not claim a removal happened.
+                expect(onClose).toHaveBeenCalled()
+            })
+            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+            expect(mockToastSuccess).not.toHaveBeenCalled()
+            expect(mockTrackEvent).not.toHaveBeenCalledWith(
+                ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED,
+                expect.anything()
+            )
+            // A truthful message must still reach the admin instead of silence.
+            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+            expect(mockToastInfo).toHaveBeenCalledWith(expect.stringMatching(/no override/i))
+        })
+
+        // Codex adversarial review (round 9 follow-up, on the fix above): the generated contract
+        // requires `removed: boolean` to ALWAYS be present on a 200 response
+        // (adminRemoveTierOverrideOutputBody.ts:37-38) — there is no "success but ambiguous" shape
+        // on the wire. A response missing it isn't a real third outcome, it's the client and
+        // server disagreeing about the contract. This must not be silently folded into EITHER the
+        // "removed" branch (could fire a false analytics event for a removal that may not have
+        // happened) or the "not removed" branch (the original bug this whole fix targets — it
+        // would swallow a REAL removal with zero admin-visible signal). It must surface as its own
+        // anomaly, exactly like any other malformed response, with the modal staying open (not
+        // auto-closing on an outcome nobody can actually vouch for).
+        it('treats a response missing `removed` as an anomaly — no success/info toast, no analytics event, modal stays open', async () => {
+            const mockMutate = mock((data: unknown, options: { onSuccess?: (resp: unknown) => void } | undefined) => {
+                options?.onSuccess?.(undefined)
+            })
+            mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE })
+            mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mockMutate, isPending: false })
+            const onClose = mock(() => { })
+            render(
+                <SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open={true} onClose={onClose} />,
+                { wrapper }
+            )
+
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'No longer needed' } })
+            fireEvent.click(screen.getByRole('button', { name: /remove override/i }))
+            const dialog = screen.getByRole('alertdialog')
+            fireEvent.change(within(dialog).getByLabelText(/type/i), { target: { value: 'REMOVE' } })
+            fireEvent.click(within(dialog).getByRole('button', { name: /remove override/i }))
+
+            await waitFor(() => {
+                // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+                expect(mockToastError).toHaveBeenCalledWith(expect.stringMatching(/unexpected response/i))
+            })
+            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+            expect(mockToastSuccess).not.toHaveBeenCalled()
+            // @ts-expect-error mock method added by bun:test mock.module (centralized preload)
+            expect(mockToastInfo).not.toHaveBeenCalled()
+            expect(mockTrackEvent).not.toHaveBeenCalledWith(
+                ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED,
+                expect.anything()
+            )
+            // An outcome nobody can vouch for must not auto-close the modal — mirrors onError.
+            expect(onClose).not.toHaveBeenCalled()
+            expect(screen.getByPlaceholderText(/gifted upgrade/i)).toBeInTheDocument()
         })
 
         it('disables both footer buttons while the removal is pending', () => {
@@ -822,6 +959,39 @@ describe('SubscriptionOverrideModal', () => {
 
             expect(setOverrideSection).not.toBeNull()
             expect(setOverrideSection?.contains(reasonTextarea)).toBe(false)
+        })
+    })
+
+    // Codex adversarial review (round 9 follow-up, on the Part 2 fix): overrideStatus.test.ts
+    // proves getOverrideStatus/isOverrideActive ACCEPT an injected `now`, but nothing proved this
+    // component's three call sites actually PASS one. Those arguments could be deleted —
+    // reintroducing an independent `new Date()` read at each call site — and every behavioral
+    // test above would still pass, because every fixture in this file is computed relative to
+    // Date.now(), so an independent real-clock read produces the same answer as the shared `now`
+    // in any practical (non-racing) test run. A genuine race — an expiry lapsing in the
+    // microseconds between two synchronous `new Date()` calls in the same render — is not
+    // reliably forceable through a rendered component, so a behavioral test here would be the
+    // same "test that cannot fail" shape flagged elsewhere in this file. This pins the actual
+    // regression class (the argument being silently deleted) structurally instead, the same way
+    // "Structural invariants (G7 Fix 8)" above pins JSX placement that no DOM assertion happens
+    // to cover.
+    describe('Single `now` threaded through override-status calls (Issue #1413 round 9, Part 2 follow-up)', () => {
+        const SOURCE = readFileSync(join(import.meta.dir, 'SubscriptionOverrideModal.tsx'), 'utf-8')
+
+        it('declares exactly one shared `now` binding for the render', () => {
+            const declarations = SOURCE.match(/const now = new Date\(\)/g) ?? []
+            expect(declarations).toHaveLength(1)
+        })
+
+        it('passes that binding into getOverrideStatus and both isOverrideActive calls', () => {
+            expect(SOURCE).toMatch(/getOverrideStatus\([^)]*,\s*now\)/)
+
+            const isOverrideActiveCalls = SOURCE.match(/isOverrideActive\([^)]*\)/g) ?? []
+            // isKnownTierOverride and isLiveOverride — the two liveness checks this component makes.
+            expect(isOverrideActiveCalls).toHaveLength(2)
+            for (const call of isOverrideActiveCalls) {
+                expect(call).toMatch(/,\s*now\)$/)
+            }
         })
     })
 })

@@ -65,16 +65,22 @@ export interface OverrideStatus {
  * Human-readable label + variant for the (hideable) "Override Status" column: Permanent /
  * Expires in Nd / Expired / null (no override at all). This is presentational only — it is
  * NOT the source of truth for whether the override is live; use `isOverrideActive` for that.
+ *
+ * `now` defaults to the current time; accept it as a parameter — mirroring `isOverrideActive`
+ * above — so a caller that also calls `isOverrideActive` for the same row can evaluate both
+ * against a single instant instead of each independently reading the clock (Issue #1413 round 9,
+ * Part 2: two separate `new Date()` calls in SubscriptionOverrideModal.tsx could straddle an
+ * expiry, producing a chip and a badge that momentarily disagree about the same row).
  */
 export function getOverrideStatus(
   manualTierOverride: string | null | undefined,
-  manualTierEndsAt: string | null | undefined
+  manualTierEndsAt: string | null | undefined,
+  now: Date = new Date()
 ): OverrideStatus | null {
   if (!manualTierOverride) return null
   if (!manualTierEndsAt) return { label: 'Permanent', variant: 'permanent' }
 
   const expiresAt = new Date(manualTierEndsAt)
-  const now = new Date()
 
   // Unparseable date: report it as such rather than rendering "Expires in NaNd", and use the
   // non-live `expired` variant so the row is never styled as an active comp. Matches
