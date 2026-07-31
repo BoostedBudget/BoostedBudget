@@ -57,10 +57,22 @@ type AdminUserService interface {
 	// targetUserID is the user whose override is being cleared.
 	RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (RemoveTierOverrideResult, error)
 
-	// SetAnalytics wires in the optional, nil-safe PostHog analytics client (Issue #1413 Task
-	// MB). Never called in some tests/environments (PostHog unconfigured in local dev/QA) — both
+	// SetGDPRAnalytics wires in the optional, nil-safe GDPR-consent-gated PostHog analytics
+	// client (Issue #1413 Task NB, replacing the raw phclient.Analytics wiring Task MB added).
+	//
+	// Both events fire with the TARGET user (userID/targetUserID) as distinct_id — the event and
+	// that user's UUID land on THEIR PostHog profile — so GDPR consent governs this regardless of
+	// who triggered the change: the target user did not act and may not have consented. This is
+	// why these use CaptureIfConsented (like transfer_suggestion_service.go's user-initiated
+	// events) rather than raw Capture (main.go's "operational/system events" carve-out does not
+	// apply here — an admin's action about a specific user's data is not "no user's action" in
+	// the sense that carve-out means; see main.go's gdprClient doc comment). audit_logs already
+	// durably records both actions (admin_user_repository.go) as the compliance record; this
+	// governs only the separate PostHog product-analytics stream.
+	//
+	// Never called in some tests/environments (PostHog unconfigured in local dev/QA) — both
 	// UpdateUserTier and RemoveUserTierOverride must remain no-ops for analytics in that case.
-	SetAnalytics(a phclient.Analytics)
+	SetGDPRAnalytics(a phclient.GDPRAnalytics)
 }
 
 // UpdateUserTierResult communicates the outcome of setting a user's manual tier override
@@ -90,7 +102,7 @@ type adminUserService struct {
 	clerkService    ClerkService
 	retentionMonths int
 	tierConfig      *config.TierConfig
-	analytics       phclient.Analytics // Optional PostHog analytics client (Issue #1413 Task MB)
+	gdprAnalytics   phclient.GDPRAnalytics // Optional GDPR-consent-gated analytics client (Issue #1413 Task NB)
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
@@ -114,9 +126,11 @@ func NewAdminUserService(repo repository.AdminUserRepository, adminService Admin
 	}
 }
 
-// SetAnalytics wires in the optional, nil-safe PostHog analytics client (Issue #1413 Task MB).
-func (s *adminUserService) SetAnalytics(a phclient.Analytics) {
-	s.analytics = a
+// SetGDPRAnalytics wires in the optional, nil-safe GDPR-consent-gated PostHog analytics client
+// (Issue #1413 Task NB). See the AdminUserService interface doc for why these events (unlike most
+// admin-triggered events) go through the consent gate.
+func (s *adminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
+	s.gdprAnalytics = a
 }
 
 // ListUsers returns a paginated list of users with optional filtering
@@ -338,18 +352,22 @@ func (s *adminUserService) UpdateUserTier(ctx context.Context, actorUserID, user
 		}
 	}
 
-	// Issue #1413 Task MB: fire the product-analytics event on the success path only, exactly
-	// like the Clerk sync above — best-effort, nil-safe (household_service.go's SetAnalytics
-	// convention). Payload mirrors the frontend's own trackEvent call
-	// (SubscriptionOverrideModal.tsx:142-145, {tier, had_expiry}) so the two sides are joinable
-	// in PostHog, plus actor_user_id for the backend's own value (nil, not "", when there is no
-	// acting admin — mirrors the repository's audit-row NULL-actor convention just above).
-	if s.analytics != nil {
+	// Issue #1413 Task NB (Codex High finding, replacing Task MB's raw phClient.Capture): fire
+	// the product-analytics event on the success path only, exactly like the Clerk sync above —
+	// best-effort, nil-safe. GDPR-gated via CaptureIfConsented, not raw Capture: this event's
+	// distinct_id is userID (the TARGET user), so it and their UUID land on THEIR PostHog
+	// profile — consent governs data about a data subject regardless of who triggered the
+	// processing (see the AdminUserService interface doc for the full reasoning). Payload mirrors
+	// the frontend's own trackEvent call (SubscriptionOverrideModal.tsx:142-145,
+	// {tier, had_expiry}) so the two sides are joinable in PostHog, plus actor_user_id for the
+	// backend's own value (nil, not "", when there is no acting admin — mirrors the repository's
+	// audit-row NULL-actor convention just above).
+	if s.gdprAnalytics != nil {
 		var actorParam interface{}
 		if actorUserID != "" {
 			actorParam = actorUserID
 		}
-		s.analytics.Capture(userID, phclient.EventAdminSubscriptionOverrideApplied, map[string]interface{}{
+		s.gdprAnalytics.CaptureIfConsented(ctx, userID, phclient.EventAdminSubscriptionOverrideAppliedServer, map[string]interface{}{
 			"tier":          tier,
 			"had_expiry":    expiresAt != nil,
 			"actor_user_id": actorParam,
@@ -391,26 +409,29 @@ func (s *adminUserService) RemoveUserTierOverride(ctx context.Context, actorUser
 		}
 	}
 
-	// Issue #1413 Task MB: fire the product-analytics event only when an override was actually
-	// removed (row.Removed) — an idempotent no-op call (nothing to clear; see this method's own
-	// doc comment) is not a "removal" a product funnel should count, unlike the audit row above
-	// which always writes as a repair hook. Best-effort/nil-safe, same as the Clerk sync above.
+	// Issue #1413 Task NB (Codex High + Medium findings, replacing Task MB's raw phClient.Capture):
+	// fire the product-analytics event only when an override was actually removed (row.Removed) —
+	// an idempotent no-op call (nothing to clear; see this method's own doc comment) is not a
+	// "removal" a product funnel should count, unlike the audit row above which always writes as
+	// a repair hook. Best-effort/nil-safe, same as the Clerk sync above. GDPR-gated via
+	// CaptureIfConsented for the same reason as the Applied event above — distinct_id is
+	// targetUserID, so consent governs regardless of the acting admin.
 	//
-	// had_expiry is deliberately NOT included here (unlike the Applied event): RemoveTierOverrideRow
-	// only threads prior.manual_tier_override through the repository's RETURNING clause, not
-	// prior.manual_tier_ends_at (admin_user_repository.go's removeUserTierOverrideUpdate), so this
-	// call site has no way to know whether the removed override had an expiry without an
-	// additional round trip or a repository schema change — out of this task's scope (the
-	// repository file is not one of the three this task touches). actor_user_id is included and is
-	// nil, not "", when there is no acting admin — mirrors the repository's own audit-row NULL-actor
+	// had_expiry is now included (Task NB, Part 2): RemoveTierOverrideRow threads
+	// prior.manual_tier_ends_at through the repository's RETURNING clause
+	// (admin_user_repository.go's removeUserTierOverrideUpdate), so this call site can report
+	// whether the just-cleared override had an expiry — matching the Applied event and the
+	// frontend's {tier, had_expiry} payload shape. actor_user_id is included and is nil, not "",
+	// when there is no acting admin — mirrors the repository's own audit-row NULL-actor
 	// convention (removeTierOverride's actorParam, just above the audit INSERT).
-	if s.analytics != nil && row.Removed {
+	if s.gdprAnalytics != nil && row.Removed {
 		var actorParam interface{}
 		if actorUserID != "" {
 			actorParam = actorUserID
 		}
-		s.analytics.Capture(targetUserID, phclient.EventAdminSubscriptionOverrideRemoved, map[string]interface{}{
+		s.gdprAnalytics.CaptureIfConsented(ctx, targetUserID, phclient.EventAdminSubscriptionOverrideRemovedServer, map[string]interface{}{
 			"tier":          *row.PriorManualTierOverride,
+			"had_expiry":    row.PriorManualTierEndsAt != nil,
 			"actor_user_id": actorParam,
 		})
 	}

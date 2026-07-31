@@ -2004,8 +2004,13 @@ func TestStampMissingPlaidCleanupMarkers_Integration_DeadlockCycleWithConcurrent
 	defer tx2.Rollback(ctx) //nolint:errcheck // no-op after Commit below
 	var revertedTier, revertedStatus, clerkUserIDEnc string
 	var priorOverride *string
+	// Issue #1413 Task NB: removeUserTierOverrideUpdate's RETURNING clause now also returns
+	// prior.manual_tier_ends_at (additive — this test's deadlock/lock-ordering assertions below
+	// are unaffected). Scanned into an otherwise-unused destination since this test doesn't
+	// assert on it.
+	var priorEndsAt *time.Time
 	require.NoError(t, tx2.QueryRow(ctx, removeUserTierOverrideQuery, userA.ID, testRetentionMonths).Scan(
-		&revertedTier, &revertedStatus, &clerkUserIDEnc, &priorOverride,
+		&revertedTier, &revertedStatus, &clerkUserIDEnc, &priorOverride, &priorEndsAt,
 	))
 	assert.Nil(t, priorOverride, "test setup invariant: A must have no override to remove")
 

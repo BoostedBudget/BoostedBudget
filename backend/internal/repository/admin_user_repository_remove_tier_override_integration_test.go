@@ -1338,8 +1338,13 @@ func TestRemoveUserTierOverride_Integration_LiveItemInsertedDuringRemoval_Marker
 	// already holds is a self-lock no-op, not a deadlock.
 	var revertedTier, revertedStatus, clerkEnc string
 	var returnedPriorOverride *string
+	// Issue #1413 Task NB: removeUserTierOverrideUpdate's RETURNING clause now also returns
+	// prior.manual_tier_ends_at (additive — this test's lock/race assertions below are
+	// unaffected). Scanned into an otherwise-unused destination since this test doesn't assert
+	// on it.
+	var returnedPriorEndsAt *time.Time
 	err = tx1.QueryRow(ctx, removeUserTierOverrideQuery, target.ID, testRetentionMonths).Scan(
-		&revertedTier, &revertedStatus, &clerkEnc, &returnedPriorOverride,
+		&revertedTier, &revertedStatus, &clerkEnc, &returnedPriorOverride, &returnedPriorEndsAt,
 	)
 	require.NoError(t, err)
 	require.NoError(t, tx1.Commit(ctx))

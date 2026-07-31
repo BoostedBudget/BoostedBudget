@@ -61,10 +61,11 @@ func (m *MockAdminUserService) RemoveUserTierOverride(ctx context.Context, actor
 	return args.Get(0).(services.RemoveTierOverrideResult), args.Error(1)
 }
 
-// SetAnalytics (Issue #1413 Task MB) is not exercised by these handler-level tests — analytics
-// wiring is tested at the service layer (admin_user_service_test.go); stubbed here only to
-// satisfy the expanded services.AdminUserService interface.
-func (m *MockAdminUserService) SetAnalytics(a phclient.Analytics) {}
+// SetGDPRAnalytics (Issue #1413 Task NB, replacing Task MB's raw SetAnalytics) is not exercised
+// by these handler-level tests — analytics wiring is tested at the service layer
+// (admin_user_service_test.go); stubbed here only to satisfy the services.AdminUserService
+// interface.
+func (m *MockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
 
 // MockAdminService is a mock implementation of services.AdminService
 type MockAdminService struct {

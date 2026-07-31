@@ -1755,7 +1755,11 @@ func main() {
 		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
 		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
-		adminUserService.SetAnalytics(phClient)
+		// Issue #1413 Task NB (Codex High finding): these events land on the TARGET user's
+		// PostHog profile (their UUID is distinct_id), so consent is gated the same way
+		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
+		// phClient other admin-triggered-but-operational events use.
+		adminUserService.SetGDPRAnalytics(gdprClient)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(

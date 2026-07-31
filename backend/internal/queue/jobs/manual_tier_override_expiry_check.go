@@ -222,11 +222,14 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 
 		// Issue #1413 Task MB: fire the product-analytics event only for a claimed (actually
 		// expired) user — best-effort/nil-safe, same convention as syncClerkMetadata above and
-		// AdminUserService's own analytics calls. A distinct event from
-		// EventAdminSubscriptionOverrideRemoved (never reused — see that constant's doc comment):
-		// this is a system-initiated lapse, not an admin's deliberate removal, so there is no
-		// actor — say so explicitly with actor_user_id: nil rather than inventing one. had_expiry
-		// is always true here (this candidate list is, by construction, users whose
+		// AdminUserService's own analytics calls. Stays on raw phClient.Capture (not GDPR-gated):
+		// this event is genuinely operational (a daily system job, no user's action — Codex
+		// review, Issue #1413 Task NB, explicitly cleared it), unlike AdminUserService's Applied/
+		// Removed events which Task NB moved to CaptureIfConsented. A distinct event from
+		// EventAdminSubscriptionOverrideRemovedServer (never reused — see that constant's doc
+		// comment): this is a system-initiated lapse, not an admin's deliberate removal, so there
+		// is no actor — say so explicitly with actor_user_id: nil rather than inventing one.
+		// had_expiry is always true here (this candidate list is, by construction, users whose
 		// manual_tier_ends_at has passed), included anyway for payload-shape parity with the
 		// other two admin-subscription-override events.
 		if w.analytics != nil {
