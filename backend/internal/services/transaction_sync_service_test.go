@@ -1880,7 +1880,7 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithActivePaddleSubscriptions(ct
 
 // Retention tracking stubs (#930)
 func (m *mockProfileRepoForCursorTests) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) { return "", nil }
-func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error { return nil }
+func (m *mockProfileRepoForCursorTests) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error { return nil }
 func (m *mockProfileRepoForCursorTests) ClearRetentionDates(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice30dSent(ctx context.Context, userID string) error { return nil }
 func (m *mockProfileRepoForCursorTests) SetRetentionNotice7dSent(ctx context.Context, userID string) error { return nil }

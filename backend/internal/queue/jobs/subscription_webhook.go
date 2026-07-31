@@ -42,8 +42,10 @@ type SubscriptionProfileRepository interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
 	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
-	// #930: Retention tracking
-	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
+	// #930: Retention tracking — both dates are computed in Postgres (clock_timestamp() +
+	// make_interval); see ProfileRepository.SetRetentionDates's doc comment (profile_repository.go)
+	// for why a Go-computed date is never passed in.
+	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
 	ClearRetentionDates(ctx context.Context, userID string) error
 	// #898: Dunning — past_due timestamp tracking
 	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
@@ -989,8 +991,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// indefinitely. Release (not Complete) and propagate so River retries the whole webhook;
 	// unlike the past-due grace path, nothing here gates re-entry on subscription_status, so a
 	// retry naturally reaches this write again.
-	now := time.Now()
-	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
+	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, w.retentionMonths); retErr != nil {
 		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
 		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
 	}

@@ -163,7 +163,7 @@ func (m *mockProfileRepo) GetUsersWithActivePaddleSubscriptions(ctx context.Cont
 func (m *mockProfileRepo) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	return "", nil
 }
-func (m *mockProfileRepo) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+func (m *mockProfileRepo) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
 	return nil
 }
 func (m *mockProfileRepo) ClearRetentionDates(ctx context.Context, userID string) error { return nil }

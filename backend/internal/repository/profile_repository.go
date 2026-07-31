@@ -70,8 +70,17 @@ type ProfileRepository interface {
 
 	// Retention tracking methods (#930: 6-month read-only before auto-deletion)
 
-	// SetRetentionDates sets the retention_started_at and retention_expires_at for a user.
-	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
+	// SetRetentionDates (re)starts the GDPR retention clock for a user: retention_started_at and
+	// retention_expires_at are computed entirely in Postgres — clock_timestamp() and
+	// clock_timestamp() + make_interval(months => retentionMonths) — never via Go's
+	// time.Now()/time.Time.AddDate, which disagrees with Postgres's make_interval on month-end
+	// dates (Go normalizes month overflow forward; Postgres clamps to the target month's last day).
+	// This mirrors AdminUserRepository.RemoveUserTierOverride's SQL, which already computed
+	// retention_expires_at this way, so every writer of this column now shares one semantics.
+	// Callers no longer supply startedAt/expiresAt themselves — verified that neither existing
+	// caller (subscription_webhook.go, trial_service.go) used those Go-computed values for anything
+	// besides this one write.
+	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
 
 	// ClearRetentionDates clears all retention tracking fields (called on resubscription).
 	ClearRetentionDates(ctx context.Context, userID string) error
@@ -1522,17 +1531,19 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 	return users, nil
 }
 
-// SetRetentionDates sets the retention_started_at and retention_expires_at for a user.
-// Called when a user's subscription is cancelled or trial expires (#930).
-func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
-	now := time.Now()
+// SetRetentionDates (re)starts the GDPR retention clock for a user: retention_started_at and
+// retention_expires_at are computed entirely in Postgres via clock_timestamp() and
+// clock_timestamp() + make_interval(months => $1) — see this method's doc comment on the
+// ProfileRepository interface for why (Go's AddDate disagrees with Postgres's make_interval on
+// month-end dates). Called when a user's subscription is cancelled or trial expires (#930).
+func (r *profileRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
 	ct, err := r.db.Exec(ctx, `
 		UPDATE users
-		SET retention_started_at = $1,
-		    retention_expires_at = $2,
-		    updated_at = $3
-		WHERE id = $4 AND is_deleted = FALSE`,
-		startedAt, expiresAt, now, userID,
+		SET retention_started_at = clock_timestamp(),
+		    retention_expires_at = clock_timestamp() + make_interval(months => $1::int),
+		    updated_at = clock_timestamp()
+		WHERE id = $2 AND is_deleted = FALSE`,
+		retentionMonths, userID,
 	)
 	if err != nil {
 		return err

@@ -35,8 +35,10 @@ type TrialRepository interface {
 	// GetUsersWithExpiringTrials returns users whose trial ends within N days
 	GetUsersWithExpiringTrials(ctx context.Context, withinDays int) ([]*domain.User, error)
 
-	// SetRetentionDates starts the retention clock (#930)
-	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
+	// SetRetentionDates starts the retention clock (#930) — both dates are computed in Postgres
+	// (clock_timestamp() + make_interval); see ProfileRepository.SetRetentionDates's doc comment
+	// (repository/profile_repository.go) for why a Go-computed date is never passed in.
+	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
 }
 
 // trialExpirationClaimLease is the lease duration requested for ActionTrialExpiration — matches
@@ -330,8 +332,7 @@ func (s *TrialService) ExpireTrial(ctx context.Context, userID string) error {
 	// in profile_repository.go for why the two grace windows are governed by separate columns.
 	// retention's own belt-and-braces repair (GetUsersNeedingRetentionClockRepair) exists
 	// independently as a backstop if this write itself fails.
-	now := time.Now()
-	if retErr := s.repo.SetRetentionDates(ctx, userID, now, now.AddDate(0, s.retentionMonths, 0)); retErr != nil {
+	if retErr := s.repo.SetRetentionDates(ctx, userID, s.retentionMonths); retErr != nil {
 		s.logger.Warn("failed to set retention dates on trial expiry", "user_id", userID, "error", retErr)
 	}
 

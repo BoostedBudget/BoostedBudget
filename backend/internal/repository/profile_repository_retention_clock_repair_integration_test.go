@@ -111,8 +111,15 @@ func TestRetentionClockRepair_Integration_ExcludesUserWithExistingClock(t *testi
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID) })
 
-	existingExpires := time.Now().AddDate(0, 6, 0)
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, time.Now(), existingExpires))
+	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, 6))
+	// Read the persisted value back rather than trusting a Go-computed expectation — SetRetentionDates
+	// now computes retention_expires_at entirely in Postgres (clock_timestamp() + make_interval), so
+	// asserting against a Go time.Now().AddDate(0, 6, 0) value would only coincidentally agree (and
+	// would silently diverge on a month-end run, e.g. the 31st).
+	var existingExpiresPtr *time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT retention_expires_at FROM users WHERE id = $1`, user.ID).Scan(&existingExpiresPtr))
+	require.NotNil(t, existingExpiresPtr, "SetRetentionDates must have written a non-NULL retention_expires_at")
+	existingExpires := *existingExpiresPtr
 
 	candidates, err := repo.GetUsersNeedingRetentionClockRepair(ctx)
 	require.NoError(t, err)

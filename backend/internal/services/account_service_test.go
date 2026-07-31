@@ -513,8 +513,8 @@ func (m *MockUserRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.
 
 // Retention tracking methods (#930)
 
-func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
-	args := m.Called(ctx, userID, startedAt, expiresAt)
+func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+	args := m.Called(ctx, userID, retentionMonths)
 	return args.Error(0)
 }
 
