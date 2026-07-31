@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	paddle "github.com/PaddleHQ/paddle-go-sdk/v4"
 	"github.com/danielgtaylor/huma/v2"
@@ -192,6 +193,8 @@ type GetCurrentSubscriptionOutput struct {
 		TrialDaysRemaining *int   `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
 		CancelAtPeriodEnd  bool   `json:"cancel_at_period_end" doc:"Whether the subscription is scheduled to cancel at end of current period"`
 		ScheduledChangeAt  string `json:"scheduled_change_at,omitempty" doc:"RFC 3339 datetime when the scheduled cancel takes effect" example:"2026-05-01T00:00:00Z"`
+		IsComped           bool   `json:"is_comped" doc:"True when access is granted by an admin comp rather than a paid subscription"`
+		CompEndsAt         string `json:"comp_ends_at,omitempty" doc:"RFC 3339 datetime when complimentary access ends; absent means indefinite"`
 	}
 }
 
@@ -220,6 +223,17 @@ func validateBillingInterval(interval string) error {
 }
 
 // isSubscriptionModifiable checks if a subscription status allows modifications
+//
+// #1413 PinnedRaw: every call site (HandlePreviewSubscriptionUpdate, HandleUpdateSubscription,
+// HandleCancelSubscription) deliberately passes user.SubscriptionStatus (raw), never
+// ComputeEffectiveStatus(). This function answers "is there a real Paddle subscription to
+// mutate" — a comped user with no real subscription must still be rejected here (there is
+// nothing for Paddle to preview/update/cancel), even though their effective status is "active".
+// Passing effective status would turn an honest "No active subscription to update" 400 into a
+// confusing attempt to mutate a Paddle subscription that doesn't exist. See
+// TestHandlePreviewSubscriptionUpdate_CompedUser_NoRealSubscription_Rejected,
+// TestHandleUpdateSubscription_CompedUser_NoRealSubscription_Rejected, and
+// TestHandleCancelSubscription_CompedUser_NoRealSubscription_Rejected for the pin.
 func isSubscriptionModifiable(status string) bool {
 	return status == "active" || status == "trialing"
 }
@@ -256,6 +270,15 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 	}
 
 	// Prevent duplicate subscriptions
+	//
+	// #1413 PinnedRaw: these two checks deliberately read the RAW user.SubscriptionStatus, not
+	// ComputeEffectiveStatus(). A comped user's raw status is whatever their real Paddle
+	// subscription last left it (typically "inactive" or "cancelled") while their EFFECTIVE
+	// status is forced to "active" by the override — if this read effective status, a comped
+	// user could never reach checkout at all, and would be hard-locked out of ever buying a real
+	// subscription the moment the comp lapses (issue #1413 AC 4). See
+	// TestHandleCreateCheckoutSession_CompedUser_RawInactive_AllowedToCheckout /
+	// TestHandleCreateCheckoutSession_CompedUser_RawCancelled_AllowedToCheckout for the pin.
 	if user.SubscriptionStatus == "active" {
 		h.logger.Warn("active user attempted duplicate purchase", "user_id", user.ID, "requested_tier", input.Body.Tier)
 		return nil, huma.Error409Conflict("You already have an active subscription. Use the upgrade flow to change plans.")
@@ -552,7 +575,16 @@ func (h *PaddleCheckoutHandler) checkDowngradeSeatCapacity(ctx context.Context, 
 	// manual_tier_override logic on top of it (same pointer fields, no DB write).
 	simulatedUser := *user
 	simulatedUser.SubscriptionTier = newTier
-	effectiveTier := simulatedUser.ComputeEffectiveTier()
+	// Issue #1413 (this task — tier axis): manual_tier_override is an unconstrained VARCHAR(50)
+	// with no CHECK constraint, so it can hold a value naming no configured tier. Validate it via
+	// isConfiguredOverrideTier (this handler's existing seam, reused rather than adding a third
+	// mechanism) before trusting it, falling back to the simulated RAW tier (newTier) — this is
+	// the site's own doc comment's "clean, no half-applied billing" 500 turned into a clean 409
+	// instead.
+	effectiveTier, overrideValue, hasOverride := simulatedUser.EffectiveTierWithActiveOverride()
+	if hasOverride && h.rejectedOverride(user.ID, overrideValue, "seat-capacity check") {
+		effectiveTier = simulatedUser.SubscriptionTier
+	}
 
 	tier, err := h.tierConfig.GetTier(domain.TierName(effectiveTier))
 	if err != nil {
@@ -691,8 +723,22 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 	h.logger.Info("getting current subscription", "user_id", user.ID, "status", user.SubscriptionStatus)
 
-	// Handle trial users separately
-	if user.SubscriptionStatus == "trial" {
+	// isComped reflects a currently-active admin manual tier override (Issue #1413). A comp
+	// dominates a trial and grants synthetic access when no real Paddle subscription exists,
+	// so it must be computed before the trial/status branches below decide how to respond.
+	//
+	// Round-5 finding: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+	// constraint. Use EffectiveStatusWithActiveOverride (not HasActiveManualOverride alone) and
+	// reject a malformed override the same way GetEffectiveSubscriptionStatusByUserID does on
+	// the access-granting path (profile_repository.go) — this REPRESENTATION path must never
+	// return a synthetic active-comp payload the read-only middleware would then 403 on write.
+	_, overrideValue, isComped := user.EffectiveStatusWithActiveOverride()
+	if isComped && h.rejectedOverride(user.ID, overrideValue, "subscription/current response") {
+		isComped = false
+	}
+
+	// Handle trial users separately — unless a comp is in effect, in which case the comp wins.
+	if user.SubscriptionStatus == "trial" && !isComped {
 		user.ComputeTrialDaysRemaining()
 
 		// Fallback: If TrialEndsAt is nil but status is "trial", compute from CreatedAt + 60 days
@@ -710,7 +756,12 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 
 		out := &GetCurrentSubscriptionOutput{}
 		out.Body.Status = "trial"
-		out.Body.Tier = user.ComputeEffectiveTier()
+		// Issue #1413 (this task — tier axis): this branch is only reached when !isComped (see
+		// the guard above), so isComped/overrideValue already reflect whether the override was
+		// live AND validly-configured — reusing them here (rather than an unvalidated
+		// ComputeEffectiveTier() call) means Tier can never disagree with IsComped about
+		// whether the override in effect is trustworthy.
+		out.Body.Tier = user.SubscriptionTier
 		out.Body.Amount = "0.00"
 		out.Body.Currency = "USD"
 		out.Body.TrialDaysRemaining = user.TrialDaysRemaining
@@ -723,19 +774,20 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		return out, nil
 	}
 
-	// Users without a Paddle subscription (e.g., inactive/never subscribed) get a 404.
+	// Users without a Paddle subscription (e.g., inactive/never subscribed) get a 404 —
+	// unless a comp grants them synthetic access (Issue #1413).
 	// Cancelled and past_due users still have a subscription in Paddle we can fetch.
 	switch user.SubscriptionStatus {
 	case "active", "trialing", "cancelled", "past_due":
 		// proceed to Paddle lookup below
 	default:
-		return nil, huma.Error404NotFound("No subscription found")
+		return h.compedOrNotFound(user, isComped)
 	}
 
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("no Paddle subscription ID for user", "user_id", user.ID, "error", err)
-		return nil, huma.Error404NotFound("No subscription found")
+		return h.compedOrNotFound(user, isComped)
 	}
 
 	subscription, err := h.paddleService.GetSubscription(ctx, subscriptionID)
@@ -748,7 +800,14 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 	out := &GetCurrentSubscriptionOutput{}
 	out.Body.SubscriptionID = subscription.ID
 	out.Body.Status = string(subscription.Status)
-	out.Body.Tier = user.ComputeEffectiveTier()
+	// Issue #1413 (this task — tier axis): reuse isComped/overrideValue (already validated
+	// above) instead of an unvalidated ComputeEffectiveTier() call — a malformed override must
+	// fall back to the raw subscription tier here too, never surface the garbage string.
+	if isComped {
+		out.Body.Tier = overrideValue
+	} else {
+		out.Body.Tier = user.SubscriptionTier
+	}
 	out.Body.BillingInterval = string(subscription.BillingCycle.Interval)
 	if subscription.CurrentBillingPeriod != nil {
 		out.Body.CurrentPeriodEnd = subscription.CurrentBillingPeriod.EndsAt
@@ -762,7 +821,80 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 		out.Body.CancelAtPeriodEnd = true
 		out.Body.ScheduledChangeAt = subscription.ScheduledChange.EffectiveAt
 	}
+	// A comp layered on top of a real Paddle subscription (e.g. past_due/cancelled): billing
+	// truth from Paddle is preserved above unchanged, the comp is only annotated (Issue #1413).
+	out.Body.IsComped = isComped
+	if isComped && user.ManualTierEndsAt != nil {
+		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
+	}
 	return out, nil
+}
+
+// isConfiguredOverrideTier reports whether tierName names a real, currently-configured
+// subscription tier. HandleGetCurrentSubscription uses it so a malformed manual_tier_override
+// can't produce a synthetic active-comp payload — the same rule
+// GetEffectiveSubscriptionStatusByUserID enforces via its injected overrideTierValidator on the
+// access-granting path (profile_repository.go's SetOverrideTierValidator), reused here directly
+// via this handler's own tierConfig rather than a second func(string) bool seam, since this file
+// already validates tier names the same way at every other call site (see e.g. the tierConfig
+// lookups above in getPaddlePriceIDFromConfig/HandleUpdateSubscription).
+//
+// Nil-safe: h.tierConfig is always wired in production (main.go os.Exit(1)s at startup if the
+// tier config fails to load — see SetOverrideTierValidator's doc comment in
+// profile_repository.go for the identical reasoning), so a nil tierConfig only occurs in a
+// handler built without one (e.g. a test that never exercises comp-adjacent code), in which case
+// validation is skipped — permissive, not fail-closed — matching that same nil-safe convention.
+func (h *PaddleCheckoutHandler) isConfiguredOverrideTier(tierName string) bool {
+	if h.tierConfig == nil {
+		return true
+	}
+	_, err := h.tierConfig.GetTier(domain.TierName(tierName))
+	return err == nil
+}
+
+// rejectedOverride reports whether overrideValue fails isConfiguredOverrideTier, logging the
+// shared warning shape when it does. Consolidates the identical "validate, warn, fall back"
+// block that used to be pasted separately in checkDowngradeSeatCapacity (tier axis) and
+// HandleGetCurrentSubscription (status axis) — both call sites already used the exact same
+// isConfiguredOverrideTier check and log message, differing only in which axis the caller resets
+// on rejection, so callerContext is the only thing that still varies between them.
+func (h *PaddleCheckoutHandler) rejectedOverride(userID, overrideValue, callerContext string) bool {
+	if h.isConfiguredOverrideTier(overrideValue) {
+		return false
+	}
+	h.logger.Warn("rejecting manual tier override in "+callerContext+": value does not name a configured tier",
+		"user_id", userID, "manual_tier_override", overrideValue)
+	return true
+}
+
+// compedOrNotFound returns the synthetic comped response when isComped is true, otherwise the
+// standard 404 — the shared outcome for both "no Paddle subscription at all" branches in
+// HandleGetCurrentSubscription (unrecognized status, and a missing PaddleSubscriptionID).
+func (h *PaddleCheckoutHandler) compedOrNotFound(user *domain.User, isComped bool) (*GetCurrentSubscriptionOutput, error) {
+	if isComped {
+		return h.compedSubscriptionResponse(user), nil
+	}
+	return nil, huma.Error404NotFound("No subscription found")
+}
+
+// compedSubscriptionResponse builds the synthetic 200 response for a comped user (Issue
+// #1413) who has no real Paddle subscription to return — i.e. the paths that would
+// otherwise 404. status is reported as "active" (not a new enum value) so existing
+// allow-list consumers keep working; is_comped carries the real signal.
+//
+// next_billing_date, current_period_end, and amount are deliberately left absent/zero: the
+// frontend computes next_billing_date ?? current_period_end, so populating either would
+// render a fake upcoming charge for someone who is not being charged.
+func (h *PaddleCheckoutHandler) compedSubscriptionResponse(user *domain.User) *GetCurrentSubscriptionOutput {
+	out := &GetCurrentSubscriptionOutput{}
+	out.Body.Status = "active"
+	out.Body.Tier = user.ComputeEffectiveTier()
+	out.Body.Currency = "USD"
+	out.Body.IsComped = true
+	if user.ManualTierEndsAt != nil {
+		out.Body.CompEndsAt = user.ManualTierEndsAt.Format(time.RFC3339)
+	}
+	return out
 }
 
 // RegisterPaddleCheckoutRoutes registers Paddle checkout routes with the Huma API.

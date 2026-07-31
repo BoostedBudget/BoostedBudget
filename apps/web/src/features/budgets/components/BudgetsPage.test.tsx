@@ -1,5 +1,4 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
-import { mockNavigate } from '@/test/mocks/react-router'
 import { STORAGE_KEY_LIST_VIEW } from '../constants'
 import type { Budget } from '../types'
 
@@ -53,7 +52,20 @@ mock.module('../hooks/useBudgetFilters', () => ({
 
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { BudgetsPage } from './BudgetsPage'
+
+const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
+
+function renderBudgetsPage() {
+  return render(
+    <MemoryRouter>
+      <LocationProbe />
+      <BudgetsPage />
+    </MemoryRouter>
+  )
+}
 
 describe('BudgetsPage', () => {
   const mockActiveBudget: Budget = {
@@ -141,7 +153,7 @@ describe('BudgetsPage', () => {
     it('renders header immediately during loading and shows skeleton in table', () => {
       localStorage.setItem(STORAGE_KEY_LIST_VIEW, 'table')
       setupMocks({ budgetsLoading: true })
-      const { container } = render(<BudgetsPage />)
+      const { container } = renderBudgetsPage()
       localStorage.removeItem(STORAGE_KEY_LIST_VIEW)
       // Page header renders immediately — no full-page loading block
       expect(screen.getByRole('heading', { level: 1, name: /budgets/i })).toBeInTheDocument()
@@ -154,7 +166,7 @@ describe('BudgetsPage', () => {
 
     it('shows error state when budgets fetch fails', () => {
       setupMocks({ budgetsError: new Error('Failed to fetch budgets') })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByText(/error loading budgets/i)).toBeInTheDocument()
       expect(screen.getByText(/failed to fetch budgets/i)).toBeInTheDocument()
     })
@@ -163,13 +175,13 @@ describe('BudgetsPage', () => {
   describe('Empty States', () => {
     it('shows empty state for budgets when none exist', () => {
       setupMocks({ budgets: [] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByText(/no active budgets/i)).toBeInTheDocument()
     })
 
     it('renders create budget button in empty state', () => {
       setupMocks({ budgets: [] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByText(/create your first budget/i)).toBeInTheDocument()
     })
   })
@@ -177,7 +189,7 @@ describe('BudgetsPage', () => {
   describe('Savings Section Removed', () => {
     it('does not render savings goals section', () => {
       setupMocks({ budgets: [] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.queryByText(/savings goals/i)).toBeNull()
     })
   })
@@ -185,27 +197,27 @@ describe('BudgetsPage', () => {
   describe('Data Display', () => {
     it('renders page header', () => {
       setupMocks()
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByRole('heading', { level: 1, name: /budgets/i })).toBeInTheDocument()
     })
 
     it('renders active budgets in grid', () => {
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByTestId('budget-card-budget-1')).toBeInTheDocument()
       expect(screen.getByText('Monthly Budget')).toBeInTheDocument()
     })
 
     it('renders inactive/past budgets in separate section', () => {
       setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByText(/past budgets/i)).toBeInTheDocument()
       expect(screen.getByTestId('budget-card-budget-2')).toBeInTheDocument()
     })
 
     it('does not render past budgets section when none exist', () => {
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.queryByText(/past budgets/i)).not.toBeInTheDocument()
     })
   })
@@ -214,7 +226,7 @@ describe('BudgetsPage', () => {
     it('opens create budget dialog when header button clicked', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       const createButton = screen.getByRole('button', { name: /create budget/i })
       await user.click(createButton)
       expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -224,7 +236,7 @@ describe('BudgetsPage', () => {
     it('opens create budget dialog when empty state button clicked', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       const emptyStateButton = screen.getByText(/create your first budget/i)
       await user.click(emptyStateButton)
       expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -233,7 +245,7 @@ describe('BudgetsPage', () => {
     it('closes create budget dialog on cancel', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       const createButton = screen.getByRole('button', { name: /create budget/i })
       await user.click(createButton)
       expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -245,7 +257,7 @@ describe('BudgetsPage', () => {
     it.skip('closes dialog and refetches on budget created', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       const createButton = screen.getByRole('button', { name: /create budget/i })
       await user.click(createButton)
       expect(mockRefetchBudgets).toHaveBeenCalled()
@@ -255,7 +267,7 @@ describe('BudgetsPage', () => {
   describe('Header Buttons', () => {
     it('renders create budget button in section header when budgets exist', () => {
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       const createButton = screen.getByRole('button', { name: /create budget/i })
       expect(createButton).toBeInTheDocument()
     })
@@ -264,14 +276,14 @@ describe('BudgetsPage', () => {
   describe('Conditional Header Button Visibility (Issue #460)', () => {
     it('hides Create Budget header button when no active budgets exist', () => {
       setupMocks({ budgets: [], })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByText(/create your first budget/i)).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /^create budget$/i })).not.toBeInTheDocument()
     })
 
     it('shows Create Budget header button when active budgets exist', () => {
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       expect(screen.getByRole('button', { name: /create budget/i })).toBeInTheDocument()
       expect(screen.queryByText(/create your first budget/i)).not.toBeInTheDocument()
     })
@@ -281,7 +293,7 @@ describe('BudgetsPage', () => {
     it('opens delete budget dialog when delete button clicked', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       await user.click(screen.getByTestId('delete-budget-budget-1'))
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: /delete budget/i })).toBeInTheDocument()
@@ -290,7 +302,7 @@ describe('BudgetsPage', () => {
     it('closes delete budget dialog on cancel', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       await user.click(screen.getByTestId('delete-budget-budget-1'))
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: /^cancel$/i }))
@@ -313,7 +325,7 @@ describe('BudgetsPage', () => {
         updateCategory: mockUpdateCategory,
         deleteCategory: mockDeleteCategory,
       })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       await user.click(screen.getByTestId('delete-budget-budget-1'))
       await user.type(screen.getByRole('textbox'), 'Monthly Budget')
       await user.click(screen.getByRole('button', { name: /^delete$/i }))
@@ -336,7 +348,7 @@ describe('BudgetsPage', () => {
         updateCategory: mockUpdateCategory,
         deleteCategory: mockDeleteCategory,
       })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
       await user.click(screen.getByTestId('delete-budget-budget-2'))
       expect(screen.getByRole('alertdialog')).toBeInTheDocument()
       await user.type(screen.getByRole('textbox'), 'Past Budget')
@@ -347,7 +359,7 @@ describe('BudgetsPage', () => {
 
   describe('Table Navigation (Issue #1051)', () => {
     beforeEach(() => {
-      mockNavigate.mockClear()
+      resetLocationProbe()
       localStorage.setItem(STORAGE_KEY_LIST_VIEW, 'table')
     })
 
@@ -358,45 +370,45 @@ describe('BudgetsPage', () => {
     it('clicking the Manage budget button navigates to /budgets/<id>', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
 
       const manageButton = screen.getByRole('button', { name: /manage budget/i })
       await user.click(manageButton)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
+      expect(locationRef.current.pathname).toBe('/budgets/budget-1')
     })
 
     it('clicking a budget row navigates to /budgets/<id>', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
 
       const budgetName = screen.getByText('Monthly Budget')
       await user.click(budgetName)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-1')
+      expect(locationRef.current.pathname).toBe('/budgets/budget-1')
     })
 
     it('inactive budget table also navigates to /budgets/<id>', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
 
       const manageButtons = screen.getAllByRole('button', { name: /manage budget/i })
       await user.click(manageButtons[1])
 
-      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
+      expect(locationRef.current.pathname).toBe('/budgets/budget-2')
     })
 
     it('clicking a row in the inactive budget table navigates to /budgets/<id>', async () => {
       const user = userEvent.setup()
       setupMocks({ budgets: [mockActiveBudget, mockInactiveBudget] })
-      render(<BudgetsPage />)
+      renderBudgetsPage()
 
       const inactiveBudgetName = screen.getByText('Past Budget')
       await user.click(inactiveBudgetName)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/budgets/budget-2')
+      expect(locationRef.current.pathname).toBe('/budgets/budget-2')
     })
   })
 })

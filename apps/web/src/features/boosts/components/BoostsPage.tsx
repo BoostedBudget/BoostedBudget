@@ -1,7 +1,7 @@
 // Issue #1267: Boosts page — unified control center for transfer suggestions + rules management
 // Issue #1300: "Create Boost" button always visible above tabs for discoverability
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { Plus } from 'lucide-react'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'

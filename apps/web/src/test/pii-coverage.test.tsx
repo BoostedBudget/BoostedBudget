@@ -13,9 +13,9 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
-import { render, screen, within, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, within, waitFor, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
@@ -70,6 +70,10 @@ import {
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
+import {
+  mockUseGetAdminUserSubscription,
+  mockUseRemoveAdminUserTierOverride,
+} from '@/test/mocks/admin-subscriptions-api'
 // EChartsChart mock — must be imported before any chart component dynamic imports
 // so that mock.module('@/shared/charts') is registered at load time.
 import '@/test/mocks/shared-charts'
@@ -110,6 +114,7 @@ const { NetWorthSparkline } = await import('@/features/dashboard/components/NetW
 
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
+const { SubscriptionOverrideModal } = await import('@/features/admin/components/SubscriptionOverrideModal')
 
 const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
@@ -1122,6 +1127,80 @@ describe('PII coverage — Round 8: billing components (personal charge surfaces
     // scanForUnmaskedPII on just the charge paragraph covers both text nodes and attributes
     // (aria-label, title, etc.) within that element — stronger than a structural assertion.
     expect(scanForUnmaskedPII(chargePara!, [])).toEqual([])
+  })
+})
+
+describe('PII coverage — SubscriptionOverrideModal (G7 Fix 7)', () => {
+  // The modal was absent from this centralized sweep entirely, and the Remove Override
+  // confirmation dialog's email had no masking assertion anywhere — both data-ph-mask
+  // placements are already correct in source; this section is coverage, not a behavior fix.
+  const adminSubDetail = {
+    base_tier: 'premium',
+    effective_tier: 'household_4',
+    effective_status: 'active',
+    subscription_status: 'active',
+    manual_tier_override: 'household_4',
+    manual_tier_ends_at: null,
+    limits: { transaction_history_days: 730 },
+    features: { api_access: true },
+  }
+
+  beforeEach(() => {
+    cleanup()
+    mockUseGetAdminUserSubscription.mockReturnValue({ isLoading: false, data: adminSubDetail })
+    mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: mock(() => {}), isPending: false })
+  })
+
+  test('masks the target user email in the main modal (DialogDescription)', async () => {
+    render(
+      <SubscriptionOverrideModal userId="u1" userEmail={SENTINEL_EMAIL} open={true} onClose={() => {}} />,
+      { wrapper: createWrapper() },
+    )
+    const sentinels: PIISentinel[] = [
+      { value: SENTINEL_EMAIL, fieldDescription: 'admin override modal target user email (DialogDescription)' },
+    ]
+    await waitForSentinels(sentinels)
+    // Scoped to the DialogDescription element itself (id="sub-override-desc"): the modal's own
+    // "New Tier" <select> statically enumerates every configured tier's display label —
+    // including parenthetical seat counts like "Household (4)" — regardless of which tier is
+    // selected, which the scanner's currency regex false-flags (a bracketed number reads like a
+    // parenthesized negative amount). That's unrelated to email masking, so scan only the
+    // element under test rather than the whole document.
+    const description = document.getElementById('sub-override-desc')
+    expect(description).not.toBeNull()
+    expect(scanForUnmaskedPII(description as HTMLElement, sentinels)).toEqual([])
+  })
+
+  test('masks the target user email in the Remove Override confirmation dialog', async () => {
+    // Use a tier with no parenthetical seat count (Premium, not a household_N tier) so the
+    // confirmation copy itself ("This will remove the Premium override...") doesn't trip the
+    // scanner's currency-regex false positive on "(4)" — same false-positive source as above,
+    // orthogonal to what this test actually verifies (email masking).
+    mockUseGetAdminUserSubscription.mockReturnValue({
+      isLoading: false,
+      data: { ...adminSubDetail, base_tier: 'premium', effective_tier: 'premium', manual_tier_override: 'premium' },
+    })
+    render(
+      <SubscriptionOverrideModal userId="u1" userEmail={SENTINEL_EMAIL} open={true} onClose={() => {}} />,
+      { wrapper: createWrapper() },
+    )
+    await waitForSentinels([
+      { value: SENTINEL_EMAIL, fieldDescription: 'admin override modal target user email' },
+    ])
+
+    fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), { target: { value: 'No longer needed' } })
+    fireEvent.click(screen.getByRole('button', { name: /remove override/i }))
+    const alertDialog = await screen.findByRole('alertdialog')
+
+    const sentinels: PIISentinel[] = [
+      {
+        value: SENTINEL_EMAIL,
+        fieldDescription: 'admin override modal target user email (ConfirmationDialog description)',
+      },
+    ]
+    // Scoped to the alertdialog itself — the main modal (still mounted behind it, per G7 Fix 8a)
+    // carries the same statically-enumerated tier <select> noted above.
+    expect(scanForUnmaskedPII(alertDialog, sentinels)).toEqual([])
   })
 })
 

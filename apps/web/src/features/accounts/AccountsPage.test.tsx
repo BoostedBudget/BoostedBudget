@@ -14,7 +14,8 @@
 
 import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ============================================================================
@@ -148,11 +149,11 @@ import {
   mockUseExchangePublicToken,
   mockExchangePublicTokenMutateAsync,
 } from '@/test/mocks/plaid-api'
-import { mockNavigate } from '@/test/mocks/react-router'
-
 // ============================================================================
 // Test helper
 // ============================================================================
+
+const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
 
 function renderAccountsPage() {
   return render(
@@ -167,6 +168,7 @@ function renderAccountsPage() {
       }
     >
       <MemoryRouter>
+        <LocationProbe />
         <AccountsPage />
       </MemoryRouter>
     </QueryClientProvider>
@@ -190,7 +192,7 @@ const mockUser = {
 describe('AccountsPage', () => {
   beforeEach(() => {
     // Clear all mock call history
-    mockNavigate.mockClear()
+    resetLocationProbe()
     mockUseGetAccounts.mockClear()
     mockUseDeleteAccount.mockClear()
     mockUseGetUserProfile.mockClear()
@@ -444,7 +446,7 @@ describe('AccountsPage', () => {
       const row = screen.getByTestId('table-row')
       fireEvent.click(row)
 
-      expect(mockNavigate).toHaveBeenCalledWith('/accounts/acc-1')
+      expect(locationRef.current.pathname).toBe('/accounts/acc-1')
     })
   })
 

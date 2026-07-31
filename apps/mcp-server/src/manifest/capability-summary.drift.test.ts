@@ -10,8 +10,8 @@
  * the marketing page's numbers wrong.
  *
  * Known values at the time this page shipped (verified against the manifest,
- * not trusted from the issue brief): 192 total, 133 allowed, 87 read, 46 write,
- * 59 excluded, 9 destructive writes. Asserted as documentation below — expect
+ * not trusted from the issue brief): 193 total, 133 allowed, 87 read, 46 write,
+ * 60 excluded, 9 destructive writes. Asserted as documentation below — expect
  * this test (not those literals) to be the source of truth as the manifest grows.
  */
 
@@ -72,11 +72,11 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
   it('documents the known baseline values (informational — the drift check above is authoritative)', () => {
     const fresh = computeCapabilitySummary(readSpecIndex())
 
-    expect(fresh.totalOperations).toBe(192)
+    expect(fresh.totalOperations).toBe(193)
     expect(fresh.allowedOperations).toBe(133)
     expect(fresh.readOperations).toBe(87)
     expect(fresh.writeOperations).toBe(46)
-    expect(fresh.excludedOperations).toBe(59)
+    expect(fresh.excludedOperations).toBe(60)
     expect(fresh.destructiveWriteOperations).toBe(9)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

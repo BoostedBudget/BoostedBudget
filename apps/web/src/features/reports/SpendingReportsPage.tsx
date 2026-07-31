@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { BarChart3, Eye, EyeOff } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { DateRangePicker } from '@/shared/dates/DateRangePicker'

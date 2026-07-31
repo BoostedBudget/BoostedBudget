@@ -33,14 +33,44 @@ type AdminSubscriptionTierOutput struct {
 	}
 }
 
+// AdminRemoveTierOverrideInput is the request body for clearing a user's manual tier override.
+type AdminRemoveTierOverrideInput struct {
+	inputs.AdminAuthenticatedInput
+	UserID string `path:"user_id" doc:"ID of the user whose manual tier override should be cleared"`
+	Body   struct {
+		Reason string `json:"reason" required:"true" minLength:"1" doc:"Reason for removing the manual tier override"`
+	}
+}
+
+// AdminRemoveTierOverrideOutput is the response body for clearing a user's manual tier override.
+type AdminRemoveTierOverrideOutput struct {
+	Body struct {
+		Message        string `json:"message"`
+		Removed        bool   `json:"removed"`
+		RevertedTier   string `json:"reverted_tier"`
+		RevertedStatus string `json:"reverted_status"`
+	}
+}
+
 // AdminSubscriptionDetailOutput represents the detailed subscription state for an admin to view
 type AdminSubscriptionDetailOutput struct {
 	Body struct {
-		BaseTier             string                            `json:"base_tier"`
-		SubscriptionStatus   string                            `json:"subscription_status"`
-		EffectiveTier        string                            `json:"effective_tier"`
-		ManualTierOverride   *string                           `json:"manual_tier_override,omitempty"`
-		ManualTierEndsAt     *time.Time                        `json:"manual_tier_ends_at,omitempty"`
+		BaseTier           string `json:"base_tier"`
+		SubscriptionStatus string `json:"subscription_status"`
+		EffectiveTier      string `json:"effective_tier"`
+		// EffectiveStatus is the server-computed effective subscription status (Issue #1413) —
+		// admins need both raw (SubscriptionStatus) and effective, since a live manual tier
+		// override forces access to "active" regardless of the stale raw status.
+		EffectiveStatus    string     `json:"effective_status"`
+		ManualTierOverride *string    `json:"manual_tier_override,omitempty"`
+		ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty"`
+		// DeletionRequestedAt/DeletionScheduledAt surface a pending GDPR account deletion (Issue
+		// #1413 AC 10) so the admin override modal can warn that a comp will NOT cancel a
+		// deletion already in progress — the deletion path is deliberately left untouched by a
+		// comp. Absent (omitempty) means no pending deletion. Mirrors
+		// domain.AdminUserListItem's identically-named/tagged fields.
+		DeletionRequestedAt  *time.Time                        `json:"deletion_requested_at,omitempty"`
+		DeletionScheduledAt  *time.Time                        `json:"deletion_scheduled_at,omitempty"`
 		Limits               domain.SubscriptionLimits         `json:"limits"`
 		Features             domain.SubscriptionFeatures       `json:"features"`
 		ActiveOverridesCount int                               `json:"active_overrides_count"`
@@ -56,16 +86,17 @@ type AdminSubscriptionDetailInput struct {
 
 // UpdateUserTier manually overrides a user's subscription tier. Requires admin privileges.
 //
+// input.UserID is the struct's own path-bound field, which SHADOWS the field promoted from
+// AdminAuthenticatedInput -> AuthenticatedInput at the top level. So:
+//
+//	input.UserID                          -> the TARGET user (path param)
+//	input.AdminAuthenticatedInput.UserID  -> the ACTING ADMIN (resolved from JWT/context)
+//
 // PUT /api/v1/admin/users/{user_id}/subscription/tier
 func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscriptionTierInput) (*AdminSubscriptionTierOutput, error) {
-	clerkUserID, ok := ctx.Value(inputs.ClerkUserIDKey).(string)
-	if !ok || clerkUserID == "" {
-		return nil, huma.Error401Unauthorized("unauthorized: missing clerk user id")
-	}
-
-	err := h.adminUserService.UpdateUserTier(
+	result, err := h.adminUserService.UpdateUserTier(
 		ctx,
-		clerkUserID,
+		input.AdminAuthenticatedInput.UserID,
 		input.UserID,
 		input.Body.Tier,
 		input.Body.Reason,
@@ -76,11 +107,52 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 		if errors.Is(err, services.ErrAdminUserNotFound) {
 			return nil, huma.Error404NotFound("user not found")
 		}
+		if errors.Is(err, services.ErrInvalidTierOverride) {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
 		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to update user tier: %w", err))
 	}
 
 	resp := &AdminSubscriptionTierOutput{}
 	resp.Body.Message = "User subscription tier updated successfully"
+	if result.Warning != "" {
+		resp.Body.Message += " " + result.Warning
+	}
+	return resp, nil
+}
+
+// RemoveUserTierOverride clears a user's manual subscription tier override, restoring their
+// raw (non-overridden) tier and status. Requires admin privileges.
+//
+// Idempotent: calling this on a user with no existing override returns 200 with
+// removed=false rather than an error — two admins clicking at once must not give the loser
+// an error, and 404 is already taken by "user not found".
+//
+// POST /api/v1/admin/users/{user_id}/subscription/tier/clear
+func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminRemoveTierOverrideInput) (*AdminRemoveTierOverrideOutput, error) {
+	// input.UserID is the struct's own path-bound field, which SHADOWS the field promoted from
+	// AdminAuthenticatedInput -> AuthenticatedInput at the top level. So:
+	//   input.UserID                          -> the TARGET user (path param)
+	//   input.AdminAuthenticatedInput.UserID  -> the ACTING ADMIN (resolved from JWT/context)
+	result, err := h.adminUserService.RemoveUserTierOverride(
+		ctx,
+		input.AdminAuthenticatedInput.UserID,
+		input.UserID,
+		input.Body.Reason,
+	)
+
+	if err != nil {
+		if errors.Is(err, services.ErrAdminUserNotFound) {
+			return nil, huma.Error404NotFound("user not found")
+		}
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to remove user tier override: %w", err))
+	}
+
+	resp := &AdminRemoveTierOverrideOutput{}
+	resp.Body.Message = "Manual tier override removed successfully"
+	resp.Body.Removed = result.Removed
+	resp.Body.RevertedTier = result.RevertedTier
+	resp.Body.RevertedStatus = result.RevertedStatus
 	return resp, nil
 }
 
@@ -130,8 +202,15 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	resp.Body.BaseTier = detail.SubscriptionTier
 	resp.Body.SubscriptionStatus = detail.SubscriptionStatus
 	resp.Body.EffectiveTier = string(effectiveSub.Tier)
+	// EffectiveStatus is already computed by AdminUserService.GetUserDetail (enrichAdminUser) —
+	// the single source of truth for override-liveness — so it is surfaced directly rather than
+	// recomputed here.
+	resp.Body.EffectiveStatus = detail.EffectiveStatus
 	resp.Body.ManualTierOverride = detail.ManualTierOverride
 	resp.Body.ManualTierEndsAt = detail.ManualTierEndsAt
+	// Sourced from the same detail already loaded above — no second query (Issue #1413 AC 10).
+	resp.Body.DeletionRequestedAt = detail.DeletionRequestedAt
+	resp.Body.DeletionScheduledAt = detail.DeletionScheduledAt
 	resp.Body.Limits = effectiveSub.Limits
 	resp.Body.Features = effectiveSub.Features
 	resp.Body.ActiveOverridesCount = effectiveSub.ActiveOverridesCount
@@ -199,6 +278,22 @@ func RegisterAdminSubscriptionsOperations(api huma.API, handler *AdminHandler) {
 			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
 		},
 	}, handler.UpdateUserTier)
+
+	// POST /api/v1/admin/users/{user_id}/subscription/tier/clear
+	huma.Register(api, huma.Operation{
+		OperationID: "remove-admin-user-tier-override",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/admin/users/{user_id}/subscription/tier/clear",
+		Summary:     "Remove manual subscription tier override",
+		Description: "Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.",
+		Tags:        []string{"Admin Subscriptions"},
+		Security: []map[string][]string{
+			{"clerk": {}},
+		},
+		Middlewares: huma.Middlewares{
+			humamiddleware.NewAdminMiddleware(handler.config, handler.adminService),
+		},
+	}, handler.RemoveUserTierOverride)
 
 	// GET /api/v1/admin/users/{user_id}/subscription
 	huma.Register(api, huma.Operation{

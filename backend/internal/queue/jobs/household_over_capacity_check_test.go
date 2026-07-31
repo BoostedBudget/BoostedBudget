@@ -238,6 +238,79 @@ func TestHouseholdOverCapacityCheck_WithinCapacity_InGrace_Cleared(t *testing.T)
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
 }
 
+// TestHouseholdOverCapacityCheck_OwnerMalformedOverride_TopOfFunctionRead_FallsBackToRawTier is
+// the RED test for Issue #1413 (this task — tier axis) at the top-of-function tier lookup
+// (Case 2, within-capacity): manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint, so it can hold a value naming no configured tier. Before this fix, a malformed
+// override reached w.tierConfig.GetTier(owner.ComputeEffectiveTier()) as an unrecognized name
+// and errored the ENTIRE daily run for this household (surfaced as a job-queue failure, not a
+// clean HTTP error, since this is a background worker) — it must instead fall back to the
+// owner's raw tier.
+func TestHouseholdOverCapacityCheck_OwnerMalformedOverride_TopOfFunctionRead_FallsBackToRawTier(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-2 * 24 * time.Hour)
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths", OverCapacitySince: &graceStart}
+	futureEnd := time.Now().Add(24 * time.Hour)
+	override := "not-a-real-tier"
+	owner := &domain.User{
+		ID: "owner-1", SubscriptionTier: "household_5", SubscriptionStatus: "active", // raw tier: 5 seats
+		ManualTierOverride: &override, ManualTierEndsAt: &futureEnd, // garbage — no CHECK constraint stops this
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(3, nil) // within owner's RAW 5-seat tier
+	mockRepo.On("ClearOverCapacity", ctx, "hh-1").Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a malformed owner override must not error tier resolution for the whole daily run")
+	mockRepo.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_OwnerMalformedOverride_FreshRecheckRead_FallsBackToRawTier is
+// the RED test for Issue #1413 (this task — tier axis) at the FRESH re-check tier lookup (only
+// reached once the top-of-function read already determined the household is over its raw-tier
+// seat count, per processHousehold's own staleness-guard comment) — the second, independent
+// site sharing the identical bug pattern as the top-of-function read above.
+func TestHouseholdOverCapacityCheck_OwnerMalformedOverride_FreshRecheckRead_FallsBackToRawTier(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	futureEnd := time.Now().Add(24 * time.Hour)
+	override := "not-a-real-tier"
+	owner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active", // raw tier: 2 seats
+		ManualTierOverride: &override, ManualTierEndsAt: &futureEnd,
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	// Reused for BOTH the top-of-function read and the fresh re-check read — mock.On without
+	// .Once() matches any number of calls (see TestHouseholdOverCapacityCheck_OverCapacity_
+	// NotYetFlagged_SetsOverCapacityAndSendsStartNoticeSameRun's identical convention).
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(owner, nil)
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(3, nil) // 3 > 2 seats (owner's RAW tier)
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(hh, nil)
+	mockRepo.On("SetOverCapacity", ctx, "hh-1", mock.AnythingOfType("time.Time")).Return(time.Now(), nil)
+	mockEmailSvc.On("SendHouseholdOverCapacityNotice", ctx, "owner@example.com", "The Smiths", 3, 2, mock.AnythingOfType("time.Time")).Return(nil)
+	mockRepo.On("MarkOverCapacityStartNoticeSent", ctx, "hh-1", mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err, "a malformed owner override must not error the fresh re-check's tier resolution")
+	mockRepo.AssertExpectations(t)
+	mockEmailSvc.AssertExpectations(t)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+}
+
 // TestHouseholdOverCapacityCheck_AlreadyResolved_NoOp proves a household that's
 // neither over capacity nor in grace triggers NO repository writes and NO emails at
 // all — the empirical "proves exactly what it claims" test for the no-op path.
@@ -441,6 +514,119 @@ func TestHouseholdOverCapacityCheck_OwnerGoesReadOnlyBetweenChecks_AlreadyFlagge
 	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
 }
 
+// ─── #1413 — comped owner must not be treated as read-only by either read ────
+
+// TestHouseholdOverCapacityCheck_CompedOwnerRawInactive_TopOfFunctionRead_DoesNotClearGrace
+// proves the fix at the TOP-of-function read-only check (Case 1): a comped owner whose
+// REAL subscription has lapsed (raw "inactive") must not be treated as read-only just
+// because of that raw status — the comp keeps them effectively active, so this household's
+// legitimate in-progress grace period must NOT be cleared. Isolated from the FRESH
+// re-check (the other site this task changes): the second GetUserByID call here returns a
+// genuinely raw-active owner (no comp involved), so that second check's own correctness
+// cannot affect this test's outcome either way — only the TOP read's fix can. Proven via
+// mockUserRepo.GetUserByID being called TWICE (i.e. execution passed Case 1's gate to reach
+// the fresh re-check at all) and ClearOverCapacity never being called.
+func TestHouseholdOverCapacityCheck_CompedOwnerRawInactive_TopOfFunctionRead_DoesNotClearGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-5 * 24 * time.Hour)      // 5 days into the 14-day grace window
+	startNoticeSent := time.Now().Add(-5 * 24 * time.Hour) // already sent -> no further notice fires
+	hh := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &startNoticeSent,
+	}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	// TOP read: comped owner, raw subscription lapsed. Exercises the site under test.
+	compedTopOwner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "premium", SubscriptionStatus: "inactive",
+		ManualTierOverride: stringPtr("household_2"), ManualTierEndsAt: &futureEnd, // comp, still active -- 2 seats
+	}
+	// FRESH re-check read: genuinely active, uncomped -- deliberately NOT exercising the
+	// fresh re-check's own status logic, so this test is isolated to the TOP read alone.
+	genuinelyActiveFreshOwner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active",
+	}
+	freshHousehold := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &startNoticeSent,
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(compedTopOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(genuinelyActiveFreshOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats, both reads
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(freshHousehold, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	// execution must pass Case 1's gate (comped owner is not read-only) to reach the
+	// fresh re-check at all -- otherwise GetUserByID would only be called once.
+	mockUserRepo.AssertNumberOfCalls(t, "GetUserByID", 2)
+	// a comped owner's raw-inactive status must not incorrectly clear an in-progress
+	// grace period.
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
+// TestHouseholdOverCapacityCheck_CompedOwnerRawInactive_FreshRecheckRead_DoesNotClearGrace
+// is the mirror image, isolating the FRESH re-check (the second read-only gate, added by
+// Round 5): the TOP-of-function read here is a genuinely raw-active owner (no comp), so
+// Case 1's own correctness cannot affect this test's outcome — only the fresh re-check's
+// fix can. The comped, raw-inactive owner is returned only on the SECOND GetUserByID call.
+func TestHouseholdOverCapacityCheck_CompedOwnerRawInactive_FreshRecheckRead_DoesNotClearGrace(t *testing.T) {
+	ctx := context.Background()
+	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
+
+	graceStart := time.Now().Add(-5 * 24 * time.Hour)
+	startNoticeSent := time.Now().Add(-5 * 24 * time.Hour)
+	hh := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &startNoticeSent,
+	}
+	// TOP read: genuinely active, uncomped -- Case 1 always passes here regardless of the
+	// top-read fix, isolating this test away from that site.
+	genuinelyActiveTopOwner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active",
+	}
+	futureEnd := time.Now().Add(30 * 24 * time.Hour)
+	// FRESH re-check read: comped owner, raw subscription lapsed. Exercises the site under test.
+	compedFreshOwner := &domain.User{
+		ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "premium", SubscriptionStatus: "inactive",
+		ManualTierOverride: stringPtr("household_2"), ManualTierEndsAt: &futureEnd,
+	}
+	freshHousehold := &domain.Household{
+		ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths",
+		OverCapacitySince: &graceStart, OverCapacityStartNoticeSentAt: &startNoticeSent,
+	}
+
+	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(genuinelyActiveTopOwner, nil).Once()
+	mockUserRepo.On("GetUserByID", ctx, "owner-1").Return(compedFreshOwner, nil).Once()
+	mockRepo.On("CountActiveMembers", ctx, "hh-1").Return(4, nil) // 4 > 2 seats, both reads
+	mockRepo.On("GetHouseholdByID", ctx, "hh-1").Return(freshHousehold, nil)
+
+	job := newTestHouseholdOverCapacityCheckJob(HouseholdOverCapacityCheckArgs{TriggerSource: "periodic"})
+	err := worker.Work(ctx, job)
+
+	require.NoError(t, err)
+	mockUserRepo.AssertExpectations(t)
+	mockUserRepo.AssertNumberOfCalls(t, "GetUserByID", 2)
+	// a comped owner's raw-inactive status must not incorrectly clear an in-progress
+	// grace period at the fresh re-check either.
+	mockRepo.AssertNotCalled(t, "ClearOverCapacity", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SetOverCapacity", mock.Anything, mock.Anything, mock.Anything)
+	mockOffboardSvc.AssertNotCalled(t, "OffboardExcessMembers")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityNotice")
+	mockEmailSvc.AssertNotCalled(t, "SendHouseholdOverCapacityWarning")
+}
+
 // TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_NotYetFlagged_SkipsSetOverCapacity
 // proves the Round 5 Gap Analysis follow-up fix (Codex Medium finding on the initial
 // fresh re-check): the re-check must recompute seat limit from the FRESH owner read,
@@ -452,8 +638,8 @@ func TestHouseholdOverCapacityCheck_OwnerUpgradesTierBetweenChecks_NotYetFlagged
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
 
-	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
-	staleOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}   // 2 seats
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                         // not yet flagged
+	staleOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"}    // 2 seats
 	upgradedOwner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_5", SubscriptionStatus: "active"} // 5 seats
 
 	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
@@ -517,7 +703,7 @@ func TestHouseholdOverCapacityCheck_ActiveCountDropsBetweenChecks_NotYetFlagged_
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
 
-	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
 	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
 
 	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
@@ -583,7 +769,7 @@ func TestHouseholdOverCapacityCheck_ActiveCountChangesButStillOverCapacity_Notic
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
 
-	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"} // not yet flagged
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Smiths"}                                                 // not yet flagged
 	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
 
 	mockRepo.On("ListHouseholdsWithMembers", ctx).Return([]*domain.Household{hh}, nil)
@@ -694,7 +880,7 @@ func TestHouseholdOverCapacityCheck_StaleNameFromScan_NoticeUsesFreshName(t *tes
 	ctx := context.Background()
 	worker, mockRepo, mockUserRepo, mockOffboardSvc, mockEmailSvc := setupOverCapacityCheckWorkerTest(t)
 
-	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Old Name"} // not yet flagged, stale name
+	hh := &domain.Household{ID: "hh-1", OwnerUserID: "owner-1", Name: "The Old Name"}                                               // not yet flagged, stale name
 	owner := &domain.User{ID: "owner-1", Email: "owner@example.com", SubscriptionTier: "household_2", SubscriptionStatus: "active"} // 2 seats
 
 	// Fresh database row: the owner renamed the household while it waited its turn in the scan.

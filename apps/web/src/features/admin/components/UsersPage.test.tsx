@@ -6,9 +6,9 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router'
 import { mockUseListAdminUsers } from '@/test/mocks/admin-api'
 import { UsersPage } from './UsersPage'
 
@@ -165,18 +165,36 @@ describe('UsersPage', () => {
     })
 
     it('should display tier using override-aware logic', () => {
+      // G7.4: the previous fixture had both rows independently render "Premium" — one via
+      // subscription_tier, one via manual_tier_override — so `getAllByText('Premium').length > 0`
+      // passed under override-AWARE logic (using manual_tier_override) and would have passed
+      // just as well under override-BLIND logic (using subscription_tier alone), since it never
+      // checked which source produced the badge. This fixture gives the override a DIFFERENT
+      // tier than subscription_tier so the two logics diverge and only the correct one passes.
+      const usersWithDivergentOverride = [
+        {
+          ...mockUsers[0],
+          subscription_tier: 'household_2',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: null,
+        },
+      ]
+
       mockUseListAdminUsers.mockReturnValue({
-        data: mockListResponse,
+        data: { ...mockListResponse, users: usersWithDivergentOverride, total_count: 1 },
         isLoading: false,
         error: null,
       })
 
       render(<UsersPage />, { wrapper: createWrapper() })
 
-      // user-2 has manual_tier_override='premium', so tier badge should show 'Premium'
-      // user-1 has no override, shows 'Premium' from subscription_tier
-      const tierBadges = screen.getAllByText('Premium')
-      expect(tierBadges.length).toBeGreaterThan(0)
+      // Scoped to the table: the tier filter dropdown also has a "Premium" <option>, which
+      // getByText('Premium') would otherwise ambiguously match too.
+      const table = screen.getByRole('table')
+      // Override-aware: shows the live override tier (Premium), never the raw subscription_tier
+      // (Household 2) it's overriding.
+      expect(within(table).getByText('Premium')).toBeInTheDocument()
+      expect(within(table).queryByText('Household 2')).not.toBeInTheDocument()
     })
 
     it('should show "—" in override status column when no override', () => {
@@ -238,6 +256,237 @@ describe('UsersPage', () => {
       render(<UsersPage />, { wrapper: createWrapper() })
 
       expect(screen.getByText('Expired')).toBeInTheDocument()
+    })
+
+    it('should NOT show an expired override tier as the effective tier (falls back to base tier)', () => {
+      // Issue #1413 Fix 1: an expired comp must not still read as the user's tier — the
+      // "Override Status" column already (correctly) says "Expired" right next to it.
+      const usersWithExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: {
+          ...mockListResponse,
+          users: usersWithExpiredOverride,
+          total_count: 1,
+        },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // Falls back to the base subscription_tier, not the expired 'premium' override.
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+    })
+  })
+
+  describe('Comped chip (Fix 2)', () => {
+    it('renders a "Comped" chip when an override is live', () => {
+      const usersWithLiveOverride = [
+        {
+          ...mockUsers[1],
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithLiveOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      const chip = screen.getByText('Comped')
+      expect(chip).toBeInTheDocument()
+      // Fix 2: state must not be conveyed by colour alone.
+      expect(chip).toHaveAttribute('aria-label', 'Effective status: active (manual override)')
+    })
+
+    it('does not render a "Comped" chip when the override has expired', () => {
+      const usersWithExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_status: 'inactive',
+          manual_tier_override: 'premium',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithExpiredOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+    })
+
+    it('does not render a "Comped" chip when there is no override', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: [mockUsers[0]], total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+    })
+  })
+
+  describe('Comped chip vs real active status (Issue #1413 M10)', () => {
+    it('does NOT show a Comped chip or the override tier when the user\'s own subscription is genuinely active and the override has expired', () => {
+      // The bug: effective_status is 'active' here because the user's OWN subscription is
+      // active — not because of the (expired) override. Deriving comp state from
+      // effective_status alone would show this user as still comped at the override tier.
+      const usersWithRealActiveAndExpiredOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'active',
+          effective_status: 'active',
+          manual_tier_override: 'household_5',
+          manual_tier_ends_at: '2020-01-01T00:00:00Z',
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithRealActiveAndExpiredOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+      expect(screen.queryByText('Household 5+')).not.toBeInTheDocument()
+    })
+
+    it('still shows the Comped chip and override tier when the override is live, even though the user\'s own subscription is genuinely active', () => {
+      const usersWithRealActiveAndLiveOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'active',
+          effective_status: 'active',
+          manual_tier_override: 'household_5',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithRealActiveAndLiveOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Comped')).toBeInTheDocument()
+      expect(screen.getByText('Household 5+')).toBeInTheDocument()
+    })
+  })
+
+  describe('Malformed override tier-name validation (Issue #1413, this task)', () => {
+    it('does not show a Comped chip or the garbage override string for an override naming no configured tier', () => {
+      // manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint on the
+      // backend, so it can hold a value naming no configured tier. isOverrideActive must reject
+      // it just like the backend's ComputeEffectiveTier()/ComputeEffectiveStatus() do — before
+      // this fix, isOverrideActive only checked liveness (non-empty + not expired), so this row
+      // would render "not_a_tier" as the Tier badge and show "Comped" for a user with zero
+      // actual write access.
+      const usersWithMalformedOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'household_2',
+          subscription_status: 'inactive',
+          manual_tier_override: 'not_a_tier',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithMalformedOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.queryByText('Comped')).not.toBeInTheDocument()
+      expect(screen.getByText('Household 2')).toBeInTheDocument()
+      expect(screen.queryByText('not_a_tier')).not.toBeInTheDocument()
+    })
+
+    it('still shows the Comped chip and override tier for a validly-configured override (positive control)', () => {
+      // A valid override must still resolve to the override tier — an over-tight fix that
+      // rejects every override (not just malformed ones) would silently un-comp every
+      // legitimately comped user in the admin UI, which is worse than the bug being fixed.
+      const usersWithValidOverride = [
+        {
+          ...mockUsers[1],
+          subscription_tier: 'premium',
+          subscription_status: 'inactive',
+          manual_tier_override: 'household_3',
+          manual_tier_ends_at: null,
+        },
+      ]
+
+      mockUseListAdminUsers.mockReturnValue({
+        data: { ...mockListResponse, users: usersWithValidOverride, total_count: 1 },
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      expect(screen.getByText('Comped')).toBeInTheDocument()
+      expect(screen.getByText('Household 3')).toBeInTheDocument()
+    })
+  })
+
+  describe('Status column regression', () => {
+    it('still renders the raw subscription_status text', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      // mockUsers[0] is 'active', mockUsers[1] is 'trial' — both raw, unmodified.
+      expect(screen.getByText('active')).toBeInTheDocument()
+      expect(screen.getByText('trial')).toBeInTheDocument()
+    })
+
+    it('still sorts on the subscription_status column id', () => {
+      mockUseListAdminUsers.mockReturnValue({
+        data: mockListResponse,
+        isLoading: false,
+        error: null,
+      })
+
+      render(<UsersPage />, { wrapper: createWrapper() })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Status' }))
+
+      expect(mockUseListAdminUsers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort_by: 'subscription_status', sort_dir: 'asc' })
+      )
     })
   })
 

@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { CategorizationRule } from '../types'
 import { AutoCategorizationPage } from './AutoCategorizationPage'

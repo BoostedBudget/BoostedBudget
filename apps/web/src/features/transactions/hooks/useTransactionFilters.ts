@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { getDateRange, inferPreset } from '@/shared/dates'
 import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState, serializeSortParam } from '@/shared/hooks/useSortUrlState'

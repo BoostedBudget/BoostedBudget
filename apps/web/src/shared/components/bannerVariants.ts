@@ -32,12 +32,12 @@ export const bannerVariants = cva(
 export type BannerVariants = VariantProps<typeof bannerVariants>
 
 /**
- * Shared CTA styling for the "warning" banner's action link/button — used
- * identically by `SubscriptionStatusBanner` (past_due "Update payment
- * method") and `HouseholdOverCapacityBanner` ("Manage household"). Only a
- * `warning` variant exists today because that's the one genuinely
- * duplicated across features; add more variants only when another banner
- * needs an identical (not merely similar) CTA treatment.
+ * Shared CTA styling for banner action links/buttons — used identically by
+ * `SubscriptionStatusBanner` (past_due "Update payment method", inactive
+ * "Resubscribe") and `HouseholdOverCapacityBanner` ("Manage household").
+ * Variants exist only for tones genuinely duplicated across call sites; add
+ * more only when another banner needs an identical (not merely similar) CTA
+ * treatment.
  */
 export const bannerCtaVariants = cva(
   'shrink-0 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors',
@@ -45,6 +45,7 @@ export const bannerCtaVariants = cva(
     variants: {
       variant: {
         warning: 'bg-warning text-warning-foreground hover:bg-warning/90',
+        primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
       },
     },
   }

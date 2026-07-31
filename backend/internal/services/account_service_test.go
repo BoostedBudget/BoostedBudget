@@ -236,6 +236,13 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 	return args.Error(0)
 }
 
+// MarkItemsDisconnected (Issue #1413 H2) is not exercised by these account-service tests;
+// stubbed to satisfy the widened LinkedItemRepository interface.
+func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)
 	return args.Error(0)
@@ -452,9 +459,9 @@ func (m *MockUserRepository) GetUsersScheduledForDeletion(ctx context.Context) (
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string) error {
-	args := m.Called(ctx, userID)
-	return args.Error(0)
+func (m *MockUserRepository) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
+	return args.Bool(0), args.Error(1)
 }
 
 // Issue #679, #680: Trial expiration methods
@@ -472,11 +479,6 @@ func (m *MockUserRepository) GetUsersWithExpiringTrials(ctx context.Context, wit
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
-func (m *MockUserRepository) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	args := m.Called(ctx, userID, status)
-	return args.Error(0)
 }
 
 func (m *MockUserRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
@@ -502,16 +504,17 @@ func (m *MockUserRepository) GetUsersWithActivePaddleSubscriptions(ctx context.C
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-// GetSubscriptionStatusByUserID returns subscription status for the read-only middleware (#930)
-func (m *MockUserRepository) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+// GetEffectiveSubscriptionStatusByUserID returns the effective subscription status for the
+// read-only middleware (#930, #1413)
+func (m *MockUserRepository) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	args := m.Called(ctx, userID)
 	return args.String(0), args.Error(1)
 }
 
 // Retention tracking methods (#930)
 
-func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
-	args := m.Called(ctx, userID, startedAt, expiresAt)
+func (m *MockUserRepository) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
+	args := m.Called(ctx, userID, retentionMonths)
 	return args.Error(0)
 }
 
@@ -554,6 +557,14 @@ func (m *MockUserRepository) GetUsersWithExpiredRetention(ctx context.Context) (
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
+func (m *MockUserRepository) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
 // Dunning methods (#898)
 
 func (m *MockUserRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
@@ -574,7 +585,61 @@ func (m *MockUserRepository) ClearPastDueStartedAt(ctx context.Context, userID s
 	return args.Error(0)
 }
 
-func (m *MockUserRepository) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these account-service tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *MockUserRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	args := m.Called(ctx, userID, retentionStarted, retentionExpires)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
+	args := m.Called(ctx, userID, startedAt, retentionMonths)
+	return args.Bool(0), args.Error(1)
+}
+
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-7 grace-window repair path) satisfies
+// the widened ProfileRepository interface; not exercised by AccountService's own tests.
+func (m *MockUserRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.User), args.Error(1)
+}
+
+func (m *MockUserRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413
+// Codex review round 3) are not exercised by these account-service tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *MockUserRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
+	args := m.Called(ctx, userID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockUserRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }

@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router'
 import { AdminLayout } from './AdminLayout'
 
 function renderWithRouter(initialEntries: string[] = ['/admin']) {

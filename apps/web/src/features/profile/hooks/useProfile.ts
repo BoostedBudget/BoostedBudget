@@ -32,9 +32,24 @@ export interface UseProfileResult {
  * }
  * ```
  */
-export function useProfile(): UseProfileResult {
+export interface UseProfileOptions {
+  /**
+   * When false, the profile query is not issued. Defaults to true so every existing
+   * caller is unaffected.
+   *
+   * Needed because `usePostHogIdentify` is mounted at the App root and therefore runs on
+   * public routes (landing, pricing) where there is no signed-in user. Without a gate it
+   * would fire `GET /api/v1/user/profile` on every anonymous page view and take a 401 —
+   * previously the profile was only ever fetched behind `PremiumRoute`.
+   */
+  enabled?: boolean
+}
+
+export function useProfile(options: UseProfileOptions = {}): UseProfileResult {
+  const { enabled = true } = options
   const { data, isLoading, error, refetch: queryRefetch } = useGetUserProfile({
     query: {
+      enabled,
       staleTime: 5 * 60 * 1000, // 5 minutes cache
       gcTime: 5 * 60 * 1000,
     },

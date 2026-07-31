@@ -245,6 +245,44 @@ func TestSubscriptionStatus_IsReadOnlySubscription(t *testing.T) {
 	}
 }
 
+// TestSubscriptionStatus_IsEligibleForPlaidDisconnectRepair is the RED test for Issue #1413
+// round-8 High 4 (Codex review): this method must be NARROWER than IsReadOnlySubscription() above
+// — specifically, past_due must be excluded, even though it IS read-only — because past_due has
+// its own dunning timeline (past_due_service.go) that this repair pass's 72-hour grace window must
+// not bypass.
+func TestSubscriptionStatus_IsEligibleForPlaidDisconnectRepair(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   SubscriptionStatus
+		expected bool
+	}{
+		{name: "active status is not eligible", status: SubscriptionStatusActive, expected: false},
+		{name: "trial status is not eligible", status: SubscriptionStatusTrial, expected: false},
+		{name: "trialing status is not eligible", status: SubscriptionStatusTrialing, expected: false},
+		{name: "inactive status is eligible", status: SubscriptionStatusInactive, expected: true},
+		{name: "cancelled status is eligible", status: SubscriptionStatusCancelled, expected: true},
+		{
+			name:     "past_due status is READ-ONLY but must NOT be eligible — it has its own dunning timeline",
+			status:   SubscriptionStatusPastDue,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.status.IsEligibleForPlaidDisconnectRepair()
+			assert.Equal(t, tt.expected, result)
+			// Falsifiability: IsEligibleForPlaidDisconnectRepair must never be a bare alias for
+			// IsReadOnlySubscription() — if it were, this line would catch past_due disagreeing.
+			if tt.status == SubscriptionStatusPastDue {
+				assert.True(t, tt.status.IsReadOnlySubscription(), "sanity check: past_due must still be read-only")
+				assert.NotEqual(t, tt.status.IsReadOnlySubscription(), result,
+					"past_due must diverge between IsReadOnlySubscription and IsEligibleForPlaidDisconnectRepair")
+			}
+		})
+	}
+}
+
 func TestEffectiveEntitlement_ZeroValueIsOwnSource(t *testing.T) {
 	var e EffectiveEntitlement
 	if e.Source != "" {

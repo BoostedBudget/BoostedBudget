@@ -1,10 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import React from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { mockUseGetSpendingByCategory, mockUseGetSpendingByMerchant } from '@/test/mocks/analytics-api'
 import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
-import { mockNavigate } from '@/test/mocks/react-router'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type { SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
@@ -12,15 +11,21 @@ import type { SpendingByMerchantResponse } from '@boostedbudget/api-client/model
 import type { CustomCategory } from '@boostedbudget/api-client/models'
 
 import '@/test/mocks/shared-charts'
-import '@/test/mocks/react-router'
 
 // Issue #1323: toggle-group is centrally mocked via bunfig.toml preload (toggle-group.tsx)
 
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { SpendingReportsPage } from './SpendingReportsPage'
+
+// SpendingReportsPage calls useNavigate() unconditionally, so every render
+// needs a real Router ancestor. A location probe rendered alongside the
+// page lets tests assert on real navigation instead of a mocked fn.
+const { locationRef, LocationProbe, currentUrl, navigationCount, reset: resetLocationProbe } = createLocationHarness()
 
 const renderPage = () =>
   render(
     <MemoryRouter>
+      <LocationProbe />
       <SpendingReportsPage />
     </MemoryRouter>
   )
@@ -158,7 +163,7 @@ describe('SpendingReportsPage merchant click navigation', () => {
   }
 
   beforeEach(() => {
-    mockNavigate.mockClear()
+    resetLocationProbe()
     // Ensure category and trends mocks return valid (non-null) values
     mockUseGetSpendingByCategory.mockReturnValue({
       data: null,
@@ -187,13 +192,13 @@ describe('SpendingReportsPage merchant click navigation', () => {
     fireEvent.click(screen.getByText('Starbucks'))
 
     // Must navigate with merchant_id param, NOT merchant name
-    expect(mockNavigate).toHaveBeenCalledTimes(1)
-    const [url, opts] = mockNavigate.mock.calls[0] as [string, { state: { merchantName: string } }]
+    expect(navigationCount()).toBe(1)
+    const url = currentUrl()
     expect(url).toContain('merchant_id=uuid-merchant-123')
     expect(url).not.toContain('search=')
     expect(url).not.toContain('Starbucks')
     // Merchant name goes in router state, not URL
-    expect(opts?.state?.merchantName).toBe('Starbucks')
+    expect((locationRef.current.state as { merchantName: string } | null)?.merchantName).toBe('Starbucks')
   })
 
   it('skips navigation when merchant has no id', () => {
@@ -207,10 +212,12 @@ describe('SpendingReportsPage merchant click navigation', () => {
     renderPage()
 
     // Click the merchant row
+    const initialUrl = currentUrl()
     fireEvent.click(screen.getByText('Unknown Merchant'))
 
     // No navigation should happen when merchant_id is absent
-    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(navigationCount()).toBe(0)
+    expect(currentUrl()).toBe(initialUrl)
   })
 })
 

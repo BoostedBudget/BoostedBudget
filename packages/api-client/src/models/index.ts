@@ -47,6 +47,8 @@ export * from './addDLQNotesRequest';
 export * from './adminCreateOverrideInputBody';
 export * from './adminCreateOverrideInputBodyResourceType';
 export * from './adminCreateOverrideOutputBody';
+export * from './adminRemoveTierOverrideInputBody';
+export * from './adminRemoveTierOverrideOutputBody';
 export * from './adminSubscriptionDetailOutputBody';
 export * from './adminSubscriptionTierInputBody';
 export * from './adminSubscriptionTierInputBodyTier';
