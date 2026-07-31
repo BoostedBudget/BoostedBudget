@@ -57,7 +57,15 @@ const TIER_OPTIONS = Object.entries(TIER_DISPLAY)
 
 function formatDate(iso: string | undefined | null): string {
     if (!iso) return '—'
-    return new Date(iso).toLocaleDateString('en-US', {
+    const date = new Date(iso)
+    // Codex adversarial review (round 9, Part 3 — Low, defense in depth): manual_tier_ends_at is
+    // an unconstrained field on the wire (see the tier-validity comments on `expiresAt` state
+    // below), so an unparseable value must not render the literal string "Invalid Date" next to
+    // "Expired:"/"Expires:" in the chip. Falls back to the same em dash already used above for a
+    // missing value, rather than duplicating getOverrideStatus's "Invalid expiry" copy — the two
+    // helpers agree that there's nothing truthful to show, they just don't need to say it twice.
+    if (Number.isNaN(date.getTime())) return '—'
+    return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -169,12 +177,41 @@ function SubscriptionOverrideForm({
         removeOverride(
             { userId, data: { reason: reason.trim() } },
             {
-                onSuccess: () => {
-                    toast.success('Subscription override removed successfully')
-                    trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED, {
-                        tier: removedTier,
-                        had_expiry: hadExpiry,
-                    })
+                // Codex adversarial review (round 9, Part 1 — Medium): this used to ignore the
+                // response body entirely, so a no-op removal (the clear endpoint is deliberately
+                // idempotent — see AdminRemoveTierOverrideOutputBody.removed, confirmed in
+                // packages/api-client/src/models/adminRemoveTierOverrideOutputBody.ts) still
+                // produced a false "removed successfully" toast AND a false
+                // ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED analytics event — exactly the "UI tells the
+                // admin something untrue" bug this PR exists to fix. The backend's own equivalent
+                // event is already gated on `row.Removed` (admin_user_service.go); this brings the
+                // two layers into agreement about when a removal actually happened.
+                onSuccess: (data) => {
+                    // Round 9 follow-up (Codex, same review): the generated contract requires
+                    // `removed: boolean` to ALWAYS be present on a 200 response — there is no
+                    // "success but we don't know" shape on the wire. So a response that fails this
+                    // check isn't a third real-world outcome, it's evidence the client and server
+                    // have drifted out of sync with each other. Silently folding it into "removed"
+                    // could fire an analytics event for a removal that may not have happened;
+                    // silently folding it into "not removed" (the bug this line replaced) can
+                    // swallow a REAL removal with zero admin-visible signal. Neither guess is
+                    // honest, so this is surfaced as its own anomaly — same treatment any other
+                    // malformed response gets — and the modal stays open (mirrors onError below)
+                    // so the admin can verify the actual state rather than trust an automatic guess.
+                    if (typeof data?.removed !== 'boolean') {
+                        toast.error('Unexpected response from server — please verify whether the override was removed')
+                        setConfirmRemove(false)
+                        return
+                    }
+                    if (data.removed) {
+                        toast.success('Subscription override removed successfully')
+                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED, {
+                            tier: removedTier,
+                            had_expiry: hadExpiry,
+                        })
+                    } else {
+                        toast.info('No override was present to remove')
+                    }
                     setConfirmRemove(false)
                     onClose()
                 },
@@ -193,6 +230,29 @@ function SubscriptionOverrideForm({
     // TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError — "that response
     // is what the override modal needs to render the Remove Override button").
     const hasOverride = !!sub?.manual_tier_override
+    // Codex adversarial review (round 9, Part 2 — Low): the chip's status (via `getOverrideStatus`
+    // below) and the effective badge (via `isOverrideActive` below) used to each call `new Date()`
+    // independently. An expiry lapsing in the gap between those two evaluations — sub-millisecond
+    // in practice, but real — could produce a chip and a badge that momentarily disagree about the
+    // same row, which is the same "one card, two answers" class of bug this whole issue exists to
+    // eliminate, just with a much smaller window. A single `now`, read once per render and threaded
+    // into every liveness/status check below, closes that window entirely: there is exactly one
+    // answer to "what time is it" for this render, so the two can never disagree with each other,
+    // only (transiently, and only until the next render) with the wall clock.
+    //
+    // Codex adversarial review (round 9 follow-up): a behavioral test cannot force the original
+    // race — there is no reliable way to make an expiry lapse in the gap between two synchronous
+    // `new Date()` calls a few microseconds apart within one render, so any such test would pass
+    // or fail identically whether or not `now` is actually threaded below, which is exactly the
+    // "test that cannot fail" shape this file keeps producing. What CAN regress silently is
+    // someone deleting the `now` argument from one of the three call sites below, reintroducing
+    // an independent clock read with zero behavioral test noticing (the fixtures are all relative
+    // to Date.now(), so an independent real clock read produces the same answer as this shared
+    // one in every practical test run). That regression is pinned structurally instead, in
+    // SubscriptionOverrideModal.test.tsx's "Single `now` threaded through override-status calls"
+    // block, which asserts directly on this file's source text that all three call sites still
+    // reference this binding.
+    const now = new Date()
     // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
     // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
     // unparseable date, because `NaN < anything` is always `false`, so a malformed
@@ -213,7 +273,7 @@ function SubscriptionOverrideForm({
     // hidden entirely), never relabelled as "expired", which would just be a quieter version of the
     // same lie (a reviewer's suggested `isExpired = !isLiveOverride` was rejected for exactly this
     // reason: it conflates "expired" with "invalid tier").
-    const overrideStatus = getOverrideStatus(sub?.manual_tier_override, sub?.manual_tier_ends_at)
+    const overrideStatus = getOverrideStatus(sub?.manual_tier_override, sub?.manual_tier_ends_at, now)
     const isExpired = overrideStatus?.variant === 'expired'
 
     // Issue #1413 AC6: this used to be `hasOverride && !isExpired`, handed straight to `isComped`
@@ -236,8 +296,8 @@ function SubscriptionOverrideForm({
     // while an expired-but-validly-named override still renders — just in its existing amber
     // "(expired)" state, not hidden — because expiring is a normal lifecycle event, not garbage
     // data.
-    const isKnownTierOverride = isOverrideActive(sub?.manual_tier_override, undefined, KNOWN_TIER_NAMES)
-    const isLiveOverride = isOverrideActive(sub?.manual_tier_override, sub?.manual_tier_ends_at, KNOWN_TIER_NAMES)
+    const isKnownTierOverride = isOverrideActive(sub?.manual_tier_override, undefined, KNOWN_TIER_NAMES, now)
+    const isLiveOverride = isOverrideActive(sub?.manual_tier_override, sub?.manual_tier_ends_at, KNOWN_TIER_NAMES, now)
     const showOverrideChip = hasOverride && isKnownTierOverride
 
     // G10 (AC 6): this is the surface where an admin actually decides to grant or revoke a

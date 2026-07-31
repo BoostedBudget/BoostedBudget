@@ -97,6 +97,28 @@ describe('getOverrideStatus', () => {
     expect(result?.variant).toBe('expired')
     expect(result?.label).not.toMatch(/NaN/)
   })
+
+  // Issue #1413 round 9, Part 2: SubscriptionOverrideModal.tsx used to call `new Date()` once for
+  // this helper and again, separately, for isOverrideActive — two independent reads of the clock
+  // that could disagree if an expiry lapsed in the gap between them. Accepting `now` (mirroring
+  // isOverrideActive's existing parameter) lets a single call site evaluate both against the same
+  // instant instead of each reading the clock itself.
+  //
+  // Both endsAt values below are deliberately placed BETWEEN the real clock and the injected
+  // `now` — computed from Date.now() so this can never drift onto the wrong branch as real time
+  // passes (a hardcoded literal in this exact file previously did exactly that). If the
+  // implementation reads `new Date()` internally instead of the `now` parameter, these assertions
+  // fail regardless of what day this suite runs on: that's the point.
+  it('accepts an injected `now` so callers can evaluate expiry against a fixed instant', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000
+    const futureNow = new Date(Date.now() + 400 * DAY_MS)
+    const endsAtBeforeFutureNow = new Date(Date.now() + 200 * DAY_MS).toISOString()
+    expect(getOverrideStatus('premium', endsAtBeforeFutureNow, futureNow)?.variant).toBe('expired')
+
+    const pastNow = new Date(Date.now() - 400 * DAY_MS)
+    const endsAtAfterPastNow = new Date(Date.now() - 200 * DAY_MS).toISOString()
+    expect(getOverrideStatus('premium', endsAtAfterPastNow, pastNow)?.variant).toBe('expiring')
+  })
 })
 
 // The representation axis of the three-axis malformed-override rule: when the data does not let us
