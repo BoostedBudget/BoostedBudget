@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { Navigation } from './Navigation'
 
 const ROUTES = [

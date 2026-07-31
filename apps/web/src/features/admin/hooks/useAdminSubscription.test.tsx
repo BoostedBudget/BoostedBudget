@@ -1,33 +1,47 @@
 /**
  * useAdminSubscription tests
  * Issue #646: Admin Subscription Management UI
- * 
+ * Issue #1413/#1414 Task 13b: Remove Override mutation hook + onSuccess invalidation coverage.
+ *
  * Uses centralized mocks from src/test/mocks/admin-subscriptions-api.ts
+ *
+ * Issue #1413 Fix 7 (G7.5): this file previously called `mock.module()` on the api-client
+ * module directly, WITHOUT spreading the real module — replacing it with a 4-export stub
+ * process-globally for every file loaded later in the same bun process (the exact fragility
+ * SubscriptionOverrideModal.test.tsx was migrated away from — see
+ * feedback_bun_test_mock_module_global.md). Now it consumes the centralized, spread-based mock
+ * in src/test/mocks/admin-subscriptions-api.ts (preloaded via bunfig.toml) instead, same as
+ * SubscriptionOverrideModal.test.tsx — no local mock.module() call needed at all.
  */
 
-import { mock } from 'bun:test'
-
-// Mock the generated API client BEFORE importing anything else
-const mockUseGetAdminUserSubscription = mock(() => ({}))
-const mockUseUpdateAdminUserTier = mock(() => ({}))
-
-mock.module('@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions', () => ({
-    useGetAdminUserSubscription: mockUseGetAdminUserSubscription,
-    useUpdateAdminUserTier: mockUseUpdateAdminUserTier,
-    getGetAdminUserSubscriptionQueryKey: (id: string) => [`/api/v1/admin/users/${id}/subscription`],
-}))
-
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, spyOn } from 'bun:test'
 import { renderHook } from '@testing-library/react'
+import {
+    mockUseGetAdminUserSubscription,
+    mockUseUpdateAdminUserTier,
+    mockUseRemoveAdminUserTierOverride,
+} from '@/test/mocks/admin-subscriptions-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useAdminSubscriptionDetail, useUpdateUserTier } from './useAdminSubscription'
+import { getListAdminUsersQueryKey } from '@boostedbudget/api-client/endpoints/admin/admin'
+import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from './useAdminSubscription'
 import { ReactNode } from 'react'
+
+type MutationOptionsArg = { mutation?: { onSuccess?: (...args: unknown[]) => void } }
 
 function createWrapper() {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     return ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={qc}>{children}</QueryClientProvider>
     )
+}
+
+/** Returns a wrapper plus the underlying QueryClient so tests can spy on invalidateQueries. */
+function createWrapperWithClient() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    function wrapper({ children }: { children: ReactNode }) {
+        return <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    }
+    return { wrapper, qc }
 }
 
 describe('useAdminSubscriptionDetail', () => {
@@ -73,5 +87,73 @@ describe('useUpdateUserTier', () => {
 
         expect(result.current.mutate).toBeDefined()
         expect(result.current.isPending).toBe(false)
+    })
+
+    it('invalidates the subscription detail and admin user list query keys on success', () => {
+        mockUseUpdateAdminUserTier.mockReturnValue({ mutate: () => { }, isPending: false })
+        const { wrapper, qc } = createWrapperWithClient()
+        const invalidateSpy = spyOn(qc, 'invalidateQueries')
+
+        renderHook(() => useUpdateUserTier('user-xyz'), { wrapper })
+
+        const options = mockUseUpdateAdminUserTier.mock.calls.at(-1)?.[0] as MutationOptionsArg | undefined
+        options?.mutation?.onSuccess?.()
+
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: ['/api/v1/admin/users/user-xyz/subscription'],
+        })
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: getListAdminUsersQueryKey(),
+        })
+    })
+})
+
+describe('useRemoveUserTierOverride', () => {
+    beforeEach(() => {
+        mockUseRemoveAdminUserTierOverride.mockClear()
+    })
+
+    it('returns a mutate function', () => {
+        mockUseRemoveAdminUserTierOverride.mockReturnValue({
+            mutate: () => { },
+            isPending: false,
+        })
+
+        const { result } = renderHook(() => useRemoveUserTierOverride('user-xyz'), {
+            wrapper: createWrapper(),
+        })
+
+        expect(result.current.mutate).toBeDefined()
+        expect(result.current.isPending).toBe(false)
+    })
+
+    it('invalidates the subscription detail query key on success', () => {
+        mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
+        const { wrapper, qc } = createWrapperWithClient()
+        const invalidateSpy = spyOn(qc, 'invalidateQueries')
+
+        renderHook(() => useRemoveUserTierOverride('user-xyz'), { wrapper })
+
+        const options = mockUseRemoveAdminUserTierOverride.mock.calls.at(-1)?.[0] as MutationOptionsArg | undefined
+        options?.mutation?.onSuccess?.()
+
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: ['/api/v1/admin/users/user-xyz/subscription'],
+        })
+    })
+
+    it('invalidates the admin user list query key on success', () => {
+        mockUseRemoveAdminUserTierOverride.mockReturnValue({ mutate: () => { }, isPending: false })
+        const { wrapper, qc } = createWrapperWithClient()
+        const invalidateSpy = spyOn(qc, 'invalidateQueries')
+
+        renderHook(() => useRemoveUserTierOverride('user-xyz'), { wrapper })
+
+        const options = mockUseRemoveAdminUserTierOverride.mock.calls.at(-1)?.[0] as MutationOptionsArg | undefined
+        options?.mutation?.onSuccess?.()
+
+        expect(invalidateSpy).toHaveBeenCalledWith({
+            queryKey: getListAdminUsersQueryKey(),
+        })
     })
 })

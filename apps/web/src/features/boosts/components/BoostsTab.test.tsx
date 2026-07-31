@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'bun:test'
 import { render } from '@testing-library/react'
 import React from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoostsTab } from './BoostsTab'
 

@@ -1,6 +1,6 @@
 // Issue #952: Notification Center — Single notification item (all 4 patterns)
 // Issue #972: Added confirm-match flow for fuzzy-matched transfer suggestions
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'

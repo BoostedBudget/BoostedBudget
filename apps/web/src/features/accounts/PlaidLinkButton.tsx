@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { usePlaidLink, PlaidLinkOnSuccessMetadata } from 'react-plaid-link'
 import {
   useCreateLinkToken,

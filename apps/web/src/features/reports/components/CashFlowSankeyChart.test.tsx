@@ -1,12 +1,27 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import React from 'react'
 
 import '@/test/mocks/shared-charts'
 import { MockEChartsChart, mockUseDarkMode } from '@/test/mocks/shared-charts'
-import { mockNavigate } from '@/test/mocks/react-router'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { CashFlowSankeyChart } from './CashFlowSankeyChart'
 import type { IncomeSourceBreakdownResponse, SpendingByCategoryResponse } from '@boostedbudget/api-client/models'
+
+// CashFlowSankeyChart calls useNavigate() unconditionally, so every render
+// needs a real Router ancestor. A location probe rendered alongside the
+// component lets tests assert on real navigation instead of a mocked fn.
+const { LocationProbe, currentUrl, navigationCount, reset: resetLocationProbe } = createLocationHarness()
+
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <MemoryRouter>
+      <LocationProbe />
+      {ui}
+    </MemoryRouter>
+  )
+}
 
 const mockIncomeData: IncomeSourceBreakdownResponse = {
   start_date: '2024-01-01',
@@ -38,7 +53,7 @@ const defaultProps = {
 
 describe('CashFlowSankeyChart', () => {
   beforeEach(() => {
-    mockNavigate.mockReset()
+    resetLocationProbe()
     mockUseDarkMode.mockReturnValue(false)
   })
 
@@ -155,8 +170,8 @@ describe('CashFlowSankeyChart', () => {
       // nodes order: hub(0), in:INCOME_WAGES(1), out:FOOD_AND_DRINK(2), out:TRANSPORTATION(3), savings(4)
       const foodBtn = screen.getByTestId('echarts-point-2')
       fireEvent.click(foodBtn)
-      expect(mockNavigate).toHaveBeenCalledTimes(1)
-      const [url] = mockNavigate.mock.calls[0] as [string]
+      expect(navigationCount()).toBe(1)
+      const url = currentUrl()
       expect(url).toContain('/transactions')
       expect(url).toContain('pfc_primaries=FOOD_AND_DRINK')
       expect(url).toContain('amount_type=expense')
@@ -167,8 +182,8 @@ describe('CashFlowSankeyChart', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
       const wagesBtn = screen.getByTestId('echarts-point-1')
       fireEvent.click(wagesBtn)
-      expect(mockNavigate).toHaveBeenCalledTimes(1)
-      const [url] = mockNavigate.mock.calls[0] as [string]
+      expect(navigationCount()).toBe(1)
+      const url = currentUrl()
       expect(url).toContain('pfc_primaries=INCOME_WAGES')
       expect(url).toContain('amount_type=income')
     })
@@ -176,7 +191,7 @@ describe('CashFlowSankeyChart', () => {
     it('income navigation appends start_date and end_date (G14)', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
       fireEvent.click(screen.getByTestId('echarts-point-1')) // Wages income node
-      const [url] = mockNavigate.mock.calls[0] as [string]
+      const url = currentUrl()
       expect(url).toContain('start_date=2024-01-01')
       expect(url).toContain('end_date=2024-01-31')
     })
@@ -186,24 +201,28 @@ describe('CashFlowSankeyChart', () => {
         <CashFlowSankeyChart {...defaultProps} startDate="" endDate="" />,
       )
       fireEvent.click(screen.getByTestId('echarts-point-2')) // Food expense node
-      const [url] = mockNavigate.mock.calls[0] as [string]
+      const url = currentUrl()
       expect(url).not.toContain('start_date')
       expect(url).not.toContain('end_date')
     })
 
     it('does NOT navigate when the hub node is clicked', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
+      const initialUrl = currentUrl()
       fireEvent.click(screen.getByTestId('echarts-point-0'))
-      expect(mockNavigate).not.toHaveBeenCalled()
+      expect(navigationCount()).toBe(0)
+      expect(currentUrl()).toBe(initialUrl)
     })
 
     it('does NOT navigate when the savings node is clicked', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
+      const initialUrl = currentUrl()
       // savings is the last node in surplus scenario
       const lastTrigger = screen.getAllByTestId(/^echarts-point-/).at(-1)!
       fireEvent.click(lastTrigger)
       // savings is non-navigable
-      expect(mockNavigate).not.toHaveBeenCalled()
+      expect(navigationCount()).toBe(0)
+      expect(currentUrl()).toBe(initialUrl)
     })
 
     it('uses custom_category_ids for custom category expense nodes', () => {
@@ -223,7 +242,7 @@ describe('CashFlowSankeyChart', () => {
       )
       // nodes: hub(0), in:INCOME_WAGES(1), out:custom:uuid-abc(2), savings(3)
       fireEvent.click(screen.getByTestId('echarts-point-2'))
-      const [url] = mockNavigate.mock.calls[0] as [string]
+      const url = currentUrl()
       expect(url).toContain('custom_category_ids=uuid-abc')
       expect(url).not.toContain('pfc_primaries')
     })
@@ -236,8 +255,11 @@ describe('CashFlowSankeyChart', () => {
       const table = screen.getByRole('table', { hidden: true })
       const buttons = table.querySelectorAll('button')
       expect(buttons.length).toBeGreaterThan(0)
-      ;(buttons[0] as HTMLElement).click()
-      expect(mockNavigate).toHaveBeenCalled()
+      // Issue #1437: a raw DOM .click() isn't wrapped in act(), so the router's
+      // real state update (from navigate()) may not have flushed before the
+      // assertion runs. fireEvent.click() wraps the dispatch in act() for us.
+      fireEvent.click(buttons[0] as HTMLElement)
+      expect(navigationCount()).toBeGreaterThan(0)
     })
   })
 
@@ -254,13 +276,15 @@ describe('CashFlowSankeyChart', () => {
   describe('edge-click guard (G4)', () => {
     it('does NOT navigate when ECharts fires a link/edge click (dataType set but not "node")', () => {
       render(<CashFlowSankeyChart {...defaultProps} />)
+      const initialUrl = currentUrl()
       // The mock trigger buttons fire { dataIndex } with no dataType — they exercise the
       // test-mock branch. To test the real-ECharts edge-click guard we grab the handler
       // directly and call it with a synthetic edge event.
       type EventsType = { click?: (p: unknown) => void }
       const clickHandler = MockEChartsChart.mock.calls.at(-1)?.[0]?.onEvents as EventsType | undefined
       clickHandler?.click?.({ dataType: 'edge', dataIndex: 2 })
-      expect(mockNavigate).not.toHaveBeenCalled()
+      expect(navigationCount()).toBe(0)
+      expect(currentUrl()).toBe(initialUrl)
     })
   })
 

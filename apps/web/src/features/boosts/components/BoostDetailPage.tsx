@@ -1,5 +1,5 @@
 // Issue #1267 Gap W5: /boosts/:id — rule detail + recent execution history (last 5)
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link } from 'react-router'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { useGetBoostByID } from '@boostedbudget/api-client/endpoints/boosts/boosts'
 import { EmptyState } from '@/components/ui/empty-state'

@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { useQueryClient } from '@tanstack/react-query'

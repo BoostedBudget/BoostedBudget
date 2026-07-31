@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"testing"
 	"time"
@@ -81,6 +82,11 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 
 	// Helper for nullable string
 	cursor := "cursor-abc"
+	// Issue #1413 round-10 (#1444): GetByUserID now scans status into a *string (see
+	// normalizeLinkedItemStatus), so pgxmock rows must supply a *string here (nil, or a pointer to a
+	// literal), not a bare string — matching the pattern already used for cursor/last_synced_at
+	// above.
+	activeStatus := "active"
 
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "item_id", "access_token_encrypted",
@@ -94,7 +100,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
 			"ins_1", "Chase", "plaid", nil, nil,
-			"active", nil, nil, nil, 0, nil,
+			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
 			nil, nil, nil,
@@ -102,7 +108,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
 			"ins_2", "Wells Fargo", "plaid", &cursor, &now,
-			"active", nil, nil, nil, 0, nil,
+			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
 			nil, nil, nil,
@@ -146,7 +152,7 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
-		"active", nil, nil, nil, 0, nil,
+		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
 		nil, nil, nil,
@@ -280,7 +286,7 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
 		"ins_chase", "Chase", "plaid", nil, nil,
-		"active", nil, nil, nil, 0, nil,
+		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
 		nil, nil, nil,
@@ -446,7 +452,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 		AddRow(
 			itemID, userID, "item-1", "encrypted-token",
 			institutionID, "Chase", "plaid", nil, nil,
-			"active", nil, nil, nil, 0, nil,
+			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
 			nil, nil, nil,
@@ -525,7 +531,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 		AddRow(
 			itemID, userID, "item-old", "encrypted-token",
 			institutionID, "Chase", "plaid", nil, nil,
-			"replaced", nil, nil, nil, 0, nil,
+			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&replacedAt, &replacedByID,
 			now, now,
 			nil, nil, nil,
@@ -629,7 +635,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 	}).AddRow(
 		mostRecentItemID, userID, "item-recent", "encrypted-token",
 		institutionID, "Chase", "plaid", nil, nil,
-		"disconnected", nil, nil, nil, 0, nil,
+		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
 		nil, nil, nil,
@@ -671,7 +677,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 	}).AddRow(
 		itemID, userID, "item-disconnected", "encrypted-token",
 		institutionID, "Bank of America", "plaid", nil, nil,
-		"disconnected", nil, nil, nil, 0, nil,
+		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
 		nil, nil, nil,
@@ -750,7 +756,7 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		"ins_123", "Chase", "plaid", nil, nil,
-		"active", nil, nil, nil, 0, nil,
+		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
 		&syncDate, nil, nil,
@@ -791,7 +797,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
 			"ins_1", "Chase", "plaid", nil, nil,
-			"active", nil, nil, nil, 0, nil,
+			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
 			nil, nil, nil,
@@ -799,7 +805,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
 			"ins_1", "Chase", "plaid", nil, nil,
-			"replaced", nil, nil, nil, 0, nil,
+			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&now, nil,
 			now, now,
 			nil, nil, nil,
@@ -816,5 +822,61 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 	// The service layer should filter by status as needed
 	assert.NoError(t, err)
 	assert.Len(t, items, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_MarkItemsDisconnected_RowsAffectedMatchesIDs is the happy-path proof
+// that a normal write (every given id actually matched and transitioned) still returns nil — no
+// regression from the RowsAffected check added below.
+func TestLinkedItemRepository_MarkItemsDisconnected_RowsAffectedMatchesIDs(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	ids := []string{uuid.New().String(), uuid.New().String()}
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	`)).WithArgs(pgxmock.AnyArg(), ids).WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+
+	err := repo.MarkItemsDisconnected(ctx, ids)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestLinkedItemRepository_MarkItemsDisconnected_ZeroRowsAffected_ReturnsErrNoLinkedItemsUpdated is
+// the Issue #1413 Medium finding RED test (PR #1443 Codex review round 4): before this fix,
+// MarkItemsDisconnected returned only the query's own error, so an UPDATE that matched zero rows
+// (every given id already excluded by the WHERE guard's terminal-state check) succeeded silently —
+// a caller (or a test) had no way to detect that the write did nothing.
+//
+// Falsifiability: reverting MarkItemsDisconnected to discard the CommandTag and return only the
+// query error makes this test fail — err would be nil, not ErrNoLinkedItemsUpdated.
+func TestLinkedItemRepository_MarkItemsDisconnected_ZeroRowsAffected_ReturnsErrNoLinkedItemsUpdated(t *testing.T) {
+	mock, repo := setupLinkedItemMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	ids := []string{uuid.New().String()}
+
+	mock.ExpectExec(regexp.QuoteMeta(`
+		UPDATE linked_items
+		SET status = 'disconnected',
+		    updated_at = $1,
+		    status_changed_at = $1
+		WHERE id = ANY($2)
+		  AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+	`)).WithArgs(pgxmock.AnyArg(), ids).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkItemsDisconnected(ctx, ids)
+
+	require.Error(t, err, "zero rows affected must now be surfaced, not silently reported as success")
+	assert.True(t, errors.Is(err, ErrNoLinkedItemsUpdated), "the zero-rows outcome must be errors.Is-checkable via ErrNoLinkedItemsUpdated")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

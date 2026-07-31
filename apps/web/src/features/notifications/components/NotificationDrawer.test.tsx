@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { screen, fireEvent } from '@testing-library/react'
 import React from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { NotificationDrawer } from './NotificationDrawer'
 import {
   mockUseGetNotifications,

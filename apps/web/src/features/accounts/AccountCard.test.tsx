@@ -9,7 +9,7 @@
 
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { AccountCard } from './AccountCard'
 import type { Account } from './types'
 

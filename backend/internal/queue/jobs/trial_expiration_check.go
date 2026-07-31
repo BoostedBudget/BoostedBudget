@@ -15,8 +15,11 @@ import (
 )
 
 // TrialExpirationCheckArgs contains the arguments for the trial expiration check job.
-// This job runs periodically (daily) to find users whose trial has expired and
-// expires their trial (sets status to inactive and disconnects Plaid items).
+// This job runs periodically (daily) to find users whose trial has expired and expires their
+// trial (sets status to inactive and starts the retention clock). Issue #1413 round-7: it does
+// NOT disconnect Plaid — that is deferred to RetentionCleanupCheckWorker's grace-window repair
+// pass, which runs only after retention_started_at (set here) is old enough. See
+// TrialService.ExpireTrial's doc comment for why.
 type TrialExpirationCheckArgs struct {
 	// TriggerSource indicates what triggered this check (e.g., "periodic", "manual")
 	TriggerSource string `json:"trigger_source,omitempty"`
@@ -39,7 +42,8 @@ type TrialService interface {
 	IsTrialActive(user *domain.User) bool
 	// GetTrialDaysRemaining returns days remaining in trial
 	GetTrialDaysRemaining(user *domain.User) int
-	// ExpireTrial expires the user's trial (sets status to inactive and disconnects Plaid items)
+	// ExpireTrial expires the user's trial (sets status to inactive and starts the retention
+	// clock — see trial_service.go's ExpireTrial doc comment for why it does not disconnect Plaid)
 	ExpireTrial(ctx context.Context, userID string) error
 	// CanGrantTrial returns true if user is eligible for a trial
 	CanGrantTrial(user *domain.User) bool
@@ -79,7 +83,8 @@ func NewTrialExpirationCheckWorker(deps TrialExpirationCheckWorkerDeps) *TrialEx
 //
 // The worker:
 //  1. Fetches users with expired trials (subscription_status='trial' AND trial_ends_at < now)
-//  2. Calls ExpireTrial for each user (sets status to inactive and disconnects Plaid items)
+//  2. Calls ExpireTrial for each user (sets status to inactive and starts the retention clock —
+//     the Plaid disconnect happens later, via RetentionCleanupCheckWorker's grace-window repair)
 //
 // Errors in individual expirations don't fail the entire job.
 func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[TrialExpirationCheckArgs]) (err error) {
@@ -96,6 +101,8 @@ func (w *TrialExpirationCheckWorker) Work(ctx context.Context, job *river.Job[Tr
 		status := "success"
 		if err != nil {
 			status = "failed"
+		} else {
+			observability.RecordJobSuccess(job.Kind) // Issue #1413 P4: last-success heartbeat
 		}
 		observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
 		observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())

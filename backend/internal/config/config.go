@@ -243,6 +243,18 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("CF_ORIGIN_SECRET is required — set it to the value in the Cloudflare Transform Rule (see docs/FLYIO_SETUP.md)"))
 	}
 
+	// Issue #1413 round-8 Blocker 2 (Codex review): DELETION_TOKEN_SECRET gates deletion-service
+	// construction in main.go (cancellation-link JWT signing), and RetentionCleanupCheckWorker's
+	// Step 3 (deleteExpiredAccounts) needs a real DeletionService to actually hard-delete expired
+	// accounts. The repair pass that disconnects a lapsed user's Plaid items no longer depends on
+	// this secret (it is constructed unconditionally now), but a production/staging deployment
+	// missing this secret is still misconfigured — hard-deletion silently never runs and account
+	// deletion requests fail — so validation catches it as belt-and-braces, matching the same
+	// "required together" treatment already given to Plaid/Paddle/CF_ORIGIN_SECRET above.
+	if c.DeletionTokenSecret == "" {
+		errs = append(errs, fmt.Errorf("DELETION_TOKEN_SECRET is required"))
+	}
+
 	return errors.Join(errs...)
 }
 

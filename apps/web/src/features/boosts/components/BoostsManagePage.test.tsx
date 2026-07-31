@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import type { Boost } from '@boostedbudget/api-client/models'
 import { BoostsManagePage } from './BoostsManagePage'
 

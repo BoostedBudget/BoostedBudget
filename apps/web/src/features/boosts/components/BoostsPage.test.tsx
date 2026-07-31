@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { screen, fireEvent, act } from '@testing-library/react'
 import React from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 
 // Mock API client boundary (all preloaded via bunfig.toml)
 import { mockTrackEvent } from '@/test/mocks/track-event'

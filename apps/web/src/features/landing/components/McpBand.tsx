@@ -8,7 +8,7 @@
  * Issue #1411: truth-up landing copy + public MCP marketing page.
  */
 
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { ArrowRight } from 'lucide-react'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'

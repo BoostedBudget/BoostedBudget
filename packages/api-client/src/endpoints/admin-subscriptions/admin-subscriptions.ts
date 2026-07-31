@@ -52,6 +52,8 @@ import type {
 import type {
   AdminCreateOverrideInputBody,
   AdminCreateOverrideOutputBody,
+  AdminRemoveTierOverrideInputBody,
+  AdminRemoveTierOverrideOutputBody,
   AdminSubscriptionDetailOutputBody,
   AdminSubscriptionTierInputBody,
   AdminSubscriptionTierOutputBody,
@@ -315,4 +317,69 @@ export const useUpdateAdminUserTier = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getUpdateAdminUserTierMutationOptions(options), queryClient);
+    }
+    /**
+ * Clear a user's manual tier override, restoring their raw subscription tier and status. Idempotent — returns removed=false if no override exists. Requires admin privileges.
+ * @summary Remove manual subscription tier override
+ */
+export const removeAdminUserTierOverride = (
+    userId: string,
+    adminRemoveTierOverrideInputBody: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<AdminRemoveTierOverrideOutputBody>(
+      {url: `/api/v1/admin/users/${userId}/subscription/tier/clear`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminRemoveTierOverrideInputBody, signal
+    },
+      options);
+    }
+
+
+
+export const getRemoveAdminUserTierOverrideMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof removeAdminUserTierOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof removeAdminUserTierOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>}, TContext> => {
+
+const mutationKey = ['removeAdminUserTierOverride'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof removeAdminUserTierOverride>>, {userId: string;data: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  removeAdminUserTierOverride(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RemoveAdminUserTierOverrideMutationResult = NonNullable<Awaited<ReturnType<typeof removeAdminUserTierOverride>>>
+    export type RemoveAdminUserTierOverrideMutationBody = BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>
+    export type RemoveAdminUserTierOverrideMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Remove manual subscription tier override
+ */
+export const useRemoveAdminUserTierOverride = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof removeAdminUserTierOverride>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof removeAdminUserTierOverride>>,
+        TError,
+        {userId: string;data: BodyType<NonReadonly<AdminRemoveTierOverrideInputBody>>},
+        TContext
+      > => {
+      return useMutation(getRemoveAdminUserTierOverrideMutationOptions(options), queryClient);
     }

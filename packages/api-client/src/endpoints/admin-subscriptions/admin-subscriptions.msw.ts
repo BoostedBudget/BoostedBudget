@@ -45,16 +45,19 @@ import type {
 
 import type {
   AdminCreateOverrideOutputBody,
+  AdminRemoveTierOverrideOutputBody,
   AdminSubscriptionDetailOutputBody,
   AdminSubscriptionTierOutputBody
 } from '../../models';
 
 
-export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), deletion_requested_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), deletion_scheduled_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), effective_status: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getCreateAdminSubscriptionOverrideResponseMock = (overrideResponse: Partial<Extract<AdminCreateOverrideOutputBody, object>> = {}): AdminCreateOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getUpdateAdminUserTierResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionTierOutputBody, object>> = {}): AdminSubscriptionTierOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getRemoveAdminUserTierOverrideResponseMock = (overrideResponse: Partial<Extract<AdminRemoveTierOverrideOutputBody, object>> = {}): AdminRemoveTierOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), removed: faker.datatype.boolean(), reverted_status: faker.string.alpha({length: {min: 10, max: 20}}), reverted_tier: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 
 export const getGetAdminUserSubscriptionMockHandler = (overrideResponse?: AdminSubscriptionDetailOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminSubscriptionDetailOutputBody> | AdminSubscriptionDetailOutputBody), options?: RequestHandlerOptions) => {
@@ -92,8 +95,21 @@ export const getUpdateAdminUserTierMockHandler = (overrideResponse?: AdminSubscr
       })
   }, options)
 }
+
+export const getRemoveAdminUserTierOverrideMockHandler = (overrideResponse?: AdminRemoveTierOverrideOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<AdminRemoveTierOverrideOutputBody> | AdminRemoveTierOverrideOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/users/:userId/subscription/tier/clear', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRemoveAdminUserTierOverrideResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 export const getAdminSubscriptionsMock = () => [
   getGetAdminUserSubscriptionMockHandler(),
   getCreateAdminSubscriptionOverrideMockHandler(),
-  getUpdateAdminUserTierMockHandler()
+  getUpdateAdminUserTierMockHandler(),
+  getRemoveAdminUserTierOverrideMockHandler()
 ]

@@ -56,6 +56,31 @@ func (s SubscriptionStatus) IsReadOnlySubscription() bool {
 	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled || s == SubscriptionStatusPastDue
 }
 
+// IsEligibleForPlaidDisconnectRepair returns true if the status is eligible for the retention
+// grace-window Plaid-disconnect repair pass (RetentionCleanupCheckWorker.repairPlaidDisconnects,
+// backend/internal/queue/jobs/retention_cleanup_check.go) — Issue #1413 round-8 High 4 (Codex
+// review).
+//
+// Deliberately NARROWER than IsReadOnlySubscription() above: 'past_due' IS read-only (that method
+// returns true for it), but must NOT be eligible for an IMMEDIATE Plaid-only disconnect here —
+// past_due has its own dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays)
+// that exists precisely to give a paying-but-behind user time to catch up before Plaid access is
+// touched. This repair pass's 72-hour grace window is not a substitute for that longer, dedicated
+// dunning schedule; using the wider read-only definition here let an old inactive/cancelled
+// candidate that transitioned into a NEW past_due cycle before the per-item re-read bypass past_due's
+// own timing entirely.
+//
+// The SQL twin of this method is profile_repository.go's
+// plaidDisconnectRepairEligibleStatusPredicate constant — the two are kept in agreement by
+// TestPlaidDisconnectRepairEligibleStatus_Integration_ParityWithGo
+// (profile_repository_plaid_disconnect_repair_integration_test.go), mirroring this branch's existing
+// precedent for this exact failure class: noActiveManualOverridePredicate /
+// domain.User.HasActiveManualOverride(), guarded by
+// TestNoActiveManualOverridePredicate_Integration_ParityWithGo.
+func (s SubscriptionStatus) IsEligibleForPlaidDisconnectRepair() bool {
+	return s == SubscriptionStatusInactive || s == SubscriptionStatusCancelled
+}
+
 // SubscriptionTier represents the full definition of a subscription tier
 // Loaded from config/subscription_tiers.yaml (centralized config directory)
 type SubscriptionTier struct {
