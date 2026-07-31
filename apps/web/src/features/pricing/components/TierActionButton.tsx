@@ -59,6 +59,20 @@ export function TierActionButton({
     )
   }
 
+  // Issue #1413: comped users keep full commerce functionality. Their own comped tier reads as
+  // "Current Plan" (nothing to buy); every other tier is a normal, functional Subscribe CTA — a
+  // comped user may legitimately want to buy, e.g. if their comp has an end date.
+  if (pricingState.status === 'comped') {
+    if (pricingState.tier === tierKey) {
+      return <Button disabled className="w-full">Current Plan</Button>
+    }
+    return (
+      <Button onClick={handleCheckout} disabled={isLoading} className="w-full">
+        {isLoading ? 'Loading...' : 'Subscribe'}
+      </Button>
+    )
+  }
+
   if (pricingState.status === 'past_due') {
     return <Button disabled className="w-full">Update Payment</Button>
   }

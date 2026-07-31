@@ -49,6 +49,10 @@ func (m *MockDeletionServiceForWorker) SetHouseholdInviteRevoker(r services.Hous
 }
 func (m *MockDeletionServiceForWorker) SetDB(db repository.DB) {}
 
+// SetWorkClaimsRepo (Issue #1413 Critical finding C2) is not exercised by these
+// deletion-worker tests; stubbed to satisfy the expanded interface.
+func (m *MockDeletionServiceForWorker) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+
 func (m *MockDeletionServiceForWorker) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
 }
@@ -108,8 +112,9 @@ func (m *MockProfileRepoForWorker) MarkForDeletion(ctx context.Context, userID s
 func (m *MockProfileRepoForWorker) CancelDeletion(ctx context.Context, userID string) error {
 	return m.Called(ctx, userID).Error(0)
 }
-func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string) error {
-	return m.Called(ctx, userID).Error(0)
+func (m *MockProfileRepoForWorker) DeleteUserCascade(ctx context.Context, userID string, expectedDeletionRequestedAt *time.Time) (bool, error) {
+	args := m.Called(ctx, userID, expectedDeletionRequestedAt)
+	return args.Bool(0), args.Error(1)
 }
 
 // Issue #679, #680: Trial expiration methods
@@ -129,9 +134,6 @@ func (m *MockProfileRepoForWorker) GetUsersWithExpiringTrials(ctx context.Contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepoForWorker) UpdateSubscriptionStatus(ctx context.Context, userID string, status string) error {
-	return m.Called(ctx, userID, status).Error(0)
-}
 func (m *MockProfileRepoForWorker) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
 	return m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial).Error(0)
 }
@@ -152,10 +154,10 @@ func (m *MockProfileRepoForWorker) GetUsersWithActivePaddleSubscriptions(ctx con
 }
 
 // Retention tracking stubs (#930)
-func (m *MockProfileRepoForWorker) GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+func (m *MockProfileRepoForWorker) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
 	return "", nil
 }
-func (m *MockProfileRepoForWorker) SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error {
+func (m *MockProfileRepoForWorker) SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error {
 	return nil
 }
 func (m *MockProfileRepoForWorker) ClearRetentionDates(ctx context.Context, userID string) error {
@@ -176,6 +178,9 @@ func (m *MockProfileRepoForWorker) GetUsersNeedingRetention7dNotice(ctx context.
 func (m *MockProfileRepoForWorker) GetUsersWithExpiredRetention(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
+func (m *MockProfileRepoForWorker) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
+	return nil, nil
+}
 
 // Dunning methods (#898)
 func (m *MockProfileRepoForWorker) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
@@ -187,7 +192,50 @@ func (m *MockProfileRepoForWorker) ClearPastDueStartedAt(ctx context.Context, us
 func (m *MockProfileRepoForWorker) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-func (m *MockProfileRepoForWorker) CancelIfPastDue(ctx context.Context, userID string) (bool, error) {
+
+// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
+// (Issue #1413 H5 residual) are not exercised by these deletion-worker tests; stubbed to satisfy
+// the widened ProfileRepository interface.
+func (m *MockProfileRepoForWorker) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
+func (m *MockProfileRepoForWorker) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
+	return false, nil
+}
+
+// GetUsersNeedingPlaidDisconnectRepair (Issue #1413 round-7 grace-window repair path) is not
+// exercised by these deletion-worker tests; stubbed to satisfy the widened ProfileRepository
+// interface.
+func (m *MockProfileRepoForWorker) GetUsersNeedingPlaidDisconnectRepair(ctx context.Context, gracePeriod time.Duration) ([]*domain.User, error) {
+	return []*domain.User{}, nil
+}
+
+func (m *MockProfileRepoForWorker) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
+// review round 3) are not exercised by these deletion-worker tests (ExecuteDeletion itself is
+// mocked at the DeletionService level here, not ProfileRepository); stubbed to satisfy the
+// widened ProfileRepository interface.
+func (m *MockProfileRepoForWorker) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockProfileRepoForWorker) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

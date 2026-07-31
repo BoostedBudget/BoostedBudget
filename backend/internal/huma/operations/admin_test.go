@@ -174,6 +174,12 @@ func (m *mockLinkedItemRepo) MarkAllUserItemsDisconnected(ctx context.Context, u
 	return nil
 }
 
+// MarkItemsDisconnected (Issue #1413 H2) is not exercised by these admin-handler tests; stubbed
+// to satisfy the widened LinkedItemRepository interface.
+func (m *mockLinkedItemRepo) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	return nil
+}
+
 // mockEncryptionService is a mock implementation of services.EncryptionService
 type mockEncryptionService struct {
 	decryptedToken string

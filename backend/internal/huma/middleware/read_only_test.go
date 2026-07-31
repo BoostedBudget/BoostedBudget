@@ -3,6 +3,7 @@ package middleware_test
 // #930: Read-only enforcement middleware tests
 // Ensures inactive/cancelled subscriptions can only perform GET/HEAD requests.
 // #898: Adds past_due blocked-case tests and narrowed-whitelist regression tests.
+// #1413: Adds effective-status (admin comp) and fail-closed-on-unresolved-status tests.
 
 import (
 	"context"
@@ -25,11 +26,17 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 	router := chi.NewRouter()
 	api := humachi.New(router, huma.DefaultConfig("Test API", "1.0.0"))
 
-	// Simulate Clerk middleware: set subscription_status (and user_id) from test headers
+	// Simulate Clerk middleware: set effective subscription_status (and user_id) from test
+	// headers. #1413: also injects the "unresolved" flag from a test header, alongside the
+	// existing status header mechanism, so tests can exercise the fail-closed branch without
+	// a new test double.
 	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
 		newCtx := ctx.Context()
 		if status := ctx.Header("X-Test-Subscription-Status"); status != "" {
-			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, status)
+			newCtx = context.WithValue(newCtx, inputs.EffectiveSubscriptionStatusKey, status)
+		}
+		if unresolved := ctx.Header("X-Test-Subscription-Unresolved"); unresolved == "true" {
+			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusUnresolvedKey, true)
 		}
 		if userID := ctx.Header("X-Test-User-Id"); userID != "" {
 			newCtx = context.WithValue(newCtx, inputs.UserIDKey, userID)
@@ -123,6 +130,50 @@ func setupReadOnlyTestAPI(t *testing.T) (*httptest.Server, huma.API) {
 		}{Body: struct {
 			Message string `json:"message"`
 		}{Message: "webhook received"}}, nil
+	})
+
+	// #1413: Protected (Security-annotated) route at the /api/v1/paddle/webhook prefix
+	// whitelist entry. Unlike "public-webhook" above (no Security, bypasses the middleware
+	// entirely), this exercises the prefix-whitelist check itself — used by the
+	// "unresolved status" tests to prove the fail-closed branch runs AFTER whitelisting.
+	huma.Register(api, huma.Operation{
+		OperationID: "paddle-webhook-readonly-test",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/paddle/webhook",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "paddle webhook received"}}, nil
+	})
+
+	// #1413: Protected route under the /api/v1/admin/ prefix whitelist entry — used by the
+	// "unresolved status" tests to prove admin routes stay reachable during an outage.
+	huma.Register(api, huma.Operation{
+		OperationID: "admin-settings-readonly-test",
+		Method:      http.MethodPost,
+		Path:        "/api/v1/admin/settings",
+		Security:    []map[string][]string{{"clerk": {}}},
+	}, func(ctx context.Context, input *struct{}) (*struct {
+		Body struct {
+			Message string `json:"message"`
+		}
+	}, error) {
+		return &struct {
+			Body struct {
+				Message string `json:"message"`
+			}
+		}{Body: struct {
+			Message string `json:"message"`
+		}{Message: "admin settings updated"}}, nil
 	})
 
 	// Subscription checkout whitelist — resubscription must work even for cancelled/inactive users
@@ -348,6 +399,20 @@ func doRequest(t *testing.T, server *httptest.Server, method, path, subscription
 	return resp
 }
 
+// doRequestUnresolved issues a request with the "unresolved" flag set (simulating a Clerk
+// middleware status-lookup failure, e.g. a DB error) and no subscription status set — the
+// #1413 fail-closed case. No X-Test-Subscription-Status header is sent, since in production
+// the status key is genuinely absent when the lookup fails (see clerk.go).
+func doRequestUnresolved(t *testing.T, server *httptest.Server, method, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, server.URL+path, nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Test-Subscription-Unresolved", "true")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
 // TestReadOnlyMiddleware_GET_Inactive_Allowed tests that GET requests are allowed for inactive users.
 func TestReadOnlyMiddleware_GET_Inactive_Allowed(t *testing.T) {
 	server, _ := setupReadOnlyTestAPI(t)
@@ -427,6 +492,67 @@ func TestReadOnlyMiddleware_PublicRoute_NoSecurity_Passthrough(t *testing.T) {
 
 	// Plaid webhook has no Security annotation — should pass through even with inactive status
 	resp := doRequest(t, server, http.MethodPost, "/api/v1/plaid/webhook", "inactive")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// ─── #1413: fail-closed-on-unresolved-status ─────────────────────────────────────────────────
+//
+// Note: this file's simulated Clerk middleware (setupReadOnlyTestAPI, above) injects the
+// effective-status header straight into the context, so it cannot exercise the real
+// clerk.go / profile_repository.go override-resolution wiring that #1413 actually changed.
+// The genuine "comped user" regression coverage lives in:
+//   - profile_repository_test.go (repository resolves an active override to "active" even
+//     though the row's raw subscription_status is "inactive")
+//   - clerk_subscription_status_test.go's
+//     TestClerkAndReadOnlyMiddleware_CompedUser_POST_Allowed, which wires the REAL Clerk
+//     middleware and the REAL read-only middleware together end-to-end.
+
+// TestReadOnlyMiddleware_POST_Unresolved_NonWhitelistedPath_Blocked503 tests the fail-closed
+// branch: when the Clerk middleware's status lookup failed (unresolved == true), a mutating
+// request to a non-whitelisted path is blocked with 503, not silently allowed through.
+func TestReadOnlyMiddleware_POST_Unresolved_NonWhitelistedPath_Blocked503(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/transactions")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"an unresolved status must fail closed (503), not silently grant write access during an outage")
+}
+
+// TestReadOnlyMiddleware_POST_Unresolved_PaddleWebhookPrefix_Allowed is the outage-safety case:
+// even when the status lookup failed, the prefix whitelist must still be honored so Paddle
+// webhook processing is never blocked by a DB blip elsewhere in the request path.
+func TestReadOnlyMiddleware_POST_Unresolved_PaddleWebhookPrefix_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/paddle/webhook")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"the unresolved-status check must run AFTER the prefix whitelist, or a DB blip would also block Paddle webhook processing")
+}
+
+// TestReadOnlyMiddleware_POST_Unresolved_AdminPrefix_Allowed tests that admin routes remain
+// reachable during an outage — a DB blip elsewhere must not lock admins out of recovery tools.
+func TestReadOnlyMiddleware_POST_Unresolved_AdminPrefix_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequestUnresolved(t, server, http.MethodPost, "/api/v1/admin/settings")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"admin routes must stay reachable even when the status lookup is unresolved")
+}
+
+// TestReadOnlyMiddleware_GET_Unresolved_Allowed tests that GET requests are never blocked by
+// the unresolved-status branch — read-only access is unaffected regardless of status.
+func TestReadOnlyMiddleware_GET_Unresolved_Allowed(t *testing.T) {
+	server, _ := setupReadOnlyTestAPI(t)
+
+	resp := doRequestUnresolved(t, server, http.MethodGet, "/api/v1/transactions")
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -691,7 +817,10 @@ func setupReadOnlyTestAPIWithHouseholdChecker(t *testing.T, checker humamiddlewa
 	api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
 		newCtx := ctx.Context()
 		if status := ctx.Header("X-Test-Subscription-Status"); status != "" {
-			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, status)
+			newCtx = context.WithValue(newCtx, inputs.EffectiveSubscriptionStatusKey, status)
+		}
+		if unresolved := ctx.Header("X-Test-Subscription-Unresolved"); unresolved == "true" {
+			newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusUnresolvedKey, true)
 		}
 		if userID := ctx.Header("X-Test-User-Id"); userID != "" {
 			newCtx = context.WithValue(newCtx, inputs.UserIDKey, userID)

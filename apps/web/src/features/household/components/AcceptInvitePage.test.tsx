@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { GetInvitePreviewResponseBody, AcceptInviteResponseBody, Account } from '@boostedbudget/api-client/models'
 import {
@@ -28,9 +28,9 @@ import {
 } from '@/test/mocks/household-api'
 import { mockUseAuth, mockUseClerk, mockUseUser, createMockClerkAuth, createMockClerk, createMockClerkUser } from '@/test/mocks/clerk'
 import { mockUseGetAccounts } from '@/test/mocks/accounts-api'
-import { mockNavigate } from '@/test/mocks/react-router'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { createLocationHarness } from '@/test/utils/locationProbe'
 import { AcceptInvitePage } from './AcceptInvitePage'
 
 const mockPreview: GetInvitePreviewResponseBody = {
@@ -73,12 +73,15 @@ const mockAccount: Account = {
   updated_at: '2025-01-01T00:00:00Z',
 }
 
+const { locationRef, LocationProbe, reset: resetLocationProbe } = createLocationHarness()
+
 function renderPage(token = 'tok-123', routePath: '/households/invites/:token' | '/household/invite/:token' = '/households/invites/:token') {
   const basePath = routePath === '/households/invites/:token' ? '/households/invites' : '/household/invite'
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`${basePath}/${token}`]}>
+        <LocationProbe />
         <Routes>
           <Route path={routePath} element={<AcceptInvitePage />} />
           <Route path="/dashboard" element={<div>Dashboard Page</div>} />
@@ -99,7 +102,7 @@ describe('AcceptInvitePage', () => {
     mockUseClerk.mockClear()
     mockUseUser.mockClear()
     mockUseGetAccounts.mockClear()
-    mockNavigate.mockClear()
+    resetLocationProbe()
     mockTrackEvent.mockClear()
 
     mockUseGetHouseholdInvitePreview.mockReturnValue({
@@ -318,7 +321,7 @@ describe('AcceptInvitePage', () => {
 
     await waitFor(
       () => {
-        expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
+        expect(locationRef.current.pathname).toBe('/dashboard')
       },
       { timeout: 3000 }
     )

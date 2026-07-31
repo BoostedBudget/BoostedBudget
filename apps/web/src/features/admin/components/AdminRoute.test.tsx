@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { mockUseCheckRole } from '@/test/mocks/admin-api'
 import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'

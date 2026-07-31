@@ -11,6 +11,7 @@ import {
   mockUpdateSubscriptionMutateAsync,
   mockCancelSubscriptionMutateAsync,
 } from '@/test/mocks/subscription-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -50,9 +51,19 @@ describe('useSubscriptionManagement', () => {
       mutateAsync: mockCancelSubscriptionMutateAsync,
       ...defaultMutationState,
     })
+    mockUseGetBillingPortalUrl.mockClear()
     mockUseGetBillingPortalUrl.mockReturnValue(defaultQueryState)
     mockUpdateSubscriptionMutateAsync.mockClear()
     mockCancelSubscriptionMutateAsync.mockClear()
+    // Non-comped by default (the hook also consults the profile-derived presentation as a
+    // resilience fallback for comped users, Issue #1413).
+    mockUseGetUserProfile.mockClear()
+    mockUseGetUserProfile.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    })
   })
 
   describe('Loading state', () => {
@@ -338,6 +349,81 @@ describe('useSubscriptionManagement', () => {
 
       const call = mockUpdateSubscriptionMutateAsync.mock.calls[0]?.[0]
       expect(call.data.current_billing_interval).toBeUndefined()
+    })
+  })
+
+  // Issue #1413: admin-comped users get real access even though there's no Paddle subscription.
+  describe('Comped resilience (#1413)', () => {
+    it('returns hasNoSubscription false for a comped user even when the endpoint 404s (profile-derived)', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        error: { status: 404, message: 'Not Found' },
+      })
+      mockUseGetUserProfile.mockReturnValue({
+        data: {
+          id: 'user-1',
+          subscription_status: 'inactive',
+          subscription_tier: 'premium',
+          is_comped: true,
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.hasNoSubscription).toBe(false)
+      expect(result.current.isComped).toBe(true)
+      expect(result.current.subscriptionError).toBeNull()
+    })
+
+    it('returns isComped true when the subscription payload itself reports is_comped', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: {
+          status: 'active',
+          tier: 'premium',
+          is_comped: true,
+          comp_ends_at: '2026-08-01T00:00:00Z',
+        },
+      })
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.isComped).toBe(true)
+      expect(result.current.compEndsAt).toBe('2026-08-01T00:00:00Z')
+    })
+
+    it('does not enable the billing-portal query for a comped user', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium', is_comped: true },
+      })
+
+      renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+
+      expect(mockUseGetBillingPortalUrl).toHaveBeenCalledWith(
+        expect.objectContaining({ query: expect.objectContaining({ enabled: false }) })
+      )
+    })
+
+    it('regression: non-comped 404 still returns hasNoSubscription true', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        error: { status: 404, message: 'Not Found' },
+      })
+
+      const { result } = renderHook(() => useSubscriptionManagement(), {
+        wrapper: createWrapper(),
+      })
+
+      expect(result.current.hasNoSubscription).toBe(true)
+      expect(result.current.isComped).toBe(false)
     })
   })
 })

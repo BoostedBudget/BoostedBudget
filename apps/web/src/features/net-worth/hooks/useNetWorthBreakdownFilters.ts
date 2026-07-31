@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import type { RangeValue } from '@/shared/components/ColumnFilterDropdown'
 import type { SortState } from '@/shared/components/DataTable'
 import { useSortUrlState } from '@/shared/hooks/useSortUrlState'

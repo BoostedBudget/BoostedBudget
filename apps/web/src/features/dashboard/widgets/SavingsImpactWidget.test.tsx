@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import type { UserSavingsImpact } from '@boostedbudget/api-client/models'
 
 // Use centralized mocks — no inline mock.module()

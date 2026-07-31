@@ -103,7 +103,6 @@ for f in \
     "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
     "$FRONTEND_DIR/src/test/mocks/clerk.tsx" \
     "$FRONTEND_DIR/src/test/mocks/plaid-api.ts" \
-    "$FRONTEND_DIR/src/test/mocks/react-router.ts" \
     "$FRONTEND_DIR/src/test/mocks/sonner.ts"; do
     GROUP_C_PRELOAD_ARGS+=(--preload "$f")
 done
@@ -152,7 +151,6 @@ for f in \
     "$FRONTEND_DIR/src/test/mocks/merchants-api.ts" \
     "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
     "$FRONTEND_DIR/src/test/mocks/posthog.ts" \
-    "$FRONTEND_DIR/src/test/mocks/react-router.ts" \
     "$FRONTEND_DIR/src/test/mocks/sonner.ts"; do
     GROUP_E_PRELOAD_ARGS+=(--preload "$f")
 done

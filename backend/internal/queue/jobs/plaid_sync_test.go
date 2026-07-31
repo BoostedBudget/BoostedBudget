@@ -184,6 +184,15 @@ func (m *MockLinkedItemRepository) MarkAllUserItemsDisconnected(ctx context.Cont
 	return args.Error(0)
 }
 
+// MarkItemsDisconnected (Issue #1413 H2) is not exercised by these sync-job tests; stubbed to
+// satisfy the widened repository.LinkedItemRepository interface. Note: this is the one
+// unavoidable, minimal, mechanical touch to internal/queue/jobs required by this task (the
+// package would otherwise fail to compile) — see the #1413 P3 report for detail.
+func (m *MockLinkedItemRepository) MarkItemsDisconnected(ctx context.Context, ids []string) error {
+	args := m.Called(ctx, ids)
+	return args.Error(0)
+}
+
 // UpdateInvestmentsLastSyncedDate - Issue #659: Plaid Investments
 func (m *MockLinkedItemRepository) UpdateInvestmentsLastSyncedDate(ctx context.Context, id string, date time.Time) error {
 	args := m.Called(ctx, id, date)

@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { screen, fireEvent } from '@testing-library/react'
 import React from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { NotificationItem } from './NotificationItem'
 import type { Notification } from '@boostedbudget/api-client/models'
 import { mockUseMarkNotificationAsRead } from '@/test/mocks/notifications-api'

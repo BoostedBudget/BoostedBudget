@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
-import { Award, Gem, Check, X, AlertTriangle } from 'lucide-react'
+import { useLocation } from 'react-router'
+import { Award, Gem, Check, X, AlertTriangle, Gift } from 'lucide-react'
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import type { TierName, SubscriptionTier } from '../subscription/types'
 import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
 import {
@@ -50,34 +51,42 @@ function buildFeatureList(tierData: SubscriptionTier): Array<{ feature: string; 
 
 function TrialBanner({ daysRemaining }: { daysRemaining: number }) {
   return (
-    <div
-      className="flex items-center bg-info/10 border border-info/30 border-l-4 border-l-info rounded-lg px-6 py-4 mb-8"
-      role="status"
-    >
-      <div className="flex-1">
-        <p className="text-[0.9375rem] text-info m-0 leading-relaxed">
-          You're on a free trial &mdash; <strong>{daysRemaining} day{daysRemaining === 1 ? '' : 's'} remaining</strong>
-        </p>
-      </div>
-    </div>
+    <Alert variant="info" role="status" className="mb-8">
+      <AlertDescription>
+        You're on a free trial &mdash; <strong>{daysRemaining} day{daysRemaining === 1 ? '' : 's'} remaining</strong>
+      </AlertDescription>
+    </Alert>
   )
 }
 
 function FrozenAccountBanner() {
   return (
-    <div
-      className="flex items-start gap-4 bg-gradient-to-r from-warning/20 to-warning/30 border border-warning border-l-4 border-l-warning rounded-lg px-6 py-5 mb-8"
-      role="alert"
-    >
-      <AlertTriangle className="shrink-0 w-6 h-6 text-warning mt-0.5" aria-hidden="true" />
-      <div className="flex-1">
-        <h2 className="text-base font-semibold text-warning m-0 mb-1.5">Your subscription has expired</h2>
-        <p className="text-[0.9375rem] text-warning m-0 leading-relaxed">
-          Subscribe to continue using BoostedBudget. Your data is safe and will be
-          available once you resubscribe.
-        </p>
-      </div>
-    </div>
+    <Alert variant="warning" className="mb-8">
+      <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+      <AlertTitle>Your subscription has expired</AlertTitle>
+      <AlertDescription>
+        Subscribe to continue using BoostedBudget. Your data is safe and will be
+        available once you resubscribe.
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/**
+ * Issue #1413: calm, non-celebratory notice for admin-comped users. Replaces the frozen banner
+ * for this population — a comped user has real access, so "your subscription has expired" would
+ * be actively wrong.
+ */
+function ComplimentaryBanner({ compEndsAt }: { compEndsAt?: string }) {
+  return (
+    <Alert variant="info" className="mb-8">
+      <Gift className="h-4 w-4" aria-hidden="true" />
+      <span>
+        {compEndsAt
+          ? `Complimentary access ends ${compEndsAt.slice(0, 10)}.`
+          : 'Complimentary Premium, provided by BoostedBudget.'}
+      </span>
+    </Alert>
   )
 }
 
@@ -111,7 +120,7 @@ function TierCard({
   const billingInterval = billingPeriod === 'monthly' ? 'month' : 'year'
 
   const isCurrentTier =
-    ['active', 'trialing', 'cancelled', 'past_due'].includes(pricingState.status) &&
+    ['active', 'trialing', 'cancelled', 'past_due', 'comped'].includes(pricingState.status) &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
 
@@ -267,9 +276,12 @@ export function PricingPage() {
     query: { staleTime: 24 * 60 * 60 * 1000 },
   })
 
+  // Issue #1413: a comped user must never see the frozen banner — even when the route guard set
+  // location.state.frozen before the profile resolved (a race, not a real freeze).
   const isFrozen =
-    (location.state as { frozen?: boolean } | null)?.frozen === true ||
-    pricingState.status === 'past_due'
+    pricingState.status !== 'comped' &&
+    ((location.state as { frozen?: boolean } | null)?.frozen === true ||
+      pricingState.status === 'past_due')
 
   if (pricingState.status === 'loading') {
     return (
@@ -325,6 +337,9 @@ export function PricingPage() {
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
       {isFrozen && <FrozenAccountBanner />}
+      {pricingState.status === 'comped' && (
+        <ComplimentaryBanner compEndsAt={pricingState.compEndsAt} />
+      )}
       {pricingState.status === 'trial' && (
         <TrialBanner daysRemaining={pricingState.daysRemaining} />
       )}

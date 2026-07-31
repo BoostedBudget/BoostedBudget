@@ -1,4 +1,4 @@
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router'
 import { useIsAdmin } from '../hooks/useIsAdmin'
 import { useAdminMode } from '../hooks/useAdminMode'
 import { Button } from '@/components/ui/button'

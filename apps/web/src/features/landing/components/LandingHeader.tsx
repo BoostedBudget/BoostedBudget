@@ -7,7 +7,7 @@
 
 import { useState, useEffect } from 'react'
 import { useClerk } from '@clerk/react-router'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Menu, X, Rocket } from 'lucide-react'
 

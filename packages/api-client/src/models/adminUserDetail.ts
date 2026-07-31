@@ -37,6 +37,9 @@ export interface AdminUserDetail {
   boosts_count: number;
   budgets_count: number;
   created_at: string;
+  deletion_requested_at?: string;
+  deletion_scheduled_at?: string;
+  effective_status: string;
   email: string;
   id: string;
   is_active: boolean;
