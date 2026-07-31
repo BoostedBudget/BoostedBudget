@@ -454,7 +454,10 @@ func main() {
 			RetentionMonths: cfg.RetentionPeriodMonths,
 			Logger:          appLogger,
 		})
-		manualTierOverrideExpiryCheckWorker.SetAnalytics(phClient)
+		// Consent-gated (Issue #1413 round 10): this worker's event carries the expired target user's
+		// own UUID as distinct_id, so it is that user's personal data even though a system job fired
+		// it — see SetGDPRAnalytics' doc comment for why the earlier raw-phClient clearance was reversed.
+		manualTierOverrideExpiryCheckWorker.SetGDPRAnalytics(gdprClient)
 		appLogger.Info("Manual tier override expiry check worker created (River)")
 
 		// Create services

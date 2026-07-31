@@ -701,6 +701,19 @@ func actorUserIDIsPresentAndNil(props map[string]interface{}) bool {
 // (never reused: an automatic expiry and an admin's deliberate removal are different events), with
 // actor_user_id PRESENT and nil (no acting admin — system-initiated; see actorUserIDIsPresentAndNil's
 // own doc comment for why a bare `== nil` check cannot be trusted here).
+// MockGDPRAnalytics mocks phclient.GDPRAnalytics — the CONSENT-GATED client this worker moved to in
+// Issue #1413 round 10. Deliberately a separate type from MockAnalytics (email_change_propagation_test.go),
+// which mocks the raw phclient.Analytics interface: the whole point of the round-10 change is that this
+// worker must call CaptureIfConsented and NOT Capture, so the two mocks must not be interchangeable.
+// A test asserting on the wrong method name now fails to compile rather than silently passing.
+type MockGDPRAnalytics struct {
+	mock.Mock
+}
+
+func (m *MockGDPRAnalytics) CaptureIfConsented(ctx context.Context, userID, event string, properties map[string]interface{}) {
+	m.Called(ctx, userID, event, properties)
+}
+
 func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_ForClaimedUser(t *testing.T) {
 	ctx := context.Background()
 
@@ -712,12 +725,12 @@ func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_ForClaimedUser(t *tes
 
 	mockRepo := new(mockManualTierOverrideProfileRepository)
 	mockRemover := new(mockManualTierOverrideRemover)
-	mockAnalytics := new(MockAnalytics)
+	mockGDPRAnalytics := new(MockGDPRAnalytics)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
-	mockAnalytics.On("Capture", "user-expired", phclient.EventAdminSubscriptionOverrideExpired, mock.MatchedBy(func(props map[string]interface{}) bool {
+	mockGDPRAnalytics.On("CaptureIfConsented", mock.Anything, "user-expired", phclient.EventAdminSubscriptionOverrideExpired, mock.MatchedBy(func(props map[string]interface{}) bool {
 		return len(props) == 3 &&
 			props["tier"] == override &&
 			props["had_expiry"] == true &&
@@ -725,13 +738,13 @@ func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_ForClaimedUser(t *tes
 	})).Return()
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
-	worker.SetAnalytics(mockAnalytics)
+	worker.SetGDPRAnalytics(mockGDPRAnalytics)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
 
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockAnalytics.AssertExpectations(t)
+	mockGDPRAnalytics.AssertExpectations(t)
 }
 
 // TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_HadExpiryFalseWhenNoEndsAt proves
@@ -755,12 +768,12 @@ func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_HadExpiryFalseWhenNoE
 
 	mockRepo := new(mockManualTierOverrideProfileRepository)
 	mockRemover := new(mockManualTierOverrideRemover)
-	mockAnalytics := new(MockAnalytics)
+	mockGDPRAnalytics := new(MockGDPRAnalytics)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-no-override", mock.AnythingOfType("string"), 6, (*string)(nil), (*time.Time)(nil)).
 		Return(repository.RemoveTierOverrideRow{Removed: false, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
-	mockAnalytics.On("Capture", "user-no-override", phclient.EventAdminSubscriptionOverrideExpired, mock.MatchedBy(func(props map[string]interface{}) bool {
+	mockGDPRAnalytics.On("CaptureIfConsented", mock.Anything, "user-no-override", phclient.EventAdminSubscriptionOverrideExpired, mock.MatchedBy(func(props map[string]interface{}) bool {
 		return len(props) == 3 &&
 			props["tier"] == "" &&
 			props["had_expiry"] == false &&
@@ -768,13 +781,13 @@ func TestManualTierOverrideExpiryCheck_FiresAnalyticsEvent_HadExpiryFalseWhenNoE
 	})).Return()
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
-	worker.SetAnalytics(mockAnalytics)
+	worker.SetGDPRAnalytics(mockGDPRAnalytics)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
 
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockAnalytics.AssertExpectations(t)
+	mockGDPRAnalytics.AssertExpectations(t)
 }
 
 // TestManualTierOverrideExpiryCheck_ClaimLost_NoAnalyticsEvent proves a lost claim (an admin
@@ -800,20 +813,20 @@ func TestManualTierOverrideExpiryCheck_ClaimLost_NoAnalyticsEvent(t *testing.T) 
 
 	mockRepo := new(mockManualTierOverrideProfileRepository)
 	mockRemover := new(mockManualTierOverrideRemover)
-	mockAnalytics := new(MockAnalytics)
+	mockGDPRAnalytics := new(MockGDPRAnalytics)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-extended", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, false, nil)
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
-	worker.SetAnalytics(mockAnalytics)
+	worker.SetGDPRAnalytics(mockGDPRAnalytics)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
 
 	err := worker.Work(ctx, job)
 
 	require.NoError(t, err)
-	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+	mockGDPRAnalytics.AssertNotCalled(t, "CaptureIfConsented", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestManualTierOverrideExpiryCheck_RemoveFails_NoAnalyticsEvent proves a per-user
@@ -835,24 +848,24 @@ func TestManualTierOverrideExpiryCheck_RemoveFails_NoAnalyticsEvent(t *testing.T
 
 	mockRepo := new(mockManualTierOverrideProfileRepository)
 	mockRemover := new(mockManualTierOverrideRemover)
-	mockAnalytics := new(MockAnalytics)
+	mockGDPRAnalytics := new(MockGDPRAnalytics)
 
 	mockRepo.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-fail", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, false, errors.New("db error"))
 
 	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil)
-	worker.SetAnalytics(mockAnalytics)
+	worker.SetGDPRAnalytics(mockGDPRAnalytics)
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
 
 	err := worker.Work(ctx, job)
 
 	require.Error(t, err)
-	mockAnalytics.AssertNotCalled(t, "Capture", mock.Anything, mock.Anything, mock.Anything)
+	mockGDPRAnalytics.AssertNotCalled(t, "CaptureIfConsented", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestManualTierOverrideExpiryCheck_NilAnalytics_NoPanic proves the worker is safe to use
-// without ever calling SetAnalytics — the real-world state in local dev/QA where PostHog is
+// without ever calling SetGDPRAnalytics — the real-world state in local dev/QA where PostHog is
 // unconfigured. A nil-pointer panic here would break the daily expiry sweep entirely.
 //
 // Paired positive assertion (second Codex round): the no-client phase above proves only "no
@@ -875,7 +888,7 @@ func TestManualTierOverrideExpiryCheck_NilAnalytics_NoPanic(t *testing.T) {
 	mockRemover.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
 
-	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil) // SetAnalytics never called
+	worker := newTestManualTierOverrideExpiryWorker(mockRepo, mockRemover, nil) // SetGDPRAnalytics never called
 
 	job := newTestManualTierOverrideExpiryJob(ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"})
 
@@ -891,18 +904,18 @@ func TestManualTierOverrideExpiryCheck_NilAnalytics_NoPanic(t *testing.T) {
 	// worker instance.
 	mockRepoWithClient := new(mockManualTierOverrideProfileRepository)
 	mockRemoverWithClient := new(mockManualTierOverrideRemover)
-	mockAnalytics := new(MockAnalytics)
+	mockGDPRAnalytics := new(MockGDPRAnalytics)
 
 	mockRepoWithClient.On("GetUsersWithExpiredManualTierOverride", ctx).Return(users, nil)
 	mockRemoverWithClient.On("RemoveUserTierOverrideIfMatches", ctx, "", "user-expired", mock.AnythingOfType("string"), 6, &override, &endsAt).
 		Return(repository.RemoveTierOverrideRow{Removed: true, RevertedTier: "premium", RevertedStatus: "cancelled"}, true, nil)
-	mockAnalytics.On("Capture", "user-expired", phclient.EventAdminSubscriptionOverrideExpired, mock.Anything).Return()
+	mockGDPRAnalytics.On("CaptureIfConsented", mock.Anything, "user-expired", phclient.EventAdminSubscriptionOverrideExpired, mock.Anything).Return()
 
 	workerWithClient := newTestManualTierOverrideExpiryWorker(mockRepoWithClient, mockRemoverWithClient, nil)
-	workerWithClient.SetAnalytics(mockAnalytics)
+	workerWithClient.SetGDPRAnalytics(mockGDPRAnalytics)
 
 	err := workerWithClient.Work(ctx, job)
 	require.NoError(t, err)
 
-	mockAnalytics.AssertExpectations(t)
+	mockGDPRAnalytics.AssertExpectations(t)
 }
