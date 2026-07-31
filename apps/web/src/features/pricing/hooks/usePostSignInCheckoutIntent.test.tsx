@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
 import React from 'react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { usePostSignInCheckoutIntent } from './usePostSignInCheckoutIntent'
 import { mockUseUser } from '@/test/mocks/clerk'
 import {

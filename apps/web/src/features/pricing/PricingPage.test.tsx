@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, mock } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { PricingPage } from './PricingPage'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
 
@@ -23,6 +23,7 @@ import {
   mockUseGetCurrentSubscription,
   mockUseGetBillingPortalUrl,
 } from '@/test/mocks/subscription-api'
+import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
 function renderWithProviders(ui: React.ReactElement, routerState?: { frozen?: boolean }) {
   return render(
@@ -82,6 +83,15 @@ describe('PricingPage', () => {
       data: undefined,
       isLoading: false,
       error: null,
+    })
+    // Non-comped by default (usePricingContext also consults the profile-derived presentation as
+    // a resilience fallback for comped users, Issue #1413).
+    mockUseGetUserProfile.mockClear()
+    mockUseGetUserProfile.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
     })
   })
 
@@ -443,6 +453,18 @@ describe('PricingPage', () => {
 
       expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
     })
+
+    // Design-hook finding: the frozen banner previously hand-rolled a "side-tab" pattern (a full
+    // border plus a thick one-sided accent border) plus a decorative gradient, instead of reusing
+    // the Alert primitive.
+    it('renders as a semantic alert with no bespoke side-tab or gradient styling', () => {
+      renderWithProviders(<PricingPage />, { frozen: true })
+
+      const alert = screen.getByRole('alert')
+      expect(alert).toHaveTextContent(/your subscription has expired/i)
+      expect(alert.className).not.toMatch(/border-l-4/)
+      expect(alert.className).not.toMatch(/bg-gradient-to-r/)
+    })
   })
 
   // Issue #772: Trial user detection (GAP 1)
@@ -531,6 +553,33 @@ describe('PricingPage', () => {
 
       expect(screen.getByText(/45 days remaining/i)).toBeInTheDocument()
       expect(screen.getByText(/you're on a free trial/i)).toBeInTheDocument()
+    })
+
+    // Design-hook finding: the trial banner previously hand-rolled a "side-tab" pattern (a
+    // full border plus a thick one-sided accent border) instead of reusing the Alert primitive.
+    it('renders the trial banner as a semantic status region with no bespoke side-tab styling', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_123',
+          status: 'trial',
+          tier: 'premium',
+          billing_interval: 'month',
+          amount: '0.00',
+          currency: 'USD',
+          current_period_end: '2026-04-08T00:00:00Z',
+          trial_ends_at: '2026-04-08T00:00:00Z',
+          trial_days_remaining: 45,
+        },
+        isLoading: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      })
+
+      renderWithProviders(<PricingPage />)
+
+      const status = screen.getByRole('status')
+      expect(status).toHaveTextContent(/you're on a free trial/i)
+      expect(status.className).not.toMatch(/border-l-4/)
     })
 
     it('should show "Current Plan" badge for paid users (not trial)', () => {
@@ -738,6 +787,104 @@ describe('PricingPage', () => {
         const updatePaymentButtons = screen.getAllByRole('button', { name: /^Update Payment$/i })
         expect(updatePaymentButtons.length).toBe(4) // 4 non-current tiers
         updatePaymentButtons.forEach(btn => expect(btn).toBeDisabled())
+      })
+    })
+
+    // Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
+    describe('comped (admin-granted complimentary access)', () => {
+      beforeEach(() => {
+        mockUseUser.mockReturnValue({
+          user: { id: 'user_123', publicMetadata: { subscription_tier: 'premium' } },
+          isSignedIn: true,
+          isLoaded: true,
+        })
+      })
+
+      it('shows a complimentary notice instead of the frozen banner, even when redirected with frozen state', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            comp_ends_at: '2026-08-10T00:00:00Z',
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />, { frozen: true })
+
+        expect(screen.queryByText(/your subscription has expired/i)).not.toBeInTheDocument()
+        expect(screen.getByText(/complimentary access ends 2026-08-10/i)).toBeInTheDocument()
+      })
+
+      it('shows provided-by copy for a permanent comp (no end date)', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        expect(screen.getByText(/complimentary premium, provided by boostedbudget/i)).toBeInTheDocument()
+      })
+
+      it('shows Current Plan for the comped tier and an enabled Subscribe for every other tier', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
+        expect(currentPlanButtons.length).toBeGreaterThan(0)
+
+        const subscribeButtons = screen.getAllByRole('button', { name: /^subscribe$/i })
+        expect(subscribeButtons.length).toBe(4)
+        subscribeButtons.forEach((btn) => expect(btn).not.toBeDisabled())
+      })
+
+      it('does not show the TrialBanner for a comped user', () => {
+        mockUseGetCurrentSubscription.mockReturnValue({
+          data: {
+            status: 'active',
+            tier: 'premium',
+            is_comped: true,
+            billing_interval: 'month',
+            amount: '0.00',
+            currency: 'USD',
+            cancel_at_period_end: false,
+          },
+          isLoading: false,
+          error: null,
+        })
+
+        renderWithProviders(<PricingPage />)
+
+        expect(screen.queryByText(/you're on a free trial/i)).not.toBeInTheDocument()
       })
     })
   })

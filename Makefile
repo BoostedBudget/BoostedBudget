@@ -284,8 +284,8 @@ generate-all: generate-openapi generate-api-client
 validate-all: validate-openapi validate-api-client validate-mcp-artifacts
 	@echo "✅ All generated code is up to date!"
 
-# Validate MCP Worker generated artifacts (facade + spec-index) match current OpenAPI spec.
-# Mirrors validate-openapi / validate-api-client patterns.
+# Validate MCP Worker generated artifacts (facade + spec-index + capability summary)
+# match current OpenAPI spec. Mirrors validate-openapi / validate-api-client patterns.
 validate-mcp-artifacts:
 	@echo "Validating MCP server generated artifacts..."
 	@cd apps/mcp-server && bun run src/spec/index-builder.ts
@@ -294,6 +294,9 @@ validate-mcp-artifacts:
 	@cd apps/mcp-server && bun run scripts/generate-facade.ts
 	@git diff --exit-code apps/mcp-server/src/client/generated/facade.ts || \
 		(echo "❌ MCP facade.ts is outdated. Run: cd apps/mcp-server && bun run scripts/generate-facade.ts" && exit 1)
+	@cd apps/mcp-server && bun run scripts/generate-mcp-capability-summary.ts
+	@git diff --exit-code apps/web/src/features/mcp/data/capabilitySummary.json || \
+		(echo "❌ MCP capabilitySummary.json is outdated. Run: cd apps/mcp-server && bun run scripts/generate-mcp-capability-summary.ts" && exit 1)
 	@echo "✅ MCP Worker artifacts are up to date"
 
 # Code generation (deprecated - use generate-openapi)

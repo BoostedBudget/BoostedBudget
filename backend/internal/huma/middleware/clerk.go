@@ -39,10 +39,11 @@ func writeClerkJSONError(ctx huma.Context, status int, message string) {
 	)))
 }
 
-// SubscriptionStatusReader can look up a user's subscription status by internal user ID.
-// Used by the Clerk middleware to store subscription status in context for read-only enforcement (#930).
+// SubscriptionStatusReader can look up a user's EFFECTIVE subscription status (override-aware;
+// Issue #1413) by internal user ID. Used by the Clerk middleware to store subscription status
+// in context for read-only enforcement (#930).
 type SubscriptionStatusReader interface {
-	GetSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
+	GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error)
 }
 
 // OAuthTokenVerifier verifies a Clerk OAuth access token (opaque or JWT) with Clerk
@@ -204,10 +205,11 @@ func (v *clerkOAuthVerifier) VerifyAccessToken(ctx context.Context, token string
 //   - registrationService: Service for auto-registering new users
 //   - logger: structured logger (nil → slog.Default())
 //   - mcpAuth: MCP service-to-service auth config (nil → JWT-only)
-//   - profileRepo: Repository for reading subscription status (nil = skip status check)
+//   - profileRepo: Repository for reading the effective subscription status (nil = skip status check)
 //
 // The middleware stores: user_id, clerk_user_id, claims (JWT path only),
-// subscription_status.
+// the effective subscription_status on lookup success, or subscription_status_unresolved=true
+// on lookup failure (Issue #1413) so the read-only middleware can fail closed.
 func NewClerkMiddleware(
 	secretKey string,
 	identityRepo repository.UserIdentityRepository,
@@ -284,13 +286,20 @@ func NewClerkMiddleware(
 		}
 		newCtx = observability.WithUserID(newCtx, identity.UserID)
 
-		// #930: Store subscription status for read-only enforcement middleware.
+		// #930: Store the EFFECTIVE subscription status for read-only enforcement middleware.
 		// Applies to BOTH paths so MCP writes cannot bypass read-only enforcement.
+		//
+		// #1413: On lookup failure, mark the status as unresolved (in addition to the
+		// existing warning log) rather than leaving the context key simply absent. The
+		// read-only middleware fails closed on SubscriptionStatusUnresolvedKey but fails
+		// open when the status key is absent AND unresolved was never set — the latter is
+		// the "no status reader configured" case, which must keep passing through.
 		if subStatusRepo != nil {
-			if subStatus, subErr := subStatusRepo.GetSubscriptionStatusByUserID(newCtx, identity.UserID); subErr == nil {
-				newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusKey, subStatus)
+			if subStatus, subErr := subStatusRepo.GetEffectiveSubscriptionStatusByUserID(newCtx, identity.UserID); subErr == nil {
+				newCtx = context.WithValue(newCtx, inputs.EffectiveSubscriptionStatusKey, subStatus)
 			} else {
 				logger.Warn("failed to fetch subscription status", "user_id", identity.UserID, "error", subErr)
+				newCtx = context.WithValue(newCtx, inputs.SubscriptionStatusUnresolvedKey, true)
 			}
 		}
 

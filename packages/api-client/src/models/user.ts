@@ -35,15 +35,19 @@ export interface User {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   clerk_user_id: string;
+  comp_ends_at?: string;
+  comp_tier?: string;
   created_at: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
+  effective_status?: string;
   effective_tier?: string;
   email: string;
   email_verified: boolean;
   had_trial: boolean;
   id: string;
   is_active: boolean;
+  is_comped: boolean;
   is_deleted: boolean;
   last_login_at?: string;
   manual_tier_ends_at?: string;
@@ -51,6 +55,7 @@ export interface User {
   paddle_customer_id?: string;
   paddle_subscription_id?: string;
   past_due_started_at?: string;
+  plaid_cleanup_pending_at?: string;
   primary_region: string;
   retention_expires_at?: string;
   retention_notice_30d_sent_at?: string;

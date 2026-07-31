@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { TransactionBudgetBadge } from './TransactionBudgetBadge'
 import type { BudgetCategoryMatch } from '../../utils/transactionBudgetMatcher'
 import type { BudgetCategory } from '../../types'

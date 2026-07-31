@@ -365,6 +365,54 @@ func TestCancelSubscription_RequiredParameters(t *testing.T) {
 	// 5. Handles API errors
 }
 
+// TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled proves the H2
+// idempotency fix for the OTHER Paddle cancel path (PastDueService's grace-cancel step calls
+// CancelSubscription, not CancelSubscriptionImmediately). PastDuePaddleClient's own doc comment
+// already promised "the implementation must tolerate
+// paddle.ErrSubscriptionIsCanceledActionInvalid by mapping it to ErrPaddleAlreadyCancelled" —
+// this was a documented contract with no implementation behind it: CancelSubscription used to
+// wrap and return the raw Paddle error unchanged, which past_due_service.go's
+// `!errors.Is(err, ErrPaddleAlreadyCancelled)` check could never match, so a retried grace-cancel
+// against an already-cancelled subscription would hard-fail instead of tolerating it and
+// continuing the cancellation flow. Verified against
+// https://developer.paddle.com/errors/subscriptions/subscription_is_canceled_action_invalid and
+// paddle.ErrSubscriptionIsCanceledActionInvalid's definition in the vendored SDK
+// (paddle-go-sdk/v4/subscriptions.go) — the same error code CancelSubscriptionImmediately already
+// tolerates, just mapped to the OTHER sentinel this method's callers expect. Issue #1413 H2.
+func TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, paddle.ErrSubscriptionIsCanceledActionInvalid)
+
+	err := svc.CancelSubscription(ctx, subscriptionID)
+
+	require.Error(t, err, "already-cancelled must still be a distinguishable outcome for CancelSubscription (unlike CancelSubscriptionImmediately, which is full success)")
+	assert.ErrorIs(t, err, ErrPaddleAlreadyCancelled, "must map to the sentinel PastDuePaddleClient callers already check for")
+	mockSDK.AssertExpectations(t)
+}
+
+// TestCancelSubscription_SDKError_NotConfusedWithAlreadyCancelled proves a genuine (non-already-
+// cancelled) Paddle failure is NOT accidentally mapped to ErrPaddleAlreadyCancelled.
+func TestCancelSubscription_SDKError_NotConfusedWithAlreadyCancelled(t *testing.T) {
+	svc, mockSDK := setupPaddleServiceWithMock(t)
+	ctx := context.Background()
+	subscriptionID := "sub_01abc123"
+
+	mockSDK.On("CancelSubscription", ctx, mock.MatchedBy(func(req *paddle.CancelSubscriptionRequest) bool {
+		return req.SubscriptionID == subscriptionID
+	})).Return(nil, errors.New("paddle API error"))
+
+	err := svc.CancelSubscription(ctx, subscriptionID)
+
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrPaddleAlreadyCancelled)
+	mockSDK.AssertExpectations(t)
+}
+
 func TestPreviewUpdate_RequiredParameters(t *testing.T) {
 	t.Skip("Requires Paddle SDK interface refactor for proper mocking")
 

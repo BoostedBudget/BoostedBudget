@@ -354,3 +354,93 @@ func TestGetEffectiveSubscription_ResolverError_FailsOpenToOwnTier(t *testing.T)
 	assert.Equal(t, domain.TierPremium, effective.Tier)
 	resolver.AssertExpectations(t)
 }
+
+// ─── Issue #1413 (this task) — tier axis: malformed manual_tier_override must not 500 ────────
+
+// TestGetEffectiveSubscription_MalformedOverride_WithValidator_FallsBackToRawTier is the RED
+// test: manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so it can
+// hold a value naming no configured tier. Before this fix, GetEffectiveSubscription called
+// domain.User.ComputeEffectiveTier() unconditionally, so a malformed override reached
+// tierConfig.GetTier() as an unrecognized name and returned an error — this is the root cause of
+// the admin subscription-detail 500, the /households/me/entitlement 500, and the Plaid
+// first-sync misclassification (all of which call through here). With a validator wired that
+// rejects "not_a_tier", the malformed override must fall back to the raw (base) subscription
+// tier instead of erroring.
+func TestGetEffectiveSubscription_MalformedOverride_WithValidator_FallsBackToRawTier(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil)
+	service.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+
+	override := "not_a_tier"
+	futureEnd := time.Now().Add(24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		SubscriptionStatus: "active", // actively paying — the worst-affected case
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd,
+	}
+
+	effective, err := service.GetEffectiveSubscription(context.Background(), user)
+	require.NoError(t, err, "a malformed override must fall back to the raw tier, not error")
+	assert.Equal(t, domain.TierPremium, effective.Tier, "must fall back to the raw base tier, not the garbage override string")
+}
+
+// TestGetEffectiveSubscription_ValidOverride_WithValidator_StillAppliesOverrideTier is the
+// POSITIVE CONTROL for the fix above: with the exact same validator wired, a VALID,
+// currently-configured override must still resolve to the override tier. An over-tight fix that
+// makes every comp fall back to the raw tier would silently un-comp every legitimately comped
+// user, which is worse than the bug being fixed.
+func TestGetEffectiveSubscription_ValidOverride_WithValidator_StillAppliesOverrideTier(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil)
+	service.SetOverrideTierValidator(func(tier string) bool {
+		_, err := tierConfig.GetTier(domain.TierName(tier))
+		return err == nil
+	})
+
+	override := string(domain.TierHousehold3)
+	futureEnd := time.Now().Add(24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		SubscriptionStatus: "inactive",
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd,
+	}
+
+	effective, err := service.GetEffectiveSubscription(context.Background(), user)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TierHousehold3, effective.Tier, "a valid override must still apply — over-tightening would silently un-comp legitimately comped users")
+}
+
+// TestGetEffectiveSubscription_MalformedOverride_NilValidator_PreFixBehaviorPreserved pins the
+// documented nil-validator semantics (see SetOverrideTierValidator's doc comment once added): if
+// the validator is never wired, a malformed override is trusted unconditionally (skip
+// validation, not deny) — exactly the pre-fix behavior. main.go wires this validator for the
+// entire process lifetime in production (os.Exit(1) if the tier config fails to load), so a nil
+// validator is a test-only/wiring-gap scenario, never real production; failing closed here
+// instead would turn a future wiring oversight into an instant outage for every currently-comped
+// user.
+func TestGetEffectiveSubscription_MalformedOverride_NilValidator_PreFixBehaviorPreserved(t *testing.T) {
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	service := NewSubscriptionService(tierConfig, nil) // SetOverrideTierValidator never called
+
+	override := "not_a_tier"
+	futureEnd := time.Now().Add(24 * time.Hour)
+	user := &domain.User{
+		ID:                 "user-123",
+		SubscriptionTier:   string(domain.TierPremium),
+		ManualTierOverride: &override,
+		ManualTierEndsAt:   &futureEnd,
+	}
+
+	_, err = service.GetEffectiveSubscription(context.Background(), user)
+	assert.Error(t, err, "nil validator must skip validation, not deny — matching this codebase's other SetOverrideTierValidator call sites")
+}

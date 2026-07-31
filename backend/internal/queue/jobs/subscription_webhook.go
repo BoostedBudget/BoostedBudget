@@ -16,6 +16,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 )
 
@@ -41,12 +42,22 @@ type SubscriptionProfileRepository interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 	UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error
 	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
-	// #930: Retention tracking
-	SetRetentionDates(ctx context.Context, userID string, startedAt, expiresAt time.Time) error
+	// #930: Retention tracking — both dates are computed in Postgres (clock_timestamp() +
+	// make_interval); see ProfileRepository.SetRetentionDates's doc comment (profile_repository.go)
+	// for why a Go-computed date is never passed in.
+	SetRetentionDates(ctx context.Context, userID string, retentionMonths int) error
 	ClearRetentionDates(ctx context.Context, userID string) error
 	// #898: Dunning — past_due timestamp tracking
 	SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error
 	ClearPastDueStartedAt(ctx context.Context, userID string) error
+	// ClearPlaidCleanupPendingIfMatches clears plaid_cleanup_pending_at ONLY if it still equals
+	// expected — Issue #1413 round-12 Fix 1. Called by processSubscriptionCanceled once a
+	// synchronous Plaid disconnect (and the retention-clock write) has actually SUCCEEDED, so the
+	// marker no longer overstates outstanding cleanup for this episode. The CAS guard (not the
+	// unconditional ClearPlaidCleanupPending) matters here for the same reason it matters for
+	// repairPlaidDisconnects: an admin comp grant-then-removal between this flow's own re-read and
+	// this call could otherwise start a NEW episode whose fresh marker this call must not erase.
+	ClearPlaidCleanupPendingIfMatches(ctx context.Context, userID string, expected time.Time) (bool, error)
 }
 
 // ClerkService defines the methods needed to update Clerk metadata.
@@ -85,6 +96,13 @@ type HouseholdOverCapacityRepository interface {
 	GetHouseholdForUser(ctx context.Context, userID string) (household *domain.Household, isOwner bool, found bool, err error)
 }
 
+// subscriptionCancelledCleanupClaimLease is the lease duration requested for
+// ActionSubscriptionCancelledCleanup — matches ExecuteDeletion's accountDeletionClaimLease and
+// PastDueService's pastDueClaimLease (Issue #1413): this path also makes a Plaid call, and a
+// generous lease means an over-run is detectable (via the fencing token) rather than silently
+// re-granted to a second worker.
+const subscriptionCancelledCleanupClaimLease = 15 * time.Minute
+
 // SubscriptionWebhookWorker processes Paddle subscription webhook events from the queue.
 type SubscriptionWebhookWorker struct {
 	river.WorkerDefaults[SubscriptionWebhookArgs]
@@ -104,7 +122,17 @@ type SubscriptionWebhookWorker struct {
 	// codebase's analytics/email nil-safe convention.
 	householdRepo HouseholdOverCapacityRepository
 	db            repository.DB
-	logger        *slog.Logger
+	// claimsRepo backs the durable work-claims mechanism processSubscriptionCanceled requires for
+	// EXCLUSIVITY on ActionSubscriptionCancelledCleanup before the Plaid disconnect / retention-
+	// clock side effects (Issue #1413 High finding H7, Codex review round 4). See
+	// SetWorkClaimsRepo — like DeletionService's, this is not an optional capability.
+	//
+	// Typed as the wider WorkClaimsOutcomeRepository (round-3 finding H3), not the base
+	// WorkClaimsRepository other #1413 callers use: this worker MUST distinguish "another
+	// worker holds this lease right now" (retryable) from "already completed" (terminal) —
+	// see processSubscriptionCanceled's ClaimOutcome switch below.
+	claimsRepo repository.WorkClaimsOutcomeRepository
+	logger     *slog.Logger
 }
 
 // SubscriptionWebhookWorkerDeps contains the dependencies for SubscriptionWebhookWorker.
@@ -158,6 +186,20 @@ func (w *SubscriptionWebhookWorker) SetAnalytics(a phclient.Analytics) {
 	w.analytics = a
 }
 
+// SetWorkClaimsRepo wires the durable work-claims mechanism processSubscriptionCanceled requires
+// for EXCLUSIVITY on ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-
+// clock side effects (Issue #1413 High finding H7, Codex review round 4). Mirrors
+// DeletionService.SetWorkClaimsRepo / PastDueService.SetWorkClaimsRepo — a nil claims repo makes
+// that destructive path fail loudly rather than silently falling back to guard-only behavior.
+//
+// Takes the wider WorkClaimsOutcomeRepository (issue #1413 round-3 finding H3) — see the
+// claimsRepo field doc comment. repository.NewWorkClaimsOutcomeRepository constructs a value
+// that satisfies this; every other #1413 caller keeps using the narrower
+// repository.NewWorkClaimsRepository / WorkClaimsRepository unchanged.
+func (w *SubscriptionWebhookWorker) SetWorkClaimsRepo(repo repository.WorkClaimsOutcomeRepository) {
+	w.claimsRepo = repo
+}
+
 // notificationParams holds parameters for creating an in-app notification.
 type notificationParams struct {
 	userID             string
@@ -193,24 +235,84 @@ func (w *SubscriptionWebhookWorker) createNotification(ctx context.Context, para
 	}
 }
 
+// releaseClaimOnFailure releases a work claim and logs any release failure.
+// Used to consolidate the repeated Release + Warn pattern in subscription-cancelled cleanup.
+//
+// userID and resourceID are both taken (rather than deriving one from the other) because, since
+// Issue #1413 P5, resourceID is a composite "{userID}:{Paddle event ID}" built by
+// repository.OccurrenceResourceID — userID stays available for clean, greppable log fields while
+// resourceID is what actually goes into the Release call.
+func (w *SubscriptionWebhookWorker) releaseClaimOnFailure(ctx context.Context, userID, resourceID, action, token, reason string) {
+	if _, releaseErr := w.claimsRepo.Release(ctx, repository.ResourceTypeUser, resourceID, action, token, reason); releaseErr != nil {
+		w.logger.Warn("failed to release work claim", "user_id", userID, "resource_id", resourceID, "action", action, "reason", reason, "error", releaseErr)
+	}
+}
+
 // stringPtr returns a pointer to a string value.
 func stringPtr(s string) *string { return &s }
 
-// syncClerkMetadata updates a user's Clerk public metadata with their current tier and status.
-// Logs and swallows errors so Clerk failures don't abort webhook processing.
-func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID, tier, status string) {
+// effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
+// when an active manual_tier_override names no tier configured in w.tierConfig (Issue #1413 —
+// the tier axis of the malformed-override rule, this task). Mirrors
+// HouseholdOverCapacityCheckWorker.effectiveTierName's identical rationale.
+func (w *SubscriptionWebhookWorker) effectiveTierName(owner *domain.User) string {
+	tier, overrideValue, hasOverride := owner.EffectiveTierWithActiveOverride()
+	if hasOverride && w.tierConfig != nil {
+		if _, err := w.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			w.logger.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+				"user_id", owner.ID, "manual_tier_override", overrideValue)
+			return owner.SubscriptionTier
+		}
+	}
+	return tier
+}
+
+// syncClerkMetadata updates a user's Clerk public metadata with their current EFFECTIVE tier and
+// status. Logs and swallows errors so Clerk failures don't abort webhook processing.
+//
+// Re-reads the user AFTER the caller's UpdateSubscriptionFromPaddle write commits, so the row is
+// fresh, and builds the payload from ClerkPublicMetadata() — the EFFECTIVE tier/status —
+// computed from that fresh row, rather than from whatever raw values this webhook just wrote.
+// This matters because a comped user (active manual_tier_override) must not have their comp
+// clobbered by a Paddle webhook's raw values (Issue #1413 Defect 3).
+//
+// If the re-read fails, the sync attempt is abandoned for this call: without a fresh row we know
+// neither the user's clerk_user_id nor their current effective tier/status, so there is nothing
+// safe to sync. The next webhook or sync opportunity retries.
+func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID string) {
 	if w.clerkService == nil {
 		return
 	}
-	user, err := w.profileRepo.GetUserByID(ctx, userID)
+
+	fresh, err := w.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
-		w.logger.Error("failed to get user for Clerk sync", "user_id", userID, "error", err)
+		w.logger.Error("failed to get user for Clerk sync; skipping sync", "user_id", userID, "error", err)
 		return
 	}
-	if err := w.clerkService.UpdateUserMetadata(ctx, user.ClerkUserID, map[string]interface{}{
-		"subscription_tier":   tier,
-		"subscription_status": status,
-	}); err != nil {
+	if fresh.ClerkUserID == "" {
+		return
+	}
+
+	// Issue #1413 (this task — tier axis, plus a status-axis leak specific to this call site):
+	// manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so its
+	// value can be garbage. domain.User.ClerkPublicMetadata() cannot validate it itself (domain
+	// must not import config), so it would otherwise write the raw garbage tier string AND a
+	// forced "active" status (its computeEffectiveStatusAt treats ANY live override as a comp,
+	// valid or not) straight into Clerk's publicMetadata. Sanitize a scratch copy here — a
+	// rejected override is nulled out entirely so ClerkPublicMetadata()'s own computation falls
+	// back to the raw subscription_tier/status, exactly like every other representation path
+	// this task fixes.
+	scratch := *fresh
+	if _, overrideValue, hasOverride := fresh.EffectiveStatusWithActiveOverride(); hasOverride && w.tierConfig != nil {
+		if _, tierErr := w.tierConfig.GetTier(domain.TierName(overrideValue)); tierErr != nil {
+			w.logger.Warn("rejecting manual tier override in clerk metadata sync: value does not name a configured tier",
+				"user_id", userID, "manual_tier_override", overrideValue)
+			scratch.ManualTierOverride = nil
+			scratch.ManualTierEndsAt = nil
+		}
+	}
+
+	if err := w.clerkService.UpdateUserMetadata(ctx, fresh.ClerkUserID, scratch.ClerkPublicMetadata()); err != nil {
 		w.logger.Error("failed to update Clerk metadata", "user_id", userID, "error", err)
 	}
 }
@@ -255,7 +357,11 @@ func (w *SubscriptionWebhookWorker) reconcileOverCapacity(ctx context.Context, o
 	if err != nil {
 		return fmt.Errorf("failed to get owner user %s: %w", ownerUserID, err)
 	}
-	tier, err := w.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	// Issue #1413 (this task — tier axis): a malformed manual_tier_override is benign here by
+	// explicit design (this method's own doc comment above: callers only log, never propagate,
+	// its error) — made consistent with every other tierConfig.GetTier(...ComputeEffectiveTier())
+	// call site in this codebase anyway, since the fix was already at hand (w.effectiveTierName).
+	tier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(owner)))
 	if err != nil {
 		return fmt.Errorf("failed to resolve tier for owner %s: %w", ownerUserID, err)
 	}
@@ -571,7 +677,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCreated(ctx context.Conte
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930/#933: Only fire active-path side effects for genuinely-active statuses.
 	// Uses IsActiveSubscription() (active/trial/trialing) — not !IsReadOnlySubscription() —
@@ -645,7 +751,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionActivated(ctx context.Con
 			w.logger.Warn("failed to clear past_due_started_at on activation", "user_id", userID, "error", clearErr)
 		}
 	}
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #1371 — Task 6, Part B: best-effort fast-path over-capacity check, run AFTER the
 	// tier write above has already landed. Logged, never propagated — see
@@ -697,7 +803,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 	}
 
 	// Issues #747 #748: Sync Clerk metadata on subscription updates
-	w.syncClerkMetadata(ctx, userID, string(tier), status)
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Clear retention clock if the updated status is non-read-only (e.g., user resubscribed)
 	if !domain.SubscriptionStatus(status).IsReadOnlySubscription() && status != "" {
@@ -728,8 +834,10 @@ func (w *SubscriptionWebhookWorker) processSubscriptionUpdated(ctx context.Conte
 }
 
 // processSubscriptionCanceled handles subscription.canceled and subscription.paused events.
-// Pause is not a supported product feature (#933); paused subscriptions are treated as terminal
-// cancellations — access is revoked, Plaid items disconnected, and data-retention starts.
+// Pause is not supported (#933); paused subscriptions are treated as terminal cancellations.
+// Issue #1413 High finding H7: a real work claim on ActionSubscriptionCancelledCleanup wraps
+// Plaid disconnect and retention writes for EXCLUSIVITY; unconditional writes (cancelled status,
+// Clerk sync, clear past_due) stay outside the claim as they record billing truth.
 func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Context, webhook *domain.PaddleWebhookEvent) error {
 	data, err := w.parseWebhookPayload(webhook)
 	if err != nil {
@@ -748,41 +856,231 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Preserve paddle_subscription_id (needed for resubscribe flow).
+	// Preserve paddle_subscription_id (needed for resubscribe flow). Unconditional — billing truth.
 	if err := w.profileRepo.UpdateSubscriptionFromPaddle(ctx, userID, user.SubscriptionTier, "cancelled", nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	// Issue #896: Disconnect Plaid items to stop billing on cancellation
-	if w.plaidCleanupSvc != nil {
-		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
-			w.logger.Warn("failed to disconnect Plaid items on cancellation",
-				"user_id", userID, "error", err)
-		}
+	// Re-read AFTER the write commits (mirrors PastDueService.reReadStillPastDue's established
+	// re-read-before-act convention) so the destructive-side-effect decision below is based on
+	// fresh state, not the stale snapshot from before the write. A failed re-read fails the whole
+	// webhook (River retries) rather than silently falling back to the stale `user`.
+	freshUser, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to re-read user after cancellation write: %w", err)
 	}
 
-	// Issues #747 #748: Sync Clerk metadata (no notification — user-initiated)
-	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, "cancelled")
-
-	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion
-	now := time.Now()
-	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, now, now.AddDate(0, w.retentionMonths, 0)); retErr != nil {
-		w.logger.Warn("failed to set retention dates on cancellation", "user_id", userID, "error", retErr)
-	}
-
-	// #898: Clear past_due stamp on cancellation (user may have been in past_due before cancelling).
+	// Unconditional trio (billing truth / non-destructive) — always runs regardless of the claim
+	// outcome below, per the H7 comment above.
+	w.syncClerkMetadata(ctx, userID)
 	if clearErr := w.profileRepo.ClearPastDueStartedAt(ctx, userID); clearErr != nil {
 		w.logger.Warn("failed to clear past_due_started_at on cancellation", "user_id", userID, "error", clearErr)
 	}
-
 	if w.analytics != nil {
 		w.analytics.Capture(userID, phclient.EventSubscriptionCancelled, nil)
 	}
-
-	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — the owner
-	// just lost active coverage entirely, so grace is moot (members already fall back
-	// to their own tier via the resolver's unchanged owner-read-only branch).
+	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — the owner just lost
+	// active coverage entirely, so grace is moot (members already fall back to their own tier via
+	// the resolver's unchanged owner-read-only branch).
 	w.clearOverCapacityIfOwner(ctx, userID)
+
+	// #1413: a comped user can still carry a paddle_subscription_id (the admin comp never clears
+	// it), so this cancellation webhook is fully reachable for them. The comp is an access-layer
+	// overlay, not a rewriting of billing truth — the destructive side effects (Plaid disconnect,
+	// retention clock) below are gated on the comp, but everything above stays unconditional.
+	if freshUser.HasActiveManualOverride() {
+		return nil
+	}
+
+	if w.claimsRepo == nil {
+		return fmt.Errorf("processSubscriptionCanceled: work claims repository not configured")
+	}
+	// Issue #1413 P5: the claim key must identify not just WHO (userID) and WHAT
+	// (ActionSubscriptionCancelledCleanup) but WHICH OCCURRENCE — otherwise cancel -> resubscribe
+	// -> cancel again would find this (user, action) pair already permanently completed from the
+	// FIRST cancellation, and this webhook would be silently acked without ever disconnecting
+	// Plaid or starting the retention clock on the second cancellation. webhook.EventID is
+	// Paddle's own idempotency key for this exact event (paddle_webhook_events.event_id is
+	// NOT NULL UNIQUE — see migration 000043): a redelivery of the SAME event reuses the same
+	// EventID (so a retry still collides, which is the whole point of the claim), while a
+	// genuinely new cancellation is a different Paddle event with a different EventID (even if
+	// it is the same user, or even the same subscription_id being cancelled a second time after a
+	// resubscribe).
+	resourceID, err := repository.OccurrenceResourceID(userID, webhook.EventID)
+	if err != nil {
+		return fmt.Errorf("processSubscriptionCanceled: %w", err)
+	}
+	// #1413 round-3 finding H3: ClaimOutcome (not bare Claim) because this caller — unlike the
+	// daily past-due/retention cron jobs, which re-run tomorrow regardless — MUST NOT treat
+	// "another worker holds this lease right now" the same as "already completed." Collapsing
+	// both into a skip here would get THIS webhook delivery marked processed even when the
+	// in-flight holder later crashes: nothing else would ever retrigger the Plaid disconnect or
+	// retention-clock write for this user again.
+	token, outcome, err := w.claimsRepo.ClaimOutcome(ctx, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, subscriptionCancelledCleanupClaimLease)
+	if err != nil {
+		return fmt.Errorf("failed to claim subscription-cancelled cleanup for user %s: %w", userID, err)
+	}
+	switch outcome {
+	case repository.ClaimAlreadyCompleted:
+		// Terminal: the cleanup already ran to completion for this user. A genuine skip.
+		w.logger.Info("subscription-cancelled cleanup already completed, skipping", "user_id", userID)
+		return nil
+	case repository.ClaimHeldByOther:
+		// Retryable, NOT a skip: another worker holds an unexpired, incomplete lease right now.
+		// Return an error so River retries the whole webhook — by the time the retry lands, the
+		// lease will have either expired (crashed holder, now reclaimable) or completed (finished
+		// holder, now ClaimAlreadyCompleted above). Acking this webhook here instead would silently
+		// drop the Plaid disconnect / retention-clock work if the current holder crashed.
+		w.logger.Warn("subscription-cancelled cleanup claim held by another in-flight worker; retrying webhook rather than acking",
+			"user_id", userID)
+		return fmt.Errorf("subscription-cancelled cleanup claim held by another in-flight worker for user %s", userID)
+	}
+
+	// Re-verify the comp predicate against the freshest possible read, immediately after winning
+	// the claim and before the Plaid disconnect / retention-clock writes — already as late as
+	// this check can be made; it sits directly above the Plaid disconnect call below, with only
+	// comments and log statements in between.
+	//
+	// Issue #1413 round-4 finding H2: a comp granted in the window between this re-check and the
+	// Plaid disconnect call is a DOCUMENTED, ACCEPTED residual, not something further tightening
+	// here can close — no database mechanism can make that window zero, and a worker already
+	// inside a Plaid call cannot be recalled. Unlike C1's residual (irreversible account
+	// deletion), this one is acceptable: a Plaid disconnect is recoverable (the user relinks),
+	// and the retention clock this run is about to start is cleared the moment the comp is
+	// applied — inconvenience, not data loss. See past_due_service.go's processGraceExpiry for
+	// the matching rationale on that flow's own equivalent re-check.
+	reVerified, err := w.profileRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
+		return fmt.Errorf("failed to re-verify user %s before subscription-cancelled cleanup: %w", userID, err)
+	}
+	if reVerified.HasActiveManualOverride() {
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "precondition lost — comp granted since last read")
+		w.logger.Info("subscription-cancelled cleanup skipped — comp granted since last read", "user_id", userID)
+		return nil
+	}
+
+	// Issue #896: Disconnect Plaid items to stop billing on cancellation. A failure here now
+	// ABORTS (Release + propagate) instead of being logged and swallowed — the work claim exists
+	// so this can be safely retried (Release makes it immediately reclaimable) rather than
+	// orphaning a still-connected, still-billing Plaid item with no automatic retry.
+	//
+	// Issue #1413 H1: DisconnectAllUserItems can return services.ErrSideEffectClaimBusy when
+	// another flow (the past-due grace-cancel cron, the Plaid-disconnect window pass, or another
+	// cancellation webhook delivery) currently holds the OPERATION-keyed
+	// ActionPlaidDisconnectUser claim for this user. Logged distinctly at Info — this is expected
+	// contention, not a Plaid failure — but this webhook delivery is one-shot (unlike the daily
+	// cron jobs), so it must still release this flow claim and return an ERROR so River retries
+	// the whole webhook, exactly like the ClaimHeldByOther handling above for the flow claim
+	// itself.
+	if w.plaidCleanupSvc != nil {
+		if err := w.plaidCleanupSvc.DisconnectAllUserItems(ctx, userID); err != nil {
+			if errors.Is(err, services.ErrSideEffectClaimBusy) {
+				w.logger.Info("subscription-cancelled Plaid disconnect deferred — side-effect claim held by another flow",
+					"user_id", userID)
+			}
+			w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, err.Error())
+			return fmt.Errorf("failed to disconnect Plaid items on cancellation for user %s: %w", userID, err)
+		}
+	}
+
+	// #930: Start 6-month retention clock — data preserved read-only until auto-deletion.
+	// #1413 round-3 finding H5: this write is REQUIRED, not best-effort. Both the retention-
+	// notice jobs and hard deletion require retention_expires_at IS NOT NULL — a swallowed
+	// failure here left this user cancelled with no clock: never warned, never deleted,
+	// indefinitely. Release (not Complete) and propagate so River retries the whole webhook;
+	// unlike the past-due grace path, nothing here gates re-entry on subscription_status, so a
+	// retry naturally reaches this write again.
+	if retErr := w.profileRepo.SetRetentionDates(ctx, userID, w.retentionMonths); retErr != nil {
+		w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, retErr.Error())
+		return fmt.Errorf("failed to set retention dates on cancellation for user %s: %w", userID, retErr)
+	}
+
+	// Issue #1413 round-12 Fix 1 (Blocker): a SUCCESSFUL synchronous Plaid disconnect (above) means
+	// cleanup for THIS episode is already done — per the invariant
+	// (domain.User.PlaidCleanupPendingAt's doc comment), the marker must go back to NULL, or it
+	// permanently overstates "cleanup outstanding" for a user whose Plaid items are already
+	// disconnected.
+	//
+	// Correction (Issue #1413 Finding 1, Codex review, PR #1443 follow-up, headline finding): this
+	// comment used to claim a stuck marker here "can never cause a WRONG disconnect (there is nothing
+	// left to disconnect)". That is FALSE, and was the exact belief Finding 1 overturned. A stuck
+	// marker CAN cause a wrong disconnect later, through a different user action entirely: if this
+	// clear (below) never succeeds, the stale marker survives, and — at the time this was found — an
+	// admin could grant a comp, the user could relink a bank (a genuinely NEW live item, under the OLD
+	// stale timestamp), and removing the comp resurrected that stale timestamp instead of starting a
+	// fresh episode via removeUserTierOverrideUpdate's then-COALESCE (admin_user_repository.go), so
+	// repairPlaidDisconnects's next pass saw a live item paired with an already-expired grace window
+	// and disconnected the newly-linked bank immediately, with zero grace. ROUND 18
+	// (admin_user_repository.go) independently removed that COALESCE, so a comp granted and removed
+	// over this exact stuck marker no longer resurrects it either way — but a stuck marker on a user
+	// no comp is EVER granted over gets no help from that fix.
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects's own self-healing backstop
+	// (ClearCompletedPlaidCleanupMarkers, profile_repository.go) is what actually closes THAT
+	// remaining population — see its doc comment for the full scenario — rather than the stuck
+	// marker being inert on its own.
+	//
+	// Gated on w.plaidCleanupSvc != nil: a nil collaborator means NO disconnect call was made at all
+	// (Issue #896's existing nil-guard, tested by TestWorker_SubscriptionCanceled_PlaidCleanupNil_
+	// Succeeds) — cleanup is genuinely still outstanding in that case, so the marker must stay set for
+	// RetentionCleanupCheckWorker.repairPlaidDisconnects to pick up later. A failed disconnect already
+	// returned above (before reaching this line), so a stuck marker after a FAILED attempt is exactly
+	// the existing, correct "repair pass will retry" behavior — untouched by this fix.
+	//
+	// Uses freshUser.PlaidCleanupPendingAt (captured by the re-read right after THIS call's own
+	// UpdateSubscriptionFromPaddle write, before the comp/claim logic above) as the CAS "expected"
+	// value — ClearPlaidCleanupPendingIfMatches, not the unconditional ClearPlaidCleanupPending, so a
+	// brand-new episode's marker (e.g. an admin comp granted then removed between that re-read and
+	// this point) survives untouched rather than being erased. Losing this write cannot cause "never
+	// warned, never deleted" — unlike SetRetentionDates above — but leaving it set FOREVER is real
+	// phantom residue (#1453), not harmless: since the disconnect that just succeeded removed the
+	// very live linked item GetUsersNeedingPlaidDisconnectRepair's own EXISTS check requires,
+	// repairPlaidDisconnects can never reselect this user again to retry the clear either. Issue #1413
+	// #1453 (Codex review, PR #1443 follow-up): a single, swallowed clear attempt used to leave the
+	// marker stuck non-NULL on any transient DB error at exactly this moment — bring this into line
+	// with the identical fix already applied to RetentionCleanupCheckWorker.repairPlaidDisconnects's
+	// own marker clear (retention_cleanup_check.go, same package): retry up to
+	// plaidCleanupMarkerClearMaxAttempts times, then Error-log (not Warn) plus the shared failure
+	// counter if every attempt still fails. Still not escalated to fail the whole webhook — this
+	// handler's cancellation/retention writes already succeeded regardless of whether the marker
+	// clears, and retrying the whole webhook would just redo an already-idempotent disconnect for no
+	// benefit.
+	if w.plaidCleanupSvc != nil && freshUser.PlaidCleanupPendingAt != nil {
+		expectedMarker := *freshUser.PlaidCleanupPendingAt
+		var cleared bool
+		var clearErr error
+		for attempt := 1; attempt <= plaidCleanupMarkerClearMaxAttempts; attempt++ {
+			cleared, clearErr = w.profileRepo.ClearPlaidCleanupPendingIfMatches(ctx, userID, expectedMarker)
+			if clearErr == nil {
+				break
+			}
+			if attempt < plaidCleanupMarkerClearMaxAttempts {
+				w.logger.Warn("failed to clear plaid_cleanup_pending_at after subscription-cancelled Plaid disconnect — retrying",
+					"user_id", userID, "attempt", attempt, "error", clearErr)
+				time.Sleep(plaidCleanupMarkerClearRetryDelay)
+			}
+		}
+		if clearErr != nil {
+			w.logger.Error("Plaid disconnect succeeded but failed to clear plaid_cleanup_pending_at after all retries — this user's Plaid items are already disconnected, so GetUsersNeedingPlaidDisconnectRepair's live-item requirement will never match them again; the marker may now be stuck non-NULL permanently unless cleared through another path",
+				"user_id", userID, "attempts", plaidCleanupMarkerClearMaxAttempts, "error", clearErr)
+			observability.PlaidDisconnectRepairUserFailuresTotal.Inc()
+		} else if !cleared {
+			w.logger.Info("Plaid disconnect succeeded, but plaid_cleanup_pending_at had already moved on to a new episode — leaving the new episode's marker untouched",
+				"user_id", userID)
+		}
+	}
+
+	// Mark the claim durably complete. A false ok (no error) means our lease was reclaimed by
+	// another worker while we were doing the work above — that worker may have ALSO run the Plaid
+	// disconnect concurrently, which is precisely what this mechanism exists to make visible
+	// instead of silent.
+	completed, err := w.claimsRepo.Complete(ctx, repository.ResourceTypeUser, resourceID, repository.ActionSubscriptionCancelledCleanup, token)
+	if err != nil {
+		w.logger.Error("failed to mark subscription-cancelled cleanup claim complete", "user_id", userID, "action", repository.ActionSubscriptionCancelledCleanup, "error", err)
+	} else if !completed {
+		w.logger.Error("subscription-cancelled cleanup claim lease lost mid-flight — Plaid disconnect/retention may have run twice",
+			"user_id", userID, "action", repository.ActionSubscriptionCancelledCleanup)
+	}
 
 	return nil
 }
@@ -833,7 +1131,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionPastDue(ctx context.Conte
 		actionLabel:        stringPtr("Update Payment"),
 		interactionPattern: "action_required",
 	})
-	w.syncClerkMetadata(ctx, userID, user.SubscriptionTier, string(domain.SubscriptionStatusPastDue))
+	w.syncClerkMetadata(ctx, userID)
 
 	// #1371 — Task 6, Part B: clear any lingering over-capacity grace flag — past_due
 	// is a read-only status, so grace is moot (members already fall back to their own
@@ -882,7 +1180,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionTrialing(ctx context.Cont
 		message:            "Your BoostedBudget trial is now active. Enjoy full access during your trial period!",
 		interactionPattern: "informational",
 	})
-	w.syncClerkMetadata(ctx, userID, string(tier), string(domain.SubscriptionStatusTrialing))
+	w.syncClerkMetadata(ctx, userID)
 
 	// #930: Clear retention clock — trialing is an active state, user should not be auto-deleted
 	if retErr := w.profileRepo.ClearRetentionDates(ctx, userID); retErr != nil {
@@ -953,10 +1251,7 @@ func (w *SubscriptionWebhookWorker) processTransactionPaymentFailed(ctx context.
 		interactionPattern: "action_required",
 	})
 
-	user, err := w.profileRepo.GetUserByID(ctx, txn.UserID)
-	if err == nil {
-		w.syncClerkMetadata(ctx, txn.UserID, user.SubscriptionTier, user.SubscriptionStatus)
-	}
+	w.syncClerkMetadata(ctx, txn.UserID)
 
 	if w.analytics != nil {
 		w.analytics.Capture(txn.UserID, phclient.EventPaymentFailed, map[string]interface{}{

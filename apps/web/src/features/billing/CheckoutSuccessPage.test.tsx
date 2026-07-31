@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router'
 import { CheckoutSuccessPage } from './CheckoutSuccessPage'
 
 function LocationDisplay() {
@@ -82,9 +82,11 @@ describe('CheckoutSuccessPage', () => {
       const button = screen.getByRole('button', { name: /View Subscription Details/i })
       expect(button).toBeEnabled()
 
-      // Verify button is clickable (actual navigation tested in E2E)
+      // Issue #1437: clicking now performs real navigation (previously a stubbed
+      // useNavigate no-op'd, so the button stayed mounted after the click). Assert
+      // the real navigation instead of the button's continued presence.
       await user.click(button)
-      expect(button).toBeInTheDocument()
+      expect(screen.getByTestId('location-display')).toHaveTextContent('/billing/manage')
     })
   })
 

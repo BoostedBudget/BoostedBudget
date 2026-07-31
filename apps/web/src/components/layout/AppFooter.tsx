@@ -7,7 +7,7 @@
  * (Product, Developers, Legal, Support) and give the MCP server a named home.
  */
 
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Rocket } from 'lucide-react'
 
 interface FooterLink {

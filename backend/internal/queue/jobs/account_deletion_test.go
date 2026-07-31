@@ -51,6 +51,10 @@ func (m *MockDeletionService) SetHouseholdReader(r services.HouseholdReader)    
 func (m *MockDeletionService) SetHouseholdInviteRevoker(r services.HouseholdInviteRevoker) {}
 func (m *MockDeletionService) SetDB(db repository.DB)                                      {}
 
+// SetWorkClaimsRepo (Issue #1413 Critical finding C2) is not exercised by these
+// account-deletion job tests; stubbed to satisfy the expanded interface.
+func (m *MockDeletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+
 func (m *MockDeletionService) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)
 }

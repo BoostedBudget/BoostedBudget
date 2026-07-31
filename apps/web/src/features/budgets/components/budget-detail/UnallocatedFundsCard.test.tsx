@@ -1,6 +1,6 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { UnallocatedFundsCard } from './UnallocatedFundsCard'
 
 const renderWithRouter = (ui: React.ReactElement) =>

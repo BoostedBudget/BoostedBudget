@@ -22,6 +22,13 @@ export const mockUseUpdateAdminUserTier = mock(() => ({
     isPending: false,
 }))
 
+// === useRemoveAdminUserTierOverride (Issue #1413/#1414 Task 13b: Remove Override button) ===
+export const mockRemoveAdminUserTierOverrideMutate = mock(() => { })
+export const mockUseRemoveAdminUserTierOverride = mock(() => ({
+    mutate: mockRemoveAdminUserTierOverrideMutate,
+    isPending: false,
+}))
+
 // === getGetAdminUserSubscriptionQueryKey ===
 export const mockGetGetAdminUserSubscriptionQueryKey = mock((id: string) => [`/api/v1/admin/users/${id}/subscription`])
 
@@ -30,5 +37,6 @@ mock.module('@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subsc
     ...RealSubsModule,
     useGetAdminUserSubscription: mockUseGetAdminUserSubscription,
     useUpdateAdminUserTier: mockUseUpdateAdminUserTier,
+    useRemoveAdminUserTierOverride: mockUseRemoveAdminUserTierOverride,
     getGetAdminUserSubscriptionQueryKey: mockGetGetAdminUserSubscriptionQueryKey,
 }))

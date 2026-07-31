@@ -659,7 +659,7 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		if err != nil {
 			return nil, err
 		}
-		ownerTier, err := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 		if err != nil {
 			return nil, err
 		}
@@ -788,21 +788,24 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	// household_over_capacity_check.go's processHousehold reads the owner once at the top
 	// of a run, then may call this method (via autoOffboard) some time later in that SAME
 	// run — if the owner's subscription lapses via a concurrent Paddle webhook in that
-	// window, the caller's cached owner would still look active. A read-only owner means
-	// the over-capacity grace is moot: members already fall back to their own tier via the
-	// (unchanged) entitlement resolver's owner-read-only branch, so there's nothing to
-	// LIFO-remove — skip straight to a normal commit instead of computing a seat limit and
-	// removing anyone. This is a legitimate "nothing to do" outcome, not an error; the
-	// caller (the daily worker's autoOffboard) already clears the over-capacity flag
-	// unconditionally after any successful call here, regardless of queue length.
-	if domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	// window, the caller's cached owner would still look active. A read-only owner who
+	// ISN'T currently comped via an active manual_tier_override means the over-capacity
+	// grace is moot: members already fall back to their own tier via the entitlement
+	// resolver's owner-read-only branch (#1413 — that branch now reads
+	// owner.ComputeEffectiveStatus(), same as this check, so the two can never disagree),
+	// so there's nothing to LIFO-remove — skip straight to a normal commit instead of
+	// computing a seat limit and removing anyone. This is a legitimate "nothing to do"
+	// outcome, not an error; the caller (the daily worker's autoOffboard) already clears
+	// the over-capacity flag unconditionally after any successful call here, regardless of
+	// queue length.
+	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		if cerr = tx.Commit(ctx); cerr != nil {
 			return nil, cerr
 		}
 		return []QueuedRemovalEmail{}, nil
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1011,7 +1014,7 @@ func (s *householdService) CreateInvite(ctx context.Context, ownerUserID, invite
 		return nil, cerr
 	}
 
-	tier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	tier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1219,7 +1222,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	if cerr != nil {
 		return nil, cerr
 	}
-	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.SubscriptionStatus).IsReadOnlySubscription() {
+	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
 		cerr = domain.ErrOwnerPlanInactive
 		return nil, cerr
 	}
@@ -1235,7 +1238,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		s.acceptInviteAfterOwnerCheckHook()
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(owner.ComputeEffectiveTier()))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1279,7 +1282,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		member = removedMember
 	case errors.Is(cerr, domain.ErrMemberNotFound):
 		// Fresh-insert path: unchanged from before Task 4.
-		priorTier := caller.ComputeEffectiveTier()
+		// Issue #1413 (this task): a malformed manual_tier_override must not propagate garbage
+		// into household_members.prior_subscription_tier, later read back to revert a member's
+		// tier when they leave the household — effectiveTierName falls back to the raw tier
+		// instead.
+		priorTier := s.effectiveTierName(caller)
 		priorStatus := caller.SubscriptionStatus
 		member = &domain.HouseholdMember{
 			HouseholdID:             inv.HouseholdID,
@@ -1347,7 +1354,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (10) Insert the household entitlement (payer == owner satisfies the composite FK).
-	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.SubscriptionStatus, ownerUserID, inv.HouseholdID); cerr != nil {
+	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.ComputeEffectiveStatus(), ownerUserID, inv.HouseholdID); cerr != nil {
 		return nil, cerr
 	}
 
@@ -1380,6 +1387,27 @@ func (s *householdService) lockAndGetUser(ctx context.Context, tx pgx.Tx, userID
 	return s.userRepo.GetUserByID(ctx, userID)
 }
 
+// effectiveTierName returns owner's effective tier name, falling back to the raw SubscriptionTier
+// when an active manual_tier_override names no tier configured in s.tierConfig (Issue #1413 —
+// the tier axis of the malformed-override rule, this task). manual_tier_override is an
+// unconstrained VARCHAR(50) with no CHECK constraint, so its value can be garbage (a legacy row,
+// a direct SQL write, a write made while the tier config was nil); every call site in this file
+// that previously passed owner.ComputeEffectiveTier() straight into s.tierConfig.GetTier() would
+// error on such a value — this is the single seam all of them now share, using this service's
+// own tierConfig field directly (mirroring PaddleCheckoutHandler.isConfiguredOverrideTier's
+// identical "handler's own tierConfig" convention) rather than a third validator-func mechanism.
+func (s *householdService) effectiveTierName(owner *domain.User) string {
+	tier, overrideValue, hasOverride := owner.EffectiveTierWithActiveOverride()
+	if hasOverride && s.tierConfig != nil {
+		if _, err := s.tierConfig.GetTier(domain.TierName(overrideValue)); err != nil {
+			slog.Warn("rejecting manual tier override on tier axis: value does not name a configured tier",
+				"user_id", owner.ID, "manual_tier_override", overrideValue)
+			return owner.SubscriptionTier
+		}
+	}
+	return tier
+}
+
 // ─── helpers ───────────────────────────────────────────────────────────────────
 
 // checkInvitePending maps an invite's current status/expiry to the sentinel the issue
@@ -1408,6 +1436,14 @@ func sameEmail(a, b string) bool {
 // paid+covered overlap. Local "trial" (60-day, no card), "cancelled"/"inactive"
 // (terminated Paddle sub), and manual-tier-override comps (no PaddleSubscriptionID) all
 // join freely — no refund risk.
+//
+// #1413 PinnedRaw: the status switch below deliberately reads the RAW user.SubscriptionStatus,
+// not ComputeEffectiveStatus(). This predicate is about Paddle BILLING truth (refund/double-charge
+// risk), not access — a comped user's forced "active" effective status must not block someone
+// whose real Paddle subscription is genuinely cancelled/inactive. See
+// TestCallerHasLivePaddleSubscription_CompedUser_WithPaddleSub_RawCancelled_PinnedRaw for the pin
+// (TestCallerHasLivePaddleSubscription_CompedUser_NoPaddleBillingRelationship_JoinsFreely covers
+// the nil-PaddleSubscriptionID short-circuit above, which never reaches this switch at all).
 func callerHasLivePaddleSubscription(u *domain.User) bool {
 	if u.PaddleSubscriptionID == nil {
 		return false
