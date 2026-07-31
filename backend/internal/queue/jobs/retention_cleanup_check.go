@@ -143,7 +143,14 @@ type RetentionProfileRepository interface {
 	// the write. This is a plain conditional UPDATE, not a work_claims claim — the write is purely
 	// additive and idempotent (once set, the WHERE clause itself prevents a concurrent repair from
 	// clobbering it), unlike the destructive external side effects work_claims exists to guard.
-	RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error)
+	//
+	// retentionMonths replaces a Go-computed expiresAt time.Time (Task NA2, Issue #1413 follow-up
+	// on PR #1443): retention_expires_at is now computed entirely in Postgres via clock_timestamp()
+	// + make_interval(months => retentionMonths), matching every other writer of this column —
+	// this repair path exists specifically to fix rows OTHER writers left NULL, so it must use the
+	// SAME arithmetic semantics those writers use, or repairing a row would land it on a DIFFERENT
+	// deadline than a fresh write would have produced.
+	RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error)
 
 	// StampMissingPlaidCleanupMarkers is Issue #1413 round 16's self-healing backstop for
 	// plaid_cleanup_pending_at — see its full doc comment on profileRepository
@@ -765,8 +772,14 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 	}
 	w.logger.Info("found users needing retention clock repair", "job_id", jobID, "user_count", len(users))
 
+	// Task NA2 (Issue #1413 follow-up on PR #1443): retention_expires_at used to be computed here
+	// via now.AddDate(0, w.retentionMonths, 0) — Go's month arithmetic normalizes overflow FORWARD,
+	// disagreeing with the Postgres make_interval semantics every other retention_expires_at writer
+	// now uses, including SetRetentionDates/RemoveUserTierOverride, the very writers this repair
+	// pass exists to backstop. w.retentionMonths is passed straight through so RepairRetentionClock
+	// can compute the deadline entirely in Postgres instead — a repaired row must land on the SAME
+	// deadline a fresh write from those writers would have produced.
 	now := time.Now()
-	expires := now.AddDate(0, w.retentionMonths, 0)
 	var repairedCount, skippedCount, errorCount int
 	for _, user := range users {
 		// Belt-and-braces: a comped user must never have a retention clock started for them,
@@ -780,7 +793,7 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 			continue
 		}
 
-		repaired, repairErr := w.profileRepo.RepairRetentionClock(ctx, user.ID, now, expires)
+		repaired, repairErr := w.profileRepo.RepairRetentionClock(ctx, user.ID, now, w.retentionMonths)
 		if repairErr != nil {
 			w.logger.Warn("failed to repair retention clock",
 				"job_id", jobID, "user_id", user.ID, "error", repairErr)

@@ -183,7 +183,7 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetentionClockRepair(c
 	return []*domain.User{}, nil
 }
 
-func (m *MockProfileRepositoryForDeletion) RepairRetentionClock(ctx context.Context, userID string, startedAt, expiresAt time.Time) (bool, error) {
+func (m *MockProfileRepositoryForDeletion) RepairRetentionClock(ctx context.Context, userID string, startedAt time.Time, retentionMonths int) (bool, error) {
 	return false, nil
 }
 

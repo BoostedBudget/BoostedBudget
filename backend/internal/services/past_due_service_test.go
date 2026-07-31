@@ -40,8 +40,8 @@ func (m *mockPastDueProfileRepo) GetUserByID(ctx context.Context, userID string)
 // SetRetentionDates pair (Issue #1413 round-3 finding H5 residual) and is itself the
 // occurrence-scoped successor to CancelIfPastDueWithRetention (Issue #1413 round-4 finding H1) —
 // see PastDueProfileRepository's doc comment.
-func (m *mockPastDueProfileRepo) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted, retentionExpires time.Time) (bool, error) {
-	args := m.Called(ctx, userID, expectedPastDueStartedAt, retentionStarted, retentionExpires)
+func (m *mockPastDueProfileRepo) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted time.Time, retentionMonths int) (bool, error) {
+	args := m.Called(ctx, userID, expectedPastDueStartedAt, retentionStarted, retentionMonths)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -224,7 +224,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	// #1413 G7: tightened from a subscription_status-only check to the full canonical payload
 	// (subscription_tier, subscription_status, AND the orphaned-key "tier": nil cleanup),
@@ -250,7 +250,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_FullFlow(t *testing.T) {
 	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 	paddle.AssertCalled(t, "CancelSubscription", mock.Anything, subID)
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 	repo.AssertCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time"))
 	clerk.AssertCalled(t, "UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything)
 	notif.AssertCalled(t, "Create", mock.Anything, mock.Anything)
@@ -292,7 +292,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_SuccessfulDisconnect_ClearsPlaid
 	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
@@ -344,7 +344,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearMarkerFails_RetriesThenLogs
 	repo.On("GetUserByID", mock.Anything, userID).Return(&postFlipUser, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	clearErr := errors.New("db unavailable")
 	repo.On("ClearPlaidCleanupPendingIfMatches", mock.Anything, userID, pendingSince).Return(false, clearErr)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
@@ -414,7 +414,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	// Paddle returns already-cancelled error — should be tolerated
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(ErrPaddleAlreadyCancelled)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -422,7 +422,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_PaddleCancelFails_Tolerated(t *t
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err, "already-cancelled Paddle error should be tolerated")
 
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 }
 
 // TestPastDueService_ProcessUser_GraceExpiry_PaddleSideEffectClaimBusy_Aborts_ReleasesFlowClaim
@@ -728,13 +728,13 @@ func TestPastDueService_ProcessUser_GraceExpiry_UserRecovered_SkipsCancel(t *tes
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	// CAS returns false — user paid between Plaid disconnect and this call
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, nil)
 
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err, "recovered user should not produce an error")
 
 	repo.AssertCalled(t, "GetUserByID", mock.Anything, userID)
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 	repo.AssertNotCalled(t, "ClearPastDueStartedAtIfMatches", mock.Anything, mock.Anything, mock.Anything)
 	clerk.AssertNotCalled(t, "UpdateUserMetadata", mock.Anything, mock.Anything, mock.Anything)
 	notif.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
@@ -797,7 +797,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testi
 
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -808,7 +808,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_NilPaddleClient_NoPanic(t *testi
 		assert.NoError(t, err)
 	})
 	// CAS flip still occurs; Paddle was correctly skipped (nil guard took effect).
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 	paddle.AssertNotCalled(t, "CancelSubscription", mock.Anything, mock.Anything)
 }
 
@@ -1006,7 +1006,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceUnchanged_Proceeds(t *
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -1014,7 +1014,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_OccurrenceUnchanged_Proceeds(t *
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 }
 
@@ -1037,7 +1037,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *test
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -1045,7 +1045,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *test
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 }
 
@@ -1098,7 +1098,7 @@ func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T)
 	repo.On("GetUserByID", mock.Anything, userID).Return(&user, nil)
 	plaid.On("DisconnectAllUserItems", mock.Anything, userID).Return(nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -1106,7 +1106,7 @@ func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T)
 	err := svc.ProcessPastDueUser(context.Background(), user, now)
 	require.NoError(t, err)
 
-	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"))
+	repo.AssertCalled(t, "CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int"))
 }
 
 // Test 16: household checker fails — fail closed (skip destructive action) but propagate the
@@ -1179,7 +1179,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClaimWonBeforeDestructiveWork(t 
 	paddle.On("CancelSubscription", mock.Anything, subID).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "paddle_cancel") }).
 		Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).
 		Run(func(mock.Arguments) { callOrder = append(callOrder, "cas_flip") }).
 		Return(true, nil)
 	mockClaims.On("Complete", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken).
@@ -1297,7 +1297,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CASMiss_ReleasesNotCompletes(t *
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
 	// CAS misses — recovered or comped during the external calls above.
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, nil)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 
@@ -1343,7 +1343,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CompleteReturnsFalse_LoggedNotSw
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(true, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
 	notif.On("Create", mock.Anything, mock.Anything).Return(nil)
@@ -1397,7 +1397,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ClearStep_TimestampMovedOn_NotAn
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(true, nil)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(true, nil)
 	// The column has already moved on to a newer cycle by the time the clear step runs.
 	repo.On("ClearPastDueStartedAtIfMatches", mock.Anything, userID, mock.AnythingOfType("time.Time")).Return(false, nil)
 	clerk.On("UpdateUserMetadata", mock.Anything, user.ClerkUserID, mock.Anything).Return(nil)
@@ -1453,7 +1453,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_CancelIfPastDueOccurrenceWithRet
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, userID, repository.ActionPaddleCancelSubscription, testPastDuePaddleCancelSideEffectToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 	paddle.On("CancelSubscription", mock.Anything, subID).Return(nil)
-	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time")).Return(false, dbErr)
+	repo.On("CancelIfPastDueOccurrenceWithRetention", mock.Anything, userID, mock.AnythingOfType("time.Time"), mock.AnythingOfType("time.Time"), mock.AnythingOfType("int")).Return(false, dbErr)
 	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, resourceID, repository.ActionPastDueGraceCancel, testPastDueClaimToken, mock.AnythingOfType("string")).
 		Return(true, nil)
 

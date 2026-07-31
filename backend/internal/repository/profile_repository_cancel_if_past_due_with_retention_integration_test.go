@@ -303,15 +303,32 @@ func TestCancelIfPastDueOccurrenceWithRetention_Integration_MatchingOccurrence_F
 	pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
 	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
 
+	// Task NA2 (Issue #1413 follow-up on PR #1443): retentionMonths replaces a Go-computed
+	// retentionExpires time.Time — retention_expires_at is now computed entirely in Postgres via
+	// clock_timestamp() + make_interval(months => retentionMonths), so the expectation below is
+	// fenced with dbNow/dbAddMonths (not time.Now()/AddDate), exactly like
+	// profile_repository_set_retention_dates_integration_test.go's
+	// TestSetRetentionDates_Integration_ArmsClockWithPostgresArithmetic — calendar-immune by
+	// construction rather than merely tolerant of drift. Uses testRetentionMonths (9), the same
+	// constant that file uses and deliberately not the config default of 6, for the same reason:
+	// a wider variety of month-end landings across the year to exercise.
 	started := time.Now().Truncate(time.Microsecond)
-	expires := started.AddDate(0, 6, 0)
-	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, expires)
+	const retentionMonths = testRetentionMonths
+	before := dbNow(t, pool)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, retentionMonths)
 	require.NoError(t, err)
+	after := dbNow(t, pool)
 	assert.True(t, flipped, "CASing with the occurrence the caller actually claimed must flip")
 
 	var status string
-	require.NoError(t, pool.QueryRow(ctx, `SELECT subscription_status FROM users WHERE id = $1`, user.ID).Scan(&status))
+	var retExpires *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT subscription_status, retention_expires_at FROM users WHERE id = $1`, user.ID,
+	).Scan(&status, &retExpires))
 	assert.Equal(t, "cancelled", status)
+	require.NotNil(t, retExpires, "retention_expires_at must be set in the SAME call")
+	assertBetweenFence(t, dbAddMonths(t, pool, before, retentionMonths), dbAddMonths(t, pool, after, retentionMonths), *retExpires,
+		"retention_expires_at must be ~now+retentionMonths, computed via Postgres's make_interval")
 }
 
 // TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_DoesNotFlip is THE H1
@@ -347,8 +364,7 @@ func TestCancelIfPastDueOccurrenceWithRetention_Integration_StaleOccurrence_Does
 	require.NoError(t, err)
 
 	started := time.Now().Truncate(time.Microsecond)
-	expires := started.AddDate(0, 6, 0)
-	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, staleOccurrence, started, expires)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, staleOccurrence, started, 6)
 	require.NoError(t, err)
 	assert.False(t, flipped, "a stale occurrence must not flip a user whose row has moved on to a newer cycle")
 
@@ -404,8 +420,7 @@ func TestCancelIfPastDueOccurrenceWithRetention_Integration_SkipsActiveOverride(
 	require.NoError(t, err)
 
 	started := time.Now().Truncate(time.Microsecond)
-	expires := started.AddDate(0, 6, 0)
-	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, expires)
+	flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, started, 6)
 	require.NoError(t, err)
 	assert.False(t, flipped, "an actively comped past_due user must not flip, even with the exact matching occurrence")
 
