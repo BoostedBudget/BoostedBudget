@@ -79,6 +79,15 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
   // this row right now" — same derivation as UsersPage.tsx's `hasLiveOverride` and
   // SubscriptionOverrideModal.tsx's `isLiveOverride`, reused rather than reinvented so all three
   // surfaces agree.
+  //
+  // Known limitation (Issue #1462): no `now` argument is passed, so this (like UsersPage.tsx's
+  // identical call) evaluates liveness against the BROWSER's clock, not a server snapshot —
+  // SubscriptionOverrideModal fixed the same class of client/server clock-skew divergence by
+  // anchoring to that endpoint's new `as_of` field, but `as_of` was added only to
+  // AdminSubscriptionDetailOutputBody (the single-user subscription-detail endpoint), not to the
+  // `AdminUserDetail`/`AdminUserListItem` shape this modal renders from — so there is no server
+  // snapshot instant available here to anchor to without a separate backend change (#1462's scope
+  // explicitly did not include one). Tracked as a follow-up rather than silently left unaddressed.
   const hasLiveOverride = user
     ? isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
     : false
@@ -88,7 +97,8 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
   const effectiveTier = user ? (hasLiveOverride ? (user.manual_tier_override as string) : user.subscription_tier) : ''
 
   // Presentational only (Permanent / Expires in Nd / Expired / null) — independent of tier-name
-  // validity, matching UsersPage.tsx's "Override Status" column exactly.
+  // validity, matching UsersPage.tsx's "Override Status" column exactly. Same known limitation as
+  // hasLiveOverride above (Issue #1462): no `now` argument, browser clock only.
   const overrideStatus = user ? getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at) : null
 
   return (
