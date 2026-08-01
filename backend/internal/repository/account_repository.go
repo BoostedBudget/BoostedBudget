@@ -363,7 +363,7 @@ func (r *accountRepository) GetByLinkedItemID(ctx context.Context, linkedItemID 
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -424,7 +424,7 @@ func (r *accountRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       status, user_account_id, replaced_by_id, replaced_at,
 		       created_at, updated_at
 		FROM accounts
@@ -488,7 +488,7 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 	query := "WITH " + householdAccountsCTEForBalancesAsOf() + `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
 		       a.created_at, a.updated_at
 		FROM accounts a
@@ -546,13 +546,21 @@ func (r *accountRepository) GetForHouseholdScope(ctx context.Context, requesting
 
 // GetAccountsWithInstitution retrieves all accounts for a user with institution names from linked_items.
 // Includes status and re-link fields so callers can distinguish active vs. replaced accounts.
+//
+// Issue #1444: a.currency_code and l.institution_name are both nullable (accounts.currency_code:
+// migration 000007:22 — DEFAULT 'USD' but no NOT NULL; linked_items.institution_name: migration
+// 000006:14 — no NOT NULL, no default) but were scanned directly into bare (non-pointer) string
+// fields — "cannot scan NULL into *string". COALESCE guarantees a non-NULL scan target: 'USD' for
+// currency_code (matching the column's own default intent), '' for institution_name (the natural
+// zero for this omitempty field, matching GetAccountsWithInstitutionFiltered's established rule
+// for the same column).
 func (r *accountRepository) GetAccountsWithInstitution(ctx context.Context, userID string) ([]domain.Account, error) {
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.status, a.user_account_id, a.replaced_by_id, a.replaced_at,
-		       a.created_at, a.updated_at, l.institution_name
+		       a.created_at, a.updated_at, COALESCE(l.institution_name, '') AS institution_name
 		FROM accounts a
 		LEFT JOIN linked_items l ON a.linked_item_id = l.id
 		WHERE a.user_id = $1 AND a.status = 'active'
@@ -672,7 +680,7 @@ func (r *accountRepository) GetByIDAndUser(ctx context.Context, accountID, userI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id,
@@ -718,7 +726,7 @@ func (r *accountRepository) GetByUserAccountIDAndUser(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       nickname, custom_color, custom_icon, custom_emoji,
 		       display_order, is_hidden,
 		       user_account_id,
@@ -846,7 +854,7 @@ func (r *accountRepository) GetAccountsWithInstitutionFiltered(ctx context.Conte
 	query := `
 		SELECT a.id, a.linked_item_id, a.user_id, a.plaid_account_id,
 		       a.name, a.official_name, a.type, a.subtype, a.mask,
-		       a.current_balance, a.available_balance, a.currency_code,
+		       a.current_balance, a.available_balance, COALESCE(a.currency_code, 'USD') AS currency_code,
 		       a.nickname, a.custom_color, a.custom_icon, a.custom_emoji,
 		       a.display_order, a.is_hidden,
 		       a.user_account_id, a.status, a.replaced_at, a.replaced_by_id,
@@ -909,7 +917,7 @@ func (r *accountRepository) GetByUserAccountAndStatus(ctx context.Context, userA
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at
@@ -958,7 +966,7 @@ func (r *accountRepository) GetByUserAccountID(ctx context.Context, userAccountI
 	query := `
 		SELECT id, linked_item_id, user_id, plaid_account_id,
 		       name, official_name, type, subtype, mask,
-		       current_balance, available_balance, currency_code,
+		       current_balance, available_balance, COALESCE(currency_code, 'USD') AS currency_code,
 		       user_account_id, status, replaced_at, replaced_by_id,
 		       nickname, custom_color, custom_icon, custom_emoji, display_order, is_hidden,
 		       created_at, updated_at

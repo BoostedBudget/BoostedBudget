@@ -333,14 +333,14 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -365,6 +365,8 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -394,14 +396,14 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -422,6 +424,8 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -448,14 +452,14 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE item_id_blind_idx = $1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, blindIdx).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -480,6 +484,8 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -624,14 +630,14 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 AND user_id = $2`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, id, userID).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -656,6 +662,8 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -717,14 +725,14 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE id = $1 FOR UPDATE`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := tx.QueryRow(ctx, query, id).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -749,6 +757,8 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -772,14 +782,14 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	query := `SELECT ` + linkedItemSelectCols + ` FROM linked_items WHERE user_id = $1 AND institution_id_blind_idx = $2 AND status = $3 ORDER BY created_at DESC LIMIT 1`
 
 	var item domain.LinkedItem
-	var statusRaw *string
+	var statusRaw, institutionIDRaw, institutionNameRaw *string
 	err := r.db.QueryRow(ctx, query, userID, institutionIDBlind, status).Scan(
 		&item.ID,
 		&item.UserID,
 		&item.ItemID,
 		&item.AccessTokenEncrypted,
-		&item.InstitutionID,
-		&item.InstitutionName,
+		&institutionIDRaw,
+		&institutionNameRaw,
 		&item.Provider,
 		&item.Cursor,
 		&item.LastSyncedAt,
@@ -805,6 +815,8 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 	if err != nil {
 		return nil, err
 	}
+	item.InstitutionID = nilOrEmpty(institutionIDRaw)
+	item.InstitutionName = nilOrEmpty(institutionNameRaw)
 	item.Status = normalizeLinkedItemStatus(statusRaw)
 
 	if err := r.decryptLinkedItemPIIFields(&item); err != nil {
@@ -836,7 +848,8 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		       li.status, li.error_code, li.error_message, li.last_error_at, li.retry_count, li.next_retry_at,
 		       li.replaced_at, li.replaced_by_id,
 		       li.cleanup_notified_at, li.cleanup_scheduled_at,
-		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at
+		       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
+		       li.status_changed_at
 		FROM linked_items li
 		WHERE li.cleanup_scheduled_at IS NULL
 		  AND li.status NOT IN ('replaced', 'disconnected')
@@ -868,14 +881,14 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -898,6 +911,8 @@ func (r *linkedItemRepository) GetItemsForCleanup(ctx context.Context, errorDays
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -927,7 +942,8 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       status, error_code, error_message, last_error_at, retry_count, next_retry_at,
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
-		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at
+		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at,
+		       status_changed_at
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
@@ -944,14 +960,14 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -974,6 +990,8 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
@@ -1116,14 +1134,14 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 	var items []domain.LinkedItem
 	for rows.Next() {
 		var item domain.LinkedItem
-		var statusRaw *string
+		var statusRaw, institutionIDRaw, institutionNameRaw *string
 		err := rows.Scan(
 			&item.ID,
 			&item.UserID,
 			&item.ItemID,
 			&item.AccessTokenEncrypted,
-			&item.InstitutionID,
-			&item.InstitutionName,
+			&institutionIDRaw,
+			&institutionNameRaw,
 			&item.Provider,
 			&item.Cursor,
 			&item.LastSyncedAt,
@@ -1144,6 +1162,8 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 		if err != nil {
 			return nil, err
 		}
+		item.InstitutionID = nilOrEmpty(institutionIDRaw)
+		item.InstitutionName = nilOrEmpty(institutionNameRaw)
 		item.Status = normalizeLinkedItemStatus(statusRaw)
 		if err := r.decryptLinkedItemPIIFields(&item); err != nil {
 			return nil, err
