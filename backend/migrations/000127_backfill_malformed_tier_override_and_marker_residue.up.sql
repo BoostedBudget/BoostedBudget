@@ -78,6 +78,25 @@ END $$;
 -- ClearCompletedPlaidCleanupMarkers's own asymmetry with StampMissingPlaidCleanupMarkers (see that
 -- method's doc comment): this corrects a fact independent of override state, not a runtime candidate
 -- selection.
+--
+-- ...and by that SAME reasoning it deliberately does NOT exclude a user with a pending deletion
+-- either, though ClearCompletedPlaidCleanupMarkers does. Found by a Codex adversarial review of this
+-- branch: an earlier draft carried that method's `deletion_requested_at IS NULL` guard across too,
+-- which left inactive/cancelled + zero-linked-item + deletion-pending users stamped forever and made
+-- the invariant claimed above ("the remaining non-NULL population is always backed by at least one
+-- genuine linked_items row") FALSE — reintroducing, for that population, the exact trap this
+-- statement exists to remove.
+--
+-- The two guards are excluded for different reasons, and only one of them transfers:
+--   * ClearCompletedPlaidCleanupMarkers skips deletion-pending users because during the 30-day
+--     deletion grace the deletion flow OWNS Plaid cleanup, and the repair pass must stay out of its
+--     way (the #1449 H6 split). That is runtime candidate selection.
+--   * This statement corrects a historical data artifact. A user with zero linked_items has nothing
+--     to clean up in the first place, so their marker is meaningless regardless of deletion state,
+--     and nulling it cannot race the deletion flow — verified: neither DeletionService nor
+--     DeletionWorker reads plaid_cleanup_pending_at at all.
+-- Note ClearMarkersOnEligibleStatus does not cover these rows either: its predicate is
+-- NOT(inactive/cancelled), and these users ARE inactive/cancelled, so branch 1 never sees them.
 DO $$
 BEGIN
     IF EXISTS (
@@ -92,7 +111,6 @@ BEGIN
         WHERE subscription_status IN ('inactive', 'cancelled')
           AND plaid_cleanup_pending_at IS NOT NULL
           AND is_deleted = FALSE
-          AND deletion_requested_at IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM linked_items WHERE linked_items.user_id = users.id
           );
