@@ -1895,13 +1895,8 @@ func (m *mockProfileRepoForCursorTests) ClearPastDueStartedAt(ctx context.Contex
 func (m *mockProfileRepoForCursorTests) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{}, nil
 }
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these cursor tests; stubbed to satisfy the
-// widened ProfileRepository interface.
-func (m *mockProfileRepoForCursorTests) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	return false, nil
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these cursor tests; stubbed to satisfy the widened ProfileRepository interface.
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
@@ -1922,16 +1917,9 @@ func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Cont
 	return false, nil
 }
 
-// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
-// review round 3) are not exercised by these cursor tests; stubbed to satisfy the widened
-// ProfileRepository interface.
+// ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these cursor tests;
+// stubbed to satisfy the widened ProfileRepository interface.
 func (m *mockProfileRepoForCursorTests) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-func (m *mockProfileRepoForCursorTests) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-func (m *mockProfileRepoForCursorTests) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 func (m *mockProfileRepoForCursorTests) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) { return nil, nil }

@@ -585,14 +585,9 @@ func (m *MockUserRepository) ClearPastDueStartedAt(ctx context.Context, userID s
 	return args.Error(0)
 }
 
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these account-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *MockUserRepository) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	args := m.Called(ctx, userID, retentionStarted, retentionExpires)
-	return args.Bool(0), args.Error(1)
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these account-service tests; stubbed to satisfy the widened ProfileRepository
+// interface.
 func (m *MockUserRepository) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
@@ -626,20 +621,9 @@ func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID
 	return args.Bool(0), args.Error(1)
 }
 
-// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413
-// Codex review round 3) are not exercised by these account-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
+// ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these account-service
+// tests; stubbed to satisfy the widened ProfileRepository interface.
 func (m *MockUserRepository) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }

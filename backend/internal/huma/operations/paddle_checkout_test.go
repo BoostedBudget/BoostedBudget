@@ -195,13 +195,9 @@ func (m *mockProfileRepo) GetUsersInPastDue(ctx context.Context) ([]domain.User,
 	return []domain.User{}, nil
 }
 
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these Paddle checkout tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *mockProfileRepo) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	return false, nil
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these Paddle checkout tests; stubbed to satisfy the widened ProfileRepository
+// interface.
 func (m *mockProfileRepo) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
@@ -225,18 +221,9 @@ func (m *mockProfileRepo) ExpireTrialIfNoOverride(ctx context.Context, userID st
 	return false, nil
 }
 
-// ClaimForDeletion, IsRetentionNotice30dEligible, IsRetentionNotice7dEligible (Issue #1413 Codex
-// review round 3) are not exercised by these Paddle checkout tests; stubbed to satisfy the
-// widened ProfileRepository interface.
+// ClaimForDeletion (Issue #1413 Codex review round 3) is not exercised by these Paddle checkout
+// tests; stubbed to satisfy the widened ProfileRepository interface.
 func (m *mockProfileRepo) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockProfileRepo) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockProfileRepo) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

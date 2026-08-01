@@ -125,7 +125,7 @@ func TestPastDueStartedAt_Integration_SetNotFoundIsNoOp(t *testing.T) {
 // subscription_webhook.go's recovery-path callers, where Paddle telling us the subscription is no
 // longer past_due IS the authorization. It is WRONG for processGraceExpiry's auto-cancel step,
 // which captured a SPECIFIC dunning cycle's timestamp earlier in its own run: sequence — the CAS
-// (CancelIfPastDueWithRetention) succeeds and the flow reaches the clear step; meanwhile the user
+// (CancelIfPastDueOccurrenceWithRetention) succeeds and the flow reaches the clear step; meanwhile the user
 // recovers, then re-enters past_due, and the webhook stamps a NEW past_due_started_at
 // (SetPastDueStartedAt) for the NEW cycle; the ORIGINAL flow, still holding its stale snapshot,
 // then reaches the unconditional clear and erases the NEW cycle's timestamp too. Because

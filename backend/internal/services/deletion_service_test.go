@@ -172,13 +172,9 @@ func (m *MockProfileRepositoryForDeletion) GetUsersInPastDue(ctx context.Context
 	return []domain.User{}, nil
 }
 
-// CancelIfPastDueWithRetention, GetUsersNeedingRetentionClockRepair, RepairRetentionClock
-// (Issue #1413 H5 residual) are not exercised by these deletion-service tests; stubbed to satisfy
-// the widened ProfileRepository interface.
-func (m *MockProfileRepositoryForDeletion) CancelIfPastDueWithRetention(ctx context.Context, userID string, retentionStarted, retentionExpires time.Time) (bool, error) {
-	return false, nil
-}
-
+// GetUsersNeedingRetentionClockRepair, RepairRetentionClock (Issue #1413 H5 residual) are not
+// exercised by these deletion-service tests; stubbed to satisfy the widened ProfileRepository
+// interface.
 func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetentionClockRepair(ctx context.Context) ([]*domain.User, error) {
 	return []*domain.User{}, nil
 }
@@ -209,14 +205,6 @@ func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.C
 func (m *MockProfileRepositoryForDeletion) ClaimForDeletion(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockProfileRepositoryForDeletion) IsRetentionNotice30dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *MockProfileRepositoryForDeletion) IsRetentionNotice7dEligible(ctx context.Context, userID string) (bool, error) {
-	return false, nil
 }
 
 func (m *MockProfileRepositoryForDeletion) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
