@@ -86,6 +86,17 @@ const tierBadgeVariant = (tier: string): BadgeProps['variant'] => {
  * so it can hold a value naming no configured tier (Issue #1413, this task) — KNOWN_TIER_NAMES
  * is passed here so such a row is treated as "not comped", matching the backend's own rejection
  * of the same malformed value.
+ *
+ * Known limitation (Issue #1462): this still evaluates liveness against the BROWSER's clock
+ * (`now` defaults to `new Date()` — no argument passed below), the same class of client/server
+ * clock-skew divergence #1462 fixed inside SubscriptionOverrideModal by anchoring to that
+ * endpoint's new `as_of` server-snapshot field. Deliberately NOT brought onto that same fix here:
+ * `as_of` was added only to `AdminSubscriptionDetailOutputBody` (the single-user subscription
+ * detail endpoint the modal reads), not to `AdminUserListItem` — the paginated list endpoint this
+ * page renders — so there is no server snapshot instant available at this call site to anchor to.
+ * Doing so would need a second, separate backend change (adding an equivalent snapshot field to
+ * the list response) that #1462's scope explicitly did not include. Tracked as a follow-up rather
+ * than silently left unaddressed.
  */
 function hasLiveOverride(user: AdminUserListItem): boolean {
   return isOverrideActive(user.manual_tier_override, user.manual_tier_ends_at, KNOWN_TIER_NAMES)
@@ -225,6 +236,9 @@ export function UsersPage() {
       minSize: 110,
       maxSize: 180,
       render: (user) => {
+        // Same known limitation as hasLiveOverride above (Issue #1462): no `now` argument, so
+        // this evaluates against the browser clock — there is no per-row server snapshot on
+        // AdminUserListItem to anchor to.
         const overrideStatus = getOverrideStatus(user.manual_tier_override, user.manual_tier_ends_at)
         return overrideStatus ? (
           <Badge variant={overrideStatusVariant(overrideStatus.variant)}>
