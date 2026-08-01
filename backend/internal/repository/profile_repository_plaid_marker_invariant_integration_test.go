@@ -879,11 +879,19 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due: initial")
 
+		// Issue #1442: CancelIfPastDueWithRetention (non-occurrence) was deleted for having zero
+		// production callers; past_due_service.go's real caller uses the occurrence-scoped CAS, which
+		// requires past_due_started_at to match the EXACT claimed cycle — so this fixture must seed
+		// one before the call, or the CAS silently matches nothing and the method no-ops. The
+		// require.True(t, flipped) below is what catches that: without a matching seed, flipped would
+		// be false and this test would fail loudly instead of passing for the wrong reason.
+		pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+		require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
+
 		retentionStart := time.Now()
-		retentionExpires := retentionStart.AddDate(0, 6, 0)
-		flipped, err := repo.CancelIfPastDueWithRetention(ctx, user.ID, retentionStart, retentionExpires)
+		flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, retentionStart, 6)
 		require.NoError(t, err)
-		require.True(t, flipped)
+		require.True(t, flipped, "CancelIfPastDueOccurrenceWithRetention must flip for the exact matching past_due occurrence")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due->grace: after grace-expiry cancellation")
 	})
 }
