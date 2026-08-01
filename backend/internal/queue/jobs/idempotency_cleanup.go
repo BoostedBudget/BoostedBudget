@@ -94,6 +94,14 @@ func IdempotencyCleanupUniqueOpts() *queue.UniqueOpts {
 			queue.JobStateRunning,
 			queue.JobStateRetryable,
 			queue.JobStatePending,
+			// Completed is REQUIRED because this job is registered with RunOnStart: true
+			// (Issue #1448). Without it, a run that COMPLETED minutes ago does not
+			// deduplicate the start-of-process catch-up insert, so every deploy or leader
+			// election enqueues a redundant duplicate. Matches the two jobs that already
+			// had RunOnStart: true before #1448 (RetentionCleanupCheckUniqueOpts,
+			// ManualTierOverrideExpiryCheckUniqueOpts). Found by the final branch-wide
+			// Codex review.
+			queue.JobStateCompleted,
 		},
 	}
 }

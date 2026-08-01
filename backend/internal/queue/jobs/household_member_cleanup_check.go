@@ -173,6 +173,22 @@ func (w *HouseholdMemberCleanupCheckWorker) purgeExpiredMemberships(ctx context.
 // HouseholdOverCapacityCheckUniqueOpts's doc comment for the full Round 8 rationale
 // (deliberately not time-windowed via ByPeriod, which could let a still-running instance
 // bridge past a period-bucket boundary and reopen a duplicate-processing window).
+//
+// ⚠️ DO NOT ADD queue.JobStateCompleted HERE. The final branch-wide Codex review of Issue
+// #1448 flagged all ten newly-RunOnStart:true jobs for omitting Completed, and for the eight
+// that carry a real ByPeriod that is correct — without it, a run that finished minutes ago
+// does not suppress the start-of-process catch-up insert, so every deploy enqueues a
+// duplicate. This job is one of the two exceptions, because ByPeriod is deliberately UNSET
+// (above): with no time bucket, Completed would mean "a completed instance exists, therefore
+// never enqueue again" — permanently, since completed rows persist. The job would run exactly
+// once in the lifetime of the database and then silently stop forever.
+// TestHouseholdMemberCleanupCheckUniqueOpts's `assert.Zero(t, opts.ByPeriod)` plus its
+// ElementsMatch on exactly these five states is what catches that mistake; it caught this
+// author making it.
+//
+// The RunOnStart duplicate this omission permits is bounded and harmless here: dedup still
+// covers every non-terminal state, so a catch-up insert can only land once the previous run
+// has already finished — never concurrently with it.
 func HouseholdMemberCleanupCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent

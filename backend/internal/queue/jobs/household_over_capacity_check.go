@@ -585,6 +585,13 @@ func (w *HouseholdOverCapacityCheckWorker) send3dWarning(ctx context.Context, jo
 // max-attempts/backoff exhaustion or manual intervention — accepted as preferable to a
 // silent duplicate-run window, since these are lightweight daily backstop jobs never
 // expected to run anywhere near long enough to matter in practice.
+//
+// ⚠️ DO NOT ADD queue.JobStateCompleted HERE — same reasoning as
+// HouseholdMemberCleanupCheckUniqueOpts (see its doc comment). Issue #1448's final
+// branch-wide review correctly flagged the eight RunOnStart:true jobs that DO carry a
+// ByPeriod for omitting Completed, but this job and its sibling deliberately leave ByPeriod
+// unset, and Completed without a time bucket means "never enqueue again, ever" — the job
+// would run once and then stop permanently.
 func HouseholdOverCapacityCheckUniqueOpts() *queue.UniqueOpts {
 	return &queue.UniqueOpts{
 		ByArgs: false, // All check jobs are equivalent
