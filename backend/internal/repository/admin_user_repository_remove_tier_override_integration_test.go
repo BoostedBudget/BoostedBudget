@@ -1247,7 +1247,7 @@ func TestRemoveUserTierOverride_Integration_LapsedCompLongerThanGrace_Immediatel
 // Finding 3 race with genuine two-connection concurrency (real goroutines, ordering enforced by a
 // real Postgres lock — not a sleep): a user has a LIVE comp masking an already-'cancelled' raw
 // status (not read-only, so LinkAccounts is reachable — the read-only allow-list contains only
-// /api/v1/plaid/webhook). Connection 1 takes the exact FOR UPDATE lock
+// /webhooks/plaid). Connection 1 takes the exact FOR UPDATE lock
 // removeUserTierOverrideQuery's CTE takes — via removeUserTierOverrideSelectPrior (the real
 // production constant) plus FOR UPDATE, run as ITS OWN statement, because the production query is a
 // single opaque round trip with no room to inject a pause — and confirms no live item is visible
