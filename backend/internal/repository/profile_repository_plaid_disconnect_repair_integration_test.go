@@ -75,7 +75,7 @@ func seedLinkedItem(t *testing.T, pool *pgxpool.Pool, userID, itemID, status str
 }
 
 // seedLinkedItemNullStatus inserts a linked_items row with status = NULL — linked_items.status was
-// nullable (migration 000013 added it with no NOT NULL constraint) until migration 000124 (Issue
+// nullable (migration 000013 added it with no NOT NULL constraint) until migration 000126 (Issue
 // #1444) added that constraint, so a row inserted without an explicit status (or predating the
 // 'active' default) could genuinely have a NULL status while still being fully "live". Issue #1413
 // round-7 finding (Codex review): a bare `status NOT IN ('disconnected', 'replaced')` evaluates to
@@ -83,7 +83,14 @@ func seedLinkedItem(t *testing.T, pool *pgxpool.Pool, userID, itemID, status str
 // GetUsersNeedingPlaidDisconnectRepair exists to prevent. See
 // TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive.
 //
-// Takes the DB interface (not *pgxpool.Pool) so callers can pass a pgx.Tx: since migration 000124,
+// The constraint arrives in 000126 rather than 000124 because #1444 adds it as a three-step
+// transition — 000124 `ADD CONSTRAINT ... CHECK (status IS NOT NULL) NOT VALID`, 000125
+// `VALIDATE CONSTRAINT`, 000126 `SET NOT NULL` + drop the scaffolding CHECK — so that the
+// full-table validation scan runs under SHARE UPDATE EXCLUSIVE instead of blocking all reads and
+// writes under ACCESS EXCLUSIVE. See .claude/skills/db-migration-guide/SKILL.md and
+// internal/database/migration_000123_000126_integration_test.go.
+//
+// Takes the DB interface (not *pgxpool.Pool) so callers can pass a pgx.Tx: since migration 000126,
 // a genuinely NULL status can no longer be constructed against the real schema at all — the only
 // way to exercise this scenario is to transactionally DROP NOT NULL first (see
 // TestPlaidDisconnectRepair_Integration_NullStatusItemIsLive), which requires every statement in
@@ -171,7 +178,7 @@ func TestPlaidDisconnectRepair_Integration_FindsCancelledUserWithLiveItem(t *tes
 // 'replaced')` (dropping the `IS NULL OR` clause) makes this test fail — the NULL-status item
 // would never be found.
 //
-// Since migration 000124 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
+// Since migration 000126 (Issue #1444), linked_items.status is NOT NULL — a genuinely NULL status
 // can no longer be constructed against the real schema at all, in any migrated database. This test
 // therefore runs its own transaction that transactionally DROPs the NOT NULL constraint first
 // (rolled back, never committed, at the very end — the real schema is never permanently altered)

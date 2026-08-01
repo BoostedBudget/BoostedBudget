@@ -12,7 +12,7 @@ package repository
 // task: "since linked_items.status is confirmed nullable in the live schema, you can seed a
 // genuine NULL with raw SQL to get an honest RED").
 //
-// Since migration 000124 (Issue #1444) added a NOT NULL constraint to linked_items.status, both
+// Since migration 000126 (Issue #1444) added a NOT NULL constraint to linked_items.status, both
 // tests below transactionally DROP that constraint first (rolled back with the rest of the
 // transaction — the real schema is never permanently altered) so a genuinely NULL status can
 // still be constructed against a fully migrated database.
