@@ -175,6 +175,63 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		assert.Nil(t, pendingAt, "a marker on a user with ZERO linked_items rows at all must be nulled — the #1453 residue cleanup")
 	})
 
+	// ─── Scenario D2: same as D, but with a PENDING DELETION. The marker must STILL be nulled.
+	//
+	// This scenario's absence is why a real gap shipped, caught by a Codex adversarial review: an
+	// earlier draft of 000127 carried ClearCompletedPlaidCleanupMarkers's `deletion_requested_at IS
+	// NULL` guard across to this migration, which left exactly this population stamped forever and
+	// made the migration's own documented invariant ("the remaining non-NULL population is always
+	// backed by at least one genuine linked_items row") false.
+	//
+	// The guard does not transfer, because the two statements exclude deletion-pending users for
+	// different reasons: ClearCompletedPlaidCleanupMarkers does it because the deletion flow owns
+	// Plaid cleanup during the 30-day grace (the #1449 H6 split) — runtime candidate selection —
+	// whereas this migration corrects a historical artifact, and a zero-linked-items user has
+	// nothing to clean up regardless of deletion state. Nulling cannot race the deletion flow:
+	// neither DeletionService nor DeletionWorker reads plaid_cleanup_pending_at at all.
+	//
+	// Note ClearMarkersOnEligibleStatus would not rescue these rows either — its predicate is
+	// NOT(inactive/cancelled), and these users ARE inactive/cancelled. ────────────────────────────
+	t.Run("ScenarioD2_ZeroLinkedItemsResidueNulledEvenWithPendingDeletion", func(t *testing.T) {
+		ctx := context.Background()
+		suffix := fmt.Sprintf("D2-%d", time.Now().UnixNano())
+
+		tx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer tx.Rollback(ctx) //nolint:errcheck
+
+		staleMarker := time.Now().Add(-1000 * time.Hour)
+		userID := seedMig127User(t, tx, suffix, "cancelled", nil, nil, &staleMarker)
+
+		// Put the user into the 30-day deletion grace window.
+		deletionRequestedAt := time.Now().Add(-24 * time.Hour)
+		_, err = tx.Exec(ctx,
+			`UPDATE users SET deletion_requested_at = $1, deletion_scheduled_at = $2 WHERE id = $3`,
+			deletionRequestedAt, deletionRequestedAt.Add(30*24*time.Hour), userID)
+		require.NoError(t, err)
+
+		// Sanity-check the fixture actually reached the state under test — otherwise this scenario
+		// could pass for the trivial reason that no deletion was pending after all.
+		var requestedAt *time.Time
+		require.NoError(t, tx.QueryRow(ctx,
+			"SELECT deletion_requested_at FROM users WHERE id = $1", userID).Scan(&requestedAt))
+		require.NotNil(t, requestedAt, "fixture precondition: the user must have a pending deletion")
+
+		applyMigration000127(t, tx)
+
+		var pendingAt *time.Time
+		require.NoError(t, tx.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userID).Scan(&pendingAt))
+		assert.Nil(t, pendingAt,
+			"a zero-linked-items residue marker must be nulled even while a deletion is pending — "+
+				"otherwise this migration's own documented invariant is false for that population")
+
+		// The deletion itself must be left strictly alone.
+		require.NoError(t, tx.QueryRow(ctx,
+			"SELECT deletion_requested_at FROM users WHERE id = $1", userID).Scan(&requestedAt))
+		require.NotNil(t, requestedAt, "the migration must not disturb a pending deletion")
+		assert.True(t, deletionRequestedAt.Equal(*requestedAt))
+	})
+
 	// ─── Scenario E: a user with AT LEAST ONE linked_items row (even a disconnected one) must be
 	// left COMPLETELY untouched — that population belongs to ClearCompletedPlaidCleanupMarkers's
 	// ongoing runtime responsibility, not this one-time migration. ─────────────────────────────────
