@@ -2380,10 +2380,14 @@ const liveLinkedItemExistsClause = `EXISTS (
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
 //     NULL status is explicitly treated as live too (round-7 fix): a bare `status NOT IN (...)`
-//     evaluates to SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding that row — since
-//     linked_items.status is nullable (migration 000013) and defaults to 'active' only for rows
-//     inserted after that default was added, a live item with a NULL status would otherwise never
-//     be repaired, precisely the leak this pass exists to prevent.
+//     evaluates to SQL's UNKNOWN (not TRUE) for a NULL status, silently excluding that row — when
+//     linked_items.status was still nullable (migration 000013 added a DEFAULT 'active' but no NOT
+//     NULL constraint) a live item with a NULL status would otherwise never be repaired, precisely
+//     the leak this pass exists to prevent. Migration 000126 (Issue #1444) has since made the
+//     column NOT NULL, so no new NULL can arise; the arm is kept as defence in depth — it costs
+//     nothing, and it keeps this clause identical to its three siblings
+//     (liveLinkedItemExistsClause, anyLinkedItemExistsClause, uncleanedLinkedItemExistsClause),
+//     whose divergence is what caused the round-7 leak in the first place.
 //
 // Issue #1413 round-12 Fix 2: uses noActiveManualOverridePredicate ("live right now"), NOT
 // noManualOverrideAtAllPredicate ("not even a lapsed one") — deliberately the OPPOSITE choice from
