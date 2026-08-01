@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
+import { useSubscriptionTiers } from '@/features/subscription/hooks/useSubscriptionTiers'
 import type { AdminSubscriptionTierInputBodyTier } from '@boostedbudget/api-client/models'
 import { useAdminSubscriptionDetail, useUpdateUserTier, useRemoveUserTierOverride } from '../hooks/useAdminSubscription'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
@@ -102,6 +103,10 @@ function SubscriptionOverrideForm({
     const { mutate: updateTier, isPending: isSaving } = useUpdateUserTier(userId ?? '')
     const { mutate: removeOverride, isPending: isRemoving } = useRemoveUserTierOverride(userId ?? '')
     const trackEvent = useTrackEvent()
+    // Issue #1452: the tier catalogue (GET /subscription/tiers) is the only place the TARGET
+    // tier's seat count (`pricing.users_included`) lives — `sub.limits` describes the CURRENT
+    // effective tier, not whatever tier the admin is about to select.
+    const { tiers } = useSubscriptionTiers()
 
     // Derive initial form values from loaded subscription data
     const initialTier = useMemo(
@@ -124,6 +129,10 @@ function SubscriptionOverrideForm({
         return Number.isNaN(parsedEndsAt.getTime()) ? null : parsedEndsAt
     })
     const [confirmRemove, setConfirmRemove] = useState(false)
+    // Issue #1452: the Save Override path had no confirmation step at all to put a warning into
+    // (unlike Remove Override's confirmRemove above) — this gates a NEW one, shown only when the
+    // seat-capacity check below actually has something to warn about.
+    const [confirmSeatWarning, setConfirmSeatWarning] = useState(false)
 
     const isBusy = isSaving || isRemoving
 
@@ -157,10 +166,12 @@ function SubscriptionOverrideForm({
                         tier: selectedTier,
                         had_expiry: !!expiresAt,
                     })
+                    setConfirmSeatWarning(false)
                     onClose()
                 },
                 onError: (err) => {
                     toast.error(`Failed to update tier: ${err.message}`)
+                    setConfirmSeatWarning(false)
                 },
             }
         )
@@ -230,29 +241,38 @@ function SubscriptionOverrideForm({
     // TestGetUserSubscription_MalformedOverride_FallsBackToRawTier_NotServerError — "that response
     // is what the override modal needs to render the Remove Override button").
     const hasOverride = !!sub?.manual_tier_override
-    // Codex adversarial review (round 9, Part 2 — Low): the chip's status (via `getOverrideStatus`
-    // below) and the effective badge (via `isOverrideActive` below) used to each call `new Date()`
-    // independently. An expiry lapsing in the gap between those two evaluations — sub-millisecond
-    // in practice, but real — could produce a chip and a badge that momentarily disagree about the
-    // same row, which is the same "one card, two answers" class of bug this whole issue exists to
-    // eliminate, just with a much smaller window. A single `now`, read once per render and threaded
-    // into every liveness/status check below, closes that window entirely: there is exactly one
-    // answer to "what time is it" for this render, so the two can never disagree with each other,
-    // only (transiently, and only until the next render) with the wall clock.
+    // Codex adversarial review (round 9, Part 2 — Low; superseded by Issue #1462, see below): the
+    // chip's status (via `getOverrideStatus` below) and the effective badge (via `isOverrideActive`
+    // below) used to each call `new Date()` independently. Round 9 fixed the SAME-RENDER half of
+    // that — a single `now`, read once per render and threaded into every liveness/status check
+    // below — so the two could never disagree with EACH OTHER within one render, only (transiently)
+    // with the wall clock.
     //
-    // Codex adversarial review (round 9 follow-up): a behavioral test cannot force the original
-    // race — there is no reliable way to make an expiry lapse in the gap between two synchronous
-    // `new Date()` calls a few microseconds apart within one render, so any such test would pass
-    // or fail identically whether or not `now` is actually threaded below, which is exactly the
-    // "test that cannot fail" shape this file keeps producing. What CAN regress silently is
-    // someone deleting the `now` argument from one of the three call sites below, reintroducing
-    // an independent clock read with zero behavioral test noticing (the fixtures are all relative
-    // to Date.now(), so an independent real clock read produces the same answer as this shared
-    // one in every practical test run). That regression is pinned structurally instead, in
-    // SubscriptionOverrideModal.test.tsx's "Single `now` threaded through override-status calls"
-    // block, which asserts directly on this file's source text that all three call sites still
-    // reference this binding.
-    const now = new Date()
+    // Issue #1462: that still left a SECOND, larger disagreement untouched — this component's own
+    // `now` was the BROWSER's clock, while `effective_status`/`effective_tier` immediately below
+    // are computed SERVER-side, at the server's own request-time instant. Browser/server clock
+    // skew, or plain request latency, could let an expiry fall between the server's snapshot and
+    // this render — the chip (client-clock liveness) and the effective badge (server-computed
+    // status, which itself embeds server-clock liveness) could then disagree about the exact same
+    // override, even though round 9 already guarantees they're evaluated at one shared instant.
+    //
+    // The fix: anchor `now` to `sub.as_of` — the literal server instant effective_tier/
+    // effective_status were computed from (AdminSubscriptionDetailOutputBody, Issue #1462) —
+    // instead of a fresh browser-clock read. This component's liveness arithmetic
+    // (isOverrideActive/getOverrideStatus below) then replays the server's own computation at the
+    // server's own reference instant, so it cannot diverge from what the server already decided.
+    // Falls back to the browser clock only when `sub` hasn't loaded yet or `as_of` is absent/
+    // unparseable (e.g. an older cached response) — display-only, must never crash the modal,
+    // mirroring the manual_tier_ends_at guards elsewhere in this file.
+    //
+    // Round 9's regression pin (below) asserted this render's `now` came from a literal
+    // `new Date()` call site and was threaded into all three call sites unchanged. That
+    // structural shape is now obsolete — `now` is deliberately NOT a fresh clock read anymore —
+    // so SubscriptionOverrideModal.test.tsx's "Single `now` threaded through override-status
+    // calls" block was updated to pin the NEW invariant (anchored to `sub.as_of`, not
+    // `new Date()`) rather than the old one.
+    const asOfMs = sub?.as_of ? new Date(sub.as_of).getTime() : NaN
+    const now = Number.isNaN(asOfMs) ? new Date() : new Date(asOfMs)
     // Round 8 / Task MC: this used to be inline `sub?.manual_tier_ends_at && new Date(...) <
     // new Date()` — a naive comparison that never consults tier validity AND fails OPEN on an
     // unparseable date, because `NaN < anything` is always `false`, so a malformed
@@ -319,6 +339,19 @@ function SubscriptionOverrideForm({
     // leaves the deletion path alone, so comping will NOT cancel it. Prefer the scheduled date
     // (when the notice period has resolved into a firm date) over the originally-requested one.
     const deletionDate = sub?.deletion_scheduled_at ?? sub?.deletion_requested_at
+
+    // Issue #1452: the seat-reduction warning used to be post-apply only (a toast on the backend's
+    // response message, above) — the admin found out after already committing. This is the
+    // pre-apply version: `household_active_member_count` is server-computed (0 when the user owns
+    // no household — see AdminSubscriptionDetailOutputBody's doc comment), and
+    // targetTierUsersIncluded comes from the TARGET tier (`selectedTier`) in the tier catalogue,
+    // never from `sub.limits`, which describes the CURRENT effective tier. Fails open (no warning)
+    // if the tier catalogue hasn't loaded yet — this is advisory only, never a blocking check, so
+    // silently skipping it on a slow/failed catalogue fetch is preferable to blocking every save.
+    const householdActiveMemberCount = sub?.household_active_member_count ?? 0
+    const targetTierUsersIncluded = selectedTier ? tiers?.tiers?.[selectedTier]?.pricing.users_included : undefined
+    const seatWarningApplies =
+        typeof targetTierUsersIncluded === 'number' && householdActiveMemberCount > targetTierUsersIncluded
 
     const inputClass = 'w-full px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm font-[inherit] transition-colors focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60 disabled:cursor-not-allowed'
 
@@ -529,7 +562,7 @@ function SubscriptionOverrideForm({
                         )}
                         <Button
                             id="save-override-btn"
-                            onClick={handleSubmit}
+                            onClick={() => (seatWarningApplies ? setConfirmSeatWarning(true) : handleSubmit())}
                             disabled={isBusy || !selectedTier || !reason.trim() || isLoading}
                         >
                             {isSaving ? (
@@ -561,6 +594,29 @@ function SubscriptionOverrideForm({
                 confirmButtonText="Remove Override"
                 confirmText={REMOVE_CONFIRM_TEXT}
                 loading={isRemoving}
+            />
+
+            {/* Issue #1452: pre-apply seat-capacity warning — the Save Override button opens this
+                instead of calling handleSubmit directly ONLY when seatWarningApplies (an
+                over-capacity downgrade); every other save still goes straight through, unchanged.
+                Advisory only — "Apply Override Anyway" still calls handleSubmit, it never blocks. */}
+            <ConfirmationDialog
+                open={confirmSeatWarning}
+                onOpenChange={setConfirmSeatWarning}
+                onConfirm={handleSubmit}
+                variant="warning"
+                title="This tier doesn't cover the household's active members"
+                description={
+                    <>
+                        <strong>{TIER_DISPLAY[selectedTier] ?? selectedTier}</strong> includes{' '}
+                        {targetTierUsersIncluded} seat{targetTierUsersIncluded === 1 ? '' : 's'}, but this household
+                        currently has {householdActiveMemberCount} active member{householdActiveMemberCount === 1 ? '' : 's'}.
+                        Excess members may eventually be offboarded unless the tier is increased or members are
+                        removed. This is advisory only — you can still proceed.
+                    </>
+                }
+                confirmButtonText="Apply Override Anyway"
+                loading={isSaving}
             />
         </>
     )
