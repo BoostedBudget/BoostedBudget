@@ -1123,6 +1123,46 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	}
 	defer tx.Rollback(ctx)
 
+	// Issue #1440 round-3 Finding 7 (Codex review, coordinator's #1440 follow-up brief): lock any
+	// household this user owns BEFORE locking the user row below, matching household_service.go's
+	// own codebase-wide invariant — AcceptInvite's own doc comment (step 4, "lockAndGetUser on the
+	// owner") states it explicitly: "No path locks a users row before a households row ... never a
+	// cycle." That invariant held until the round-2 household-owner guard (Issue #1440 Critical
+	// finding) was added to THIS method: it locks the USER row first (the eligibility recheck's
+	// `FOR UPDATE` just below), and only touches the household row implicitly, much later, when the
+	// final `DELETE FROM users` cascades into households via owner_user_id's CASCADE FK. Two
+	// transactions acquiring the SAME two rows in OPPOSITE orders is a textbook deadlock:
+	// AcceptInvite locks household then wants the owner's user row (step 1 then step 4); this method
+	// used to lock the user row then (via its cascading DELETE) want the household. Verified
+	// empirically (TestDeleteUserCascade_Integration_LockOrderMatchesAcceptInvite_
+	// NoDeadlockWithConcurrentAcceptInvite): the pre-fix order genuinely deadlocks — "ERROR: deadlock
+	// detected (SQLSTATE 40P01)" — against a transaction that reproduces AcceptInvite's exact lock
+	// sequence.
+	//
+	// households.owner_user_id is UNIQUE (migration 000106) — a user owns at most one household, so
+	// this is a single-row lookup, not a scan. A non-locking `SELECT ... FOR NO KEY UPDATE` on the
+	// household row (if one exists; zero rows is a normal, common no-op for a non-owner) reorders
+	// this method's OWN lock acquisition to household-then-user, matching AcceptInvite, closing the
+	// cycle at its root rather than at one specific interleaving of it.
+	//
+	// `FOR NO KEY UPDATE`, not `FOR UPDATE` — deliberately, to avoid reintroducing the OTHER deadlock
+	// class this codebase has already been bitten by once (StampMissingPlaidCleanupMarkers's ROUND 23
+	// correction, this file, ~line 2545): a `FOR UPDATE` lock on the household row would conflict with
+	// a concurrent `FOR KEY SHARE` request an unrelated INSERT referencing this household (e.g. a
+	// household_members or household_invites row) would need for its own FK check, which this method
+	// does not need to preclude — this transaction never updates a key column on the household row
+	// itself (it only ever gets removed via CASCADE from the DELETE below, which takes its own
+	// necessary lock at that time regardless of what mode was held earlier). `FOR NO KEY UPDATE` still
+	// conflicts with a concurrent `FOR UPDATE` request — which is exactly what AcceptInvite's/
+	// RemoveMember's/OffboardExcessMembers'/ForceDisband's own household-row locks all use — so this
+	// still correctly blocks any of THOSE from proceeding concurrently while this guard is being
+	// decided; it only stops conflicting with the narrower, unrelated FK-driven `FOR KEY SHARE` case.
+	var lockedHouseholdID *string
+	err = tx.QueryRow(ctx, `SELECT id FROM households WHERE owner_user_id = $1 FOR NO KEY UPDATE`, userID).Scan(&lockedHouseholdID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Errorf("DeleteUserCascade: lock owned household: %w", err)
+	}
+
 	// Issue #1413 round-4 Critical finding C1: re-verify eligibility INSIDE this transaction,
 	// immediately before any destructive statement — closing the window between ClaimForDeletion
 	// (which the external cleanup above this call in ExecuteDeletion can separate from here by
