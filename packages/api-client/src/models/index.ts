@@ -229,6 +229,7 @@ export * from './incomeSourceBreakdownResponse';
 export * from './incomeSourceItem';
 export * from './incomeSummary';
 export * from './investmentTransaction';
+export * from './jobBacklogMetrics';
 export * from './largestTransactionItem';
 export * from './largestTransactionsResponse';
 export * from './linkTokenResponse';
