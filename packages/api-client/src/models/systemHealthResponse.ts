@@ -31,6 +31,7 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { DeadLetterMetrics } from './deadLetterMetrics';
+import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
 import type { ServiceHealthStatuses } from './serviceHealthStatuses';
 import type { SyncStatusMetrics } from './syncStatusMetrics';
@@ -40,6 +41,7 @@ export interface SystemHealthResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   dead_letter_queue: DeadLetterMetrics;
+  job_backlog: JobBacklogMetrics;
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
   services: ServiceHealthStatuses;

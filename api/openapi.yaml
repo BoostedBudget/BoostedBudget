@@ -486,6 +486,9 @@ components:
         active_overrides_count:
           format: int64
           type: integer
+        as_of:
+          format: date-time
+          type: string
         base_tier:
           type: string
         deletion_requested_at:
@@ -500,6 +503,9 @@ components:
           type: string
         features:
           $ref: "#/components/schemas/SubscriptionFeatures"
+        household_active_member_count:
+          format: int64
+          type: integer
         limits:
           $ref: "#/components/schemas/SubscriptionLimits"
         manual_tier_ends_at:
@@ -524,6 +530,8 @@ components:
         - features
         - active_overrides_count
         - resource_overrides
+        - household_active_member_count
+        - as_of
       type: object
     AdminSubscriptionTierInputBody:
       additionalProperties: false
@@ -3788,6 +3796,23 @@ components:
         - date
         - created_at
       type: object
+    JobBacklogMetrics:
+      additionalProperties: false
+      properties:
+        manual_tier_override_oldest_uncleared_expired_seconds:
+          format: int64
+          type: integer
+        plaid_cleanup_oldest_outstanding_seconds:
+          format: int64
+          type: integer
+        plaid_cleanup_outstanding_users:
+          format: int64
+          type: integer
+      required:
+        - plaid_cleanup_outstanding_users
+        - plaid_cleanup_oldest_outstanding_seconds
+        - manual_tier_override_oldest_uncleared_expired_seconds
+      type: object
     LargestTransactionItem:
       additionalProperties: false
       properties:
@@ -5837,6 +5862,8 @@ components:
           type: string
         dead_letter_queue:
           $ref: "#/components/schemas/DeadLetterMetrics"
+        job_backlog:
+          $ref: "#/components/schemas/JobBacklogMetrics"
         job_queues:
           additionalProperties:
             $ref: "#/components/schemas/QueueMetrics"
@@ -5860,6 +5887,7 @@ components:
         - sync_status
         - dead_letter_queue
         - paddle_status
+        - job_backlog
       type: object
     TagSource:
       additionalProperties: false
