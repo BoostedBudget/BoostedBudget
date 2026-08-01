@@ -284,6 +284,20 @@ type RetentionProfileRepository interface {
 	// tier list, and why it returns (nil, nil) rather than an empty slice when no validator has been
 	// wired.
 	GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error)
+
+	// GetOrphanedFKlessUserScopedRowCounts is Issue #1440 round-3 Finding 5's monitoring query
+	// (Codex review, coordinator's #1440 follow-up brief): reports, per table, how many rows in
+	// dead_letter_jobs/idempotency_keys/mcp_audit_log — the three user-scoped tables with NO foreign
+	// key to users at all — currently reference a user_id/actor_user_id that no longer names any
+	// real user. See its full doc comment on profileRepository (profile_repository.go) for the
+	// complete rationale: this state can only arise from a concurrent writer racing
+	// DeleteUserCascade's own erasure of these tables in the narrow window before that transaction
+	// commits, a residual DeleteUserCascade's own row lock cannot close because none of these three
+	// tables has any FK to users at all.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason
+	// as its siblings above.
+	GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (repository.OrphanedFKlessUserScopedRowCounts, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -510,6 +524,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 	// account deletion.
 	if monitorErr := w.monitorMalformedTierOverrides(ctx, job.ID); monitorErr != nil {
 		w.logger.Error("failed to check for malformed manual_tier_override rows",
+			"job_id", job.ID,
+			"error", monitorErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0d: Issue #1440 round-3 Finding 5 monitoring pass — report the current count, per table,
+	// of rows in dead_letter_jobs/idempotency_keys/mcp_audit_log whose user_id/actor_user_id no
+	// longer names any real user. See monitorOrphanedFKlessRows's own doc comment for the full
+	// rationale. Non-fatal for the same reason every other step here is: this is an observability
+	// check, not a repair, and must never block GDPR notices or expired-account deletion.
+	if monitorErr := w.monitorOrphanedFKlessRows(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check for orphaned FK-less user-scoped rows",
 			"job_id", job.ID,
 			"error", monitorErr,
 		)
@@ -1333,6 +1360,57 @@ func (w *RetentionCleanupCheckWorker) monitorMalformedTierOverrides(ctx context.
 	}
 	w.logger.Error("found users with a manual_tier_override that does not name a configured tier — this should be impossible after migration 000127; some writer bypassed write-time validation",
 		"job_id", jobID, "count", len(malformed), "user_ids", userIDs)
+	return nil
+}
+
+// monitorOrphanedFKlessRows is Issue #1440 round-3 Finding 5's monitoring pass (Codex review,
+// coordinator's #1440 follow-up brief): reports the current count, per table, of rows in
+// dead_letter_jobs/idempotency_keys/mcp_audit_log — the three user-scoped tables with NO foreign
+// key to users at all — whose user_id/actor_user_id no longer names any real user.
+//
+// Why this exists at all: DeleteUserCascade's own explicit erasure of these three tables runs
+// inside its transaction, immediately before commit (see that method's own "round-3 reordering" doc
+// comment, profile_repository.go), but none of them has any FK to users, so the FOR UPDATE lock
+// that transaction holds on the users row never blocks a concurrent writer (an in-flight MCP audit
+// call, an idempotency write, a River dead-letter insert) from landing in the narrow remaining
+// window before commit. That residual cannot be closed by locking — this transaction cannot take a
+// lock on a table that has no relationship to users at all — so this pass makes it OBSERVABLE
+// instead, on every scheduled run, the same way monitorMalformedTierOverrides above already does for
+// a different, structurally similar residual this codebase accepted it cannot fully prevent at
+// write time.
+//
+// Deliberately non-fatal and does not fail the job, matching every other step in this function:
+// this is an observability check, never a repair (it makes no write), so a failure here must not
+// block the 30-day/7-day GDPR pre-deletion notices or deleteExpiredAccounts for every user.
+//
+// Deliberately GAUGES (OrphanedFKlessUserScopedRowsCount, labeled by table), not counters — mirrors
+// MalformedManualTierOverrideCount's own reasoning: this reports how many rows are orphaned RIGHT
+// NOW, each pass, not a cumulative total of every orphan ever observed across every pass.
+//
+// idempotency_keys is expected to read 0 within 24h of any transient non-zero reading regardless —
+// IdempotencyCleanupWorker (jobs/idempotency_cleanup.go) sweeps every row past its own TTL daily,
+// independent of this pass entirely — but dead_letter_jobs and mcp_audit_log have no such backstop,
+// so a sustained non-zero reading for either requires an operator to act on what this pass surfaces.
+func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Context, jobID int64) error {
+	counts, err := w.profileRepo.GetOrphanedFKlessUserScopedRowCounts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query for orphaned FK-less user-scoped rows: %w", err)
+	}
+
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("dead_letter_jobs").Set(float64(counts.DeadLetterJobs))
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("idempotency_keys").Set(float64(counts.IdempotencyKeys))
+	observability.OrphanedFKlessUserScopedRowsCount.WithLabelValues("mcp_audit_log").Set(float64(counts.MCPAuditLog))
+
+	if counts.DeadLetterJobs == 0 && counts.IdempotencyKeys == 0 && counts.MCPAuditLog == 0 {
+		return nil
+	}
+
+	w.logger.Warn("found rows in FK-less user-scoped tables whose user_id/actor_user_id no longer names any real user — residue of a concurrent write racing DeleteUserCascade's own erasure of these tables",
+		"job_id", jobID,
+		"dead_letter_jobs_orphaned", counts.DeadLetterJobs,
+		"idempotency_keys_orphaned", counts.IdempotencyKeys,
+		"mcp_audit_log_orphaned", counts.MCPAuditLog,
+	)
 	return nil
 }
 

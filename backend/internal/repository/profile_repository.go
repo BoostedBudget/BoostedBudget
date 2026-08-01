@@ -1334,40 +1334,6 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, fmt.Errorf("DeleteUserCascade: clear dangling transactions.user_account_id references: %w", err)
 	}
 
-	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
-	// actor_user_id) column with NO foreign key to users at all — the schema's own CASCADE graph
-	// (the whole mechanism this method exists to rely on) cannot reach them. Per-table disposition:
-	//
-	//   - dead_letter_jobs: operational record of a failed River job. args/errors are jsonb and can
-	//     embed arbitrary PII from the original job payload or failure message. A dead-lettered job
-	//     for a user who no longer exists has no remaining operational value — nobody will "retry"
-	//     it — so this is erased outright, not redacted-and-kept like audit_logs (there is no other
-	//     user's audit interest riding on this row the way there is on an ADMIN's audit_logs.user_id
-	//     row about a DIFFERENT user).
-	//   - idempotency_keys: response_body (jsonb) caches a full API response for retry
-	//     deduplication. Already short-lived by design (expires_at defaults to now()+24h), but
-	//     erased here rather than left to that TTL — GDPR erasure should not depend on a cache
-	//     expiring on its own schedule.
-	//   - mcp_audit_log: actor_user_id directly identifies the deleted user. Unlike audit_logs (kept
-	//     + redacted, because an admin's audit_logs.user_id row documents an action against a
-	//     DIFFERENT user whose own security-audit interest must survive the admin's deletion),
-	//     mcp_audit_log.actor_user_id is always the deleted user's OWN MCP tool-call history — no
-	//     other user's audit trail depends on this specific row — so it is erased outright.
-	//
-	// budget_period_events.user_id is ALSO a bare TEXT column with no FK to users, but is
-	// deliberately NOT listed here: every row's budget_id is a NOT NULL, ON DELETE CASCADE FK to
-	// budgets(id), so it is already cleaned up transitively via that table's own CASCADE (see
-	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned's dedicated assertion).
-	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
-		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
-	}
-
 	// Redact audit-log PII BEFORE the hard delete below. audit_logs.user_id (the ACTING admin —
 	// see admin_user_repository.go:390-393's doc comment: "audit_logs.user_id -> the ACTING
 	// ADMIN; resource_id -> the TARGET") already gets nulled for free by its own ON DELETE SET
@@ -1449,6 +1415,71 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		// exists, under a FOR UPDATE lock held for the remainder of this transaction. Defensive,
 		// not an expected outcome.
 		return false, nil
+	}
+
+	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
+	// actor_user_id) column with NO foreign key to users at all — the schema's own CASCADE graph
+	// (the whole mechanism this method exists to rely on) cannot reach them. Per-table disposition:
+	//
+	//   - dead_letter_jobs: operational record of a failed River job. args/errors are jsonb and can
+	//     embed arbitrary PII from the original job payload or failure message. A dead-lettered job
+	//     for a user who no longer exists has no remaining operational value — nobody will "retry"
+	//     it — so this is erased outright, not redacted-and-kept like audit_logs (there is no other
+	//     user's audit interest riding on this row the way there is on an ADMIN's audit_logs.user_id
+	//     row about a DIFFERENT user).
+	//   - idempotency_keys: response_body (jsonb) caches a full API response for retry
+	//     deduplication. Already short-lived by design (expires_at defaults to now()+24h), but
+	//     erased here rather than left to that TTL — GDPR erasure should not depend on a cache
+	//     expiring on its own schedule.
+	//   - mcp_audit_log: actor_user_id directly identifies the deleted user. Unlike audit_logs (kept
+	//     + redacted, because an admin's audit_logs.user_id row documents an action against a
+	//     DIFFERENT user whose own security-audit interest must survive the admin's deletion),
+	//     mcp_audit_log.actor_user_id is always the deleted user's OWN MCP tool-call history — no
+	//     other user's audit trail depends on this specific row — so it is erased outright.
+	//
+	// budget_period_events.user_id is ALSO a bare TEXT column with no FK to users, but is
+	// deliberately NOT listed here: every row's budget_id is a NOT NULL, ON DELETE CASCADE FK to
+	// budgets(id), so it is already cleaned up transitively via that table's own CASCADE (see
+	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned's dedicated assertion).
+	//
+	// Round-3 reordering (Issue #1440 follow-up, Codex review, Finding 5, High): these three DELETEs
+	// used to run BEFORE `DELETE FROM users` above. None of these three tables has any FK to users,
+	// so the FOR UPDATE lock this transaction holds on the users row (the eligibility recheck, far
+	// above) never blocks a concurrent writer from inserting into any of them — an in-flight MCP
+	// audit call (mcp_audit.go's RecordAuditEntry, a separate autocommit statement resolving the
+	// actor's identity fresh, independent of this transaction entirely), an idempotency write (whose
+	// advisory lock is per (user_id, key) — idempotency_repository.go — and shares nothing with this
+	// transaction's user-row lock), or a River dead-letter insert (queue/river/dead_letter.go) can
+	// all land at any point during this transaction's lifetime, completely unblocked by anything held
+	// here. Running these deletes early left the ENTIRE remainder of this method (the household
+	// guard re-check, the cross-user override/reference clears above, and the DELETE FROM users
+	// cascade itself — the slowest step, cascading roughly 40 tables) as an open window during which
+	// such a write could land AFTER this delete already ran and AFTER commit — surviving undetected,
+	// silently, forever. Moving these three deletes to run immediately before COMMIT, once the user
+	// row (and everything FK-linked to it) is already gone, shrinks that window to essentially the
+	// time between these three statements and the COMMIT round trip — the best reduction achievable
+	// without inventing new locking infrastructure these unrelated tables were never designed to
+	// need. It does NOT eliminate the race: this transaction cannot take a lock on a table that has
+	// no relationship to users at all, so a write landing in the few remaining milliseconds before
+	// COMMIT is still possible in principle. Rather than leave that residual silent, a self-healing/
+	// observability backstop closes it the same way this codebase already closes every other
+	// residual it cannot fully lock out (see StampMissingPlaidCleanupMarkers/
+	// ClearCompletedPlaidCleanupMarkers's self-healing pattern, and monitorMalformedTierOverrides'
+	// observability pattern, both profile_repository.go/retention_cleanup_check.go): see
+	// GetOrphanedFKlessUserScopedRowCounts (below) and RetentionCleanupCheckWorker's
+	// monitorOrphanedFKlessRows, which reports (and, for idempotency_keys, is ALSO already backstopped
+	// by IdempotencyCleanupWorker's independent 24-hour TTL sweep — jobs/idempotency_cleanup.go — so
+	// that column self-heals within one day even if this fix were entirely absent) any row in these
+	// three tables whose user_id/actor_user_id no longer names a real user, on every scheduled pass,
+	// rather than leaving a residual GDPR-erasure gap silent and undiscoverable.
+	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
 	}
 
 	// Commit the transaction
@@ -3165,6 +3196,62 @@ func (r *profileRepository) GetUsersWithMalformedTierOverride(ctx context.Contex
 		}
 	}
 	return malformed, nil
+}
+
+// OrphanedFKlessUserScopedRowCounts is GetOrphanedFKlessUserScopedRowCounts's result — the current
+// count, per table, of rows whose user_id/actor_user_id no longer names any real user.
+type OrphanedFKlessUserScopedRowCounts struct {
+	DeadLetterJobs  int64
+	IdempotencyKeys int64
+	MCPAuditLog     int64
+}
+
+// GetOrphanedFKlessUserScopedRowCounts is Issue #1440 round-3 Finding 5's self-healing/
+// observability backstop (Codex review, coordinator's #1440 follow-up brief): reports, per table,
+// how many rows in the three user-scoped tables with NO foreign key to users at all
+// (dead_letter_jobs, idempotency_keys, mcp_audit_log — see DeleteUserCascade's own doc comment for
+// why the schema cannot enforce their cleanup automatically) currently reference a
+// user_id/actor_user_id that no longer exists in `users`.
+//
+// This state can ONLY arise from a concurrent writer's insert landing in the narrow window between
+// DeleteUserCascade's own explicit erasure of these three tables and its transaction's commit (see
+// that method's own "round-3 reordering" doc comment for the full race — none of these tables has
+// any FK to users, so the FOR UPDATE lock DeleteUserCascade holds on the users row never blocks a
+// concurrent insert into any of them). Reordering DeleteUserCascade's own erasure to run
+// immediately before commit shrinks that window to (in practice) milliseconds, but cannot close it
+// entirely — this method exists so that residual is OBSERVABLE (RetentionCleanupCheckWorker's
+// monitorOrphanedFKlessRows reports it every scheduled pass) rather than silent and undiscoverable,
+// mirroring monitorMalformedTierOverrides' own observability-not-repair pattern for a different
+// residual this codebase already accepted it cannot fully prevent at write time.
+//
+// idempotency_keys is additionally (and independently) self-healing regardless of this method:
+// IdempotencyCleanupWorker (jobs/idempotency_cleanup.go) sweeps every row past its 24-hour
+// expires_at TTL daily, so an orphaned row in that table self-resolves within one day even without
+// this backstop. dead_letter_jobs and mcp_audit_log have no equivalent TTL sweep, so an orphaned row
+// in either persists until an operator acts on what this method surfaces.
+//
+// A single round-trip UNION-free query (one for each table, scalar-subquery style) — this is a
+// monitoring check run once per scheduled pass, not a hot path, so the three independent COUNT
+// scans are an acceptable trade for a single, simple query shape. dead_letter_jobs.user_id is
+// VARCHAR (not UUID — see migration 000030:179), so it is compared against users.id cast to text;
+// idempotency_keys.user_id and mcp_audit_log.actor_user_id are both UUID NOT NULL and compare
+// directly.
+func (r *profileRepository) GetOrphanedFKlessUserScopedRowCounts(ctx context.Context) (OrphanedFKlessUserScopedRowCounts, error) {
+	var counts OrphanedFKlessUserScopedRowCounts
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM dead_letter_jobs d
+			 WHERE d.user_id IS NOT NULL
+			   AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id::text = d.user_id)),
+			(SELECT COUNT(*) FROM idempotency_keys i
+			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = i.user_id)),
+			(SELECT COUNT(*) FROM mcp_audit_log m
+			 WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = m.actor_user_id))
+	`).Scan(&counts.DeadLetterJobs, &counts.IdempotencyKeys, &counts.MCPAuditLog)
+	if err != nil {
+		return OrphanedFKlessUserScopedRowCounts{}, fmt.Errorf("GetOrphanedFKlessUserScopedRowCounts: %w", err)
+	}
+	return counts, nil
 }
 
 // SetPastDueStartedAt sets the past_due_started_at timestamp for a user.

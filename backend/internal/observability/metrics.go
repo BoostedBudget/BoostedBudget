@@ -277,6 +277,26 @@ var (
 		Help: "Total DeleteUserCascade calls refused because the target is a household owner whose CASCADE would destroy another real user's household_members or subscription_entitlements data. Requires human resolution (ownership transfer, member removal, or entitlement reconciliation) — alert on any sustained non-zero rate.",
 	})
 
+	// OrphanedFKlessUserScopedRowsCount is Issue #1440 round-3 Finding 5's monitoring gauge: the
+	// current count, per table, of rows in the three user-scoped tables with NO foreign key to users
+	// at all (dead_letter_jobs, idempotency_keys, mcp_audit_log) whose user_id/actor_user_id no
+	// longer names any real user — see profileRepository.GetOrphanedFKlessUserScopedRowCounts's own
+	// doc comment for the full race this reports (a concurrent writer landing in the narrow window
+	// between DeleteUserCascade's own erasure of these tables and its transaction's commit; none of
+	// the three has any FK to users, so DeleteUserCascade's own row lock never blocks such a write).
+	//
+	// A GaugeVec labeled by table, mirroring MalformedManualTierOverrideCount's own gauge shape
+	// (current outstanding count each pass observes, not a cumulative total of every orphan ever
+	// seen). idempotency_keys is expected to self-heal to 0 within 24h regardless, via
+	// IdempotencyCleanupWorker's independent TTL sweep — a sustained non-zero reading there points at
+	// that sweep itself failing, not (only) this race. dead_letter_jobs and mcp_audit_log have no
+	// such TTL backstop, so any non-zero reading for either is the sole visible signal that a row
+	// needs manual cleanup.
+	OrphanedFKlessUserScopedRowsCount = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "orphaned_fkless_user_scoped_rows_count",
+		Help: "Current count, per table, of rows in dead_letter_jobs/idempotency_keys/mcp_audit_log whose user_id/actor_user_id no longer names a real user — residue of a concurrent write racing DeleteUserCascade's own erasure of these FK-less tables. idempotency_keys self-heals within 24h via its own TTL sweep; the other two do not and require manual cleanup.",
+	}, []string{"table"})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{
