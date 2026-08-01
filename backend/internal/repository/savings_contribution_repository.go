@@ -176,6 +176,24 @@ func (r *savingsContributionRepository) Insert(ctx context.Context, userID strin
 // Acquires a row-level lock on the transaction to prevent concurrent over-allocation
 // (Codex C2). Uses ON CONFLICT on the partial unique index
 // (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL.
+//
+// occurred_on is written as CURRENT_DATE (see the INSERT below), which Postgres evaluates in the
+// SESSION time zone — Issue #1461 decision: now that NewPool pins every pooled connection's
+// session TimeZone to UTC, CURRENT_DATE here resolves to the UTC calendar day, not any particular
+// user's local day. This is a deliberate choice, not an oversight:
+//  1. It matches this repository's OWN sibling convention just below (UpsertProposedFromTransaction
+//     uses the identical CURRENT_DATE) and the rest of the repository layer's established
+//     UTC-calendar-day convention (analytics_repository.go, balance_snapshot_repository.go,
+//     savings_impact_repository.go all bucket by AT TIME ZONE 'UTC' explicitly).
+//  2. It is very unlikely to change PRODUCTION behavior: managed Postgres providers (this app
+//     deploys to Fly.io) default new sessions to UTC already, and nothing in docker-compose.yml or
+//     fly.toml pins a different zone — the inconsistency this fix closes was primarily LOCAL DEV
+//     (confirmed: this machine's Postgres defaults to America/New_York) disagreeing with
+//     presumed-UTC production, not a production behavior change.
+//  3. InsertManualFromTransaction (below, occurred_on=caller-supplied) remains the correct choice
+//     whenever the caller has and wants to assert a specific date — this UTC-CURRENT_DATE path is
+//     only for the two auto-derived/reconciliation-owned paths where "today" is inferred, not
+//     asserted.
 func (r *savingsContributionRepository) UpsertFromTransaction(
 	ctx context.Context,
 	userID, goalID, transactionID string,
@@ -403,6 +421,8 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 	// are left untouched even if they share the same (transaction_id, savings_goal_id) key.
 	// R3-7: rejected rows (tombstones) must also NOT be overwritten — the
 	// WHERE status='proposed' clause already excludes them.
+	// occurred_on=CURRENT_DATE — same Issue #1461 UTC-calendar-day decision as
+	// UpsertFromTransaction's own doc comment above; both auto-derived paths share it.
 	now := time.Now()
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
