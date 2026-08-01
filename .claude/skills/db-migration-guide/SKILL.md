@@ -201,6 +201,54 @@ row-count-limited `UPDATE ... LIMIT`) rather than one unbounded full-table `UPDA
 backfill holds its row locks for a fraction of a second per batch instead of monopolizing them for
 the whole run.
 
+### Adding `NOT NULL` to an existing column: never a bare `SET NOT NULL`
+
+`ALTER TABLE ... ALTER COLUMN x SET NOT NULL` performs a **mandatory full-table validation scan while
+holding `ACCESS EXCLUSIVE`**, blocking every read and write to the table until it finishes. Backfilling
+the NULLs in an earlier migration does **not** avoid this: the scan still reads every row regardless of
+whether it finds a violation. (Issue #1444's first draft made exactly that mistake, and argued the scan
+was cheap "because the backfill already ran" — a Codex adversarial review caught it.)
+
+Use the three-step transition instead, **one migration per step**:
+
+```sql
+-- Step 1 (migration N):   instant. ACCESS EXCLUSIVE for a catalog write only, NO scan.
+ALTER TABLE t ADD CONSTRAINT t_x_not_null CHECK (x IS NOT NULL) NOT VALID;
+
+-- Step 2 (migration N+1): performs the scan under SHARE UPDATE EXCLUSIVE, which does NOT block
+--                         concurrent SELECT/INSERT/UPDATE/DELETE. This is the point of the split.
+ALTER TABLE t VALIDATE CONSTRAINT t_x_not_null;
+
+-- Step 3 (migration N+2): PostgreSQL 12+ proves non-nullness from the VALIDATED check and SKIPS the
+--                         scan; then drop the now-redundant constraint.
+ALTER TABLE t ALTER COLUMN x SET NOT NULL;
+ALTER TABLE t DROP CONSTRAINT IF EXISTS t_x_not_null;
+```
+
+**The steps must be separate migrations, not separate statements in one file.** golang-migrate wraps
+each migration in a single transaction, so combining them holds step 1's `ACCESS EXCLUSIVE` right
+through step 2's scan — reproducing the exact hazard. This is the same reason DDL and backfills must be
+split (above).
+
+Two properties worth knowing:
+
+- **A `NOT VALID` CHECK still rejects new rows.** `NOT VALID` exempts only rows that already existed
+  when the constraint was added, so from step 1 onward no fresh NULL can be introduced even though the
+  column is still formally nullable. There is no window of weakened enforcement.
+- **Step 2 is where a bad deploy fails, and it fails safely.** If a NULL survived the backfill, `VALIDATE`
+  errors — leaving the column nullable and the constraint un-validated, a coherent state the application
+  still runs against. Worth a dedicated migration test asserting this fail-closed behaviour, paired with
+  a clean-data test that must succeed, so the pair distinguishes on data rather than passing vacuously.
+
+Reference implementation: `000124`/`000125`/`000126` (`linked_items.status`), with
+`backend/internal/database/migration_000123_000126_integration_test.go` covering all four steps.
+
+Lock modes verified empirically rather than assumed: while `VALIDATE CONSTRAINT` was held open in a
+transaction, `pg_locks` reported `ShareUpdateExclusiveLock` and a concurrent `SELECT` completed; the
+identical `SELECT` against a deliberately held `ACCESS EXCLUSIVE` lock failed with `canceling statement
+due to statement timeout`. If you change this pattern, re-verify the same way — Squawk cannot tell you
+(see below).
+
 ### Escape hatch: `ADD COLUMN IF NOT EXISTS` lets an operator pre-empt the lock
 
 Because `000119`'s `ALTER` is written as `ADD COLUMN IF NOT EXISTS`, an operator can run that exact
