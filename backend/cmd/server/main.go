@@ -1733,7 +1733,7 @@ func main() {
 		// email fallback that the Huma middleware provides).
 
 		appLogger.Info("Authenticated routes enabled (Clerk + Database)")
-	} else if db != nil {
+	} else if msg, attrs, warranted := clerkGateWarning(db != nil, cfg.ClerkSecretKey != ""); warranted {
 		// Issue #1450: this whole block (background job registration + Huma admin/authenticated
 		// routes) is gated on cfg.ClerkSecretKey != "", not just db != nil. The gate is
 		// intentional — Clerk is this app's identity source and most of the above touches user
@@ -1741,16 +1741,12 @@ func main() {
 		// stopped. Concretely, every periodic job configured inside the gate above never runs,
 		// including RetentionCleanupCheckWorker — the ONLY place that runs retention-clock
 		// repair, the 30-day/7-day GDPR pre-deletion notices, deleteExpiredAccounts, and the
-		// Plaid-disconnect repair pass. main.go:95's startup summary already logs `"clerk",
-		// boolStatus(cfg.ClerkSecretKey != "")` as a bare status flag — that line does not say
-		// what breaks, so it does not satisfy this warning.
-		appLogger.Warn("CLERK_SECRET_KEY is unset — ALL background jobs are disabled, including "+
-			"GDPR-mandated processing",
-			"consequence_gdpr_pre_deletion_notices", "NOT running (30-day and 7-day warnings)",
-			"consequence_account_deletion", "NOT running (deleteExpiredAccounts never executes)",
-			"consequence_retention_clock_repair", "NOT running",
-			"consequence_plaid_disconnect_repair", "NOT running",
-			"remediation", "set CLERK_SECRET_KEY, or see Issue #1450 for narrowing the gate to jobs that don't need Clerk")
+		// Plaid-disconnect repair pass.
+		//
+		// The decision and the message live in clerkGateWarning (clerk_gate_warning.go) so a test
+		// can assert on their real values instead of text-scanning this file — see that file's
+		// header for why the original inline version's test was unsound.
+		appLogger.Warn(msg, attrs...)
 	}
 
 	// Issue #972: Savings impact routes (public aggregate + per-user) require DB but NOT Clerk,
