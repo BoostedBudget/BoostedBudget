@@ -1,0 +1,15 @@
+-- Down migration: intentional no-op (data preservation).
+--
+-- Both halves of the up migration are one-way backfills with nothing "more correct" to roll back
+-- to:
+--
+-- 1. A manual_tier_override value that named no configured tier was, by definition, garbage — a
+--    legacy row, a direct SQL write, or a write made while tierConfig was nil. There is no original
+--    "intended" value to restore; re-populating the column with the same malformed string would just
+--    reopen the exact hole this migration exists to close.
+-- 2. A plaid_cleanup_pending_at marker nulled here belonged to a user with ZERO linked_items rows
+--    at all — restoring a marker that never had any outstanding cleanup behind it, on a user who may
+--    since have genuinely relinked (in which case a real writer already re-armed a fresh marker for
+--    them), would either resurrect meaningless residue or clobber a fresh, legitimate one.
+--
+-- No-op: intentionally no executable statement below this line.

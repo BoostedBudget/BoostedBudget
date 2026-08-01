@@ -72,6 +72,7 @@ func TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain(t *te
 	user := &domain.User{ID: userID, Email: "rearm@example.com", RetentionExpiresAt: &secondCycleExpires}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
@@ -134,6 +135,7 @@ func TestRetentionCleanupCheck_Occurrence_SameCycle_SecondRunDoesNotResend(t *te
 	user := &domain.User{ID: userID, Email: "samecycle@example.com", RetentionExpiresAt: &retentionExpiresAt}
 
 	mockRepo := new(MockRetentionProfileRepository)
+	mockRepo.On("GetUsersWithMalformedTierOverride", mock.Anything).Return([]*domain.User{}, nil).Maybe()
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()

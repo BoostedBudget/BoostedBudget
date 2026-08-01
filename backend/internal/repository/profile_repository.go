@@ -2867,6 +2867,51 @@ func (r *profileRepository) GetUsersWithExpiredManualTierOverride(ctx context.Co
 	return users, nil
 }
 
+// malformedTierOverrideWhereClause is GetUsersWithMalformedTierOverride's candidate scope: every
+// row carrying a non-empty manual_tier_override, ordered for a stable, reproducible scan. Validity
+// (does the value name a currently-configured tier) is NOT checked in SQL at all — see that
+// method's own doc comment for why.
+const malformedTierOverrideWhereClause = ` WHERE manual_tier_override IS NOT NULL AND manual_tier_override <> '' AND is_deleted = FALSE ORDER BY id`
+
+// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: it returns every user whose
+// manual_tier_override is non-empty but does NOT name a currently-configured tier — the population
+// migration 000127's one-time backfill cleared, and the population any FUTURE writer that bypasses
+// admin_user_service.go's write-time validation (SetOverrideTierValidator / tierConfig.GetTier)
+// could still reintroduce.
+//
+// Deliberately reuses r.overrideTierValidator — the SAME injected validator
+// GetEffectiveSubscriptionStatusByUserID already uses on the read-access path (see
+// SetOverrideTierValidator's doc comment) — rather than hand-copying config/subscription_tiers.yaml's
+// tier list into a SQL literal. This is the reason Issue #1453 rejected a CHECK constraint (schema
+// duplicating application config, drifting the next time a tier is added/renamed) but accepted a
+// migration backfill (a one-time point-in-time cleanup that never runs again, so staleness
+// afterward is a non-issue): an ONGOING monitoring query has the identical staleness problem a
+// perpetual CHECK constraint would have if it hand-copied the tier list, so it must not do that
+// either. Reusing the validator means "configured" can never drift from what every other
+// enforcement seam in this codebase already treats as valid.
+//
+// Returns (nil, nil) — not an empty slice — when no validator has been wired
+// (SetOverrideTierValidator never called). This is a monitoring aid, not an enforcement path, and
+// "unknown whether any rows are malformed" is a materially different claim from "zero malformed
+// rows found" — silently reporting the latter when the real answer is the former would hide a
+// misconfigured caller behind a false-negative "all clear" the first time someone checks this query.
+func (r *profileRepository) GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error) {
+	if r.overrideTierValidator == nil {
+		return nil, nil
+	}
+	candidates, err := r.queryUsers(ctx, userSelectQuery+malformedTierOverrideWhereClause)
+	if err != nil {
+		return nil, err
+	}
+	malformed := make([]*domain.User, 0, len(candidates))
+	for _, u := range candidates {
+		if u.ManualTierOverride != nil && !r.overrideTierValidator(*u.ManualTierOverride) {
+			malformed = append(malformed, u)
+		}
+	}
+	return malformed, nil
+}
+
 // SetPastDueStartedAt sets the past_due_started_at timestamp for a user.
 // Only sets the timestamp if it is currently NULL (does not reset on repeated calls).
 // Issue #898: dunning job grace-period tracking.

@@ -272,6 +272,18 @@ type RetentionProfileRepository interface {
 	SetRetentionNotice30dSent(ctx context.Context, userID string) error
 	// SetRetentionNotice7dSent is SetRetentionNotice30dSent's 7-day sibling.
 	SetRetentionNotice7dSent(ctx context.Context, userID string) error
+
+	// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: returns every user whose
+	// manual_tier_override is non-empty but does not name a currently-configured tier. Migration
+	// 000127 backfilled the known population to NULL as a one-time cleanup; this monitoring pass
+	// (monitorMalformedTierOverrides below) catches a FUTURE writer reintroducing the class — one
+	// that bypasses admin_user_service.go's write-time validation entirely (a legacy row, a direct
+	// SQL write, or a write made while tierConfig was nil). See its full doc comment on
+	// profileRepository (profile_repository.go) for why it reuses the SAME injected
+	// overrideTierValidator every other validation seam already uses, rather than a hand-copied SQL
+	// tier list, and why it returns (nil, nil) rather than an empty slice when no validator has been
+	// wired.
+	GetUsersWithMalformedTierOverride(ctx context.Context) ([]*domain.User, error)
 }
 
 // RetentionDeletionService defines the deletion methods needed for retention cleanup.
@@ -487,6 +499,19 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 		w.logger.Error("failed to repair Plaid disconnects",
 			"job_id", job.ID,
 			"error", repairErr,
+		)
+		// Don't fail job — continue with other steps
+	}
+
+	// Step 0c: Issue #1453 monitoring pass — report the current count of users whose
+	// manual_tier_override does not name a configured tier. See monitorMalformedTierOverrides's own
+	// doc comment for the full rationale. Non-fatal for the same reason every other step here is:
+	// this is an observability check, not a repair, and must never block GDPR notices or expired-
+	// account deletion.
+	if monitorErr := w.monitorMalformedTierOverrides(ctx, job.ID); monitorErr != nil {
+		w.logger.Error("failed to check for malformed manual_tier_override rows",
+			"job_id", job.ID,
+			"error", monitorErr,
 		)
 		// Don't fail job — continue with other steps
 	}
@@ -1252,6 +1277,62 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	// shared PlaidCleanupBackstopFailuresTotal counter (see this function's Clear call site) — but it
 	// does mean the residual this paragraph used to accept as merely cosmetic is now actively healed,
 	// not just tolerated.
+	return nil
+}
+
+// monitorMalformedTierOverrides is Issue #1453's monitoring pass: reports the current count of
+// users whose manual_tier_override does not name a currently-configured tier
+// (config/subscription_tiers.yaml).
+//
+// Why this exists at all: users.manual_tier_override is an unconstrained VARCHAR(50) with no CHECK
+// constraint — Issue #1453 deliberately did NOT add one, because the tier set lives in
+// config/subscription_tiers.yaml, not the database, and inlining it into schema would duplicate
+// application config and drift the next time a tier is added or renamed. Migration 000127
+// backfilled every row that was ALREADY malformed at the time it ran to NULL, and
+// admin_user_service.go's UpdateUserTier validates every NEW write against tierConfig — but neither
+// of those closes the class permanently the way a CHECK constraint would have: a legacy migration, a
+// direct SQL write, or a write made while tierConfig was nil can all still reintroduce a malformed
+// value, invisibly, with no write-time gate to catch it. This pass is the compensating control:
+// unlike a one-time backfill, it runs on every scheduled pass, so a reintroduced malformed value is
+// visible (MalformedManualTierOverrideCount gauge, plus an Error log line naming the affected user
+// IDs) within one repair-pass interval, not left to be discovered whenever someone happens to query
+// for it by hand.
+//
+// Deliberately non-fatal and does not fail the job, matching every other step in this function:
+// this is an observability check, never a repair (it makes no write), so a failure here must not
+// block the 30-day/7-day GDPR pre-deletion notices or deleteExpiredAccounts for every user.
+//
+// Deliberately a GAUGE (MalformedManualTierOverrideCount), not a counter: this reports how many
+// rows are malformed RIGHT NOW, each pass — it is not a cumulative count of every malformed row ever
+// observed across every pass, which would only ever grow and would misrepresent a single persistent
+// malformed row as "many failures" the longer it goes unnoticed.
+func (w *RetentionCleanupCheckWorker) monitorMalformedTierOverrides(ctx context.Context, jobID int64) error {
+	malformed, err := w.profileRepo.GetUsersWithMalformedTierOverride(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query for malformed manual_tier_override rows: %w", err)
+	}
+	if malformed == nil {
+		// No validator wired (SetOverrideTierValidator never called on the injected repository) —
+		// "unknown", not "zero found". Skip reporting entirely rather than publish a gauge value of
+		// 0 that would misrepresent an unconfigured check as a clean bill of health. See
+		// GetUsersWithMalformedTierOverride's own doc comment (profile_repository.go) for why this
+		// distinction is load-bearing, not pedantic.
+		w.logger.Warn("skipping malformed manual_tier_override check — no override tier validator configured on the injected repository",
+			"job_id", jobID)
+		return nil
+	}
+
+	observability.MalformedManualTierOverrideCount.Set(float64(len(malformed)))
+	if len(malformed) == 0 {
+		return nil
+	}
+
+	userIDs := make([]string, len(malformed))
+	for i, u := range malformed {
+		userIDs[i] = u.ID
+	}
+	w.logger.Error("found users with a manual_tier_override that does not name a configured tier — this should be impossible after migration 000127; some writer bypassed write-time validation",
+		"job_id", jobID, "count", len(malformed), "user_ids", userIDs)
 	return nil
 }
 
