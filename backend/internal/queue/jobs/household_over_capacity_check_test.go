@@ -1538,7 +1538,13 @@ func TestHouseholdOverCapacityCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
 
 	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
 	assert.Zero(t, opts.UniqueOpts.ByPeriod)
-	require.NotEmpty(t, opts.UniqueOpts.ByState)
+	assert.False(t, opts.UniqueOpts.ByQueue, "uniqueness must stay global across queues")
+
+	require.Len(t, opts.UniqueOpts.ByState, len(want.ByState),
+		"ByState must match HouseholdOverCapacityCheckUniqueOpts() exactly, not just be non-empty")
+	for i, s := range want.ByState {
+		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
+	}
 }
 
 func TestHouseholdOverCapacityCheckPeriodicOpts_RunOnStart(t *testing.T) {
