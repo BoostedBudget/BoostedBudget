@@ -254,6 +254,29 @@ var (
 		Help: "Current number of users whose manual_tier_override does not name a configured tier (config/subscription_tiers.yaml). Should always be 0 post-migration-000127; any sustained non-zero value means a writer bypassed write-time validation.",
 	})
 
+	// HouseholdOwnerDeletionBlockedTotal counts every time DeleteUserCascade
+	// (profile_repository.go) refused to hard-delete a household owner because doing so would
+	// CASCADE away another real user's data — households.owner_user_id CASCADEs the household row
+	// itself (taking every other active member's household_members row with it), and
+	// subscription_entitlements.payer_user_id CASCADEs away any entitlement this owner funds for
+	// someone else, live membership or not. Issue #1440 Critical finding (Codex review): the #1367
+	// owner guard (domain.ErrHouseholdHasActiveMembers) previously lived ONLY in
+	// DeletionService.RequestDeletion, the user-initiated request path — ExecuteDeletion's other two
+	// callers (the retention-triggered deleteExpiredAccounts, and the legacy
+	// DeletionWorker/AccountDeletionWorker paths) reached DeleteUserCascade with no guard at all.
+	//
+	// This is now a genuine error (not a silent, expected (false, nil) skip like a lapsed comp or an
+	// un-cleaned Plaid item) — ExecuteDeletion propagates it, so it is logged at Error by every
+	// caller and, for the River-job paths, retried and eventually visible in the dead-letter queue
+	// (the System Health Dashboard's DLQ metrics already surface this). A blocked deletion here
+	// requires a human to resolve the household situation (transfer ownership, remove members, or
+	// reconcile the stale entitlement) — it cannot self-heal, so alert on ANY sustained non-zero
+	// rate: it means a GDPR deletion deadline is going unmet for a real, specific household.
+	HouseholdOwnerDeletionBlockedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "household_owner_deletion_blocked_total",
+		Help: "Total DeleteUserCascade calls refused because the target is a household owner whose CASCADE would destroy another real user's household_members or subscription_entitlements data. Requires human resolution (ownership transfer, member removal, or entitlement reconciliation) — alert on any sustained non-zero rate.",
+	})
+
 	// InvestmentHoldingsSyncDuration tracks how long holdings sync operations take.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSyncDuration = promauto.NewHistogram(prometheus.HistogramOpts{

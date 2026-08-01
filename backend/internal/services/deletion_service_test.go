@@ -2102,6 +2102,59 @@ func TestExecuteDeletion_CascadeFails_ReleasesClaim(t *testing.T) {
 	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
 }
 
+// TestExecuteDeletion_CascadeHouseholdOwnerGuard_ReleasesClaimAndPropagatesError is Issue #1440's
+// Critical-finding regression at the SERVICE layer (Codex review): DeleteUserCascade now returns
+// (false, domain.ErrHouseholdHasActiveMembers) — NOT a normal (false, nil) skip like a lapsed comp
+// or an un-cleaned Plaid item — when the target is a household owner whose deletion would CASCADE
+// away another real user's data (households.owner_user_id -> household_members /
+// subscription_entitlements.payer_user_id). Unlike TestExecuteDeletion_CascadeAbortedByGuard above,
+// this condition cannot self-heal on the next scheduled run, so it MUST be treated as a genuine
+// error: ExecuteDeletion must propagate it (so every caller's existing Error-level logging fires,
+// and the River-job callers retry and eventually surface it in the dead-letter queue) while still
+// releasing the work claim so a future run — after a human resolves the household — is not stuck
+// waiting out the rest of the 15-minute lease. The real DB proof that DeleteUserCascade itself
+// returns this error in exactly this situation lives in
+// profile_repository_delete_user_cascade_integration_test.go
+// (TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_NotDeleted and its
+// orphaned-entitlement sibling); this test is the service-layer proof that ExecuteDeletion responds
+// to that signal correctly — as an error, not a silent skip.
+func TestExecuteDeletion_CascadeHouseholdOwnerGuard_ReleasesClaimAndPropagatesError(t *testing.T) {
+	ctx := context.Background()
+	mockRepo := new(MockProfileRepositoryForDeletion)
+	mockEmail := new(MockEmailService)
+	mockClerk := new(MockClerkService)
+	mockAudit := new(MockAuditLogger)
+
+	service := NewDeletionService(mockRepo, mockEmail, mockClerk, mockAudit, nil, 30, "test-secret-key")
+
+	user := &domain.User{
+		ID:          "user-123",
+		ClerkUserID: "user_123",
+		Email:       "test@example.com",
+		IsDeleted:   false,
+	}
+
+	mockClaims := new(MockWorkClaimsRepository)
+	mockClaims.On("Claim", ctx, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, accountDeletionClaimLease).
+		Return(testDeletionClaimToken, true, nil)
+	mockClaims.On("Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string")).
+		Return(true, nil)
+	service.SetWorkClaimsRepo(mockClaims)
+
+	mockRepo.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockRepo.On("ClaimForDeletion", ctx, user.ID).Return(true, nil)
+	mockRepo.On("DeleteUserCascade", ctx, user.ID, mock.Anything).Return(false, domain.ErrHouseholdHasActiveMembers)
+	// Clerk deletion and audit log deliberately left unstubbed — an unstubbed testify mock call
+	// panics, proving the error return happens before either of them (the user was NOT deleted).
+
+	err := service.ExecuteDeletion(ctx, user.ID)
+
+	require.Error(t, err, "a household-owner guard trip must be a genuine error, not a silent (nil) skip — it cannot self-heal without a human resolving the household")
+	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	mockClaims.AssertCalled(t, "Release", mock.Anything, repository.ResourceTypeUser, user.ID, repository.ActionAccountDeletion, testDeletionClaimToken, mock.AnythingOfType("string"))
+	mockClaims.AssertNotCalled(t, "Complete", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestExecuteDeletion_CascadeAbortedByGuard_ReleasesClaimNotCompleteAndReturnsNoError proves
 // Issue #1413 round-4 Critical finding C1/C2's abort path is wired correctly at the service
 // layer: DeleteUserCascade reporting (false, nil) — its own internal guard found the user no

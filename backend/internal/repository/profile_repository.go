@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 var (
@@ -1186,6 +1187,117 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil
 	}
 
+	// Issue #1440 Critical finding (Codex review): re-verify the household-owner guard INSIDE this
+	// same transaction, immediately before the destructive DELETE — the same principle finding
+	// C1/C2 above already established for eligibility and Plaid cleanup, now applied to household
+	// ownership. #1367's guard (domain.ErrHouseholdHasActiveMembers) lived ONLY in
+	// DeletionService.RequestDeletion — the user-INITIATED request path. ExecuteDeletion's other
+	// two callers (the retention-triggered deleteExpiredAccounts, and the legacy
+	// DeletionWorker/AccountDeletionWorker paths) call this method directly, with NO owner guard at
+	// all: a household owner whose retention clock expires while still owning an active household
+	// would reach the DELETE below unguarded. households.owner_user_id CASCADEs the household row
+	// away, taking every OTHER member's household_members row with it, and — via
+	// subscription_entitlements.payer_user_id CASCADE — every OTHER beneficiary's entitlement too.
+	// That is irreversible destruction of a DIFFERENT user's data, not just the deletion target's
+	// own.
+	//
+	// householdOwnerBlocksDeletionClause is deliberately BROADER than the #1367 rule
+	// (CountActiveMembers(householdID) > 1) alone: it also blocks on any subscription_entitlements
+	// row this household funds (household_id = h.id) for someone OTHER than the owner, regardless
+	// of that beneficiary's current household_members.status. RemoveMember
+	// (household_repository.go) only flips a member's status to 'removed' — its own doc comment
+	// says it "Never touches Plaid Items", and it likewise never touches subscription_entitlements
+	// — so a just-removed member's owner-funded entitlement can outlive their active membership row
+	// entirely. An active-member-count-only guard would miss that residual; this does not.
+	//
+	// Unlike the comp/deletion-request-cancelled guard above (a normal, expected (false, nil) skip
+	// that resolves itself on the next scheduled run), this condition CANNOT self-heal: nothing else
+	// in the system will transfer ownership, remove the member, or reconcile the stale entitlement.
+	// A silent (false, nil) skip here would let a GDPR deletion deadline go unmet forever with no
+	// visible signal. So this returns a genuine, non-nil error instead — every ExecuteDeletion
+	// caller already logs a non-nil error at Error level, and the two River-job callers additionally
+	// retry it (eventually surfacing in the dead-letter queue the System Health Dashboard already
+	// monitors). observability.HouseholdOwnerDeletionBlockedTotal gives an operator a dedicated,
+	// alertable signal distinct from ordinary transient failures — this situation requires a human
+	// to actually resolve the household, not just retry.
+	var householdOwnerBlocksDeletion bool
+	err = tx.QueryRow(ctx, `SELECT `+householdOwnerBlocksDeletionClause, userID).Scan(&householdOwnerBlocksDeletion)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: household owner guard check: %w", err)
+	}
+	if householdOwnerBlocksDeletion {
+		observability.HouseholdOwnerDeletionBlockedTotal.Inc()
+		return false, domain.ErrHouseholdHasActiveMembers
+	}
+
+	// Issue #1440 Finding 2 (Codex review): clear any DANGLING cross-user override BEFORE the hard
+	// delete below. transactions.custom_category_override_id -> custom_categories is ON DELETE
+	// RESTRICT (deliberately — see migration 000065: "prevents deleting a custom_category while it
+	// is the active override", a real, everyday product rule enforced by
+	// custom_category_repository.go, not something to weaken via a schema change just for this
+	// method). custom_categories.user_id -> users is CASCADE, so this user's own custom_categories
+	// rows are about to disappear as part of the DELETE below.
+	//
+	// The user's OWN transactions (also cascading away in the very same DELETE FROM users
+	// statement) never trip this RESTRICT — empirically verified: Postgres's RI check for RESTRICT
+	// evaluates once every row this single statement cascades away has actually been removed, not
+	// per-row as each cascade step runs, so an override pointing at a category that is ALSO being
+	// deleted in this same statement is never seen as "still referenced". The one case that DOES
+	// reach a real, reproducible failure: transactions.custom_category_override_id has NO trigger
+	// enforcing same-user ownership (unlike custom_categories.parent_id's own
+	// enforce_custom_category_two_levels trigger), so a DIFFERENT, non-deleted user's transaction
+	// can reference this user's custom_categories row as its override — that transaction is NOT
+	// part of this statement's cascade, so the RESTRICT fires for real and the whole deletion
+	// fails. Clearing it here, unconditionally, ahead of time, closes that residual regardless of
+	// which user owns the referencing transaction.
+	//
+	// category_override_kind must be cleared in the SAME statement, not just
+	// custom_category_override_id: valid_category_override_discriminator (migration 000065) forbids
+	// kind='custom' with a NULL override_id, so nulling only the FK column here would trade one
+	// constraint violation for another.
+	_, err = tx.Exec(ctx, `
+		UPDATE transactions
+		SET custom_category_override_id = NULL, category_override_kind = NULL
+		WHERE custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1)
+	`, userID)
+	if err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
+	}
+
+	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
+	// actor_user_id) column with NO foreign key to users at all — the schema's own CASCADE graph
+	// (the whole mechanism this method exists to rely on) cannot reach them. Per-table disposition:
+	//
+	//   - dead_letter_jobs: operational record of a failed River job. args/errors are jsonb and can
+	//     embed arbitrary PII from the original job payload or failure message. A dead-lettered job
+	//     for a user who no longer exists has no remaining operational value — nobody will "retry"
+	//     it — so this is erased outright, not redacted-and-kept like audit_logs (there is no other
+	//     user's audit interest riding on this row the way there is on an ADMIN's audit_logs.user_id
+	//     row about a DIFFERENT user).
+	//   - idempotency_keys: response_body (jsonb) caches a full API response for retry
+	//     deduplication. Already short-lived by design (expires_at defaults to now()+24h), but
+	//     erased here rather than left to that TTL — GDPR erasure should not depend on a cache
+	//     expiring on its own schedule.
+	//   - mcp_audit_log: actor_user_id directly identifies the deleted user. Unlike audit_logs (kept
+	//     + redacted, because an admin's audit_logs.user_id row documents an action against a
+	//     DIFFERENT user whose own security-audit interest must survive the admin's deletion),
+	//     mcp_audit_log.actor_user_id is always the deleted user's OWN MCP tool-call history — no
+	//     other user's audit trail depends on this specific row — so it is erased outright.
+	//
+	// budget_period_events.user_id is ALSO a bare TEXT column with no FK to users, but is
+	// deliberately NOT listed here: every row's budget_id is a NOT NULL, ON DELETE CASCADE FK to
+	// budgets(id), so it is already cleaned up transitively via that table's own CASCADE (see
+	// TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned's dedicated assertion).
+	if _, err = tx.Exec(ctx, `DELETE FROM dead_letter_jobs WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase dead_letter_jobs: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM idempotency_keys WHERE user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase idempotency_keys: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM mcp_audit_log WHERE actor_user_id = $1`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: erase mcp_audit_log: %w", err)
+	}
+
 	// Redact audit-log PII BEFORE the hard delete below. audit_logs.user_id (the ACTING admin —
 	// see admin_user_repository.go:390-393's doc comment: "audit_logs.user_id -> the ACTING
 	// ADMIN; resource_id -> the TARGET") already gets nulled for free by its own ON DELETE SET
@@ -1211,26 +1323,53 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}
 
-	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE, 2 are ON
-	// DELETE SET NULL (audit_logs.user_id, household_invites.accepted_user_id), and ZERO are
-	// RESTRICT/NO ACTION (verified against the live schema for Issue #1440) — so this statement
-	// cannot fail on a referential-integrity violation, and every user-scoped table is cleaned up
-	// by the schema itself rather than by an incomplete, hand-maintained list of DELETEs in Go.
+	// Hard-delete the user row. 37 foreign keys into users are ON DELETE CASCADE and 2 are ON
+	// DELETE SET NULL (audit_logs.user_id, household_invites.accepted_user_id) — every user-scoped
+	// table these cover is cleaned up by the schema itself rather than by an incomplete,
+	// hand-maintained list of DELETEs in Go.
+	//
+	// A handful of tables are user-scoped WITHOUT any FK to users at all (dead_letter_jobs,
+	// idempotency_keys, mcp_audit_log.actor_user_id) — handled by explicit statements above/below
+	// this comment, per-table, since the schema cannot enforce their cleanup automatically. See each
+	// statement's own doc comment for its disposition (erase vs. retain-and-reason).
+	//
+	// RESTRICT/NO ACTION note (Issue #1440 follow-up, Codex review "Finding 2"): a prior audit of
+	// this method claimed "ZERO FKs into users are RESTRICT/NO ACTION" and treated that as proof
+	// this DELETE cannot fail on referential integrity. That claim was about direct FKs INTO users —
+	// true — but did not account for the TRANSITIVE closure: custom_categories.parent_id (self-FK,
+	// RESTRICT) and transactions.custom_category_override_id -> custom_categories (RESTRICT) sit one
+	// hop further out. Empirically verified (see this file's companion tests): when every
+	// referencing AND referenced row is cascaded away together within this SAME DELETE FROM users
+	// statement, Postgres's RI check for both RESTRICT and NO ACTION is satisfied — it evaluates
+	// after all of this statement's own cascaded deletes complete, not per-row as each cascade step
+	// runs. The one residual that DOES reach a real, reproducible failure: a DIFFERENT (non-deleted)
+	// user's transaction referencing THIS user's custom_categories row as
+	// custom_category_override_id — schema-legal (no trigger enforces same-user on that column,
+	// unlike custom_categories.parent_id's own trigger), and not covered by this statement's own
+	// cascade since that other transaction is not being deleted. Cleared defensively just above (see
+	// that UPDATE's own doc comment) before this DELETE runs, rather than relying on FK delete-rule
+	// changes — converting either RESTRICT to CASCADE would change real, everyday single-category
+	// deletion behavior elsewhere in the app (custom_category_repository.go's reparent-then-delete
+	// flow, and the "can't delete a category still used as a transaction override" product rule),
+	// which is out of scope for a GDPR account-deletion fix.
 	//
 	// Cross-user CASCADE consequences (columns other than user_id: households.owner_user_id,
 	// household_invites.inviter_user_id, referrals.referrer_id/referred_id,
-	// subscription_entitlements.payer_user_id) were audited for Issue #1440:
-	//   - households.owner_user_id: DeletionService.RequestDeletion already blocks a household
-	//     owner with active non-owner members (domain.ErrHouseholdHasActiveMembers, Issue #1367
-	//     Phase 3) before deletion_requested_at is ever set — so only a sole-member owner can
-	//     reach this method, and cascading that household away is harmless. Still true as of this
-	//     writing (requestDeletionTransactional, deletion_service.go).
-	//   - subscription_entitlements.payer_user_id: verified SAFE. The composite FK
-	//     fk_subscription_entitlements_payer_is_owner (migration 000112) makes payer_user_id
-	//     EQUAL the household's owner_user_id by construction — the database will not allow a
-	//     payer who isn't the owner — so this column is fully covered by the SAME owner guard as
-	//     households.owner_user_id above; there is no reachable case where a payer is deleted out
-	//     from under members who are not also covered by that guard.
+	// subscription_entitlements.payer_user_id) were re-audited for this follow-up:
+	//   - households.owner_user_id: guarded INSIDE this same transaction just above
+	//     (householdOwnerBlocksDeletionClause), not merely upstream in
+	//     DeletionService.RequestDeletion. A prior version of this comment claimed
+	//     RequestDeletion's #1367 guard alone made this safe — that was wrong: RequestDeletion
+	//     never runs on the retention-triggered or legacy-worker ExecuteDeletion paths, both of
+	//     which call this method directly. See the guard block above for the full rationale.
+	//   - subscription_entitlements.payer_user_id: the composite FK
+	//     fk_subscription_entitlements_payer_is_owner (migration 000112) makes payer_user_id EQUAL
+	//     the household's owner_user_id by construction, so this column is covered by the SAME
+	//     guard above — including its broader-than-#1367 check for an entitlement whose beneficiary
+	//     (user_id) is no longer an active member (see the guard's own doc comment).
+	//   - household_invites.inviter_user_id / referrals.referrer_id/referred_id: unchanged from the
+	//     original audit — these only remove the relationship/invite row itself, never another
+	//     user's own `users` row or their independently-owned data, so no guard is needed for them.
 	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: delete user: %w", err)
@@ -2552,6 +2691,36 @@ const anyLinkedItemExistsClause = `EXISTS (
 // `users`.
 const uncleanedLinkedItemExistsClause = `EXISTS (
 	SELECT 1 FROM linked_items WHERE user_id = $1 AND (status IS NULL OR status NOT IN ('disconnected', 'replaced'))
+)`
+
+// householdOwnerBlocksDeletionClause is DeleteUserCascade's guard predicate for "deleting this
+// user would destroy another real user's data via households.owner_user_id's CASCADE" — Issue
+// #1440 Critical finding (Codex review). See the guard's call site (above, in DeleteUserCascade)
+// for the full rationale; this const only holds the SQL.
+//
+// Two independent conditions, OR'd together:
+//  1. The #1367 rule: more than one ACTIVE household_members row (the owner's own row plus at
+//     least one other).
+//  2. Broader than #1367: any subscription_entitlements row this household funds
+//     (household_id = h.id) for someone OTHER than the owner (se.user_id <> h.owner_user_id),
+//     regardless of that beneficiary's current household_members.status — closing the residual
+//     where RemoveMember flipped a member to 'removed' without also touching their
+//     owner-funded entitlement.
+//
+// Correlates against households.owner_user_id = $1 directly (not via a household_members join for
+// the owner's own row) since households.owner_user_id IS the user_id being deleted — mirrors
+// uncleanedLinkedItemExistsClause's own $1-parameterized style, for the same reason (this guard
+// query is not already joined to `users`).
+const householdOwnerBlocksDeletionClause = `EXISTS (
+	SELECT 1 FROM households h
+	WHERE h.owner_user_id = $1
+	  AND (
+	    (SELECT COUNT(*) FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active') > 1
+	    OR EXISTS (
+	      SELECT 1 FROM subscription_entitlements se
+	      WHERE se.household_id = h.id AND se.user_id <> h.owner_user_id
+	    )
+	  )
 )`
 
 // ClearCompletedPlaidCleanupMarkers is StampMissingPlaidCleanupMarkers's symmetric counterpart —
