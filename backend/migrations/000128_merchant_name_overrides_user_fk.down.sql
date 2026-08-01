@@ -1,0 +1,2 @@
+-- Rollback for 000128_merchant_name_overrides_user_fk
+ALTER TABLE merchant_name_overrides DROP CONSTRAINT IF EXISTS fk_merchant_name_overrides_user_id;
