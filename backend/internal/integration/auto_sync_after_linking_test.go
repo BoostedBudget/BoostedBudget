@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/stretchr/testify/assert"
@@ -120,7 +121,9 @@ func setupTestDBIfAvailable(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		return nil
 	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	// Issue #1461: route through database.NewPoolFromURL (not a bare pgxpool.New) so this pool
+	// pins session TimeZone=UTC exactly like the production pool does.
+	pool, err := database.NewPoolFromURL(context.Background(), dsn)
 	require.NoError(t, err, "connect to test database")
 	return pool
 }

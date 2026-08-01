@@ -141,26 +141,76 @@ func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
 	return now
 }
 
-// dbAddMonths computes ts + months entirely in Postgres via make_interval — the SAME semantics
-// AdminUserRepository.RemoveUserTierOverride's own SQL uses for retention_expires_at
-// (clock_timestamp() + make_interval(months => $N)). Go's time.Time.AddDate normalizes month
-// overflow FORWARD (2026-07-31 + 9mo -> 2027-05-01); Postgres's make_interval CLAMPS to the target
-// month's last day (-> 2027-04-30) instead. They agree on every date whose day-of-month exists in
-// the target month and silently diverge otherwise — which is exactly why a test that computed its
-// expectation via ts.AddDate(...) and compared it against a value the production SQL computed via
-// make_interval could pass 27+ days a month and fail specifically on a month-end run.
+// dbAddMonthsQuery computes ts + months entirely in Postgres via make_interval, pinned to UTC
+// BEFORE the calendar addition (Issue #1461) — the AT TIME ZONE 'UTC' conversion makes the result
+// independent of the connection's own session TimeZone. dbAddMonths below and
+// TestDbAddMonths_Integration_IndependentOfSessionTimeZone share this exact literal so the test can
+// never drift from the implementation it is proving.
 //
-// Fencing with THIS helper instead of AddDate keeps the assertion calendar-immune BY CONSTRUCTION:
+// Historically (pre-#1461) this was `$1::timestamptz + make_interval(months => $2)`, with no pin
+// of its own — the SAME expression AdminUserRepository.RemoveUserTierOverride's SQL uses for
+// retention_expires_at (clock_timestamp() + make_interval(months => $N)). Both sides therefore
+// drifted IDENTICALLY with whatever session TimeZone the shared pool happened to have: if NewPool's
+// UTC pin were ever removed, production's write and dbAddMonths's expectation would both silently
+// shift by the same DST offset, and every assertion built on dbAddMonths would keep passing despite
+// the regression. Pinning dbAddMonths's OWN expression to UTC, independent of the ambient session,
+// removes that blind spot.
+//
+// Go's time.Time.AddDate normalizes month overflow FORWARD (2026-07-31 + 9mo -> 2027-05-01);
+// Postgres's make_interval CLAMPS to the target month's last day (-> 2027-04-30) instead. They
+// agree on every date whose day-of-month exists in the target month and silently diverge
+// otherwise — which is exactly why a test that computed its expectation via ts.AddDate(...) and
+// compared it against a value the production SQL computed via make_interval could pass 27+ days a
+// month and fail specifically on a month-end run.
+//
+// Fencing with dbAddMonths instead of AddDate keeps the assertion calendar-immune BY CONSTRUCTION:
 // the expectation and the actual stored value are both computed by the same engine (Postgres),
 // using the same function (make_interval), so they can never disagree regardless of what day of
 // the month the test happens to run on. This is not a wider tolerance — it removes the source of
 // divergence entirely rather than hiding it.
+const dbAddMonthsQuery = `SELECT ($1::timestamptz AT TIME ZONE 'UTC') + make_interval(months => $2)`
+
 func dbAddMonths(t *testing.T, pool *pgxpool.Pool, ts time.Time, months int) time.Time {
 	t.Helper()
 	var result time.Time
-	require.NoError(t, pool.QueryRow(context.Background(),
-		"SELECT $1::timestamptz + make_interval(months => $2)", ts, months).Scan(&result))
-	return result
+	require.NoError(t, pool.QueryRow(context.Background(), dbAddMonthsQuery, ts, months).Scan(&result))
+	return result.UTC()
+}
+
+// TestDbAddMonths_Integration_IndependentOfSessionTimeZone is Issue #1461's headline regression
+// test for the test-fence itself: it forces a connection's session TimeZone away from UTC
+// (simulating NewPool's UTC pin having been removed or bypassed — confirmed locally that
+// America/New_York, not UTC, is this host's own unpinned Postgres default) and proves
+// dbAddMonthsQuery still returns the UTC-preserved absolute instant regardless.
+//
+// Falsified by reverting dbAddMonthsQuery to the pre-#1461 unpinned form
+// (`$1::timestamptz + make_interval(months => $2)`, no AT TIME ZONE) and confirming this test goes
+// RED — see Issue #1461's report for the verbatim failure output.
+func TestDbAddMonths_Integration_IndependentOfSessionTimeZone(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "SET TIME ZONE 'America/New_York'")
+	require.NoError(t, err)
+
+	// 2026-01-15 12:00:00-05 (EST, expressed as its UTC instant so the literal is unambiguous).
+	anchor := time.Date(2026, 1, 15, 17, 0, 0, 0, time.UTC)
+
+	var got time.Time
+	require.NoError(t, conn.QueryRow(ctx, dbAddMonthsQuery, anchor, 6).Scan(&got))
+
+	// 6 months later, added in UTC with no DST reinterpretation: 2026-07-15 17:00:00 UTC. (The
+	// unpinned expression, run on this same America/New_York connection, would instead compute
+	// 2026-07-15 12:00:00-04 = 16:00 UTC — an hour off, because July sits in EDT while the addition
+	// started from a wall-clock reading taken in EST.)
+	want := time.Date(2026, 7, 15, 17, 0, 0, 0, time.UTC)
+	assert.True(t, want.Equal(got.UTC()),
+		"dbAddMonthsQuery must preserve the absolute instant regardless of the connection's own "+
+			"session TimeZone — got %v, want %v", got.UTC(), want)
 }
 
 // waitUntilBlockedBy is a real synchronization barrier for lock-contention tests — Issue #1413

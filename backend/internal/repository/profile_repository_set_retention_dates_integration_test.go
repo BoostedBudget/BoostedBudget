@@ -136,3 +136,51 @@ func TestSetRetentionDates_Integration_MakeIntervalClampsAtMonthEnd(t *testing.T
 	assert.False(t, expires.Equal(goOverflowed),
 		"the Postgres-clamped result must NOT match Go's AddDate overflow result — got the same value %v for both, which would mean make_interval stopped clamping", expires)
 }
+
+// TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossDSTBoundary is Issue #1461's
+// headline test: it proves retention_expires_at's absolute GDPR deletion deadline survives a real
+// spring-forward DST boundary, on the exact pool (connectTestDB) production code runs on.
+//
+// retention_expires_at is written as `clock_timestamp() + make_interval(months => N)` — a
+// timestamptz plus a calendar interval, with NO inline AT TIME ZONE of its own (see
+// SetRetentionDates/RemoveUserTierOverride's own SQL). Postgres performs that addition in the
+// SESSION time zone: it converts the timestamptz to session-local wall-clock time, adds N months
+// to the wall clock, then reinterprets the result in whatever UTC offset applies THEN — which can
+// differ from the offset that applied at the anchor if a DST transition falls in between. Pinning
+// every pooled connection's session TimeZone to UTC (NewPool, Issue #1461) removes that
+// session-dependence: this test exercises the SAME unqualified expression shape production uses,
+// through connectTestDB's pool (which now routes through database.NewPoolFromURL — see that
+// helper's own comment), and asserts it lands exactly on the UTC-computed reference regardless.
+//
+// Falsified by removing RuntimeParams["TimeZone"] = "UTC" from database.buildPoolConfig
+// (internal/database/pgx.go) and confirming this test goes RED (on this host, whose own Postgres
+// TimeZone defaults to America/New_York) — see Issue #1461's report for the verbatim failure
+// output.
+func TestSetRetentionDates_Integration_PreservesAbsoluteDeadlineAcrossDSTBoundary(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	// 2026-01-15 12:00:00-05 (EST) — expressed as its UTC instant so the literal is unambiguous.
+	anchor := time.Date(2026, 1, 15, 17, 0, 0, 0, time.UTC)
+	const retentionMonths = 6
+
+	// The EXACT expression shape SetRetentionDates/RemoveUserTierOverride use in production:
+	// <timestamptz> + make_interval(months => N), relying entirely on whatever session TimeZone
+	// this pool's connections carry — no inline AT TIME ZONE here. If NewPool's UTC pin is in
+	// place, this is computed as if in UTC; if the pin is ever removed, this instead reflects the
+	// host's own ambient Postgres TimeZone default.
+	var actual time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT $1::timestamptz + make_interval(months => $2::int)`, anchor, retentionMonths,
+	).Scan(&actual))
+	actual = actual.UTC()
+
+	// The intended absolute deadline: 6 calendar months added in UTC, with no DST reinterpretation
+	// at all — January (EST, -05) and July (EDT, -04) must not matter.
+	want := time.Date(2026, 7, 15, 17, 0, 0, 0, time.UTC)
+	assert.True(t, want.Equal(actual),
+		"retention_expires_at-shaped arithmetic (clock_timestamp() + make_interval(months => N)) "+
+			"on connectTestDB's pool must preserve the absolute deadline across the January(EST)->"+
+			"July(EDT) DST boundary — got %v, want %v; a divergence here means NewPool's session "+
+			"TimeZone pin is missing or not reaching this pool", actual, want)
+}
