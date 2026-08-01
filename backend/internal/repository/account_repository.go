@@ -1051,12 +1051,17 @@ func (r *accountRepository) CheckFingerprintOwnership(ctx context.Context, finge
 		LIMIT 1
 	`
 
-	// Issue #1444 (Site B): li.status is nullable (linked_items.status) and was scanned directly
+	// Issue #1444 (Site B): li.status WAS nullable (linked_items.status) and was scanned directly
 	// into ownership.ItemStatus, a bare domain.LinkedItemStatus (string) field — "cannot scan
 	// NULL into *string". Scan into a *string intermediate and normalize through
 	// normalizeLinkedItemStatus (the established NULL-means-active rule) instead. This backs the
 	// Issue #1010 cross-user Plaid-item uniqueness gate (account_service.go's LinkAccounts) —
 	// security-relevant, so a NULL status must not silently fail the scan.
+	//
+	// Migration 000126 (also Issue #1444) has since made the column NOT NULL, so no new NULL can
+	// arise. The intermediate is kept deliberately: it costs nothing, it stays correct against an
+	// older or partially-migrated database, and removing it would put the panic back one migration
+	// rollback away on a security-relevant path.
 	var ownership FingerprintOwnership
 	var statusRaw *string
 	err := r.db.QueryRow(ctx, query, fingerprintBlindIdx, excludeUserID).Scan(
