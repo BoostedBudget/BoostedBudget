@@ -29,12 +29,16 @@ func TestRiverUniqueOpts_ConvertsAllFields(t *testing.T) {
 	assert.Equal(t, rivertype.JobStateCompleted, got.ByState[1])
 }
 
-// TestRiverUniqueOpts_EmptyByState proves an empty ByState converts to an empty (not nil vs.
-// non-nil ambiguous) slice — River's own zero value is an empty slice, not nil, so a caller
-// checking len() sees consistent behavior either way.
+// TestRiverUniqueOpts_EmptyByState proves an unset (nil) source ByState converts to a NIL
+// river ByState, not a non-nil empty slice. This distinction is load-bearing: river's own
+// UniqueOpts.isEmpty() (insert_opts.go) checks `ByState == nil` specifically when a
+// completely zero-valued UniqueOpts{} should fall back to a job's own default InsertOpts —
+// make([]rivertype.JobState, 0) would produce a non-nil empty slice that breaks that
+// fallback. None of the 14 periodic jobs hit this today (every one sets a non-zero ByPeriod
+// or non-empty ByState), but the helper itself must still get this right for future callers.
 func TestRiverUniqueOpts_EmptyByState(t *testing.T) {
 	got := riverUniqueOpts(&queue.UniqueOpts{})
-	assert.Empty(t, got.ByState)
+	assert.Nil(t, got.ByState, "an unset source ByState must convert to nil, not a non-nil empty slice")
 	assert.False(t, got.ByArgs)
 	assert.False(t, got.ByQueue)
 	assert.Zero(t, got.ByPeriod)

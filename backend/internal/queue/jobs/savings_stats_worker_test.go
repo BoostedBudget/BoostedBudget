@@ -265,7 +265,12 @@ func TestSavingsStatsInsertOpts_CarriesUniqueOpts(t *testing.T) {
 	opts := SavingsStatsInsertOpts()
 	want := SavingsStatsUniqueOpts()
 
+	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
 	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
+	assert.False(t, opts.UniqueOpts.ByQueue, "uniqueness must stay global across queues")
+	assert.Empty(t, opts.UniqueOpts.ByState,
+		"SavingsStatsUniqueOpts() sets no ByState (ByPeriod-only dedup) — an unexpected "+
+			"ByState here means the conversion helper stopped preserving that")
 }
 
 func TestSavingsStatsPeriodicOpts_RunOnStart(t *testing.T) {

@@ -230,9 +230,15 @@ func TestTrialExpirationCheckInsertOpts_CarriesUniqueOpts(t *testing.T) {
 
 	assert.Equal(t, want.ByArgs, opts.UniqueOpts.ByArgs)
 	assert.Equal(t, want.ByPeriod, opts.UniqueOpts.ByPeriod)
-	require.NotEmpty(t, opts.UniqueOpts.ByState,
+	assert.False(t, opts.UniqueOpts.ByQueue, "uniqueness must stay global across queues")
+
+	require.Len(t, opts.UniqueOpts.ByState, len(want.ByState),
 		"main.go's periodic registration previously carried NO UniqueOpts at all for this "+
-			"job despite RunOnStart: true (Issue #1448)")
+			"job despite RunOnStart: true (Issue #1448) — ByState must match "+
+			"TrialExpirationCheckUniqueOpts() exactly, not just be non-empty")
+	for i, s := range want.ByState {
+		assert.Equal(t, rivertype.JobState(s), opts.UniqueOpts.ByState[i])
+	}
 }
 
 func TestTrialExpirationCheckPeriodicOpts_RunOnStart(t *testing.T) {
