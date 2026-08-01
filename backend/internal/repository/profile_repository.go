@@ -1255,13 +1255,83 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// custom_category_override_id: valid_category_override_discriminator (migration 000065) forbids
 	// kind='custom' with a NULL override_id, so nulling only the FK column here would trade one
 	// constraint violation for another.
+	//
+	// Round-3 addition (Issue #1440 follow-up, Codex review, Finding 3, High): also reset
+	// effective_category_name to pfc_primary in this SAME statement. effective_category_name is an
+	// app-maintained column (migration 000073) — unlike effective_pfc_primary/effective_pfc_detailed
+	// (GENERATED ALWAYS AS, migration 000073:15-30), it does NOT recompute itself when
+	// category_override_kind/custom_category_override_id change, so clearing only those two columns
+	// left effective_category_name holding the DELETED user's custom category NAME on the surviving
+	// OTHER user's transaction — personal data (a name the deleted user chose and typed) surviving
+	// erasure, in a column this codebase treats as PII (docs/security/posthog-pii-masking.md;
+	// data-ph-mask is applied to it on the frontend). Migration 000073 places no CHECK constraint
+	// tying effective_category_name to category_override_kind, so setting it here is schema-safe.
+	// `effective_category_name = pfc_primary` mirrors custom_category_repository.go's
+	// DeleteWithReassignment — the ordinary, already-shipped code path for "a custom category was
+	// deleted out from under a transaction that used it as an override" (same-user case) — so a
+	// cross-user dangling override left by THIS method resolves to the exact same, already-expected
+	// value: the effective category reverts to the transaction's own underlying PFC primary, matching
+	// what effective_pfc_primary's generated-column CASE will independently compute for the same row
+	// now that category_override_kind is NULL (ELSE pfc_primary branch) — the two columns stay in
+	// agreement, not just individually non-PII.
 	_, err = tx.Exec(ctx, `
 		UPDATE transactions
-		SET custom_category_override_id = NULL, category_override_kind = NULL
+		SET custom_category_override_id = NULL, category_override_kind = NULL, effective_category_name = pfc_primary
 		WHERE custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1)
 	`, userID)
 	if err != nil {
 		return false, fmt.Errorf("DeleteUserCascade: clear dangling custom category overrides: %w", err)
+	}
+
+	// Issue #1440 round-3 Finding 4 (Codex review): null out four ON DELETE NO ACTION references
+	// (the default delete rule for a bare REFERENCES clause with no explicit ON DELETE) that can
+	// legally hold a CROSS-USER reference, none of it enforced by any trigger:
+	//
+	//   - accounts.replaced_by_id -> accounts(id)               (migration 000033:43-48)
+	//   - linked_items.replaced_by_id -> linked_items(id)       (migration 000032:35-40)
+	//   - accounts.user_account_id -> user_accounts(id)         (migration 000033:19-24)
+	//   - transactions.user_account_id -> user_accounts(id)     (migration 000034:16-21)
+	//
+	// This user's own accounts/linked_items/user_accounts rows are about to cascade away via their
+	// own user_id -> users CASCADE FKs (part of the DELETE FROM users below). NO ACTION's
+	// referential-integrity check has the SAME end-of-statement timing as RESTRICT (see the dangling
+	// custom-category-override clear above for the empirically-verified mechanism): a same-user
+	// reference is satisfied for free because both the referencing and referenced row cascade away
+	// together in the SAME statement, but a DIFFERENT user's surviving row that still points at one
+	// of this user's about-to-vanish rows makes the whole `DELETE FROM users` statement fail with a
+	// foreign key violation. Migration 000100 (:276-312) is direct evidence this is reachable in
+	// production, not a theoretical edge case: its own comments for accounts.user_account_id and
+	// transactions.user_account_id both say "ON DELETE NO ACTION — must re-point before deleting
+	// losers", and it re-points BOTH columns before removing a duplicate user_accounts row for
+	// exactly this reason.
+	//
+	// Nulling unconditionally (not scoped to "only when the referencing row belongs to someone
+	// else") is deliberate and harmless: all four columns are nullable (no NOT NULL constraint in
+	// any of the migrations above), and a same-user reference would cascade away in this same
+	// statement regardless of whether it is nulled first.
+	if _, err = tx.Exec(ctx, `
+		UPDATE accounts SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.replaced_by_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE linked_items SET replaced_by_id = NULL
+		WHERE replaced_by_id IN (SELECT id FROM linked_items WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling linked_items.replaced_by_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE accounts SET user_account_id = NULL
+		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling accounts.user_account_id references: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE transactions SET user_account_id = NULL
+		WHERE user_account_id IN (SELECT id FROM user_accounts WHERE user_id = $1)
+	`, userID); err != nil {
+		return false, fmt.Errorf("DeleteUserCascade: clear dangling transactions.user_account_id references: %w", err)
 	}
 
 	// Issue #1440 Finding 3 (Codex review): erase the three tables that carry a user_id (or
@@ -2699,13 +2769,41 @@ const uncleanedLinkedItemExistsClause = `EXISTS (
 // for the full rationale; this const only holds the SQL.
 //
 // Two independent conditions, OR'd together:
-//  1. The #1367 rule: more than one ACTIVE household_members row (the owner's own row plus at
-//     least one other).
-//  2. Broader than #1367: any subscription_entitlements row this household funds
-//     (household_id = h.id) for someone OTHER than the owner (se.user_id <> h.owner_user_id),
+//  1. The #1367 rule: at least one ACTIVE, NON-OWNER household_members row.
+//  2. Broader than #1367: any CURRENTLY EFFECTIVE subscription_entitlements row this household
+//     funds (household_id = h.id) for someone OTHER than the owner (se.user_id <> h.owner_user_id),
 //     regardless of that beneficiary's current household_members.status — closing the residual
 //     where RemoveMember flipped a member to 'removed' without also touching their
 //     owner-funded entitlement.
+//
+// Round-3 correction (Issue #1440 follow-up, Codex review, coordinator's own brief — Finding 1 and
+// Finding 6, both High):
+//
+//   - Finding 1: condition 2 used to have NO filter on effective_until/effective_from — matching
+//     ANY subscription_entitlements row ever written for this household, live or long since closed.
+//     But member removal (household_service.go's removeMemberTx) only EXPIRES the departing
+//     member's entitlement — entRepo.ExpireActiveEntitlement sets effective_until = now() and
+//     entitlement_repository.go deliberately RETAINS the historical row (see
+//     ExpireActiveEntitlement/ExpireActiveHouseholdEntitlement's own doc comments — both a
+//     bookkeeping UPDATE, never a DELETE). So a household with only its owner currently active,
+//     plus a FORMER member's now-closed entitlement, hit ErrHouseholdHasActiveMembers FOREVER —
+//     the ordinary, everyday shape of "a member left at some point," not a contrived edge case —
+//     and that owner could never complete a GDPR deletion. Fixed by requiring
+//     `se.effective_until IS NULL AND se.effective_from <= now()`, the EXACT predicate
+//     entitlement_repository.go's own GetActiveEntitlement already uses to distinguish a live
+//     entitlement from historical residue — this guard must agree with that definition, not invent
+//     its own.
+//   - Finding 6: condition 1 used to be `COUNT(*) > 1` (the owner's own active row plus at least
+//     one other) — silently DEPENDING on an invariant the schema does not enforce: that
+//     household_members always contains an 'active' row for the owner. There are ZERO
+//     constraints tying household_members.user_id to households.owner_user_id (migration
+//     000107:12-15 documents this as a service-layer invariant only; :94-102 enforces uniqueness,
+//     not existence). A schema-valid household with one active NON-OWNER member, NO active owner
+//     row at all, and no entitlement passed `COUNT(*) > 1` (count exactly 1) — silently permitting
+//     the owner's deletion, and households.owner_user_id's CASCADE (migration 000106:54-62)
+//     destroyed that OTHER real user's household_members row. Fixed by counting active members
+//     `WHERE hm.user_id <> h.owner_user_id` directly — the guard no longer depends on the owner's
+//     own membership row existing at all.
 //
 // Correlates against households.owner_user_id = $1 directly (not via a household_members join for
 // the owner's own row) since households.owner_user_id IS the user_id being deleted — mirrors
@@ -2715,10 +2813,11 @@ const householdOwnerBlocksDeletionClause = `EXISTS (
 	SELECT 1 FROM households h
 	WHERE h.owner_user_id = $1
 	  AND (
-	    (SELECT COUNT(*) FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active') > 1
+	    (SELECT COUNT(*) FROM household_members hm WHERE hm.household_id = h.id AND hm.status = 'active' AND hm.user_id <> h.owner_user_id) > 0
 	    OR EXISTS (
 	      SELECT 1 FROM subscription_entitlements se
 	      WHERE se.household_id = h.id AND se.user_id <> h.owner_user_id
+	        AND se.effective_until IS NULL AND se.effective_from <= now()
 	    )
 	  )
 )`
