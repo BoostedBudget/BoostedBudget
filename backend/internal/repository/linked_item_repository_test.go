@@ -99,7 +99,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
-			"ins_1", "Chase", "plaid", nil, nil,
+			ptrStr("ins_1"), ptrStr("Chase"), "plaid", nil, nil,
 			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
@@ -107,7 +107,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
-			"ins_2", "Wells Fargo", "plaid", &cursor, &now,
+			ptrStr("ins_2"), ptrStr("Wells Fargo"), "plaid", &cursor, &now,
 			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
@@ -151,7 +151,7 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 		"status_changed_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
-		"ins_123", "Chase", "plaid", nil, nil,
+		ptrStr("ins_123"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
@@ -285,7 +285,7 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 		"status_changed_at",
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
-		"ins_chase", "Chase", "plaid", nil, nil,
+		ptrStr("ins_chase"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
@@ -451,7 +451,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 	}).
 		AddRow(
 			itemID, userID, "item-1", "encrypted-token",
-			institutionID, "Chase", "plaid", nil, nil,
+			ptrStr(institutionID), ptrStr("Chase"), "plaid", nil, nil,
 			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
@@ -530,7 +530,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 	}).
 		AddRow(
 			itemID, userID, "item-old", "encrypted-token",
-			institutionID, "Chase", "plaid", nil, nil,
+			ptrStr(institutionID), ptrStr("Chase"), "plaid", nil, nil,
 			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&replacedAt, &replacedByID,
 			now, now,
@@ -634,7 +634,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 		"status_changed_at",
 	}).AddRow(
 		mostRecentItemID, userID, "item-recent", "encrypted-token",
-		institutionID, "Chase", "plaid", nil, nil,
+		ptrStr(institutionID), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
@@ -676,7 +676,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		"status_changed_at",
 	}).AddRow(
 		itemID, userID, "item-disconnected", "encrypted-token",
-		institutionID, "Bank of America", "plaid", nil, nil,
+		ptrStr(institutionID), ptrStr("Bank of America"), "plaid", nil, nil,
 		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
@@ -755,7 +755,7 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 		"status_changed_at",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
-		"ins_123", "Chase", "plaid", nil, nil,
+		ptrStr("ins_123"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
@@ -796,7 +796,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
-			"ins_1", "Chase", "plaid", nil, nil,
+			ptrStr("ins_1"), ptrStr("Chase"), "plaid", nil, nil,
 			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
@@ -804,7 +804,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
-			"ins_1", "Chase", "plaid", nil, nil,
+			ptrStr("ins_1"), ptrStr("Chase"), "plaid", nil, nil,
 			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&now, nil,
 			now, now,
