@@ -1470,6 +1470,172 @@ func TestClearCompletedPlaidCleanupMarkers_Integration_Idempotent(t *testing.T) 
 	assert.Nil(t, marker)
 }
 
+// ─── Issue #1455: ClearMarkersOnEligibleStatus — the third backstop, closing invariant BRANCH 1 ──
+//
+// domain.User.PlaidCleanupPendingAt's invariant has two branches: (1) status NOT ineligible ⇒
+// marker must be NULL; (2) status ineligible ⇒ marker non-NULL exactly while an episode is open.
+// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers above both self-heal branch
+// 2, but both are gated on plaidDisconnectRepairEligibleStatusPredicate — neither ever looks at a
+// row whose status is NOT inactive/cancelled. So until this fix, branch 1 had no runtime backstop:
+// a row that ever ended up with a non-ineligible status AND a non-NULL marker stayed that way
+// forever, and a later cancellation's COALESCE-free write could still inherit a marker stale enough
+// to skip the 72-hour grace window entirely (see ClearMarkersOnEligibleStatus's own doc comment,
+// profile_repository.go, for the full scenario).
+
+func createClearMarkersOnEligibleStatusTestUser(t *testing.T, pool *pgxpool.Pool, repo *profileRepository, namePrefix, status string) *domain.User {
+	t.Helper()
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := &domain.User{
+		ClerkUserID:        "clerk_" + namePrefix + "_" + suffix,
+		Email:              namePrefix + "-" + suffix + "@example.com",
+		SubscriptionTier:   "premium",
+		SubscriptionStatus: status,
+		PrimaryRegion:      "iad",
+		IsActive:           true,
+	}
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
+	require.NoError(t, tx.Commit(ctx))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM linked_items WHERE user_id = $1", user.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+	return user
+}
+
+// TestClearMarkersOnEligibleStatus_Integration_ClearsStaleMarkerOnNonIneligibleStatus is the RED
+// test for Issue #1455: models the exact corruption the ticket describes — a row whose
+// subscription_status is NOT inactive/cancelled but whose plaid_cleanup_pending_at is non-NULL
+// (e.g. a hypothetical future status-only writer that forgets to touch this column, or historical
+// corruption). No production writer can construct this today (PR #1443 deleted the only one that
+// could — see this ticket's own "Current state" section), so this is modeled directly via raw SQL,
+// matching this file's established convention (setPlaidCleanupPendingAt) for states no writer
+// currently produces.
+//
+// Falsifiability: without ClearMarkersOnEligibleStatus (or if its WHERE clause were inverted), the
+// marker stays non-NULL and this test fails.
+func TestClearMarkersOnEligibleStatus_Integration_ClearsStaleMarkerOnNonIneligibleStatus(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createClearMarkersOnEligibleStatusTestUser(t, pool, repo, "branch1active", "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+
+	clearedCount, err := repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, clearedCount, 1, "at least this fixture's row must be cleared")
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "a marker on a user whose status is NOT ineligible must be cleared — branch 1 of the invariant")
+}
+
+// TestClearMarkersOnEligibleStatus_Integration_ExcludesIneligibleStatus proves this backstop never
+// touches a row whose status genuinely IS inactive/cancelled — that population is
+// StampMissingPlaidCleanupMarkers/ClearCompletedPlaidCleanupMarkers's job, not this one's. Mirrors
+// TestClearCompletedPlaidCleanupMarkers_Integration_ExcludesUserWithLiveItem's shape for the
+// opposite backstop.
+func TestClearMarkersOnEligibleStatus_Integration_ExcludesIneligibleStatus(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createClearMarkersOnEligibleStatusTestUser(t, pool, repo, "branch1cancelled", "cancelled")
+	staleMarker := time.Now().Add(-time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+
+	_, err := repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker, "an ineligible-status (cancelled) user's marker must be untouched by this backstop")
+	assert.True(t, staleMarker.Equal(*marker))
+}
+
+// TestClearMarkersOnEligibleStatus_Integration_ClearsRegardlessOfActiveOverride pins the Issue
+// #1455 judgement call: unlike StampMissingPlaidCleanupMarkers (which excludes a currently-comped
+// user because stamping only ever arms a marker for a population the repair candidate query would
+// itself eventually act on, and that query already excludes a live comp), this backstop must NOT
+// exclude one. domain.User.PlaidCleanupPendingAt's own doc comment is explicit that
+// manual_tier_override is not a term in this invariant at all — branch 1 says "status not
+// ineligible ⇒ marker must be NULL", full stop, independent of override state. Mirrors
+// ClearCompletedPlaidCleanupMarkers's identical asymmetry (which also does not exclude an active
+// override) rather than Stamp's.
+func TestClearMarkersOnEligibleStatus_Integration_ClearsRegardlessOfActiveOverride(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createClearMarkersOnEligibleStatusTestUser(t, pool, repo, "branch1comped", "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+	future := time.Now().Add(24 * time.Hour)
+	_, err := pool.Exec(ctx, `UPDATE users SET manual_tier_override = 'household_2', manual_tier_ends_at = $1 WHERE id = $2`, future, user.ID)
+	require.NoError(t, err)
+
+	clearedCount, err := repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, clearedCount, 1)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker, "unlike Stamp, this backstop must NOT exclude a currently-comped user — branch 1 doesn't reference manual_tier_override at all")
+}
+
+// TestClearMarkersOnEligibleStatus_Integration_ExcludesSoftDeletedUser proves the is_deleted = FALSE
+// guard is real, matching this file's convention of testing every clause in a global-scan WHERE.
+func TestClearMarkersOnEligibleStatus_Integration_ExcludesSoftDeletedUser(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createClearMarkersOnEligibleStatusTestUser(t, pool, repo, "branch1deleted", "active")
+	staleMarker := time.Now().Add(-time.Hour)
+	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
+	_, err := pool.Exec(ctx, `UPDATE users SET is_deleted = TRUE WHERE id = $1`, user.ID)
+	require.NoError(t, err)
+
+	_, err = repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.NotNil(t, marker, "a soft-deleted user must be untouched by this backstop")
+	assert.True(t, staleMarker.Equal(*marker))
+}
+
+// TestClearMarkersOnEligibleStatus_Integration_Idempotent proves this backstop is safe to run on
+// every single pass, mirroring ClearCompletedPlaidCleanupMarkers's own idempotency test.
+func TestClearMarkersOnEligibleStatus_Integration_Idempotent(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	user := createClearMarkersOnEligibleStatusTestUser(t, pool, repo, "branch1idem", "active")
+	setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+
+	firstClearedCount, err := repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, firstClearedCount, 1)
+
+	var marker *time.Time
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	require.Nil(t, marker)
+
+	_, err = repo.ClearMarkersOnEligibleStatus(ctx)
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
+	assert.Nil(t, marker)
+}
+
 // TestPlaidDisconnectRepair_Integration_StaleMarkerHealedBeforeRelink_FreshGraceWindowEnforced is
 // THE test the task brief calls "the test that matters": the verified five-step scenario reproduced
 // end to end at the repository level (RetentionCleanupCheckWorker.repairPlaidDisconnects itself lives

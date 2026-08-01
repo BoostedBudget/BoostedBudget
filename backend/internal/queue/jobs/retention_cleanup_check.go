@@ -190,6 +190,23 @@ type RetentionProfileRepository interface {
 	// StampMissingPlaidCleanupMarkers.
 	ClearCompletedPlaidCleanupMarkers(ctx context.Context) (int, error)
 
+	// ClearMarkersOnEligibleStatus is Issue #1455's THIRD self-healing backstop — closing the
+	// plaid_cleanup_pending_at invariant's OTHER branch. Stamp/Clear above both self-heal "status
+	// ineligible ⇒ marker reflects outstanding cleanup", but BOTH are gated on
+	// plaidDisconnectRepairEligibleStatusPredicate, so neither ever inspects a row whose status is
+	// NOT inactive/cancelled — leaving "status NOT ineligible ⇒ marker must be NULL" with no runtime
+	// backstop at all. See its full doc comment on profileRepository (profile_repository.go) for the
+	// complete rationale, including why this is a flat UPDATE (not Stamp's `FOR NO KEY UPDATE` CTE —
+	// this writes only a constant, exactly like Clear) and the judgement call on NOT excluding a
+	// currently-comped user (mirroring Clear's asymmetry with Stamp, not Stamp's own exclusion).
+	// Called by repairPlaidDisconnects (below) immediately after ClearCompletedPlaidCleanupMarkers,
+	// at the very start of every pass. Returns the number of rows cleared (for logging only) and a
+	// non-nil error only on a genuine database failure, treated as non-fatal like its two siblings.
+	//
+	// Deliberately NOT part of the broad canonical ProfileRepository interface, for the same reason as
+	// its two siblings.
+	ClearMarkersOnEligibleStatus(ctx context.Context) (int, error)
+
 	// GetUsersNeedingPlaidDisconnectRepair returns users who are read-only-status
 	// (inactive/cancelled), whose plaid_cleanup_pending_at marker (Issue #1413 round-10) is older
 	// than gracePeriod, and who still have at least one LIVE linked item — Issue #1413 round-7
@@ -917,6 +934,24 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 	} else if clearedCount > 0 {
 		w.logger.Info("plaid_cleanup_pending_at stale-marker backstop cleared completed-episode markers",
 			"job_id", jobID, "cleared_count", clearedCount)
+	}
+
+	// Issue #1455: the THIRD backstop, closing the invariant's OTHER branch (status NOT ineligible
+	// ⇒ marker must be NULL) — see ClearMarkersOnEligibleStatus's own doc comment
+	// (profile_repository.go) for the full rationale, including the comped-user judgement call.
+	// Runs immediately after the Clear half above, at the very start of every pass, unconditionally
+	// — same non-fatal, Error-plus-counter treatment as its two siblings: this backstop is the ONLY
+	// thing that ever repairs a non-ineligible-status row whose marker was wrongly left set, and a
+	// persistently failing instance of it is a silent grace-window bypass (a later cancellation's
+	// write could inherit the stale marker and skip the 72-hour grace period entirely), not a routine
+	// event.
+	if branch1ClearedCount, branch1Err := w.profileRepo.ClearMarkersOnEligibleStatus(ctx); branch1Err != nil {
+		observability.PlaidCleanupBackstopFailuresTotal.Inc()
+		w.logger.Error("plaid_cleanup_pending_at branch-1 backstop FAILED — a marker left set on a non-ineligible-status row stays stale indefinitely, and a later status transition could inherit a marker already past the 72-hour grace window, disconnecting the user's banks with zero notice; see ClearMarkersOnEligibleStatus's doc comment",
+			"job_id", jobID, "error", branch1Err)
+	} else if branch1ClearedCount > 0 {
+		w.logger.Info("plaid_cleanup_pending_at branch-1 backstop cleared markers on non-ineligible-status rows",
+			"job_id", jobID, "cleared_count", branch1ClearedCount)
 	}
 
 	// A CI finding on this branch's head (fixed alongside Issue #1413 Finding 1, not from the Codex

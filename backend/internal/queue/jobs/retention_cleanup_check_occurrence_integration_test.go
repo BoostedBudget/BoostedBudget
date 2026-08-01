@@ -74,6 +74,7 @@ func TestRetentionCleanupCheck_Occurrence_ReArmedCycle_30dNoticeFiresAgain(t *te
 	mockRepo := new(MockRetentionProfileRepository)
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
@@ -135,6 +136,7 @@ func TestRetentionCleanupCheck_Occurrence_SameCycle_SecondRunDoesNotResend(t *te
 	mockRepo := new(MockRetentionProfileRepository)
 	mockRepo.On("StampMissingPlaidCleanupMarkers", mock.Anything).Return(0, nil)
 	mockRepo.On("ClearCompletedPlaidCleanupMarkers", mock.Anything).Return(0, nil)
+	mockRepo.On("ClearMarkersOnEligibleStatus", mock.Anything).Return(0, nil).Maybe()
 	mockDeletion := new(MockRetentionDeletionService)
 	mockEmail := new(MockRetentionEmailService)
 
