@@ -145,6 +145,41 @@ jobs:
           E2E_CLERK_USER_ID: ${{ secrets.E2E_CLERK_USER_ID }}
         run: bun run test:e2e
 
+      # Issue #1437 (second half): a lost Clerk session must fail CI loudly, not pass
+      # silently. e2e/auth.setup.ts calls setup.skip() whenever TEST_CLERK_EMAIL/
+      # TEST_CLERK_PASSWORD are unset (e.g. a misconfigured `e2e` GitHub environment, a
+      # renamed secret) — Playwright treats a skipped setup test as neither a pass nor a
+      # failure, so `bun run test:e2e` above can exit 0 with every *.auth.spec.ts test
+      # having silently run unauthenticated (or self-skipped), while the job shows green.
+      # This is exactly the failure mode that let the react-router P0 (#1437) reach
+      # staging undetected. Runs only when the E2E step above succeeded — if it already
+      # failed, the job is already red and this adds nothing.
+      #
+      # Local dev is unaffected: this check lives in CI only. auth.setup.ts's skip() path
+      # (and the no-auth spec subset it leaves runnable) is untouched.
+      - name: Guard — E2E auth session must have been obtained
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}/apps/web
+        run: |
+          AUTH_FILE="e2e/.auth/user.json"
+
+          if [ ! -s "$AUTH_FILE" ]; then
+            echo "::error::${AUTH_FILE} is missing or empty — the Clerk auth setup (e2e/auth.setup.ts) did not produce a session, most likely because TEST_CLERK_EMAIL/TEST_CLERK_PASSWORD were unset and auth.setup.ts called setup.skip(). Every *.auth.spec.ts test would then have run unauthenticated (or been skipped) while this job still reports green — see #1437."
+            exit 1
+          fi
+
+          if ! grep -q '"cookies"' "$AUTH_FILE"; then
+            echo "::error::${AUTH_FILE} exists but has no 'cookies' key — the storage state is malformed, so no real Clerk session was saved."
+            exit 1
+          fi
+
+          COOKIE_COUNT=$(grep -o '"name"' "$AUTH_FILE" | wc -l | tr -d ' ')
+          if [ "$COOKIE_COUNT" -eq 0 ]; then
+            echo "::error::${AUTH_FILE} has zero cookies — a Clerk session was never actually established."
+            exit 1
+          fi
+
+          echo "E2E auth session verified: ${COOKIE_COUNT} cookies in ${AUTH_FILE}"
+
       - name: Upload E2E test results
         id: upload-playwright-report
         if: success() || failure()
