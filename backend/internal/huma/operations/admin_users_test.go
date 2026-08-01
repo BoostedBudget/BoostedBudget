@@ -38,6 +38,14 @@ func (m *mockAdminUserService) GetUserDetail(ctx context.Context, userID string)
 	return args.Get(0).(*domain.AdminUserDetail), args.Error(1)
 }
 
+// GetOwnedHouseholdActiveMemberCount satisfies services.AdminUserService for tests in this file
+// that don't exercise the subscription-detail endpoint (Issue #1452 — see
+// admin_subscriptions_test.go for coverage).
+func (m *mockAdminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	args := m.Called(ctx, userID)
+	return args.Int(0), args.Error(1)
+}
+
 // UpdateUserTier satisfies services.AdminUserService for tests in this file that don't
 // exercise tier-override updates (Issue #1413 — see admin_subscriptions_test.go for coverage).
 func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, actorUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) (services.UpdateUserTierResult, error) {

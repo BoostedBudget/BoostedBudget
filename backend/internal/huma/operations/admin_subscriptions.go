@@ -75,6 +75,21 @@ type AdminSubscriptionDetailOutput struct {
 		Features             domain.SubscriptionFeatures       `json:"features"`
 		ActiveOverridesCount int                               `json:"active_overrides_count"`
 		ResourceOverrides    []domain.UserSubscriptionOverride `json:"resource_overrides"`
+		// HouseholdActiveMemberCount is the number of active members in the household owned by
+		// this user (0 if they own no household — see
+		// AdminUserService.GetOwnedHouseholdActiveMemberCount's doc comment). Issue #1452: lets
+		// the override modal warn BEFORE an admin applies a downgrade that would leave the
+		// household over the target tier's seat limit, rather than only after (the existing
+		// post-apply warning appended to UpdateUserTier's response message). No omitempty — 0 is
+		// a real, meaningful answer ("not an owner" or "an empty household"), not an absence.
+		HouseholdActiveMemberCount int `json:"household_active_member_count"`
+		// AsOf is the server instant EffectiveTier/EffectiveStatus above were computed from
+		// (Issue #1462) — a single snapshot the client can anchor its own override-liveness
+		// arithmetic to (isOverrideActive/getOverrideStatus in SubscriptionOverrideModal.tsx)
+		// instead of the browser's own clock, so the chip and the effective-status badge cannot
+		// disagree with the server (or each other) due to client/server clock skew or request
+		// latency near an expiry boundary.
+		AsOf time.Time `json:"as_of"`
 	}
 }
 
@@ -160,6 +175,10 @@ func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminR
 //
 // GET /api/v1/admin/users/{user_id}/subscription
 func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubscriptionDetailInput) (*AdminSubscriptionDetailOutput, error) {
+	// Issue #1462: captured before the rest of this handler's work so `as_of` reflects (at the
+	// latest) the instant EffectiveTier/EffectiveStatus below started being computed from.
+	asOf := time.Now()
+
 	detail, err := h.adminUserService.GetUserDetail(ctx, input.UserID)
 	if err != nil {
 		if errors.Is(err, services.ErrAdminUserNotFound) {
@@ -190,12 +209,11 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 		}
 	}
 
-	var overrides []domain.UserSubscriptionOverride
+	overrides := []domain.UserSubscriptionOverride{}
 	if h.subService != nil {
-		overrides, _ = h.subService.GetUserOverrides(ctx, userObj.ID)
-	}
-	if overrides == nil {
-		overrides = []domain.UserSubscriptionOverride{}
+		if o, _ := h.subService.GetUserOverrides(ctx, userObj.ID); o != nil {
+			overrides = o
+		}
 	}
 
 	resp := &AdminSubscriptionDetailOutput{}
@@ -215,6 +233,16 @@ func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubs
 	resp.Body.Features = effectiveSub.Features
 	resp.Body.ActiveOverridesCount = effectiveSub.ActiveOverridesCount
 	resp.Body.ResourceOverrides = overrides
+
+	// Issue #1452: the pre-apply seat-reduction warning needs this count available in the
+	// SAME response the modal already loads — a real repository failure here (not "0, no
+	// household") should fail the request rather than silently rendering as "not an owner".
+	householdActiveMemberCount, err := h.adminUserService.GetOwnedHouseholdActiveMemberCount(ctx, input.UserID)
+	if err != nil {
+		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to fetch household active member count: %w", err))
+	}
+	resp.Body.HouseholdActiveMemberCount = householdActiveMemberCount
+	resp.Body.AsOf = asOf
 
 	return resp, nil
 }

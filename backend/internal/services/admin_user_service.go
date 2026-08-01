@@ -42,6 +42,15 @@ type AdminUserService interface {
 	// GetUserDetail returns detailed user information with statistics
 	GetUserDetail(ctx context.Context, userID string) (*domain.AdminUserDetail, error)
 
+	// GetOwnedHouseholdActiveMemberCount returns the number of active members in the household
+	// owned by userID (0 if the user owns no household) — a direct passthrough to
+	// AdminUserRepository.GetOwnedHouseholdActiveMemberCount, exposed here because the admin
+	// subscription-detail handler only has access to this service, not the repository directly
+	// (Issue #1452). Reused by UpdateUserTier's own post-apply seat-capacity warning below, and
+	// by GetUserSubscription (admin_subscriptions.go) to surface the same count BEFORE an
+	// override is applied — same underlying query, two different call sites.
+	GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error)
+
 	// UpdateUserTier updates a user's subscription tier natively and in Clerk.
 	//
 	// actorUserID is the acting admin's internal UUID (for the audit row; may be "").
@@ -194,6 +203,16 @@ func (s *adminUserService) GetUserDetail(ctx context.Context, userID string) (*d
 	s.enrichAdminUser(&detail.AdminUserListItem)
 
 	return detail, nil
+}
+
+// GetOwnedHouseholdActiveMemberCount is a direct passthrough to
+// AdminUserRepository.GetOwnedHouseholdActiveMemberCount — see the interface doc comment for why
+// this exists as its own method rather than being folded into GetUserDetail's response (Issue
+// #1452): GetUserSubscription needs it as a standalone value, and GetUserDetail's own
+// domain.AdminUserDetail type is shared with the plain (non-subscription) admin user-detail
+// endpoint, which has no use for a household seat count.
+func (s *adminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Context, userID string) (int, error) {
+	return s.repo.GetOwnedHouseholdActiveMemberCount(ctx, userID)
 }
 
 // enrichUsersWithAdminStatus sets IsAdmin flag and overrides tier for admin users.

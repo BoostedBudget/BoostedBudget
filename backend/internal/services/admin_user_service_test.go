@@ -700,6 +700,48 @@ func TestAdminUserService_GetUserDetail_EnrichesAdminStatus(t *testing.T) {
 	mockAdminService.AssertExpectations(t)
 }
 
+// TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PassesThroughToRepo proves
+// AdminUserService exposes AdminUserRepository.GetOwnedHouseholdActiveMemberCount unchanged
+// (Issue #1452) — the admin subscription-detail handler needs this count to warn BEFORE an
+// override is applied (rather than only after, in UpdateUserTier's existing post-apply
+// warning), and the handler only has access to AdminUserService, not the repository directly.
+func TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PassesThroughToRepo(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(3, nil)
+
+	count, err := service.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PropagatesRepoError proves a repository
+// failure is surfaced to the caller rather than silently swallowed — unlike UpdateUserTier's
+// best-effort seat-capacity check (which logs and skips on error since it must never block a
+// tier change), this is a direct read the admin subscription-detail GET needs to render
+// accurately, so a failure here should fail the request rather than silently show 0 members.
+func TestAdminUserService_GetOwnedHouseholdActiveMemberCount_PropagatesRepoError(t *testing.T) {
+	mockRepo := new(MockAdminUserRepository)
+	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	mockRepo.On("GetOwnedHouseholdActiveMemberCount", ctx, userID).Return(0, errors.New("db error"))
+
+	count, err := service.GetOwnedHouseholdActiveMemberCount(ctx, userID)
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	mockRepo.AssertExpectations(t)
+}
+
 // TestAdminUserService_ListUsers_NilAdminService tests graceful handling of nil AdminService
 func TestAdminUserService_ListUsers_NilAdminService(t *testing.T) {
 	mockRepo := new(MockAdminUserRepository)
