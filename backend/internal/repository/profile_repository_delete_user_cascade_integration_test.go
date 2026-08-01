@@ -462,6 +462,325 @@ func TestDeleteUserCascade_Integration_RedactsAuditLogPII(t *testing.T) {
 	assert.Equal(t, admin.ID, subjectUserID, "the unrelated acting admin's own id must be untouched")
 }
 
+// TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_NotDeleted is the
+// Critical finding's RED test (Codex review, coordinator's own #1440 follow-up brief): the #1367
+// household-owner guard (domain.ErrHouseholdHasActiveMembers) lives ONLY in
+// DeletionService.RequestDeletion — the USER-INITIATED request path. ExecuteDeletion's other two
+// callers (the retention-triggered deleteExpiredAccounts, and the legacy DeletionWorker /
+// AccountDeletionWorker paths) call DeleteUserCascade directly with NO owner guard at all. A
+// household owner whose retention clock expires while they still have an ACTIVE non-owner member
+// must not be hard-deleted here: households.owner_user_id's CASCADE would take the household row
+// and every other member's household_members row with it. This test calls DeleteUserCascade
+// exactly as the retention path does — no RequestDeletion involved, deletion_requested_at stays
+// nil — so it is a direct proof the guard must live in DeleteUserCascade itself, not upstream.
+func TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_NotDeleted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	owner := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "owner-"+suffix, nil, nil, nil)
+	member := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "member-"+suffix, nil, nil, nil)
+
+	var householdID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'Guard H1') RETURNING id`, owner.ID,
+	).Scan(&householdID))
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'owner', 'active')`,
+		householdID, owner.ID)
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
+		householdID, member.ID)
+
+	// Retention-triggered path: no ClaimForDeletion, no deletion_requested_at — DeleteUserCascade
+	// called directly, exactly as deleteExpiredAccounts (retention_cleanup_check.go) does.
+	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	require.Error(t, err, "an owner with an active non-owner member must NOT be silently skipped (false, nil) — it must be a genuine, loud error so it is retried and eventually visible (DLQ / logs), not silently dropped forever")
+	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	assert.False(t, deleted)
+
+	assertUserRowExists(t, ctx, pool, owner.ID)
+	assertUserRowExists(t, ctx, pool, member.ID)
+
+	var householdCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM households WHERE id = $1", householdID).Scan(&householdCount))
+	assert.Equal(t, 1, householdCount, "the household must survive an aborted cascade")
+
+	var memberRowCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM household_members WHERE household_id = $1 AND user_id = $2", householdID, member.ID).Scan(&memberRowCount))
+	assert.Equal(t, 1, memberRowCount, "the other member's household_members row must survive — this is the exact data the Critical finding says CASCADE would otherwise destroy")
+}
+
+// TestDeleteUserCascade_Integration_HouseholdOwnerWithOrphanedMemberEntitlement_NotDeleted proves
+// the guard is broader than the #1367 active-member-count rule alone: RemoveMember
+// (household_repository.go) only flips household_members.status to 'removed' — its own doc
+// comment states it "Never touches Plaid Items", and it likewise never touches
+// subscription_entitlements — so a just-removed member's entitlement, funded by this owner
+// (payer_user_id), can outlive their membership row. An active-member-count-only guard would miss
+// this: CountActiveMembers reports 1 (only the owner), yet subscription_entitlements.payer_user_id
+// would still CASCADE away this OTHER real user's entitlement row. The owner must not be deletable
+// while any such entitlement exists, regardless of the beneficiary's current membership status.
+func TestDeleteUserCascade_Integration_HouseholdOwnerWithOrphanedMemberEntitlement_NotDeleted(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	owner := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "owner2-"+suffix, nil, nil, nil)
+	beneficiary := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "beneficiary-"+suffix, nil, nil, nil)
+
+	var householdID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'Guard H2') RETURNING id`, owner.ID,
+	).Scan(&householdID))
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'owner', 'active')`,
+		householdID, owner.ID)
+	// beneficiary is deliberately NOT an active (or even present) household_members row — simulating
+	// a removed member whose entitlement was never cleaned up, or any other provisioning gap.
+
+	var entitlementID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id)
+		VALUES ($1, 'household', 'premium', 'active', $2, $3) RETURNING id`,
+		beneficiary.ID, householdID, owner.ID,
+	).Scan(&entitlementID))
+
+	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrHouseholdHasActiveMembers)
+	assert.False(t, deleted)
+
+	assertUserRowExists(t, ctx, pool, owner.ID)
+	assertUserRowExists(t, ctx, pool, beneficiary.ID)
+
+	var entitlementCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM subscription_entitlements WHERE id = $1", entitlementID).Scan(&entitlementCount))
+	assert.Equal(t, 1, entitlementCount, "the beneficiary's entitlement (funded by the owner being deleted) must survive")
+}
+
+// TestDeleteUserCascade_Integration_HouseholdOwnerSoleActiveMemberSelfPayer_Deletes is the guard's
+// control/negative case: a genuinely sole household owner — no other active members, and any
+// household-funded entitlement belongs to the owner themselves (payer_user_id = user_id) — must
+// still be deletable. An over-broad guard that blocks every household owner, not just ones with
+// another real user's data at stake, would fail this test.
+func TestDeleteUserCascade_Integration_HouseholdOwnerSoleActiveMemberSelfPayer_Deletes(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	owner := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "owner3-"+suffix, nil, nil, nil)
+
+	var householdID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'Guard H3') RETURNING id`, owner.ID,
+	).Scan(&householdID))
+	execNoErr(t, ctx, pool,
+		`INSERT INTO household_members (household_id, user_id, role, status) VALUES ($1, $2, 'owner', 'active')`,
+		householdID, owner.ID)
+	execNoErr(t, ctx, pool, `
+		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id)
+		VALUES ($1, 'household', 'premium', 'active', $2, $3)`,
+		owner.ID, householdID, owner.ID)
+
+	deleted, err := repo.DeleteUserCascade(ctx, owner.ID, owner.DeletionRequestedAt)
+	require.NoError(t, err)
+	assert.True(t, deleted, "a genuinely sole household owner (no other member, no other beneficiary) must still be deletable")
+
+	assertUserRowGone(t, ctx, pool, owner.ID)
+
+	var householdCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM households WHERE id = $1", householdID).Scan(&householdCount))
+	assert.Equal(t, 0, householdCount, "the household must cascade away along with its sole owner")
+}
+
+// TestDeleteUserCascade_Integration_NestedCustomCategoriesAndOwnTransactionOverride_Deletes is
+// Issue #1440 Finding 2's explicitly-requested test (Codex review): seed nested custom categories
+// (a RESTRICT self-FK, custom_categories.parent_id) AND a transaction carrying
+// custom_category_override_id (RESTRICT to custom_categories) set to the CHILD category, all owned
+// by the SAME user being deleted, then delete. Empirically verified (see the coordinator's report):
+// when every referencing and referenced row is cascaded away together within the SAME
+// `DELETE FROM users` statement, Postgres's RESTRICT check is satisfied — it evaluates once every
+// cascaded delete from this statement has completed, not per-row as each cascade step runs. This is
+// the ordinary, expected shape (a user's own nested categories and own transaction overrides) and
+// is a control/regression pin, not a bug fix: it must keep passing on its own, with no special
+// pre-clean step required for the intra-user case.
+func TestDeleteUserCascade_Integration_NestedCustomCategoriesAndOwnTransactionOverride_Deletes(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	user := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "restrict-own-"+suffix, nil, nil, nil)
+
+	var parentCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Parent Cat') RETURNING id`, user.ID,
+	).Scan(&parentCategoryID))
+
+	var childCategoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name, parent_id) VALUES ($1, 'Child Cat', $2) RETURNING id`,
+		user.ID, parentCategoryID,
+	).Scan(&childCategoryID))
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO transactions (user_id, source, amount, date, name, category_override_kind, custom_category_override_id)
+		VALUES ($1, 'manual', 12.34, CURRENT_DATE, 'Test Txn', 'custom', $2)`,
+		user.ID, childCategoryID)
+
+	deleted, err := repo.DeleteUserCascade(ctx, user.ID, user.DeletionRequestedAt)
+	require.NoError(t, err, "a user's own nested categories and own transaction override must not block their own deletion")
+	assert.True(t, deleted)
+
+	assertUserRowGone(t, ctx, pool, user.ID)
+
+	var categoryCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM custom_categories WHERE user_id = $1", user.ID).Scan(&categoryCount))
+	assert.Equal(t, 0, categoryCount, "both nested categories must be gone")
+}
+
+// TestDeleteUserCascade_Integration_OtherUsersTransactionOverridesTargetsCategory_StillDeletes is
+// Issue #1440 Finding 2's real, narrower residual: transactions.custom_category_override_id has NO
+// trigger enforcing same-user ownership (unlike custom_categories.parent_id's own
+// enforce_custom_category_two_levels trigger) — so a DIFFERENT, non-deleted user's transaction can
+// reference the deletion target's custom_categories row as its override. That row is NOT part of
+// the target's own DELETE FROM users cascade (the referencing transaction belongs to someone
+// else), so the RESTRICT fires for real and the whole deletion fails — verified empirically before
+// this fix existed. The fix clears the dangling override (both custom_category_override_id AND
+// category_override_kind, to keep the valid_category_override_discriminator CHECK satisfied) on
+// ANY transaction referencing a category the target owns, regardless of who owns that transaction,
+// before the hard delete.
+func TestDeleteUserCascade_Integration_OtherUsersTransactionOverridesTargetsCategory_StillDeletes(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	target := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "restrict-target-"+suffix, nil, nil, nil)
+	other := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "restrict-other-"+suffix, nil, nil, nil)
+
+	var categoryID string
+	require.NoError(t, pool.QueryRow(ctx,
+		`INSERT INTO custom_categories (user_id, name) VALUES ($1, 'Target Cat') RETURNING id`, target.ID,
+	).Scan(&categoryID))
+
+	var otherTxnID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO transactions (user_id, source, amount, date, name, category_override_kind, custom_category_override_id)
+		VALUES ($1, 'manual', 20.00, CURRENT_DATE, 'Other user txn', 'custom', $2) RETURNING id`,
+		other.ID, categoryID,
+	).Scan(&otherTxnID))
+
+	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	require.NoError(t, err, "a stray cross-user override on target's category must not abort the deletion")
+	assert.True(t, deleted)
+
+	assertUserRowGone(t, ctx, pool, target.ID)
+	assertUserRowExists(t, ctx, pool, other.ID)
+
+	var otherKind, otherOverrideID *string
+	require.NoError(t, pool.QueryRow(ctx,
+		"SELECT category_override_kind, custom_category_override_id FROM transactions WHERE id = $1", otherTxnID,
+	).Scan(&otherKind, &otherOverrideID))
+	assert.Nil(t, otherOverrideID, "the dangling override must be cleared once its target category is gone")
+	assert.Nil(t, otherKind, "category_override_kind must be cleared too — leaving 'custom' with a NULL override_id would violate valid_category_override_discriminator")
+
+	var otherTxnCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM transactions WHERE id = $1", otherTxnID).Scan(&otherTxnCount))
+	assert.Equal(t, 1, otherTxnCount, "the OTHER user's transaction row itself must survive — only the dangling override is cleared")
+}
+
+// TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned is Issue #1440 Finding 3
+// (Codex review): three tables carry a user_id (or actor_user_id) column with NO foreign key to
+// users at all — dead_letter_jobs, idempotency_keys, mcp_audit_log — so the schema's own CASCADE
+// graph (the mechanism this whole method exists to rely on) cannot clean them up automatically.
+// dead_letter_jobs.args/errors and idempotency_keys.response_body can embed arbitrary PII from the
+// original failed/cached request; mcp_audit_log.actor_user_id directly identifies the deleted
+// user. Disposition (see the coordinator's report for the full per-table reasoning): all three are
+// ERASED outright — unlike audit_logs (kept + redacted, since an ADMIN's audit_logs.user_id row
+// documents an action against a DIFFERENT user, whose own security-audit interest survives the
+// admin's deletion), none of these three has an "another user's own record depends on this row"
+// property: dead_letter_jobs/idempotency_keys are the deleted user's own operational/ephemeral
+// records, and mcp_audit_log.actor_user_id is always the deleted user's OWN MCP tool-call history,
+// not a record ABOUT someone else.
+func TestDeleteUserCascade_Integration_NonFKUserScopedTablesAreCleaned(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	target := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "nonfk-target-"+suffix, nil, nil, nil)
+	other := createDeleteCascadeFixtureUser(t, ctx, pool, repo, "nonfk-other-"+suffix, nil, nil, nil)
+
+	now := time.Now()
+
+	var targetDLQID, otherDLQID int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO dead_letter_jobs (original_job_id, kind, queue, args, errors, max_attempts, created_at, user_id)
+		VALUES (1001, 'account_deletion', 'critical', $1::jsonb, '[]'::jsonb, 5, $2, $3)
+		RETURNING id`, `{"user_id":"`+target.ID+`"}`, now, target.ID,
+	).Scan(&targetDLQID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO dead_letter_jobs (original_job_id, kind, queue, args, errors, max_attempts, created_at, user_id)
+		VALUES (1002, 'account_deletion', 'critical', '{}'::jsonb, '[]'::jsonb, 5, $1, $2)
+		RETURNING id`, now, other.ID,
+	).Scan(&otherDLQID))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM dead_letter_jobs WHERE id IN ($1, $2)", targetDLQID, otherDLQID) })
+
+	execNoErr(t, ctx, pool, `
+		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
+		VALUES ($1, $2, 'op-target', '{}'::jsonb)`, "idem-target-"+suffix, target.ID)
+	execNoErr(t, ctx, pool, `
+		INSERT INTO idempotency_keys (key, user_id, operation_id, response_body)
+		VALUES ($1, $2, 'op-other', '{}'::jsonb)`, "idem-other-"+suffix, other.ID)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM idempotency_keys WHERE user_id IN ($1, $2)", target.ID, other.ID) })
+
+	var targetAuditID, otherAuditID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO mcp_audit_log (actor_user_id, grant_id, operation_class, operation_id, result)
+		VALUES ($1, 'grant-target', 'read', 'op-1', 'success') RETURNING id`, target.ID,
+	).Scan(&targetAuditID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO mcp_audit_log (actor_user_id, grant_id, operation_class, operation_id, result)
+		VALUES ($1, 'grant-other', 'read', 'op-2', 'success') RETURNING id`, other.ID,
+	).Scan(&otherAuditID))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM mcp_audit_log WHERE actor_user_id IN ($1, $2)", target.ID, other.ID) })
+
+	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+
+	assertUserRowGone(t, ctx, pool, target.ID)
+	assertUserRowExists(t, ctx, pool, other.ID)
+
+	var dlqCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM dead_letter_jobs WHERE id = $1", targetDLQID).Scan(&dlqCount))
+	assert.Equal(t, 0, dlqCount, "dead_letter_jobs.user_id has no FK to users — DeleteUserCascade must erase it explicitly")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM dead_letter_jobs WHERE id = $1", otherDLQID).Scan(&dlqCount))
+	assert.Equal(t, 1, dlqCount, "the OTHER user's dead-lettered job must survive")
+
+	var idemCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM idempotency_keys WHERE user_id = $1", target.ID).Scan(&idemCount))
+	assert.Equal(t, 0, idemCount, "idempotency_keys.user_id has no FK to users — DeleteUserCascade must erase it explicitly")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM idempotency_keys WHERE user_id = $1", other.ID).Scan(&idemCount))
+	assert.Equal(t, 1, idemCount, "the OTHER user's idempotency key must survive")
+
+	var auditCount int
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM mcp_audit_log WHERE id = $1", targetAuditID).Scan(&auditCount))
+	assert.Equal(t, 0, auditCount, "mcp_audit_log.actor_user_id has no FK to users — DeleteUserCascade must erase it explicitly")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM mcp_audit_log WHERE id = $1", otherAuditID).Scan(&auditCount))
+	assert.Equal(t, 1, auditCount, "the OTHER user's mcp_audit_log row must survive")
+}
+
 // userScopedFK describes one live foreign key discovered by queryUserScopedFKsToUsers, pointing
 // at users(id).
 type userScopedFK struct {
@@ -474,22 +793,45 @@ type userScopedFK struct {
 // references users(id), grouped by (table, column, delete_rule). Deliberately NOT hard-coded:
 // Issue #1440 exists because DeleteUserCascade's five explicit DELETEs were silently treated as
 // "the whole cascade" while 31 other user-scoped tables leaked personal data for years — a test
-// that hard-codes "these N tables" would rot the exact same way. Querying
-// information_schema/pg_constraint at TEST RUN TIME means the set of tables this test must cover
-// is always the actual, current FK graph, not a snapshot of it from whenever this test was written.
+// that hard-codes "these N tables" would rot the exact same way. Querying pg_constraint/
+// pg_attribute at TEST RUN TIME means the set of tables this test must cover is always the
+// actual, current FK graph, not a snapshot of it from whenever this test was written.
+//
+// Issue #1440 Finding 6 (Codex review, hardening): this used to query information_schema's
+// table_constraints/key_column_usage/constraint_column_usage/referential_constraints views,
+// joined only by (constraint_name, schema) — never the child table. Postgres constraint names are
+// unique only PER TABLE (pg_constraint's real key is (conrelid, conname)), not globally, so a
+// same-named constraint on a completely unrelated table corrupted the discovered graph: verified
+// empirically, a 2-real-FK scenario with one colliding name returned 8 phantom/duplicate rows,
+// including the unrelated table appearing to have a fabricated FK to users and the genuine FK's
+// delete_rule appearing twice with contradictory values. information_schema's views cannot be
+// fully disambiguated by adding more join keys once two constraints share a (schema, name) pair —
+// constraint_column_usage/referential_constraints don't expose the defining (child) table at all.
+// Querying pg_constraint/pg_attribute directly sidesteps the whole class of bug: every row is
+// already keyed by conrelid/confrelid (real object OIDs), never by name-matching, so a collision
+// on the NAME cannot contaminate the result regardless of how many constraints share it.
 func queryUserScopedFKsToUsers(t *testing.T, ctx context.Context, pool *pgxpool.Pool) []userScopedFK {
 	t.Helper()
 	rows, err := pool.Query(ctx, `
-		SELECT tc.table_name, kcu.column_name, rc.delete_rule
-		FROM information_schema.table_constraints tc
-		JOIN information_schema.constraint_column_usage ccu
-			ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
-		JOIN information_schema.key_column_usage kcu
-			ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-		JOIN information_schema.referential_constraints rc
-			ON tc.constraint_name = rc.constraint_name AND tc.table_schema = rc.constraint_schema
-		WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'users'
-		ORDER BY tc.table_name, kcu.column_name
+		SELECT
+			con.conrelid::regclass::text AS table_name,
+			att.attname AS column_name,
+			CASE con.confdeltype
+				WHEN 'c' THEN 'CASCADE'
+				WHEN 'n' THEN 'SET NULL'
+				WHEN 'd' THEN 'SET DEFAULT'
+				WHEN 'r' THEN 'RESTRICT'
+				WHEN 'a' THEN 'NO ACTION'
+				ELSE 'UNKNOWN'
+			END AS delete_rule
+		FROM pg_constraint con
+		JOIN pg_attribute att
+			ON att.attrelid = con.conrelid AND att.attnum = con.conkey[1]
+		WHERE con.contype = 'f'
+		  AND con.confrelid = 'users'::regclass
+		  AND array_length(con.conkey, 1) = 1
+		  AND con.confkey[1] = (SELECT attnum FROM pg_attribute WHERE attrelid = con.confrelid AND attname = 'id')
+		ORDER BY table_name, column_name
 	`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -502,6 +844,59 @@ func queryUserScopedFKsToUsers(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	require.NoError(t, rows.Err())
 	return out
+}
+
+// TestQueryUserScopedFKsToUsers_ImmuneToCollidingConstraintNameOnAnotherTable is Issue #1440
+// Finding 6 (Codex review, hardening): Postgres constraint names are unique only PER TABLE
+// (pg_constraint's real key is (conrelid, conname)), not globally — so a constraint on a
+// completely unrelated table can share the exact same name as a genuine users-referencing FK.
+// queryUserScopedFKsToUsers's ORIGINAL joins keyed information_schema.key_column_usage/
+// constraint_column_usage to information_schema.table_constraints by constraint_name + schema
+// only, never the child table — so a name collision made every one of those views' rows for BOTH
+// constraints join against BOTH tables, corrupting the discovered graph with phantom rows,
+// wrong delete_rules, and a completely unrelated table appearing to reference users. Verified
+// empirically before this fix (see the coordinator's report): the original query returned 8 rows
+// for a 2-real-FK scenario, including the colliding table with a fabricated "user_id" column and
+// two different (contradictory) delete_rules for the SAME real column. This test creates that
+// exact collision — a throwaway table whose FK constraint reuses the literal name
+// "fk_merchant_name_overrides_user_id" but points at securities(id), not users — and asserts the
+// discovered graph is immune to it.
+func TestQueryUserScopedFKsToUsers_ImmuneToCollidingConstraintNameOnAnotherTable(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	execNoErr(t, ctx, pool, `CREATE TABLE IF NOT EXISTS _fk_collision_test_table (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), sec_id UUID)`)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS _fk_collision_test_table") })
+	execNoErr(t, ctx, pool, `
+		ALTER TABLE _fk_collision_test_table
+		ADD CONSTRAINT fk_merchant_name_overrides_user_id
+		FOREIGN KEY (sec_id) REFERENCES securities(id) ON DELETE SET NULL
+	`)
+
+	liveFKs := queryUserScopedFKsToUsers(t, ctx, pool)
+
+	for _, fk := range liveFKs {
+		assert.NotEqual(t, "_fk_collision_test_table", fk.Table,
+			"a same-named constraint on an unrelated table (pointing at securities, not users) must not appear in the users-scoped FK list")
+	}
+
+	var found *userScopedFK
+	for i := range liveFKs {
+		if liveFKs[i].Table == "merchant_name_overrides" && liveFKs[i].Column == "user_id" {
+			found = &liveFKs[i]
+		}
+	}
+	require.NotNil(t, found, "the genuine merchant_name_overrides -> users FK must still be discovered")
+	assert.Equal(t, "CASCADE", found.DeleteRule, "the genuine FK's delete_rule must not be corrupted by the colliding constraint name")
+
+	// No duplicate entries for the genuine FK either — the collision must not fan it out.
+	count := 0
+	for _, fk := range liveFKs {
+		if fk.Table == "merchant_name_overrides" && fk.Column == "user_id" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "the genuine FK must be reported exactly once, not once per colliding constraint")
 }
 
 // quoteIdent wraps a Postgres identifier in double quotes. Safe here because every value passed
@@ -600,10 +995,16 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 
 	// --- Seed one row in every table above, plus the supporting rows they need. ---
 
-	// households: target is the SOLE owner of H1. DeleteUserCascade itself does not enforce the
-	// "no active non-owner members" guard (that lives in DeletionService.RequestDeletion — see
-	// Issue #1367 Phase 3 — and is tested there); this suite tests the schema-level cascade in
-	// isolation, so H1 has no other members.
+	// households: target is the SOLE owner of H1, with no other active household_members row and
+	// no subscription_entitlements row funded for anyone other than target themselves. This is
+	// deliberate: DeleteUserCascade DOES now enforce the household-owner guard
+	// (householdOwnerBlocksDeletionClause, Issue #1440 Critical finding) INSIDE this same
+	// transaction — a household with another active member, or an entitlement funded for someone
+	// else, would abort this deletion entirely, defeating this test's actual purpose (proving every
+	// OTHER user-scoped table's cascade is complete for a genuinely eligible deletion). The guard
+	// itself — including the case this test intentionally avoids — is covered by its own dedicated
+	// tests above (TestDeleteUserCascade_Integration_HouseholdOwnerWithActiveNonOwnerMember_NotDeleted
+	// and TestDeleteUserCascade_Integration_HouseholdOwnerWithOrphanedMemberEntitlement_NotDeleted).
 	var householdH1 string
 	require.NoError(t, pool.QueryRow(ctx,
 		`INSERT INTO households (owner_user_id, name) VALUES ($1, 'H1') RETURNING id`, target.ID,
@@ -638,18 +1039,21 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		householdH2, otherA.ID, "blind-"+suffix+"-2", "tok-"+suffix+"-2", target.ID,
 	).Scan(&acceptedInviteID))
 
-	// subscription_entitlements: one own_subscription row (user_id cascade) and one household row
-	// where target is the PAYER (payer_user_id cascade). payer_user_id MUST equal the household's
-	// owner_user_id (composite FK fk_subscription_entitlements_payer_is_owner) — so this is also
-	// the ONLY reachable shape for that column, which is exactly why the coordinator's brief's
-	// open question about payer_user_id resolves the way it does (see this task's final report).
-	execNoErr(t, ctx, pool, `
-		INSERT INTO subscription_entitlements (user_id, source, tier, status)
-		VALUES ($1, 'own_subscription', 'premium', 'active')`, target.ID)
-
+	// subscription_entitlements: a single household-sourced row where target is BOTH the
+	// beneficiary (user_id) and the PAYER (payer_user_id) — exercises both CASCADE FKs
+	// (user_id and payer_user_id) with one row, since uq_subscription_entitlements_active_user
+	// forbids two ACTIVE rows for the same user_id. payer_user_id MUST equal the household's
+	// owner_user_id (composite FK fk_subscription_entitlements_payer_is_owner) — but user_id is
+	// independently free to name ANYONE, including someone other than the owner (Issue #1440
+	// Critical finding, Codex review: this is exactly how an owner's deletion can CASCADE away a
+	// DIFFERENT real user's entitlement, which is now blocked by
+	// householdOwnerBlocksDeletionClause). Deliberately self-payer here so this row exercises the
+	// payer_user_id CASCADE FK without tripping that guard; the cross-user shape (payer_user_id
+	// names the owner, user_id names someone else) has its own dedicated guard test above
+	// (TestDeleteUserCascade_Integration_HouseholdOwnerWithOrphanedMemberEntitlement_NotDeleted).
 	execNoErr(t, ctx, pool, `
 		INSERT INTO subscription_entitlements (user_id, source, tier, status, household_id, payer_user_id)
-		VALUES ($1, 'household', 'premium', 'active', $2, $3)`, otherB.ID, householdH1, target.ID)
+		VALUES ($1, 'household', 'premium', 'active', $2, $3)`, target.ID, householdH1, target.ID)
 
 	// referrals: one row tests referred_id (target was referred by otherA), one tests
 	// referrer_id (target referred otherB) — uq_referrals_referred forces distinct referred_id
@@ -784,6 +1188,21 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		INSERT INTO audit_logs (user_id, action, resource_type, resource_id, changes)
 		VALUES ($1, 'user.login', 'user', gen_random_uuid(), 'sensitive-payload')
 		RETURNING id`, target.ID).Scan(&auditLogRowID))
+
+	// --- Sanity-check: every live CASCADE FK actually has a seeded row before the cascade runs, so
+	// the post-delete count==0 assertions below are not vacuously true. Issue #1440 Finding 5
+	// (Codex review): an FK added to expectedUserScopedFKs (and the dynamic loop below) without a
+	// matching seed above would previously pass silently — 0 rows before the cascade, 0 rows after,
+	// no signal either way that coverage was actually missing.
+	for _, fk := range liveFKs {
+		if fk.DeleteRule != "CASCADE" {
+			continue
+		}
+		var preCount int
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s = $1`, quoteIdent(fk.Table), quoteIdent(fk.Column))
+		require.NoError(t, pool.QueryRow(ctx, query, target.ID).Scan(&preCount))
+		require.Greater(t, preCount, 0, "no seed row exists yet for %s.%s — the post-delete count==0 assertion below would be vacuous; add seed data above", fk.Table, fk.Column)
+	}
 
 	// --- Run the cascade. ---
 	deleted, err := repo.DeleteUserCascade(ctx, target.ID, target.DeletionRequestedAt)

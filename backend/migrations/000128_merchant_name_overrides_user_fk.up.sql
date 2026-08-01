@@ -30,13 +30,44 @@ BEGIN
     END IF;
 END $$;
 
+-- Issue #1440 Finding 6 (Codex review, hardening): the original guard below matched only
+-- constraint NAME + TABLE, not shape — a pre-existing, differently-shaped constraint that
+-- happened to share this name (wrong type, wrong referenced table/column, or missing ON DELETE
+-- CASCADE) would be silently treated as "already applied" and skipped, and the VALIDATE CONSTRAINT
+-- call below validates whatever is ALREADY named that — it cannot repair a wrongly-shaped
+-- constraint. That would leave merchant_name_overrides orphanable on user deletion forever, with
+-- no error raised anywhere. Now verifies the existing constraint (if any) is actually type 'f',
+-- references users(id), and is ON DELETE CASCADE before accepting it as equivalent; anything else
+-- raises loudly instead of silently passing through.
 DO $$
+DECLARE
+    existing_contype    "char";
+    existing_confrelid  regclass;
+    existing_confdeltype "char";
+    existing_confkey    smallint[];
+    existing_conkey     smallint[];
+    expected_confkey    smallint[];
+    expected_conkey     smallint[];
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'fk_merchant_name_overrides_user_id'
-          AND conrelid = 'merchant_name_overrides'::regclass
-    ) THEN
+    SELECT contype, confrelid, confdeltype, confkey, conkey
+      INTO existing_contype, existing_confrelid, existing_confdeltype, existing_confkey, existing_conkey
+    FROM pg_constraint
+    WHERE conname = 'fk_merchant_name_overrides_user_id'
+      AND conrelid = 'merchant_name_overrides'::regclass;
+
+    IF FOUND THEN
+        expected_confkey := ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'users'::regclass AND attname = 'id')];
+        expected_conkey := ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'merchant_name_overrides'::regclass AND attname = 'user_id')];
+
+        IF existing_contype IS DISTINCT FROM 'f'
+            OR existing_confrelid IS DISTINCT FROM 'users'::regclass
+            OR existing_confdeltype IS DISTINCT FROM 'c'
+            OR existing_confkey IS DISTINCT FROM expected_confkey
+            OR existing_conkey IS DISTINCT FROM expected_conkey
+        THEN
+            RAISE EXCEPTION 'Migration 000128: a constraint named fk_merchant_name_overrides_user_id already exists on merchant_name_overrides but is not the expected FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE — refusing to silently accept a differently-shaped constraint.';
+        END IF;
+    ELSE
         ALTER TABLE merchant_name_overrides
             ADD CONSTRAINT fk_merchant_name_overrides_user_id
             FOREIGN KEY (user_id) REFERENCES users(id)
