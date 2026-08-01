@@ -486,6 +486,40 @@ func TestGetSystemHealth_Success(t *testing.T) {
 	assert.Len(t, output.Body.JobQueues, 1)
 }
 
+// TestGetSystemHealth_IncludesJobBacklogMetrics proves the three DB-derived backlog gauges
+// (Issue #1458) — already computed by SystemHealthService.GetSystemHealth — pass through this
+// handler unchanged, since GetSystemHealth returns *domain.SystemHealthResponse directly as the
+// response body with no field-by-field mapping to drift out of sync.
+func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
+	mockHealth := &mockSystemHealthService{
+		healthResp: &domain.SystemHealthResponse{
+			Status: "healthy",
+			JobBacklog: domain.JobBacklogMetrics{
+				PlaidCleanupOutstandingUsers:                    3,
+				PlaidCleanupOldestOutstandingSeconds:            7200,
+				ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+			},
+		},
+	}
+
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
+
+	input := &GetSystemHealthInput{
+		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
+			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "admin-123"},
+			ClerkUserID:        "clerk_admin_123",
+		},
+	}
+
+	output, err := handler.GetSystemHealth(context.Background(), input)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(3), output.Body.JobBacklog.PlaidCleanupOutstandingUsers)
+	assert.Equal(t, int64(7200), output.Body.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
+	assert.Equal(t, int64(3600), output.Body.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+}
+
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
 func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
 	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)

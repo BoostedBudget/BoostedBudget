@@ -69,6 +69,12 @@ const mockHealthData = {
     last_reconciliation_at: '2026-03-22T10:00:00Z',
     reconciliation_discrepancies: 0,
   },
+  // Issue #1458: the 3 DB-derived Plaid-cleanup/manual-tier-override backlog gauges.
+  job_backlog: {
+    plaid_cleanup_outstanding_users: 0,
+    plaid_cleanup_oldest_outstanding_seconds: 0,
+    manual_tier_override_oldest_uncleared_expired_seconds: 0,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -238,6 +244,69 @@ describe('HealthDashboardPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Never')).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1458: the 3 DB-derived Plaid-cleanup/manual-tier-override backlog gauges, surfaced via
+  // the same SummaryCard grid idiom as the Paddle Status section above (there is no Dead Letter
+  // Queue SummaryCard to copy — DLQ renders as a conditional alert banner instead).
+  describe('Job Backlog section (Issue #1458)', () => {
+    // Reads a SummaryCard's value by its title, scoped via StatCard's own `data-slot="stat-value"`
+    // — this file's other numeric fixtures (active_syncs, job queue counts, etc.) can coincide
+    // with these gauges' values, so an unscoped `screen.getByText('<number>')` is ambiguous.
+    function backlogCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    it('should render the Job Backlog section with all three gauges', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          job_backlog: {
+            plaid_cleanup_outstanding_users: 42,
+            plaid_cleanup_oldest_outstanding_seconds: 7500,
+            manual_tier_override_oldest_uncleared_expired_seconds: 5400,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Job Backlog/i)).toBeInTheDocument()
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+        expect(screen.getByText('Plaid Cleanup Oldest Outstanding')).toBeInTheDocument()
+        expect(screen.getByText('Manual Override Oldest Uncleared Expired')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('42')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('2h 5m')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('1h 30m')
+    })
+
+    it('should render zero-state values without crashing when there is no backlog', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // job_backlog all zeros
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      })
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
+      })
+
+      expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('0')
+      expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('0s')
+      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('0s')
     })
   })
 })
