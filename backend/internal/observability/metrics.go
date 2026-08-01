@@ -162,19 +162,22 @@ var (
 		Help: "Total number of per-user failures in RetentionCleanupCheckWorker's Plaid-disconnect repair pass.",
 	})
 
-	// PlaidCleanupBackstopFailuresTotal counts failures of BOTH halves of the
-	// plaid_cleanup_pending_at self-healing backstop (profile_repository.go): the round-16 Stamp half
+	// PlaidCleanupBackstopFailuresTotal counts failures of ALL THREE self-healing backstops for
+	// plaid_cleanup_pending_at (profile_repository.go): the round-16 Stamp half
 	// (profileRepository.StampMissingPlaidCleanupMarkers, which stamps the marker for any ineligible
-	// user who has a live linked item but a NULL marker) and, as of Issue #1413 Finding 1 (Codex
-	// review, PR #1443 follow-up), its Clear half (profileRepository.ClearCompletedPlaidCleanupMarkers,
+	// user who has a live linked item but a NULL marker); its Clear half, added by Issue #1413
+	// Finding 1 (Codex review, PR #1443 follow-up) (profileRepository.ClearCompletedPlaidCleanupMarkers,
 	// which nulls the marker for any ineligible user whose episode's cleanup has already completed —
-	// at least one linked_items row, none of them live). Both directions share this one counter
-	// deliberately: they are the same operational hazard viewed from opposite sides — the invariant
-	// (domain.User.PlaidCleanupPendingAt's doc comment) drifting out of sync with reality — and a
-	// reader alerting on "is the backstop healthy" should not need to watch two counters to answer
-	// that question. repairPlaidDisconnects's own structured log lines (healed_count / cleared_count,
-	// each under its own field name) are what distinguish WHICH direction is active on any given pass;
-	// this counter answers only whether either direction is currently failing.
+	// at least one linked_items row, none of them live); and, as of Issue #1455, the branch-1 backstop
+	// (profileRepository.ClearMarkersOnEligibleStatus, which nulls the marker for any user whose
+	// status is NOT ineligible at all — the invariant's OTHER branch, previously unguarded by any
+	// runtime backstop). All three share this one counter deliberately: they are the same operational
+	// hazard viewed from different angles — the invariant (domain.User.PlaidCleanupPendingAt's doc
+	// comment) drifting out of sync with reality — and a reader alerting on "is the backstop healthy"
+	// should not need to watch three counters to answer that question. repairPlaidDisconnects's own
+	// structured log lines (healed_count / cleared_count, each call site under its own message and
+	// field name) are what distinguish WHICH backstop is active on any given pass; this counter
+	// answers only whether any of them is currently failing.
 	//
 	// This is deliberately a SEPARATE counter from the per-user one above, and the distinction is the
 	// point. A per-user failure is self-limiting: that user keeps a non-NULL marker, so the candidate
@@ -183,8 +186,11 @@ var (
 	// visibility, and a user invisible to the candidate query is a user whose bank connections are
 	// never disconnected; Clear is the only thing that returns a completed episode's marker to NULL
 	// before a later comp grant/removal can preserve it as a stale, grace-bypassing timestamp (Finding
-	// 1's own scenario). So a persistently failing backstop, in either direction, is a silent
-	// data-retention or grace-window failure, and it must not be inferable only from the absence of
+	// 1's own scenario); the branch-1 backstop (Issue #1455) is the only thing that ever repairs a
+	// non-ineligible-status row whose marker was wrongly left set, closing the identical
+	// grace-bypassing scenario from the OTHER side (a status transition, not a comp grant/removal).
+	// So a persistently failing backstop, in any of the three directions, is a silent data-retention
+	// or grace-window failure, and it must not be inferable only from the absence of
 	// "healed"/"cleared" log lines.
 	//
 	// Deliberately does NOT fail the job (see repairPlaidDisconnects's call sites): returning an error
@@ -196,7 +202,7 @@ var (
 	// pass heals for free; a rate that persists across passes means the backstop itself is broken.
 	PlaidCleanupBackstopFailuresTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "plaid_cleanup_backstop_failures_total",
-		Help: "Total failures of the plaid_cleanup_pending_at self-healing backstop, both directions (StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers). Sustained non-zero means the marker may be drifting out of sync with the linked_items it is supposed to summarise, in either direction.",
+		Help: "Total failures of the plaid_cleanup_pending_at self-healing backstop, all three directions (StampMissingPlaidCleanupMarkers, ClearCompletedPlaidCleanupMarkers, and ClearMarkersOnEligibleStatus). Sustained non-zero means the marker may be drifting out of sync with the linked_items it is supposed to summarise, or with subscription_status, in any direction.",
 	})
 
 	// PlaidCleanupServiceNotConfiguredTotal counts passes of

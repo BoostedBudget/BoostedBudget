@@ -2700,6 +2700,104 @@ func (r *profileRepository) ClearCompletedPlaidCleanupMarkers(ctx context.Contex
 	return int(ct.RowsAffected()), nil
 }
 
+// ClearMarkersOnEligibleStatus is the THIRD self-healing backstop — Issue #1455 — closing the
+// plaid_cleanup_pending_at invariant's OTHER branch. domain.User.PlaidCleanupPendingAt's doc
+// comment states the invariant in two halves:
+//
+//  1. status NOT ineligible (not inactive/cancelled) ⇒ marker must be NULL.
+//  2. status ineligible ⇒ marker non-NULL exactly while an episode is open and cleanup has not
+//     completed.
+//
+// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers above both self-heal half
+// 2 — but BOTH are gated on plaidDisconnectRepairEligibleStatusPredicate, so neither one EVER
+// inspects a row whose status is not inactive/cancelled. Half 1 therefore had NO runtime backstop
+// at all until this method: if a row ever ended up with a non-ineligible status AND a non-NULL
+// marker, nothing in this codebase would ever repair it.
+//
+// Why this matters — the concrete failure this closes, restated from the issue: PR #1443 deleted
+// the only writer that could produce this state (ProfileRepository.UpdateSubscriptionStatus, which
+// wrote subscription_status without touching the marker and had zero production callers), which
+// removes the IMMEDIATE trap but not the durable recurrence guard — nothing stops some FUTURE
+// status-only writer from recreating the identical gap, and the invariant sweep enumerates known
+// writers by hand, so a new one is invisible to it by default. If that ever happens: a stale marker
+// survives on an active row at timestamp T; months later the user cancels;
+// removeUserTierOverrideUpdate's should_mark_plaid_cleanup_pending CASE only overwrites the marker
+// when a LIVE linked item exists at that exact moment — a cancellation with no comp in play at all
+// takes an entirely different write path (UpdateSubscriptionFromPaddle et al.), and NONE of those
+// COALESCE the marker (round 18 removed the one COALESCE that used to exist) but they also don't
+// unconditionally overwrite an already-non-NULL value the way the comp-removal CASE does — so a
+// pre-existing stale T can survive a raw cancellation-status write untouched, and the repair pass
+// then sees a marker already older than the 72-hour grace window and disconnects the user's bank
+// connections IMMEDIATELY, with ZERO grace. The grace window exists precisely so a lapsed user can
+// recover; this path silently skips it.
+//
+// SHAPE: flat UPDATE, NOT StampMissingPlaidCleanupMarkers's `FOR NO KEY UPDATE` CTE dance — and this
+// is a deliberate correction of the issue's own suggested implementation, not an oversight. Read
+// StampMissingPlaidCleanupMarkers's doc comment in full: that CTE exists ONLY because that statement
+// writes the VOLATILE clock_timestamp() into its SET list, and Postgres evaluates a volatile
+// target-list expression against the pre-lock-wait row version — so the lock has to be acquired as
+// its own explicit step (`FOR NO KEY UPDATE`) before the value is computed, or a concurrently-locked
+// row gets a backdated timestamp. This method, like ClearCompletedPlaidCleanupMarkers right above
+// it, writes only a CONSTANT (NULL) — there is no volatile expression for a lock-wait to backdate,
+// so the CTE's entire reason for existing does not apply here. Adding one anyway would not be extra
+// safety; it would needlessly re-open the exact lock-mode hazard that CTE's own doc comment spends
+// several paragraphs warning about (a `FOR UPDATE`/`FOR NO KEY UPDATE` scan can conflict with a
+// concurrent `FOR KEY SHARE` audit-log FK check and deadlock — SQLSTATE 40P01 — see
+// StampMissingPlaidCleanupMarkers's ROUND 23 correction for the full reproduced cycle). A flat
+// `UPDATE ... WHERE ...`, exactly ClearCompletedPlaidCleanupMarkers's shape, is both simpler and
+// strictly safer here.
+//
+// JUDGEMENT CALL — does this exclude a currently-comped user? NO, deliberately, mirroring
+// ClearCompletedPlaidCleanupMarkers's asymmetry with Stamp rather than Stamp's own exclusion.
+// Reasoning: Stamp excludes an actively-comped user because STAMPING only ever arms a marker for a
+// population the repair CANDIDATE query (GetUsersNeedingPlaidDisconnectRepair) would itself
+// eventually act on, and that candidate query already excludes a live comp via
+// noActiveManualOverridePredicate — deferring to "re-arm the ordinary way once the comp is removed"
+// is correct there because the column starts from NULL either way, so nothing is lost by waiting.
+// This method has the OPPOSITE obligation: like Clear, it corrects a FACT that is already true
+// regardless of anything else — "this row's raw status is not ineligible" — and
+// domain.User.PlaidCleanupPendingAt's own doc comment is explicit that manual_tier_override is NOT
+// a term in this invariant at all ("the marker records only the durable fact ... a function of raw
+// subscription_status and of whether live linked items exist, and of nothing else"). Branch 1 does
+// not say "status not ineligible, unless comped" — it says "status not ineligible ⇒ NULL", full
+// stop. Excluding a comped user here would leave exactly the corrupted state this method exists to
+// close sitting untouched for as long as the comp stays active, for no compensating benefit (there
+// is no future candidate-query action being deferred to, the way there is for Stamp) — so exclusion
+// would be strictly worse with nothing gained. See
+// TestClearMarkersOnEligibleStatus_Integration_ClearsRegardlessOfActiveOverride.
+//
+// Deliberately does NOT filter on deletion_requested_at, unlike its two siblings — this predicate
+// is exactly the three clauses Issue #1455 specifies (status, marker non-NULL, is_deleted = FALSE):
+// a user mid-GDPR-deletion-request can still have any subscription_status, and this invariant is
+// defined purely in terms of raw subscription_status (see the doc comment above) — it has no
+// dependency on the separate deletion pipeline, so gating on it here would be an unrequested,
+// unmotivated restriction rather than genuine defense-in-depth.
+//
+// Reuses plaidDisconnectRepairEligibleStatusPredicate (negated) — the SAME shared Go constant every
+// other status-eligibility check in this file already uses — rather than hand-writing a fifth
+// spelling of "which statuses are eligible".
+//
+// Same CAUTION as its two siblings: a global-scan WRITE with no user-id parameter in its WHERE
+// clause. Every integration test fixture for this method must own its row end-to-end (unique,
+// t.Cleanup'd), never rely on a shared test-setup helper.
+//
+// Deliberately NOT part of the exported ProfileRepository interface, for the same reason as its two
+// siblings: needed only by RetentionCleanupCheckWorker's own narrow RetentionProfileRepository
+// consumer interface (retention_cleanup_check.go).
+func (r *profileRepository) ClearMarkersOnEligibleStatus(ctx context.Context) (int, error) {
+	ct, err := r.db.Exec(ctx, `
+		UPDATE users
+		SET plaid_cleanup_pending_at = NULL, updated_at = NOW()
+		WHERE NOT (`+plaidDisconnectRepairEligibleStatusPredicate+`)
+		  AND plaid_cleanup_pending_at IS NOT NULL
+		  AND is_deleted = FALSE
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("ClearMarkersOnEligibleStatus: %w", err)
+	}
+	return int(ct.RowsAffected()), nil
+}
+
 // expiredManualTierOverridePredicate selects users with a manual tier override that has
 // strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
 // performing the exact same clear-override/re-arm-retention/audit transition

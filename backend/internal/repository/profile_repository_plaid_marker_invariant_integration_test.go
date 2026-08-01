@@ -894,4 +894,35 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		require.True(t, flipped, "CancelIfPastDueOccurrenceWithRetention must flip for the exact matching past_due occurrence")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due->grace: after grace-expiry cancellation")
 	})
+
+	// t.Run("branch1_backstop_heals_stale_marker_on_reactivation", ...) is Issue #1455's sweep
+	// subtest: the invariant's FIRST branch (status NOT ineligible ⇒ marker must be NULL) had no
+	// runtime backstop at all until ClearMarkersOnEligibleStatus (profile_repository.go) — both
+	// StampMissingPlaidCleanupMarkers and ClearCompletedPlaidCleanupMarkers are gated on
+	// plaidDisconnectRepairEligibleStatusPredicate, so neither ever looks at a row whose status is
+	// NOT inactive/cancelled. No production writer can reach this state today (PR #1443 deleted the
+	// only one that could — see Issue #1455's "Current state" section) — modeled directly via
+	// setPlaidCleanupPendingAt, the same raw-SQL convention comp_grant_to_remove and
+	// cancel_to_resubscribe already use for states no writer currently produces.
+	//
+	// Deliberately does NOT call assertPlaidMarkerInvariant on the corrupted state itself — that
+	// helper's whole point is to fail loudly on a genuine violation, and asserting a state we already
+	// know violates the invariant would just be a scripted, uninformative failure. Instead this
+	// subtest reads the column directly to confirm the violation exists, THEN calls the new backstop,
+	// THEN uses assertPlaidMarkerInvariant to prove the invariant holds again afterward — the
+	// "proves your backstop repairs it" case Issue #1455 asks for.
+	t.Run("branch1_backstop_heals_stale_marker_on_reactivation", func(t *testing.T) {
+		user := createPlaidMarkerTestUser(t, pool, repo, "sweepbranch1", "active")
+		setPlaidCleanupPendingAt(t, pool, user.ID, time.Now().Add(-time.Hour))
+
+		var preRepair *time.Time
+		require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&preRepair))
+		require.NotNil(t, preRepair, "setup sanity check: the corrupted state must actually have a non-NULL marker before the backstop runs")
+
+		clearedCount, err := repo.ClearMarkersOnEligibleStatus(ctx)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, clearedCount, 1, "at least this fixture's row must be healed")
+
+		assertPlaidMarkerInvariant(t, pool, user.ID, "branch1: after ClearMarkersOnEligibleStatus")
+	})
 }
